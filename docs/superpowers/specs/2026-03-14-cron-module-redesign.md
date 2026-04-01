@@ -8,7 +8,7 @@
 
 ## Context & Motivation
 
-Aleph's `core/src/cron/` module has a mature skeleton (ScheduleKind, delivery, chain, template, Gateway RPC) but lacks production-grade reliability guarantees. Drawing from OpenClaw's battle-tested planning module, this redesign upgrades the cron system to answer three infrastructure questions reliably:
+Aleph's `src/cron/` module has a mature skeleton (ScheduleKind, delivery, chain, template, Gateway RPC) but lacks production-grade reliability guarantees. Drawing from OpenClaw's battle-tested planning module, this redesign upgrades the cron system to answer three infrastructure questions reliably:
 
 1. **When does a task start?** — Anchor-aligned scheduling, hash-based stagger, drift-free
 2. **Who gets the results?** — Unified delivery with dedup
@@ -35,7 +35,7 @@ This is a greenfield rebuild — the existing code is not in production use.
 ## 1. Module Structure
 
 ```
-core/src/cron/
+src/cron/
 ├── mod.rs                     // Module facade, re-exports
 ├── config.rs                  // Data types (CronJob, ScheduleKind, JobState, etc.)
 ├── clock.rs                   // Clock trait + SystemClock + FakeClock

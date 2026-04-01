@@ -17,38 +17,38 @@
 ### New Files to Create
 | File | Responsibility |
 |------|---------------|
-| `core/src/cron/clock.rs` | Clock trait + SystemClock + FakeClock |
-| `core/src/cron/schedule.rs` | Pure scheduling computation (anchor-aligned, cron-next, MIN_REFIRE_GAP) |
-| `core/src/cron/stagger.rs` | SHA256 hash-based stagger spreading |
-| `core/src/cron/store.rs` | JSON atomic persistence (tmp+fsync+rename), load, reload, migration |
-| `core/src/cron/alert.rs` | Failure alerting + cooldown |
-| `core/src/cron/service/mod.rs` | Service facade, re-exports |
-| `core/src/cron/service/state.rs` | ServiceState<C: Clock> runtime container |
-| `core/src/cron/service/ops.rs` | CRUD operations + manual trigger (zero side-effect reads) |
-| `core/src/cron/service/concurrency.rs` | Three-phase execution model |
-| `core/src/cron/service/timer.rs` | Core scheduling loop + worker pool |
-| `core/src/cron/service/catchup.rs` | Restart catchup strategy |
-| `core/src/cron/execution/mod.rs` | Execution module facade |
-| `core/src/cron/execution/lightweight.rs` | Main-loop event injection |
-| `core/src/cron/execution/isolated.rs` | Isolated agent session execution |
+| `src/cron/clock.rs` | Clock trait + SystemClock + FakeClock |
+| `src/cron/schedule.rs` | Pure scheduling computation (anchor-aligned, cron-next, MIN_REFIRE_GAP) |
+| `src/cron/stagger.rs` | SHA256 hash-based stagger spreading |
+| `src/cron/store.rs` | JSON atomic persistence (tmp+fsync+rename), load, reload, migration |
+| `src/cron/alert.rs` | Failure alerting + cooldown |
+| `src/cron/service/mod.rs` | Service facade, re-exports |
+| `src/cron/service/state.rs` | ServiceState<C: Clock> runtime container |
+| `src/cron/service/ops.rs` | CRUD operations + manual trigger (zero side-effect reads) |
+| `src/cron/service/concurrency.rs` | Three-phase execution model |
+| `src/cron/service/timer.rs` | Core scheduling loop + worker pool |
+| `src/cron/service/catchup.rs` | Restart catchup strategy |
+| `src/cron/execution/mod.rs` | Execution module facade |
+| `src/cron/execution/lightweight.rs` | Main-loop event injection |
+| `src/cron/execution/isolated.rs` | Isolated agent session execution |
 
 ### Files to Modify
 | File | Changes |
 |------|---------|
-| `core/src/cron/config.rs` | Enhanced ScheduleKind (rich enum), JobState (new fields), new types (RunStatus, ErrorReason, DeliveryStatus, FailureAlertConfig, JobSnapshot, ExecutionResult, SessionTarget, CronJobView) |
-| `core/src/cron/mod.rs` | Gut the monolith — becomes thin facade re-exporting submodules. CronService becomes a wrapper around service::CronServiceInner |
-| `core/src/cron/delivery.rs` | Add dedup logic (AlreadySentByAgent) |
-| `core/src/cron/chain.rs` | Migrate from SQLite queries to CronStore operations |
-| `core/src/cron/template.rs` | Inject Clock trait instead of direct Utc::now() |
-| `core/src/gateway/handlers/cron.rs` | Update to use new service API, add new fields to JSON serialization |
+| `src/cron/config.rs` | Enhanced ScheduleKind (rich enum), JobState (new fields), new types (RunStatus, ErrorReason, DeliveryStatus, FailureAlertConfig, JobSnapshot, ExecutionResult, SessionTarget, CronJobView) |
+| `src/cron/mod.rs` | Gut the monolith — becomes thin facade re-exporting submodules. CronService becomes a wrapper around service::CronServiceInner |
+| `src/cron/delivery.rs` | Add dedup logic (AlreadySentByAgent) |
+| `src/cron/chain.rs` | Migrate from SQLite queries to CronStore operations |
+| `src/cron/template.rs` | Inject Clock trait instead of direct Utc::now() |
+| `src/gateway/handlers/cron.rs` | Update to use new service API, add new fields to JSON serialization |
 | `apps/panel/src/api/cron.rs` | Add new DTO fields |
 | `apps/panel/src/views/cron.rs` | Three-state indicator, anchor/stagger inputs, failure alert section, delivery column |
 
 ### Files to Delete
 | File | Reason |
 |------|--------|
-| `core/src/cron/scheduler.rs` | Replaced by `schedule.rs` |
-| `core/src/cron/resource.rs` | CPU-aware concurrency removed; fixed limits used instead |
+| `src/cron/scheduler.rs` | Replaced by `schedule.rs` |
+| `src/cron/resource.rs` | CPU-aware concurrency removed; fixed limits used instead |
 
 ---
 
@@ -57,13 +57,13 @@
 ### Task 1: Clock Trait
 
 **Files:**
-- Create: `core/src/cron/clock.rs`
-- Modify: `core/src/cron/mod.rs` (add `pub mod clock;`)
+- Create: `src/cron/clock.rs`
+- Modify: `src/cron/mod.rs` (add `pub mod clock;`)
 
 - [ ] **Step 1: Write Clock trait and SystemClock**
 
 ```rust
-// core/src/cron/clock.rs
+// src/cron/clock.rs
 use chrono::{DateTime, Utc};
 
 /// Abstraction over system time for testability.
@@ -92,7 +92,7 @@ impl Clock for SystemClock {
 - [ ] **Step 2: Write FakeClock under test-helpers feature**
 
 ```rust
-// Append to core/src/cron/clock.rs
+// Append to src/cron/clock.rs
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod testing {
     use super::*;
@@ -174,7 +174,7 @@ mod tests {
 
 - [ ] **Step 4: Register module in mod.rs**
 
-Add `pub mod clock;` to `core/src/cron/mod.rs` near the top module declarations.
+Add `pub mod clock;` to `src/cron/mod.rs` near the top module declarations.
 
 - [ ] **Step 5: Run tests**
 
@@ -184,7 +184,7 @@ Expected: All 5 tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/cron/clock.rs core/src/cron/mod.rs
+git add src/cron/clock.rs src/cron/mod.rs
 git commit -m "cron: add Clock trait with SystemClock and FakeClock"
 ```
 
@@ -193,13 +193,13 @@ git commit -m "cron: add Clock trait with SystemClock and FakeClock"
 ### Task 2: Enhanced Config Types
 
 **Files:**
-- Modify: `core/src/cron/config.rs`
+- Modify: `src/cron/config.rs`
 
 This task adds the new types from the spec alongside existing types. Existing types are preserved for now (they'll be migrated in Chunk 3).
 
 - [ ] **Step 1: Add new enums and structs**
 
-Append to `core/src/cron/config.rs`:
+Append to `src/cron/config.rs`:
 
 ```rust
 // === New types for cron module redesign ===
@@ -422,7 +422,7 @@ Expected: All 5 tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/cron/config.rs
+git add src/cron/config.rs
 git commit -m "cron: add enhanced config types for module redesign"
 ```
 
@@ -431,7 +431,7 @@ git commit -m "cron: add enhanced config types for module redesign"
 ### Task 2b: Rewrite CronJob Struct and ScheduleKind Enum
 
 **Files:**
-- Modify: `core/src/cron/config.rs`
+- Modify: `src/cron/config.rs`
 
 This task transforms the existing `CronJob` and `ScheduleKind` to use the new type system. Since this is a greenfield rebuild, we rewrite in-place.
 
@@ -587,7 +587,7 @@ Expected: All tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/cron/config.rs
+git add src/cron/config.rs
 git commit -m "cron: rewrite CronJob and ScheduleKind to new type system"
 ```
 
@@ -596,13 +596,13 @@ git commit -m "cron: rewrite CronJob and ScheduleKind to new type system"
 ### Task 3: Pure Schedule Computation
 
 **Files:**
-- Create: `core/src/cron/schedule.rs`
-- Modify: `core/src/cron/mod.rs` (add `pub mod schedule;`)
+- Create: `src/cron/schedule.rs`
+- Modify: `src/cron/mod.rs` (add `pub mod schedule;`)
 
 - [ ] **Step 1: Write anchor-aligned interval computation**
 
 ```rust
-// core/src/cron/schedule.rs
+// src/cron/schedule.rs
 
 /// Minimum gap between consecutive runs to prevent spin-loops.
 /// Protects against cron library edge cases (timezone boundaries, DST).
@@ -659,7 +659,7 @@ pub fn resolve_anchor(explicit_anchor_ms: Option<i64>, created_at_ms: i64) -> i6
 - [ ] **Step 2: Write cron expression computation**
 
 ```rust
-// Append to core/src/cron/schedule.rs
+// Append to src/cron/schedule.rs
 use chrono::{DateTime, Utc, TimeZone};
 use cron::Schedule;
 use std::str::FromStr;
@@ -858,7 +858,7 @@ mod tests {
 
 - [ ] **Step 4: Register module and run tests**
 
-Add `pub mod schedule;` to `core/src/cron/mod.rs`.
+Add `pub mod schedule;` to `src/cron/mod.rs`.
 
 Run: `cargo test -p alephcore --lib cron::schedule`
 Expected: All tests pass.
@@ -866,7 +866,7 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/cron/schedule.rs core/src/cron/mod.rs
+git add src/cron/schedule.rs src/cron/mod.rs
 git commit -m "cron: add pure schedule computation with anchor alignment"
 ```
 
@@ -875,13 +875,13 @@ git commit -m "cron: add pure schedule computation with anchor alignment"
 ### Task 4: Hash-Based Stagger
 
 **Files:**
-- Create: `core/src/cron/stagger.rs`
-- Modify: `core/src/cron/mod.rs`
+- Create: `src/cron/stagger.rs`
+- Modify: `src/cron/mod.rs`
 
 - [ ] **Step 1: Write stagger computation**
 
 ```rust
-// core/src/cron/stagger.rs
+// src/cron/stagger.rs
 use sha2::{Sha256, Digest};
 
 /// Compute deterministic stagger offset from job ID using SHA-256.
@@ -997,14 +997,14 @@ mod tests {
 
 - [ ] **Step 3: Register, check sha2 dependency, run tests**
 
-Add `pub mod stagger;` to `core/src/cron/mod.rs`.
+Add `pub mod stagger;` to `src/cron/mod.rs`.
 
 Check if `sha2` is already in `Cargo.toml`. If not, add it:
 ```bash
 # Check existing deps
-grep 'sha2' core/Cargo.toml
+grep 'sha2' Cargo.toml
 # If missing:
-# Add sha2 = "0.10" to [dependencies] in core/Cargo.toml
+# Add sha2 = "0.10" to [dependencies] in Cargo.toml
 ```
 
 Run: `cargo test -p alephcore --lib cron::stagger`
@@ -1013,7 +1013,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/cron/stagger.rs core/src/cron/mod.rs
+git add src/cron/stagger.rs src/cron/mod.rs
 git commit -m "cron: add SHA256 hash-based stagger spreading"
 ```
 
@@ -1024,13 +1024,13 @@ git commit -m "cron: add SHA256 hash-based stagger spreading"
 ### Task 5: JSON Atomic Store
 
 **Files:**
-- Create: `core/src/cron/store.rs`
-- Modify: `core/src/cron/mod.rs`
+- Create: `src/cron/store.rs`
+- Modify: `src/cron/mod.rs`
 
 - [ ] **Step 1: Write CronStoreFile and CronStore types**
 
 ```rust
-// core/src/cron/store.rs
+// src/cron/store.rs
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use std::io::Write;
@@ -1364,11 +1364,11 @@ mod tests {
 
 - [ ] **Step 5: Register module, add tempfile dev-dependency if needed, run tests**
 
-Add `pub mod store;` to `core/src/cron/mod.rs`.
+Add `pub mod store;` to `src/cron/mod.rs`.
 
 Check/add `tempfile` dev-dependency:
 ```bash
-grep 'tempfile' core/Cargo.toml
+grep 'tempfile' Cargo.toml
 # If missing, add: tempfile = "3" under [dev-dependencies]
 ```
 
@@ -1378,7 +1378,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/cron/store.rs core/src/cron/mod.rs
+git add src/cron/store.rs src/cron/mod.rs
 git commit -m "cron: add JSON atomic persistence with crash recovery"
 ```
 
@@ -1389,14 +1389,14 @@ git commit -m "cron: add JSON atomic persistence with crash recovery"
 ### Task 6: Service State Container
 
 **Files:**
-- Create: `core/src/cron/service/mod.rs`
-- Create: `core/src/cron/service/state.rs`
-- Modify: `core/src/cron/mod.rs`
+- Create: `src/cron/service/mod.rs`
+- Create: `src/cron/service/state.rs`
+- Modify: `src/cron/mod.rs`
 
 - [ ] **Step 1: Create service module facade**
 
 ```rust
-// core/src/cron/service/mod.rs
+// src/cron/service/mod.rs
 // Only declare state initially. Other submodules are added by their respective tasks.
 pub mod state;
 
@@ -1408,7 +1408,7 @@ Note: Task 7 adds `pub mod ops;`, Task 8 adds `pub mod concurrency;`, Task 9 add
 - [ ] **Step 2: Write ServiceState**
 
 ```rust
-// core/src/cron/service/state.rs
+// src/cron/service/state.rs
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
@@ -1457,7 +1457,7 @@ impl<C: Clock> ServiceState<C> {
 
 - [ ] **Step 3: Register service module**
 
-Add `pub mod service;` to `core/src/cron/mod.rs`.
+Add `pub mod service;` to `src/cron/mod.rs`.
 
 - [ ] **Step 4: Run compile check**
 
@@ -1467,7 +1467,7 @@ Expected: Compiles successfully.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/cron/service/
+git add src/cron/service/
 git commit -m "cron: add ServiceState container for cron service"
 ```
 
@@ -1476,12 +1476,12 @@ git commit -m "cron: add ServiceState container for cron service"
 ### Task 7: Service Operations (CRUD + Zero Side-Effect Reads)
 
 **Files:**
-- Create: `core/src/cron/service/ops.rs`
+- Create: `src/cron/service/ops.rs`
 
 - [ ] **Step 1: Write CRUD operations with zero side-effect reads**
 
 ```rust
-// core/src/cron/service/ops.rs
+// src/cron/service/ops.rs
 use crate::cron::clock::Clock;
 use crate::cron::config::{CronJob, CronJobView, JobStateV2, ScheduleKind};
 use crate::cron::schedule::{compute_next_every, compute_next_cron, resolve_anchor, apply_min_gap};
@@ -1712,7 +1712,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/cron/service/ops.rs
+git add src/cron/service/ops.rs
 git commit -m "cron: add service operations with zero side-effect reads"
 ```
 
@@ -1721,12 +1721,12 @@ git commit -m "cron: add service operations with zero side-effect reads"
 ### Task 8: Three-Phase Concurrency Model
 
 **Files:**
-- Create: `core/src/cron/service/concurrency.rs`
+- Create: `src/cron/service/concurrency.rs`
 
 - [ ] **Step 1: Write three-phase execution model**
 
 ```rust
-// core/src/cron/service/concurrency.rs
+// src/cron/service/concurrency.rs
 use crate::cron::clock::Clock;
 use crate::cron::config::{
     CronJob, ExecutionResult, JobSnapshot, RunStatus, SessionTarget, TriggerSource,
@@ -2039,7 +2039,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/cron/service/concurrency.rs
+git add src/cron/service/concurrency.rs
 git commit -m "cron: add three-phase concurrency model with MVCC merge"
 ```
 
@@ -2048,12 +2048,12 @@ git commit -m "cron: add three-phase concurrency model with MVCC merge"
 ### Task 9: Restart Catchup
 
 **Files:**
-- Create: `core/src/cron/service/catchup.rs`
+- Create: `src/cron/service/catchup.rs`
 
 - [ ] **Step 1: Write catchup implementation**
 
 ```rust
-// core/src/cron/service/catchup.rs
+// src/cron/service/catchup.rs
 use crate::cron::clock::Clock;
 use crate::cron::store::CronStore;
 use tokio::sync::Mutex;
@@ -2200,7 +2200,7 @@ mod tests {
 Run: `cargo test -p alephcore --lib cron::service::catchup`
 
 ```bash
-git add core/src/cron/service/catchup.rs
+git add src/cron/service/catchup.rs
 git commit -m "cron: add restart catchup with stale marker clearing and stagger"
 ```
 
@@ -2209,12 +2209,12 @@ git commit -m "cron: add restart catchup with stale marker clearing and stagger"
 ### Task 10: Timer Loop + Worker Pool
 
 **Files:**
-- Create: `core/src/cron/service/timer.rs`
+- Create: `src/cron/service/timer.rs`
 
 - [ ] **Step 1: Write timer loop skeleton**
 
 ```rust
-// core/src/cron/service/timer.rs
+// src/cron/service/timer.rs
 use std::sync::Arc;
 use std::collections::VecDeque;
 use tokio::sync::Mutex;
@@ -2407,7 +2407,7 @@ mod tests {
 Run: `cargo test -p alephcore --lib cron::service::timer`
 
 ```bash
-git add core/src/cron/service/timer.rs
+git add src/cron/service/timer.rs
 git commit -m "cron: add timer loop with dual-path worker pool"
 ```
 
@@ -2418,15 +2418,15 @@ git commit -m "cron: add timer loop with dual-path worker pool"
 ### Task 11: Execution Module (Lightweight + Isolated)
 
 **Files:**
-- Create: `core/src/cron/execution/mod.rs`
-- Create: `core/src/cron/execution/lightweight.rs`
-- Create: `core/src/cron/execution/isolated.rs`
-- Modify: `core/src/cron/mod.rs`
+- Create: `src/cron/execution/mod.rs`
+- Create: `src/cron/execution/lightweight.rs`
+- Create: `src/cron/execution/isolated.rs`
+- Modify: `src/cron/mod.rs`
 
 - [ ] **Step 1: Create execution module facade**
 
 ```rust
-// core/src/cron/execution/mod.rs
+// src/cron/execution/mod.rs
 pub mod lightweight;
 pub mod isolated;
 ```
@@ -2434,7 +2434,7 @@ pub mod isolated;
 - [ ] **Step 2: Write lightweight executor**
 
 ```rust
-// core/src/cron/execution/lightweight.rs
+// src/cron/execution/lightweight.rs
 use crate::cron::config::{ExecutionResult, JobSnapshot, RunStatus};
 use crate::cron::clock::Clock;
 
@@ -2468,7 +2468,7 @@ pub async fn execute_lightweight<C: Clock>(
 - [ ] **Step 3: Write isolated executor skeleton**
 
 ```rust
-// core/src/cron/execution/isolated.rs
+// src/cron/execution/isolated.rs
 use crate::cron::config::{ExecutionResult, JobSnapshot, RunStatus, ErrorReason};
 use crate::cron::clock::Clock;
 use std::time::Duration;
@@ -2547,12 +2547,12 @@ mod tests {
 
 - [ ] **Step 5: Register, run tests, commit**
 
-Add `pub mod execution;` to `core/src/cron/mod.rs`.
+Add `pub mod execution;` to `src/cron/mod.rs`.
 
 Run: `cargo test -p alephcore --lib cron::execution`
 
 ```bash
-git add core/src/cron/execution/ core/src/cron/mod.rs
+git add src/cron/execution/ src/cron/mod.rs
 git commit -m "cron: add dual-path execution module (lightweight + isolated)"
 ```
 
@@ -2561,13 +2561,13 @@ git commit -m "cron: add dual-path execution module (lightweight + isolated)"
 ### Task 12: Failure Alert with Cooldown
 
 **Files:**
-- Create: `core/src/cron/alert.rs`
-- Modify: `core/src/cron/mod.rs`
+- Create: `src/cron/alert.rs`
+- Modify: `src/cron/mod.rs`
 
 - [ ] **Step 1: Write alert module**
 
 ```rust
-// core/src/cron/alert.rs
+// src/cron/alert.rs
 use crate::cron::config::{CronJob, FailureAlertConfig};
 use crate::cron::clock::Clock;
 
@@ -2652,12 +2652,12 @@ mod tests {
 
 - [ ] **Step 3: Register, run tests, commit**
 
-Add `pub mod alert;` to `core/src/cron/mod.rs`.
+Add `pub mod alert;` to `src/cron/mod.rs`.
 
 Run: `cargo test -p alephcore --lib cron::alert`
 
 ```bash
-git add core/src/cron/alert.rs core/src/cron/mod.rs
+git add src/cron/alert.rs src/cron/mod.rs
 git commit -m "cron: add failure alert with cooldown mechanism"
 ```
 
@@ -2666,7 +2666,7 @@ git commit -m "cron: add failure alert with cooldown mechanism"
 ### Task 13: Delivery Enhancement (Dedup)
 
 **Files:**
-- Modify: `core/src/cron/delivery.rs`
+- Modify: `src/cron/delivery.rs`
 
 - [ ] **Step 1: Add dedup logic to delivery engine**
 
@@ -2710,7 +2710,7 @@ fn dedup_skips_when_agent_sent() {
 Run: `cargo test -p alephcore --lib cron::delivery`
 
 ```bash
-git add core/src/cron/delivery.rs
+git add src/cron/delivery.rs
 git commit -m "cron: add delivery dedup for agent-sent messages"
 ```
 
@@ -2721,7 +2721,7 @@ git commit -m "cron: add delivery dedup for agent-sent messages"
 ### Task 14: Migrate chain.rs from SQLite to CronStore
 
 **Files:**
-- Modify: `core/src/cron/chain.rs`
+- Modify: `src/cron/chain.rs`
 
 - [ ] **Step 1: Rewrite cycle detection to operate on CronStore**
 
@@ -2740,7 +2740,7 @@ All 8 existing tests should be adapted to create a CronStore in tempdir instead 
 Run: `cargo test -p alephcore --lib cron::chain`
 
 ```bash
-git add core/src/cron/chain.rs
+git add src/cron/chain.rs
 git commit -m "cron: migrate chain.rs from SQLite to CronStore"
 ```
 
@@ -2749,7 +2749,7 @@ git commit -m "cron: migrate chain.rs from SQLite to CronStore"
 ### Task 15: Inject Clock into template.rs
 
 **Files:**
-- Modify: `core/src/cron/template.rs`
+- Modify: `src/cron/template.rs`
 
 - [ ] **Step 1: Change `render_template` signature to accept `&dyn Clock`**
 
@@ -2776,7 +2776,7 @@ Run: `cargo test -p alephcore --lib cron::template`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/cron/template.rs
+git add src/cron/template.rs
 git commit -m "cron: inject Clock trait into template rendering"
 ```
 
@@ -2785,7 +2785,7 @@ git commit -m "cron: inject Clock trait into template rendering"
 ### Task 16: Rebuild mod.rs as Thin Facade
 
 **Files:**
-- Modify: `core/src/cron/mod.rs` (major rewrite — from 1346 lines to ~100 lines)
+- Modify: `src/cron/mod.rs` (major rewrite — from 1346 lines to ~100 lines)
 
 - [ ] **Step 1: Extract CronService to wrap ServiceState**
 
@@ -2810,7 +2810,7 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/cron/mod.rs
+git add src/cron/mod.rs
 git commit -m "cron: rebuild mod.rs as thin facade over service layer"
 ```
 
@@ -2819,17 +2819,17 @@ git commit -m "cron: rebuild mod.rs as thin facade over service layer"
 ### Task 17: Delete Obsolete Files
 
 **Files:**
-- Delete: `core/src/cron/scheduler.rs`
-- Delete: `core/src/cron/resource.rs`
+- Delete: `src/cron/scheduler.rs`
+- Delete: `src/cron/resource.rs`
 
 - [ ] **Step 1: Remove module declarations from mod.rs**
 
-Remove `mod scheduler;` and `mod resource;` from `core/src/cron/mod.rs`.
+Remove `mod scheduler;` and `mod resource;` from `src/cron/mod.rs`.
 
 - [ ] **Step 2: Delete files**
 
 ```bash
-rm core/src/cron/scheduler.rs core/src/cron/resource.rs
+rm src/cron/scheduler.rs src/cron/resource.rs
 ```
 
 - [ ] **Step 3: Fix any compilation errors from removed imports**
@@ -2843,7 +2843,7 @@ Run: `cargo check -p alephcore && cargo test -p alephcore --lib cron`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A core/src/cron/
+git add -A src/cron/
 git commit -m "cron: remove obsolete scheduler.rs and resource.rs"
 ```
 
@@ -2852,7 +2852,7 @@ git commit -m "cron: remove obsolete scheduler.rs and resource.rs"
 ### Task 18: Update Gateway Handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/cron.rs`
+- Modify: `src/gateway/handlers/cron.rs`
 
 - [ ] **Step 1: Update `job_to_json` to include new fields**
 
@@ -2881,7 +2881,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/handlers/cron.rs
+git add src/gateway/handlers/cron.rs
 git commit -m "cron: update gateway handlers for redesigned service API"
 ```
 
@@ -2988,7 +2988,7 @@ git commit -m "panel: update cron UI with three-state indicator, anchor/stagger,
 ### Task 21: SQLite Execution History
 
 **Files:**
-- Modify: `core/src/resilience/database/tasks.rs` or create new table in `state_database.rs`
+- Modify: `src/resilience/database/tasks.rs` or create new table in `state_database.rs`
 
 - [ ] **Step 1: Add cron_job_runs table schema**
 
@@ -3024,7 +3024,7 @@ After `phase3_writeback`, asynchronously write each `ExecutionResult` to SQLite.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/resilience/database/
+git add src/resilience/database/
 git commit -m "cron: add SQLite execution history recording"
 ```
 
@@ -3033,7 +3033,7 @@ git commit -m "cron: add SQLite execution history recording"
 ### Task 22: Regression Test Suite
 
 **Files:**
-- Create: `core/src/cron/tests/regression.rs` (or add to existing test modules)
+- Create: `src/cron/tests/regression.rs` (or add to existing test modules)
 
 - [ ] **Step 1: Write OpenClaw regression tests**
 
@@ -3063,7 +3063,7 @@ Expected: All pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/cron/
+git add src/cron/
 git commit -m "cron: add regression tests from OpenClaw production bugs"
 ```
 

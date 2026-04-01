@@ -4,7 +4,7 @@
 
 **Goal:** Insert a DebounceBuffer → MessagePipeline → SessionScheduler chain between InboundRouter and ExecutionEngine, enabling message merging, media pre-understanding, and per-session serial execution.
 
-**Architecture:** New `pipeline/` module under `core/src/gateway/` with 5 files. InboundRouter stops calling ExecutionAdapter directly — instead submits to DebounceBuffer. SessionScheduler owns the ExecutionAdapter reference and enforces serial execution per session.
+**Architecture:** New `pipeline/` module under `src/gateway/` with 5 files. InboundRouter stops calling ExecutionAdapter directly — instead submits to DebounceBuffer. SessionScheduler owns the ExecutionAdapter reference and enforces serial execution per session.
 
 **Tech Stack:** Rust, tokio (timers, spawn, Mutex), async-trait, reqwest (media download), futures (join_all for concurrent understanding), uuid, tracing
 
@@ -13,13 +13,13 @@
 ### Task 1: Pipeline Types & Data Structures
 
 **Files:**
-- Create: `core/src/gateway/pipeline/mod.rs`
-- Create: `core/src/gateway/pipeline/types.rs`
-- Modify: `core/src/gateway/mod.rs` (add `pub mod pipeline;`)
+- Create: `src/gateway/pipeline/mod.rs`
+- Create: `src/gateway/pipeline/types.rs`
+- Modify: `src/gateway/mod.rs` (add `pub mod pipeline;`)
 
 **Step 1: Write the failing test**
 
-Create `core/src/gateway/pipeline/types.rs` with test module:
+Create `src/gateway/pipeline/types.rs` with test module:
 
 ```rust
 //! Pipeline data types
@@ -353,7 +353,7 @@ mod tests {
 
 **Step 2: Create the mod.rs**
 
-Create `core/src/gateway/pipeline/mod.rs`:
+Create `src/gateway/pipeline/mod.rs`:
 
 ```rust
 //! Message Pipeline
@@ -371,7 +371,7 @@ pub use types::*;
 
 **Step 3: Register the module**
 
-In `core/src/gateway/mod.rs`, add after `pub mod inbound_router;`:
+In `src/gateway/mod.rs`, add after `pub mod inbound_router;`:
 
 ```rust
 pub mod pipeline;
@@ -388,7 +388,7 @@ Expected: All 6 tests pass.
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/ core/src/gateway/mod.rs
+git add src/gateway/pipeline/ src/gateway/mod.rs
 git commit -m "pipeline: add core types (MergedMessage, EnrichedMessage, MediaCategory)"
 ```
 
@@ -397,7 +397,7 @@ git commit -m "pipeline: add core types (MergedMessage, EnrichedMessage, MediaCa
 ### Task 2: DebounceBuffer
 
 **Files:**
-- Create: `core/src/gateway/pipeline/debounce.rs`
+- Create: `src/gateway/pipeline/debounce.rs`
 
 **Step 1: Write the implementation with tests**
 
@@ -795,7 +795,7 @@ Expected: All 5 tests pass.
 **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/debounce.rs
+git add src/gateway/pipeline/debounce.rs
 git commit -m "pipeline: add DebounceBuffer with sliding window and max-messages flush"
 ```
 
@@ -804,7 +804,7 @@ git commit -m "pipeline: add DebounceBuffer with sliding window and max-messages
 ### Task 3: MediaDownloader
 
 **Files:**
-- Create: `core/src/gateway/pipeline/media_download.rs`
+- Create: `src/gateway/pipeline/media_download.rs`
 
 **Step 1: Write implementation with tests**
 
@@ -1205,7 +1205,7 @@ Expected: All 6 tests pass (URL download tests skip gracefully — only inline/l
 **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/media_download.rs
+git add src/gateway/pipeline/media_download.rs
 git commit -m "pipeline: add MediaDownloader with inline/local/URL support"
 ```
 
@@ -1214,7 +1214,7 @@ git commit -m "pipeline: add MediaDownloader with inline/local/URL support"
 ### Task 4: MediaUnderstander
 
 **Files:**
-- Create: `core/src/gateway/pipeline/media_understanding.rs`
+- Create: `src/gateway/pipeline/media_understanding.rs`
 
 **Step 1: Write implementation with tests**
 
@@ -1545,7 +1545,7 @@ mod tests {
 
 **Step 2: Update mod.rs to export**
 
-In `core/src/gateway/pipeline/mod.rs`, ensure `pub mod media_understanding;` is present.
+In `src/gateway/pipeline/mod.rs`, ensure `pub mod media_understanding;` is present.
 
 **Step 3: Run tests**
 
@@ -1558,7 +1558,7 @@ Expected: All 6 tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/media_understanding.rs
+git add src/gateway/pipeline/media_understanding.rs
 git commit -m "pipeline: add MediaUnderstander with mock-friendly trait and concurrent processing"
 ```
 
@@ -1567,11 +1567,11 @@ git commit -m "pipeline: add MediaUnderstander with mock-friendly trait and conc
 ### Task 5: MessagePipeline Orchestrator
 
 **Files:**
-- Modify: `core/src/gateway/pipeline/mod.rs` (add pipeline orchestrator logic)
+- Modify: `src/gateway/pipeline/mod.rs` (add pipeline orchestrator logic)
 
 **Step 1: Write the pipeline orchestrator**
 
-Update `core/src/gateway/pipeline/mod.rs`:
+Update `src/gateway/pipeline/mod.rs`:
 
 ```rust
 //! Message Pipeline
@@ -1757,7 +1757,7 @@ Expected: All pipeline tests pass (types + debounce + download + understanding +
 **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/mod.rs
+git add src/gateway/pipeline/mod.rs
 git commit -m "pipeline: add MessagePipeline orchestrator combining all stages"
 ```
 
@@ -1766,8 +1766,8 @@ git commit -m "pipeline: add MessagePipeline orchestrator combining all stages"
 ### Task 6: SessionScheduler
 
 **Files:**
-- Create: `core/src/gateway/session_scheduler.rs`
-- Modify: `core/src/gateway/mod.rs` (add `pub mod session_scheduler;`)
+- Create: `src/gateway/session_scheduler.rs`
+- Modify: `src/gateway/mod.rs` (add `pub mod session_scheduler;`)
 
 **Step 1: Write the implementation**
 
@@ -2178,7 +2178,7 @@ mod tests {
 
 **Step 2: Register module**
 
-In `core/src/gateway/mod.rs`, add after `pub mod inbound_router;`:
+In `src/gateway/mod.rs`, add after `pub mod inbound_router;`:
 
 ```rust
 pub mod session_scheduler;
@@ -2195,7 +2195,7 @@ Expected: Tests pass.
 **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/session_scheduler.rs core/src/gateway/mod.rs
+git add src/gateway/session_scheduler.rs src/gateway/mod.rs
 git commit -m "gateway: add SessionScheduler for per-session serial execution"
 ```
 
@@ -2204,7 +2204,7 @@ git commit -m "gateway: add SessionScheduler for per-session serial execution"
 ### Task 7: InboundRouter Integration
 
 **Files:**
-- Modify: `core/src/gateway/inbound_router.rs`
+- Modify: `src/gateway/inbound_router.rs`
 
 **Step 1: Add DebounceBuffer field to InboundRouter**
 
@@ -2323,7 +2323,7 @@ Expected: All existing tests pass (debounce_buffer defaults to None, legacy path
 **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/inbound_router.rs
+git add src/gateway/inbound_router.rs
 git commit -m "gateway: integrate DebounceBuffer into InboundRouter with legacy fallback"
 ```
 
@@ -2332,12 +2332,12 @@ git commit -m "gateway: integrate DebounceBuffer into InboundRouter with legacy 
 ### Task 8: Deprecated Code Cleanup
 
 **Files:**
-- Modify: `core/src/dispatcher/registry/registration.rs` — remove `register_agent_tools()`
-- Modify: `core/src/dispatcher/executor/mod.rs` — remove `with_working_dir()`
-- Modify: `core/src/dispatcher/types/category.rs` — remove `ToolCategory::Native`
-- Modify: `core/src/gateway/security/policy_engine.rs` — remove deprecated stubs
-- Modify: `core/src/memory/compression/conflict.rs` — remove `InvalidateOld`
-- Modify: `core/src/memory/store/mod.rs` — remove `AuditStore` trait
+- Modify: `src/dispatcher/registry/registration.rs` — remove `register_agent_tools()`
+- Modify: `src/dispatcher/executor/mod.rs` — remove `with_working_dir()`
+- Modify: `src/dispatcher/types/category.rs` — remove `ToolCategory::Native`
+- Modify: `src/gateway/security/policy_engine.rs` — remove deprecated stubs
+- Modify: `src/memory/compression/conflict.rs` — remove `InvalidateOld`
+- Modify: `src/memory/store/mod.rs` — remove `AuditStore` trait
 
 **Step 1: For each file, find and remove the deprecated item**
 
@@ -2377,8 +2377,8 @@ git commit -m "cleanup: remove deprecated APIs (register_agent_tools, with_worki
 ### Task 9: Integration Test
 
 **Files:**
-- Create: `core/src/gateway/pipeline/integration_test.rs`
-- Modify: `core/src/gateway/pipeline/mod.rs` (add `#[cfg(test)] mod integration_test;`)
+- Create: `src/gateway/pipeline/integration_test.rs`
+- Modify: `src/gateway/pipeline/mod.rs` (add `#[cfg(test)] mod integration_test;`)
 
 **Step 1: Write full-flow integration test**
 
@@ -2601,7 +2601,7 @@ Expected: Both tests pass.
 **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/pipeline/integration_test.rs core/src/gateway/pipeline/mod.rs
+git add src/gateway/pipeline/integration_test.rs src/gateway/pipeline/mod.rs
 git commit -m "pipeline: add integration tests for full debounce → pipeline flow"
 ```
 

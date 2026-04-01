@@ -4,7 +4,7 @@
 
 **Goal:** Add Feishu (飞书) / Lark as a new messaging channel to Aleph, supporting text + image messages via WebSocket long connection.
 
-**Architecture:** Four new files in `core/src/gateway/interfaces/feishu/` following the existing Channel trait + factory pattern. `FeishuClient` encapsulates token management, WebSocket connection, and HTTP API calls. Three existing files need minor modifications to register the new channel type.
+**Architecture:** Four new files in `src/gateway/interfaces/feishu/` following the existing Channel trait + factory pattern. `FeishuClient` encapsulates token management, WebSocket connection, and HTTP API calls. Three existing files need minor modifications to register the new channel type.
 
 **Tech Stack:** Rust, tokio, reqwest (existing), tokio-tungstenite (existing), serde_json
 
@@ -16,24 +16,24 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `core/src/gateway/interfaces/feishu/types.rs` | Create | API types, event enums, config struct |
-| `core/src/gateway/interfaces/feishu/events.rs` | Create | WebSocket frame parsing → FeishuEvent |
-| `core/src/gateway/interfaces/feishu/client.rs` | Create | FeishuClient: token, WebSocket, HTTP API |
-| `core/src/gateway/interfaces/feishu/mod.rs` | Create | FeishuChannel, Channel trait impl, ChannelProvider |
-| `core/src/gateway/interfaces/mod.rs` | Modify | Add `pub mod feishu;` and re-export |
-| `core/src/gateway/handlers/channel.rs` | Modify | Add `"feishu"` arm to `create_channel_from_config()` |
+| `src/gateway/interfaces/feishu/types.rs` | Create | API types, event enums, config struct |
+| `src/gateway/interfaces/feishu/events.rs` | Create | WebSocket frame parsing → FeishuEvent |
+| `src/gateway/interfaces/feishu/client.rs` | Create | FeishuClient: token, WebSocket, HTTP API |
+| `src/gateway/interfaces/feishu/mod.rs` | Create | FeishuChannel, Channel trait impl, ChannelProvider |
+| `src/gateway/interfaces/mod.rs` | Modify | Add `pub mod feishu;` and re-export |
+| `src/gateway/handlers/channel.rs` | Modify | Add `"feishu"` arm to `create_channel_from_config()` |
 
 ---
 
 ### Task 1: Types and Config (`types.rs`)
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/types.rs`
+- Create: `src/gateway/interfaces/feishu/types.rs`
 
 - [ ] **Step 1: Create the types file with config and API types**
 
 ```rust
-// core/src/gateway/interfaces/feishu/types.rs
+// src/gateway/interfaces/feishu/types.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -343,7 +343,7 @@ Expected: All 5 tests PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/types.rs
+git add src/gateway/interfaces/feishu/types.rs
 git commit -m "feat(feishu): add types, config, and API response structs"
 ```
 
@@ -352,13 +352,13 @@ git commit -m "feat(feishu): add types, config, and API response structs"
 ### Task 2: Event Parsing (`events.rs`)
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/events.rs`
-- Read: `core/src/gateway/interfaces/feishu/types.rs` (uses types defined in Task 1)
+- Create: `src/gateway/interfaces/feishu/events.rs`
+- Read: `src/gateway/interfaces/feishu/types.rs` (uses types defined in Task 1)
 
 - [ ] **Step 1: Create the events parser**
 
 ```rust
-// core/src/gateway/interfaces/feishu/events.rs
+// src/gateway/interfaces/feishu/events.rs
 
 use super::types::*;
 
@@ -643,7 +643,7 @@ Expected: All 9 tests PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/events.rs
+git add src/gateway/interfaces/feishu/events.rs
 git commit -m "feat(feishu): add WebSocket event parsing and text extraction"
 ```
 
@@ -652,8 +652,8 @@ git commit -m "feat(feishu): add WebSocket event parsing and text extraction"
 ### Task 3: Feishu HTTP Client (`client.rs`)
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/client.rs`
-- Read: `core/src/gateway/interfaces/feishu/types.rs`
+- Create: `src/gateway/interfaces/feishu/client.rs`
+- Read: `src/gateway/interfaces/feishu/types.rs`
 
 **Reference docs:**
 - Feishu Token API: `POST /open-apis/auth/v3/app_access_token/internal`
@@ -667,7 +667,7 @@ git commit -m "feat(feishu): add WebSocket event parsing and text extraction"
 - [ ] **Step 1: Create the client**
 
 ```rust
-// core/src/gateway/interfaces/feishu/client.rs
+// src/gateway/interfaces/feishu/client.rs
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1082,7 +1082,7 @@ Expected: Compiles without errors (client.rs is only used internally, no externa
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/client.rs
+git add src/gateway/interfaces/feishu/client.rs
 git commit -m "feat(feishu): add FeishuClient with token, HTTP API, and media support"
 ```
 
@@ -1091,15 +1091,15 @@ git commit -m "feat(feishu): add FeishuClient with token, HTTP API, and media su
 ### Task 4: Channel Implementation (`mod.rs`)
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/mod.rs`
-- Read: `core/src/gateway/channel.rs:418-546` (Channel, ChannelProvider, ChannelFactory traits)
-- Read: `core/src/thinker/interaction.rs` (InteractionManifest, InteractionParadigm)
-- Reference: `core/src/gateway/interfaces/telegram/mod.rs` (pattern to follow)
+- Create: `src/gateway/interfaces/feishu/mod.rs`
+- Read: `src/gateway/channel.rs:418-546` (Channel, ChannelProvider, ChannelFactory traits)
+- Read: `src/thinker/interaction.rs` (InteractionManifest, InteractionParadigm)
+- Reference: `src/gateway/interfaces/telegram/mod.rs` (pattern to follow)
 
 - [ ] **Step 1: Create mod.rs with FeishuChannel**
 
 ```rust
-// core/src/gateway/interfaces/feishu/mod.rs
+// src/gateway/interfaces/feishu/mod.rs
 
 pub mod types;
 pub mod events;
@@ -1490,7 +1490,7 @@ Note: If there are compilation issues, they will surface in the next task when w
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/mod.rs
+git add src/gateway/interfaces/feishu/mod.rs
 git commit -m "feat(feishu): add FeishuChannel with Channel and ChannelProvider impls"
 ```
 
@@ -1499,8 +1499,8 @@ git commit -m "feat(feishu): add FeishuChannel with Channel and ChannelProvider 
 ### Task 5: Wire Into Aleph (Registration)
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/mod.rs:39` (add `pub mod feishu;` + re-export)
-- Modify: `core/src/gateway/handlers/channel.rs:283-324` (add `"feishu"` arm)
+- Modify: `src/gateway/interfaces/mod.rs:39` (add `pub mod feishu;` + re-export)
+- Modify: `src/gateway/handlers/channel.rs:283-324` (add `"feishu"` arm)
 
 - [ ] **Step 1: Add module declaration to `interfaces/mod.rs`**
 
@@ -1544,7 +1544,7 @@ Expected: All existing tests pass (plus new feishu tests)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/mod.rs core/src/gateway/handlers/channel.rs
+git add src/gateway/interfaces/mod.rs src/gateway/handlers/channel.rs
 git commit -m "feat(feishu): wire Feishu channel into factory and module registry"
 ```
 
@@ -1553,12 +1553,12 @@ git commit -m "feat(feishu): wire Feishu channel into factory and module registr
 ### Task 6: Final Verification and Doc Update
 
 **Files:**
-- Read: `core/src/gateway/interfaces/mod.rs` (verify module doc comment)
-- Modify: `core/src/gateway/interfaces/mod.rs:1-22` (add Feishu to doc comment list)
+- Read: `src/gateway/interfaces/mod.rs` (verify module doc comment)
+- Modify: `src/gateway/interfaces/mod.rs:1-22` (add Feishu to doc comment list)
 
 - [ ] **Step 1: Update module doc comment**
 
-In `core/src/gateway/interfaces/mod.rs`, add to the doc comment list (after Nostr line):
+In `src/gateway/interfaces/mod.rs`, add to the doc comment list (after Nostr line):
 
 ```rust
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
@@ -1594,7 +1594,7 @@ After all tasks complete:
 - [ ] `cargo check -p alephcore` passes
 - [ ] `cargo test -p alephcore --lib` passes (all existing + new feishu tests)
 - [ ] `cargo clippy -p alephcore` clean
-- [ ] 4 new files created in `core/src/gateway/interfaces/feishu/`
+- [ ] 4 new files created in `src/gateway/interfaces/feishu/`
 - [ ] `create_channel_from_config` has `"feishu"` arm
 - [ ] Module doc comment lists Feishu
 - [ ] Config deserialization works with defaults

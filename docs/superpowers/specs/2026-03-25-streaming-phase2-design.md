@@ -29,7 +29,7 @@ Connect the `DeltaSink` pre-wire from Phase 1 to the existing Gateway event syst
 
 ## Section 1: StreamingDeltaSink
 
-**File**: `core/src/gateway/streaming_sink.rs` (new)
+**File**: `src/gateway/streaming_sink.rs` (new)
 
 Bridges `ProviderDelta` events to the Gateway `EventEmitter` for real-time streaming. Created per-run by ExecutionEngine, injected into AgentLoop via `with_delta_sink()`.
 
@@ -97,7 +97,7 @@ impl DeltaSink for StreamingDeltaSink {
 
 ## Section 2: StreamCallback Coordination
 
-**File**: `core/src/gateway/execution_engine/run_loop.rs` (modify)
+**File**: `src/gateway/execution_engine/run_loop.rs` (modify)
 
 When `StreamingDeltaSink` is active, `StreamCallback` must not re-emit text that was already streamed token-by-token.
 
@@ -141,7 +141,7 @@ impl<E: EventEmitter> StreamCallback<E> {
 
 ## Section 3: ExecutionEngine Injection
 
-**File**: `core/src/gateway/execution_engine/run_loop.rs` (modify, same file as Section 2)
+**File**: `src/gateway/execution_engine/run_loop.rs` (modify, same file as Section 2)
 
 In `run_agent_loop()`, create `StreamingDeltaSink` and inject into AgentLoop:
 
@@ -186,9 +186,9 @@ agent_loop.run_with_history(&input, &mut callback).await
 
 | File | Change |
 |------|--------|
-| `core/src/gateway/streaming_sink.rs` | **NEW** — `StreamingDeltaSink` impl |
-| `core/src/gateway/mod.rs` | Add `pub mod streaming_sink;` |
-| `core/src/gateway/execution_engine/run_loop.rs` | Add `streaming_active` to `StreamCallback`; create + inject `StreamingDeltaSink` in `run_agent_loop()` |
+| `src/gateway/streaming_sink.rs` | **NEW** — `StreamingDeltaSink` impl |
+| `src/gateway/mod.rs` | Add `pub mod streaming_sink;` |
+| `src/gateway/execution_engine/run_loop.rs` | Add `streaming_active` to `StreamCallback`; create + inject `StreamingDeltaSink` in `run_agent_loop()` |
 
 ## Section 6: What Does NOT Change
 

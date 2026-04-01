@@ -15,13 +15,13 @@
 ### Task 1: Add `is_intermediate` field to `ResponseChunk` event
 
 **Files:**
-- Modify: `core/src/gateway/event_emitter/types.rs:93-99`
+- Modify: `src/gateway/event_emitter/types.rs:93-99`
 
 This is the data type change that everything else depends on. All existing code that constructs `ResponseChunk` must be updated to include the new field.
 
 - [ ] **Step 1: Add `is_intermediate` field to `ResponseChunk`**
 
-In `core/src/gateway/event_emitter/types.rs`, find the `ResponseChunk` variant (line 93-99):
+In `src/gateway/event_emitter/types.rs`, find the `ResponseChunk` variant (line 93-99):
 
 ```rust
     /// Response text chunk (streaming output)
@@ -56,44 +56,44 @@ Replace with:
 
 Add `is_intermediate: false` to every existing `ResponseChunk` construction. Here is the complete list:
 
-**File 1: `core/src/gateway/execution_engine/run_loop.rs:270`** — `StreamCallback::on_text()`
+**File 1: `src/gateway/execution_engine/run_loop.rs:270`** — `StreamCallback::on_text()`
 ```rust
             is_final: false,
             is_intermediate: false,  // ADD THIS
 ```
 
-**File 2: `core/src/gateway/execution_engine/engine.rs:569`** — `finalize_fast_path_error()`
+**File 2: `src/gateway/execution_engine/engine.rs:569`** — `finalize_fast_path_error()`
 ```rust
                 is_final: true,
                 is_intermediate: false,  // ADD THIS
 ```
 
-**File 3: `core/src/gateway/event_emitter/mod.rs:100`** — `emit_response_chunk()` helper
+**File 3: `src/gateway/event_emitter/mod.rs:100`** — `emit_response_chunk()` helper
 ```rust
                 is_final,
                 is_intermediate: false,  // ADD THIS
 ```
 
-**File 4: `core/src/gateway/event_emitter/impls.rs:155`** — `GatewayEventEmitter` instant-mode final reconstruction
+**File 4: `src/gateway/event_emitter/impls.rs:155`** — `GatewayEventEmitter` instant-mode final reconstruction
 ```rust
                     is_final: true,
                     is_intermediate: false,  // ADD THIS
 ```
 
-**File 5: `core/src/gateway/event_emitter/tests.rs:245,255,271`** — 3 constructions in tests
+**File 5: `src/gateway/event_emitter/tests.rs:245,255,271`** — 3 constructions in tests
 Add `is_intermediate: false` to each of the 3 `ResponseChunk` constructions in the test file.
 
-**File 6: `core/src/gateway/execution_engine/simple.rs:219,231`** — 2 constructions in simple engine
+**File 6: `src/gateway/execution_engine/simple.rs:219,231`** — 2 constructions in simple engine
 Add `is_intermediate: false` to each of the 2 `ResponseChunk` constructions.
 
-**File 7: `core/src/gateway/execution_engine/slash_command.rs:171,232`** — 2 constructions in slash command handler
+**File 7: `src/gateway/execution_engine/slash_command.rs:171,232`** — 2 constructions in slash command handler
 Add `is_intermediate: false` to each of the 2 `ResponseChunk` constructions.
 
-Verify completeness: `grep -rn "ResponseChunk {" core/src/ | grep -v "matches!\|\.\.\|ref " | wc -l` should equal 10 construction sites.
+Verify completeness: `grep -rn "ResponseChunk {" src/ | grep -v "matches!\|\.\.\|ref " | wc -l` should equal 10 construction sites.
 
 - [ ] **Step 3: Update `GatewayEventEmitter` instant-mode to pass through intermediate chunks**
 
-In `core/src/gateway/event_emitter/impls.rs:131-143`, the instant-mode logic buffers all non-final `ResponseChunk` events. After this change, `is_intermediate: true` chunks must NOT be buffered — they should be emitted immediately (same as typewriter mode).
+In `src/gateway/event_emitter/impls.rs:131-143`, the instant-mode logic buffers all non-final `ResponseChunk` events. After this change, `is_intermediate: true` chunks must NOT be buffered — they should be emitted immediately (same as typewriter mode).
 
 Find (line 131-143):
 
@@ -150,7 +150,7 @@ Expected: all existing tests pass (serde default handles backward compat).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/event_emitter/types.rs core/src/gateway/event_emitter/mod.rs core/src/gateway/event_emitter/impls.rs core/src/gateway/event_emitter/tests.rs core/src/gateway/execution_engine/run_loop.rs core/src/gateway/execution_engine/engine.rs core/src/gateway/execution_engine/simple.rs core/src/gateway/execution_engine/slash_command.rs
+git add src/gateway/event_emitter/types.rs src/gateway/event_emitter/mod.rs src/gateway/event_emitter/impls.rs src/gateway/event_emitter/tests.rs src/gateway/execution_engine/run_loop.rs src/gateway/execution_engine/engine.rs src/gateway/execution_engine/simple.rs src/gateway/execution_engine/slash_command.rs
 git commit -m "gateway: add is_intermediate field to ResponseChunk event"
 ```
 
@@ -159,12 +159,12 @@ git commit -m "gateway: add is_intermediate field to ResponseChunk event"
 ### Task 2: Add `on_intermediate_text` to `LoopCallback` and change dispatch logic
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs:102-107` (trait definition)
-- Modify: `core/src/agent_loop/loop_core.rs:241-244` (text dispatch in loop)
+- Modify: `src/agent_loop/loop_core.rs:102-107` (trait definition)
+- Modify: `src/agent_loop/loop_core.rs:241-244` (text dispatch in loop)
 
 - [ ] **Step 1: Write the failing test**
 
-In `core/src/agent_loop/loop_core.rs`, find the `TrackingCallback` in the test module (around line 578) and add an `intermediate_texts` field:
+In `src/agent_loop/loop_core.rs`, find the `TrackingCallback` in the test module (around line 578) and add an `intermediate_texts` field:
 
 ```rust
     #[derive(Default)]
@@ -239,7 +239,7 @@ Expected: FAIL — `intermediate_texts` is empty, `texts` contains both strings 
 
 - [ ] **Step 3: Add `on_intermediate_text` to LoopCallback trait**
 
-In `core/src/agent_loop/loop_core.rs`, find the `LoopCallback` trait (line 102-107):
+In `src/agent_loop/loop_core.rs`, find the `LoopCallback` trait (line 102-107):
 
 ```rust
 pub trait LoopCallback: Send {
@@ -266,7 +266,7 @@ pub trait LoopCallback: Send {
 
 - [ ] **Step 4: Change text dispatch logic in the loop**
 
-In `core/src/agent_loop/loop_core.rs`, find the text processing block (line 241-244):
+In `src/agent_loop/loop_core.rs`, find the text processing block (line 241-244):
 
 ```rust
             // Process text output
@@ -307,7 +307,7 @@ Expected: all tests pass. Note that existing tests like `test_tool_call_then_res
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/agent_loop/loop_core.rs
+git add src/agent_loop/loop_core.rs
 git commit -m "agent_loop: add on_intermediate_text callback, dispatch based on has_tool_calls"
 ```
 
@@ -316,11 +316,11 @@ git commit -m "agent_loop: add on_intermediate_text callback, dispatch based on 
 ### Task 3: Implement `on_intermediate_text` in `StreamCallback`
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:262-283`
+- Modify: `src/gateway/execution_engine/run_loop.rs:262-283`
 
 - [ ] **Step 1: Add `on_intermediate_text` implementation to `StreamCallback`**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, find the `LoopCallback` impl for `StreamCallback` (starts around line 262). After the `on_text` method (ends around line 283), add:
+In `src/gateway/execution_engine/run_loop.rs`, find the `LoopCallback` impl for `StreamCallback` (starts around line 262). After the `on_text` method (ends around line 283), add:
 
 ```rust
     fn on_intermediate_text(&mut self, text: &str) {
@@ -354,7 +354,7 @@ Expected: compiles successfully.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "execution_engine: implement on_intermediate_text in StreamCallback"
 ```
 
@@ -363,11 +363,11 @@ git commit -m "execution_engine: implement on_intermediate_text in StreamCallbac
 ### Task 4: Update `ReplyEmitter` to send intermediate messages immediately
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs:362-381`
+- Modify: `src/gateway/reply_emitter.rs:362-381`
 
 - [ ] **Step 1: Update `ResponseChunk` handling in `emit()`**
 
-In `core/src/gateway/reply_emitter.rs`, find the `ResponseChunk` match arm in `emit()` (line 362-381):
+In `src/gateway/reply_emitter.rs`, find the `ResponseChunk` match arm in `emit()` (line 362-381):
 
 ```rust
             StreamEvent::ResponseChunk {
@@ -438,7 +438,7 @@ Expected: all existing tests pass (they don't construct `ResponseChunk` events d
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/reply_emitter.rs
+git add src/gateway/reply_emitter.rs
 git commit -m "reply_emitter: send intermediate ResponseChunks immediately instead of buffering"
 ```
 
@@ -447,11 +447,11 @@ git commit -m "reply_emitter: send intermediate ResponseChunks immediately inste
 ### Task 5: Add intermediate message guidance to `BASE_BEHAVIOR`
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs:27-40`
+- Modify: `src/agent_loop/prompt_builder.rs:27-40`
 
 - [ ] **Step 1: Add the behavioral rule**
 
-In `core/src/agent_loop/prompt_builder.rs`, find the `BASE_BEHAVIOR` constant. After the line (line 38):
+In `src/agent_loop/prompt_builder.rs`, find the `BASE_BEHAVIOR` constant. After the line (line 38):
 
 ```
 - Provide concise summaries of actions taken and results obtained.\n\
@@ -474,7 +474,7 @@ Expected: compiles successfully.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "prompt: add KEEP THE USER INFORMED rule to BASE_BEHAVIOR"
 ```
 
@@ -483,11 +483,11 @@ git commit -m "prompt: add KEEP THE USER INFORMED rule to BASE_BEHAVIOR"
 ### Task 6: Add "Communication" section to `default_soul()` template
 
 **Files:**
-- Modify: `core/src/config/agent_resolver.rs:388-425`
+- Modify: `src/config/agent_resolver.rs:388-425`
 
 - [ ] **Step 1: Add Communication section to `default_soul()` template**
 
-In `core/src/config/agent_resolver.rs`, find `default_soul()` (line 388). In the format string, insert a new section between "## Vibe" and "## Continuity". Find:
+In `src/config/agent_resolver.rs`, find `default_soul()` (line 388). In the format string, insert a new section between "## Vibe" and "## Continuity". Find:
 
 ```
 ## Vibe
@@ -520,7 +520,7 @@ Expected: compiles successfully.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/config/agent_resolver.rs
+git add src/config/agent_resolver.rs
 git commit -m "config: add Communication section to default_soul() template"
 ```
 

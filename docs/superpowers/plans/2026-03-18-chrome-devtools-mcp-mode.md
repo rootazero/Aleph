@@ -17,12 +17,12 @@
 ### Task 1: Add BrowserDriver enum and ChromeMcpConfig to profile.rs
 
 **Files:**
-- Modify: `core/src/browser/profile.rs`
-- Modify: `core/src/browser/error.rs`
+- Modify: `src/browser/profile.rs`
+- Modify: `src/browser/error.rs`
 
 - [ ] **Step 1: Write tests for new types**
 
-Add to the `#[cfg(test)] mod tests` block in `core/src/browser/profile.rs`:
+Add to the `#[cfg(test)] mod tests` block in `src/browser/profile.rs`:
 
 ```rust
 #[test]
@@ -86,7 +86,7 @@ Expected: FAIL — `BrowserDriver`, `ChromeMcpConfig` not defined, `ProfileConfi
 
 - [ ] **Step 3: Add BrowserDriver enum**
 
-In `core/src/browser/profile.rs`, add before `ProfileConfig`:
+In `src/browser/profile.rs`, add before `ProfileConfig`:
 
 ```rust
 /// Driver mode for browser profiles.
@@ -183,7 +183,7 @@ In the `BrowserSystemConfig` struct, add after `playwright_mcp`:
 
 - [ ] **Step 7: Add new BrowserError variants**
 
-In `core/src/browser/error.rs`, add to the `BrowserError` enum:
+In `src/browser/error.rs`, add to the `BrowserError` enum:
 
 ```rust
     #[error("Failed to attach to browser: {0}")]
@@ -209,7 +209,7 @@ Expected: No errors (existing TOML deserialization tests should still pass since
 - [ ] **Step 10: Commit**
 
 ```bash
-git add core/src/browser/profile.rs core/src/browser/error.rs
+git add src/browser/profile.rs src/browser/error.rs
 git commit -m "browser: add BrowserDriver enum, ChromeMcpConfig, and new error variants"
 ```
 
@@ -218,12 +218,12 @@ git commit -m "browser: add BrowserDriver enum, ChromeMcpConfig, and new error v
 ### Task 2: Create BrowserBackend trait
 
 **Files:**
-- Create: `core/src/browser/backend.rs`
-- Modify: `core/src/browser/mod.rs`
+- Create: `src/browser/backend.rs`
+- Modify: `src/browser/mod.rs`
 
 - [ ] **Step 1: Create backend.rs with trait definition**
 
-Create `core/src/browser/backend.rs`:
+Create `src/browser/backend.rs`:
 
 ```rust
 //! BrowserBackend trait — unified contract for browser driver implementations.
@@ -310,7 +310,7 @@ pub trait BrowserBackend: Send + Sync {
 
 - [ ] **Step 2: Register module in mod.rs**
 
-In `core/src/browser/mod.rs`, add after the existing `pub mod types;` line:
+In `src/browser/mod.rs`, add after the existing `pub mod types;` line:
 
 ```rust
 pub mod backend;
@@ -330,7 +330,7 @@ Expected: No errors. The trait has no implementors yet but compiles fine.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/browser/backend.rs core/src/browser/mod.rs
+git add src/browser/backend.rs src/browser/mod.rs
 git commit -m "browser: add BrowserBackend trait for driver abstraction"
 ```
 
@@ -339,12 +339,12 @@ git commit -m "browser: add BrowserBackend trait for driver abstraction"
 ### Task 3: Create ManagedBackend wrapping BrowserRuntime
 
 **Files:**
-- Create: `core/src/browser/managed_backend.rs`
-- Modify: `core/src/browser/mod.rs`
+- Create: `src/browser/managed_backend.rs`
+- Modify: `src/browser/mod.rs`
 
 - [ ] **Step 1: Create managed_backend.rs**
 
-Create `core/src/browser/managed_backend.rs`:
+Create `src/browser/managed_backend.rs`:
 
 ```rust
 //! ManagedBackend — BrowserBackend implementation wrapping BrowserRuntime (chromiumoxide).
@@ -482,7 +482,7 @@ impl BrowserBackend for ManagedBackend {
 
 - [ ] **Step 2: Register module in mod.rs**
 
-In `core/src/browser/mod.rs`, add:
+In `src/browser/mod.rs`, add:
 
 ```rust
 pub mod managed_backend;
@@ -502,7 +502,7 @@ Expected: No errors.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/browser/managed_backend.rs core/src/browser/mod.rs
+git add src/browser/managed_backend.rs src/browser/mod.rs
 git commit -m "browser: add ManagedBackend wrapping BrowserRuntime"
 ```
 
@@ -513,12 +513,12 @@ git commit -m "browser: add ManagedBackend wrapping BrowserRuntime"
 ### Task 4: Create snapshot conversion module
 
 **Files:**
-- Create: `core/src/browser/chrome_mcp_snapshot.rs`
-- Modify: `core/src/browser/mod.rs`
+- Create: `src/browser/chrome_mcp_snapshot.rs`
+- Modify: `src/browser/mod.rs`
 
 - [ ] **Step 1: Write tests for snapshot conversion**
 
-Create `core/src/browser/chrome_mcp_snapshot.rs` with tests first:
+Create `src/browser/chrome_mcp_snapshot.rs` with tests first:
 
 ```rust
 //! Snapshot conversion from Chrome DevTools MCP tree format to Aleph's AriaSnapshot.
@@ -656,7 +656,7 @@ mod tests {
 
 - [ ] **Step 2: Register module in mod.rs**
 
-In `core/src/browser/mod.rs`, add:
+In `src/browser/mod.rs`, add:
 
 ```rust
 pub mod chrome_mcp_snapshot;
@@ -731,7 +731,7 @@ Expected: ALL PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/browser/chrome_mcp_snapshot.rs core/src/browser/mod.rs
+git add src/browser/chrome_mcp_snapshot.rs src/browser/mod.rs
 git commit -m "browser: add Chrome MCP snapshot conversion"
 ```
 
@@ -740,12 +740,12 @@ git commit -m "browser: add Chrome MCP snapshot conversion"
 ### Task 5: Create ChromeMcpDriver — session management and Chrome auto-launch
 
 **Files:**
-- Create: `core/src/browser/chrome_mcp.rs`
-- Modify: `core/src/browser/mod.rs`
+- Create: `src/browser/chrome_mcp.rs`
+- Modify: `src/browser/mod.rs`
 
 - [ ] **Step 1: Write tests for ChromeMcpDriver**
 
-Create `core/src/browser/chrome_mcp.rs` with the struct definition and tests:
+Create `src/browser/chrome_mcp.rs` with the struct definition and tests:
 
 ```rust
 //! ChromeMcpDriver — manages Chrome DevTools MCP sessions.
@@ -1051,7 +1051,7 @@ mod tests {
 
 - [ ] **Step 2: Register module in mod.rs**
 
-In `core/src/browser/mod.rs`, add:
+In `src/browser/mod.rs`, add:
 
 ```rust
 pub mod chrome_mcp;
@@ -1076,7 +1076,7 @@ Expected: No errors. May need to adjust imports if `McpClient`, `ExternalServerC
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/browser/chrome_mcp.rs core/src/browser/mod.rs
+git add src/browser/chrome_mcp.rs src/browser/mod.rs
 git commit -m "browser: add ChromeMcpDriver with session management and Chrome auto-launch"
 ```
 
@@ -1087,12 +1087,12 @@ git commit -m "browser: add ChromeMcpDriver with session management and Chrome a
 ### Task 6: Create ChromeMcpBackend
 
 **Files:**
-- Create: `core/src/browser/chrome_mcp_backend.rs`
-- Modify: `core/src/browser/mod.rs`
+- Create: `src/browser/chrome_mcp_backend.rs`
+- Modify: `src/browser/mod.rs`
 
 - [ ] **Step 1: Create chrome_mcp_backend.rs**
 
-Create `core/src/browser/chrome_mcp_backend.rs`:
+Create `src/browser/chrome_mcp_backend.rs`:
 
 ```rust
 //! ChromeMcpBackend — BrowserBackend implementation routing through Chrome DevTools MCP.
@@ -1351,7 +1351,7 @@ impl BrowserBackend for ChromeMcpBackend {
 
 - [ ] **Step 2: Register module in mod.rs**
 
-In `core/src/browser/mod.rs`, add:
+In `src/browser/mod.rs`, add:
 
 ```rust
 pub mod chrome_mcp_backend;
@@ -1371,7 +1371,7 @@ Expected: No errors.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/browser/chrome_mcp_backend.rs core/src/browser/mod.rs
+git add src/browser/chrome_mcp_backend.rs src/browser/mod.rs
 git commit -m "browser: add ChromeMcpBackend routing through Chrome DevTools MCP"
 ```
 
@@ -1380,11 +1380,11 @@ git commit -m "browser: add ChromeMcpBackend routing through Chrome DevTools MCP
 ### Task 7: Update ProfileManager with get_backend() routing and "user" profile auto-injection
 
 **Files:**
-- Modify: `core/src/browser/manager.rs`
+- Modify: `src/browser/manager.rs`
 
 - [ ] **Step 1: Write tests for new ProfileManager behavior**
 
-Add to the `#[cfg(test)] mod tests` block in `core/src/browser/manager.rs`:
+Add to the `#[cfg(test)] mod tests` block in `src/browser/manager.rs`:
 
 ```rust
 #[test]
@@ -1436,7 +1436,7 @@ Expected: FAIL — no "user" profile auto-injected, `driver` field doesn't exist
 
 - [ ] **Step 3: Update ProfileManager::new() to inject "user" profile**
 
-In `core/src/browser/manager.rs`, update the `new()` method. Add these imports at the top:
+In `src/browser/manager.rs`, update the `new()` method. Add these imports at the top:
 
 ```rust
 use super::profile::{BrowserDriver, BrowserType, BrowserSystemConfig, ProfileConfig, ProfileState};
@@ -1530,7 +1530,7 @@ pub fn get_driver(&self, name: &str) -> Option<BrowserDriver> {
 
 - [ ] **Step 4: Update existing test that expects 1 profile**
 
-In `core/src/browser/manager.rs`, update `test_manager_default_profile_if_none_configured`:
+In `src/browser/manager.rs`, update `test_manager_default_profile_if_none_configured`:
 
 ```rust
 #[test]
@@ -1558,7 +1558,7 @@ Expected: No errors.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/browser/manager.rs
+git add src/browser/manager.rs
 git commit -m "browser: add user profile auto-injection and ChromeMcpDriver to ProfileManager"
 ```
 
@@ -1571,17 +1571,17 @@ git commit -m "browser: add user profile auto-injection and ChromeMcpDriver to P
 This is the largest task — updating all 10 stub tools (excluding profile_tool.rs which already has real logic). The pattern is the same for each tool: replace the placeholder response with actual `BrowserBackend` dispatch.
 
 **Files:**
-- Modify: `core/src/builtin_tools/browser_tools/mod.rs`
-- Modify: `core/src/builtin_tools/browser_tools/open.rs`
-- Modify: `core/src/builtin_tools/browser_tools/navigate.rs`
-- Modify: `core/src/builtin_tools/browser_tools/click.rs`
-- Modify: `core/src/builtin_tools/browser_tools/type_text.rs`
-- Modify: `core/src/builtin_tools/browser_tools/fill_form.rs`
-- Modify: `core/src/builtin_tools/browser_tools/select.rs`
-- Modify: `core/src/builtin_tools/browser_tools/screenshot.rs`
-- Modify: `core/src/builtin_tools/browser_tools/snapshot.rs`
-- Modify: `core/src/builtin_tools/browser_tools/evaluate.rs`
-- Modify: `core/src/builtin_tools/browser_tools/tabs.rs`
+- Modify: `src/builtin_tools/browser_tools/mod.rs`
+- Modify: `src/builtin_tools/browser_tools/open.rs`
+- Modify: `src/builtin_tools/browser_tools/navigate.rs`
+- Modify: `src/builtin_tools/browser_tools/click.rs`
+- Modify: `src/builtin_tools/browser_tools/type_text.rs`
+- Modify: `src/builtin_tools/browser_tools/fill_form.rs`
+- Modify: `src/builtin_tools/browser_tools/select.rs`
+- Modify: `src/builtin_tools/browser_tools/screenshot.rs`
+- Modify: `src/builtin_tools/browser_tools/snapshot.rs`
+- Modify: `src/builtin_tools/browser_tools/evaluate.rs`
+- Modify: `src/builtin_tools/browser_tools/tabs.rs`
 
 **Implementation note:** Each tool currently holds `Arc<ProfileManager>`. The routing pattern for each is:
 
@@ -1679,7 +1679,7 @@ Expected: Existing tests still pass (they test managed mode which still returns 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/browser_tools/
+git add src/builtin_tools/browser_tools/
 git commit -m "browser: wire browser_tools to BrowserBackend with existing-session routing"
 ```
 
@@ -1688,11 +1688,11 @@ git commit -m "browser: wire browser_tools to BrowserBackend with existing-sessi
 ### Task 9: Integration smoke test
 
 **Files:**
-- Modify: `core/src/browser/chrome_mcp.rs` (add integration test)
+- Modify: `src/browser/chrome_mcp.rs` (add integration test)
 
 - [ ] **Step 1: Add ignored integration test**
 
-Add to the bottom of `core/src/browser/chrome_mcp.rs`:
+Add to the bottom of `src/browser/chrome_mcp.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1738,7 +1738,7 @@ Expected: Lists the test names but doesn't run them (ignored).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/browser/chrome_mcp.rs
+git add src/browser/chrome_mcp.rs
 git commit -m "browser: add Chrome DevTools MCP integration smoke tests (ignored)"
 ```
 

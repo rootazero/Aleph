@@ -46,26 +46,26 @@ Resolution chain:
 
 | Target | Path | Action |
 |--------|------|--------|
-| ModelRegistry | `core/src/providers/model_registry.rs` | Delete file |
+| ModelRegistry | `src/providers/model_registry.rs` | Delete file |
 | model-presets.toml | `shared/config/model-presets.toml` | Delete file |
-| ProtocolAdapter::list_models() | `core/src/providers/adapter.rs` | Remove method + default impl |
-| DiscoveredModel struct | `core/src/providers/adapter.rs` | Remove struct |
-| OpenAI list_models | `core/src/providers/protocols/openai.rs` | Remove method |
-| Anthropic list_models | `core/src/providers/protocols/anthropic.rs` | Remove method |
-| ChatGPT list_models | `core/src/providers/protocols/chatgpt.rs` | Remove method |
-| Gemini list_models | `core/src/providers/protocols/gemini.rs` | Remove method |
-| OllamaProvider::list_models() | `core/src/providers/ollama.rs` | Remove method |
-| OllamaDiscoveryAdapter | `core/src/gateway/handlers/models/` | Remove |
-| models handlers module | `core/src/gateway/handlers/models/` | Delete entire directory |
-| providers.probe handler | `core/src/gateway/handlers/providers/` | Remove probe handler + types |
-| embedding_providers.probe | `core/src/gateway/handlers/embedding_providers.rs` | Remove probe handler + types |
-| models.* RPC registrations | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove 4 endpoints: `models.list`, `models.get`, `models.capabilities`, `models.refresh` |
-| providers.probe RPC registration | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
-| embedding_providers.probe RPC | `core/src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
-| Extension provider list_models | `core/src/extension/provider_adapter.rs` | Remove `list_models()` and `static_models()` methods |
+| ProtocolAdapter::list_models() | `src/providers/adapter.rs` | Remove method + default impl |
+| DiscoveredModel struct | `src/providers/adapter.rs` | Remove struct |
+| OpenAI list_models | `src/providers/protocols/openai.rs` | Remove method |
+| Anthropic list_models | `src/providers/protocols/anthropic.rs` | Remove method |
+| ChatGPT list_models | `src/providers/protocols/chatgpt.rs` | Remove method |
+| Gemini list_models | `src/providers/protocols/gemini.rs` | Remove method |
+| OllamaProvider::list_models() | `src/providers/ollama.rs` | Remove method |
+| OllamaDiscoveryAdapter | `src/gateway/handlers/models/` | Remove |
+| models handlers module | `src/gateway/handlers/models/` | Delete entire directory |
+| providers.probe handler | `src/gateway/handlers/providers/` | Remove probe handler + types |
+| embedding_providers.probe | `src/gateway/handlers/embedding_providers.rs` | Remove probe handler + types |
+| models.* RPC registrations | `src/bin/aleph/commands/start/builder/handlers.rs` | Remove 4 endpoints: `models.list`, `models.get`, `models.capabilities`, `models.refresh` |
+| providers.probe RPC registration | `src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
+| embedding_providers.probe RPC | `src/bin/aleph/commands/start/builder/handlers.rs` | Remove registration |
+| Extension provider list_models | `src/extension/provider_adapter.rs` | Remove `list_models()` and `static_models()` methods |
 
 **NOT deleted** (intentionally preserved):
-- `core/src/gateway/openai_api/routes.rs` — the OpenAI-compatible `/v1/models` endpoint for external tool integration is unrelated to internal model discovery and remains unchanged.
+- `src/gateway/openai_api/routes.rs` — the OpenAI-compatible `/v1/models` endpoint for external tool integration is unrelated to internal model discovery and remains unchanged.
 
 ### 4. Frontend Deletions
 
@@ -94,17 +94,17 @@ All four provider settings pages get the same treatment:
 
 All `config.model` references throughout the codebase change to `config.default_model()` (returns `&models[0]`). This is a large mechanical refactor (~114 occurrences across ~58 files). Key areas:
 
-- Provider creation in `core/src/providers/mod.rs`
-- Execution engine in `core/src/gateway/execution_engine/`
-- Protocol implementations in `core/src/providers/protocols/` (including template.rs)
-- Generation providers in `core/src/generation/providers/`
-- Reranking providers in `core/src/memory/rerank/`
-- Embedding provider in `core/src/memory/embedding_provider.rs`
-- Dispatcher modules in `core/src/dispatcher/`
-- Config presets in `core/src/config/presets_override.rs`
+- Provider creation in `src/providers/mod.rs`
+- Execution engine in `src/gateway/execution_engine/`
+- Protocol implementations in `src/providers/protocols/` (including template.rs)
+- Generation providers in `src/generation/providers/`
+- Reranking providers in `src/memory/rerank/`
+- Embedding provider in `src/memory/embedding_provider.rs`
+- Dispatcher modules in `src/dispatcher/`
+- Config presets in `src/config/presets_override.rs`
 - Frontend API types in `apps/panel/src/api.rs`
 
-**Template system compatibility**: `core/src/providers/protocols/template.rs` serializes config into a template context as `"model": config.model`. This must be updated to `"model": config.default_model()` so existing custom protocol templates using `{{config.model}}` continue to work.
+**Template system compatibility**: `src/providers/protocols/template.rs` serializes config into a template context as `"model": config.model`. This must be updated to `"model": config.default_model()` so existing custom protocol templates using `{{config.model}}` continue to work.
 
 ### 7. Backward Compatibility
 

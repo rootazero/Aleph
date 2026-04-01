@@ -18,10 +18,10 @@
 
 | File | Responsibility |
 |------|---------------|
-| `core/src/skill/config.rs` | SkillsConfig persistence (TOML), Vault API key helpers |
-| `core/src/builtin_tools/skill_status.rs` | LLM Tool: query skill status |
-| `core/src/builtin_tools/skill_install.rs` | LLM Tool: install skill dependencies |
-| `core/src/builtin_tools/skill_manage.rs` | LLM Tool: toggle/configure skills |
+| `src/skill/config.rs` | SkillsConfig persistence (TOML), Vault API key helpers |
+| `src/builtin_tools/skill_status.rs` | LLM Tool: query skill status |
+| `src/builtin_tools/skill_install.rs` | LLM Tool: install skill dependencies |
+| `src/builtin_tools/skill_manage.rs` | LLM Tool: toggle/configure skills |
 | `interfaces/webchat/src/views/settings/skills/mod.rs` | SkillsView main + tab bar |
 | `interfaces/webchat/src/views/settings/skills/skill_list.rs` | List + source grouping |
 | `interfaces/webchat/src/views/settings/skills/skill_card.rs` | Single skill row |
@@ -33,20 +33,20 @@
 
 | File | Changes |
 |------|---------|
-| `core/src/domain/skill.rs:362-515` | Add `primary_env`, `homepage`, `emoji` fields + accessors + mutators |
-| `core/src/skill/manifest.rs:62-224` | Parse new frontmatter fields (`primary-env`, `homepage`, `emoji`) |
-| `core/src/skill/status.rs:1-149` | Replace `SkillStatusReport` with `SkillStatusEntry` + `MissingRequirements` + `InstallOption` + `SkillStatusFilter` |
-| `core/src/skill/installer.rs:1-53` | Add `InstallExecutor`, `select_best_install`, `InstallResult`, `InstallPreferences`, `NodeManager` |
-| `core/src/skill/mod.rs:7-23,85-249` | Add `config` module, extend `Inner` with config/vault, add `register_external`/`full_status`/`update_config`/`install_dependency` |
-| `core/src/gateway/handlers/skills.rs:1-191` | Rewrite: `skills.status`/`skills.update`/`skills.install_dep`/`skills.add`/`skills.remove` |
-| `core/src/gateway/handlers/mod.rs:301-312` | Replace old handler registrations with new ones |
+| `src/domain/skill.rs:362-515` | Add `primary_env`, `homepage`, `emoji` fields + accessors + mutators |
+| `src/skill/manifest.rs:62-224` | Parse new frontmatter fields (`primary-env`, `homepage`, `emoji`) |
+| `src/skill/status.rs:1-149` | Replace `SkillStatusReport` with `SkillStatusEntry` + `MissingRequirements` + `InstallOption` + `SkillStatusFilter` |
+| `src/skill/installer.rs:1-53` | Add `InstallExecutor`, `select_best_install`, `InstallResult`, `InstallPreferences`, `NodeManager` |
+| `src/skill/mod.rs:7-23,85-249` | Add `config` module, extend `Inner` with config/vault, add `register_external`/`full_status`/`update_config`/`install_dependency` |
+| `src/gateway/handlers/skills.rs:1-191` | Rewrite: `skills.status`/`skills.update`/`skills.install_dep`/`skills.add`/`skills.remove` |
+| `src/gateway/handlers/mod.rs:301-312` | Replace old handler registrations with new ones |
 | `interfaces/webchat/src/views/settings/mod.rs` | Change `skills` from file module to directory module |
 
 ### Files to Delete (Phase 6)
 
 | File | Reason |
 |------|--------|
-| `core/src/gateway/handlers/markdown_skills.rs` | Unified into `skills.*` |
+| `src/gateway/handlers/markdown_skills.rs` | Unified into `skills.*` |
 | `interfaces/webchat/src/views/settings/skills.rs` | Replaced by `skills/` directory |
 
 ---
@@ -56,12 +56,12 @@
 ### Task 1: Extend SkillManifest with new fields
 
 **Files:**
-- Modify: `core/src/domain/skill.rs:362-515`
-- Test: `core/src/domain/skill.rs:527-725` (existing test module)
+- Modify: `src/domain/skill.rs:362-515`
+- Test: `src/domain/skill.rs:527-725` (existing test module)
 
 - [ ] **Step 1: Write test for new fields**
 
-In `core/src/domain/skill.rs` test module, add:
+In `src/domain/skill.rs` test module, add:
 
 ```rust
 #[test]
@@ -97,7 +97,7 @@ Expected: FAIL — fields/methods don't exist yet
 
 - [ ] **Step 3: Add fields, accessors, and mutators to SkillManifest**
 
-In `core/src/domain/skill.rs`, add three private fields after `source` (line 385):
+In `src/domain/skill.rs`, add three private fields after `source` (line 385):
 
 ```rust
     /// API Key environment variable name (e.g. "OPENAI_API_KEY").
@@ -167,7 +167,7 @@ Expected: All existing tests pass (new fields have `None` defaults — no breaki
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/domain/skill.rs
+git add src/domain/skill.rs
 git commit -m "skill: add primary_env, homepage, emoji fields to SkillManifest"
 ```
 
@@ -176,12 +176,12 @@ git commit -m "skill: add primary_env, homepage, emoji fields to SkillManifest"
 ### Task 2: Parse new fields from SKILL.md frontmatter
 
 **Files:**
-- Modify: `core/src/skill/manifest.rs:62-224`
-- Test: `core/src/skill/manifest.rs:265+` (existing test module)
+- Modify: `src/skill/manifest.rs:62-224`
+- Test: `src/skill/manifest.rs:265+` (existing test module)
 
 - [ ] **Step 1: Write test for parsing new fields**
 
-In `core/src/skill/manifest.rs` test module, add:
+In `src/skill/manifest.rs` test module, add:
 
 ```rust
 #[test]
@@ -257,7 +257,7 @@ Expected: PASS (both tests)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/skill/manifest.rs
+git add src/skill/manifest.rs
 git commit -m "skill: parse primary-env, homepage, emoji from SKILL.md frontmatter"
 ```
 
@@ -266,12 +266,12 @@ git commit -m "skill: parse primary-env, homepage, emoji from SKILL.md frontmatt
 ### Task 3: Create SkillsConfig with TOML persistence
 
 **Files:**
-- Create: `core/src/skill/config.rs`
-- Modify: `core/src/skill/mod.rs:7-14` (add module declaration)
+- Create: `src/skill/config.rs`
+- Modify: `src/skill/mod.rs:7-14` (add module declaration)
 
 - [ ] **Step 1: Write tests**
 
-Create `core/src/skill/config.rs` with test module:
+Create `src/skill/config.rs` with test module:
 
 ```rust
 //! Skill configuration persistence — stores user preferences per skill.
@@ -449,7 +449,7 @@ mod tests {
 
 - [ ] **Step 2: Add module declaration**
 
-In `core/src/skill/mod.rs`, add after line 14 (`pub mod status;`):
+In `src/skill/mod.rs`, add after line 14 (`pub mod status;`):
 
 ```rust
 pub mod config;
@@ -463,7 +463,7 @@ pub use config::{InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryC
 
 - [ ] **Step 3: Ensure PromptScope derives needed traits**
 
-Check that `PromptScope` in `core/src/domain/skill.rs` has `Serialize, Deserialize, PartialEq`. If not, add them to its derive. It likely needs at least `Serialize, Deserialize` for TOML roundtrip.
+Check that `PromptScope` in `src/domain/skill.rs` has `Serialize, Deserialize, PartialEq`. If not, add them to its derive. It likely needs at least `Serialize, Deserialize` for TOML roundtrip.
 
 - [ ] **Step 4: Run tests**
 
@@ -473,7 +473,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/skill/config.rs core/src/skill/mod.rs core/src/domain/skill.rs
+git add src/skill/config.rs src/skill/mod.rs src/domain/skill.rs
 git commit -m "skill: add SkillsConfig with TOML persistence"
 ```
 
@@ -482,12 +482,12 @@ git commit -m "skill: add SkillsConfig with TOML persistence"
 ### Task 4: Replace SkillStatusReport with SkillStatusEntry
 
 **Files:**
-- Modify: `core/src/skill/status.rs:1-149` (full rewrite)
-- Modify: `core/src/skill/mod.rs:23` (update re-export)
+- Modify: `src/skill/status.rs:1-149` (full rewrite)
+- Modify: `src/skill/mod.rs:23` (update re-export)
 
 - [ ] **Step 1: Rewrite status.rs**
 
-Replace entire `core/src/skill/status.rs` with:
+Replace entire `src/skill/status.rs` with:
 
 ```rust
 //! Status reporting — provides a rich, serializable view of skill status
@@ -762,7 +762,7 @@ mod tests {
 
 - [ ] **Step 2: Ensure InstallKind has needed traits and as_str method**
 
-In `core/src/domain/skill.rs`, ensure `InstallKind` has `Clone, Serialize, Deserialize` derives and an `as_str()` method:
+In `src/domain/skill.rs`, ensure `InstallKind` has `Clone, Serialize, Deserialize` derives and an `as_str()` method:
 
 ```rust
 impl InstallKind {
@@ -781,7 +781,7 @@ impl InstallKind {
 
 - [ ] **Step 3: Update re-export in mod.rs**
 
-In `core/src/skill/mod.rs` line 23, change:
+In `src/skill/mod.rs` line 23, change:
 
 ```rust
 pub use status::SkillStatusReport;
@@ -805,7 +805,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/skill/status.rs core/src/skill/mod.rs core/src/domain/skill.rs
+git add src/skill/status.rs src/skill/mod.rs src/domain/skill.rs
 git commit -m "skill: replace SkillStatusReport with rich SkillStatusEntry"
 ```
 
@@ -814,11 +814,11 @@ git commit -m "skill: replace SkillStatusReport with rich SkillStatusEntry"
 ### Task 5: Add InstallExecutor and preference selection
 
 **Files:**
-- Modify: `core/src/skill/installer.rs:1-53`
+- Modify: `src/skill/installer.rs:1-53`
 
 - [ ] **Step 1: Write tests for select_best_install and InstallExecutor**
 
-Add to `core/src/skill/installer.rs` test module:
+Add to `src/skill/installer.rs` test module:
 
 ```rust
 #[test]
@@ -890,7 +890,7 @@ fn select_best_install_no_brew_preference() {
 
 - [ ] **Step 2: Implement select_best_install**
 
-Add to `core/src/skill/installer.rs` before the test module:
+Add to `src/skill/installer.rs` before the test module:
 
 ```rust
 use crate::skill::config::InstallPreferences;
@@ -931,7 +931,7 @@ pub fn select_best_install<'a>(
 
 - [ ] **Step 3: Add InstallResult struct**
 
-Add to `core/src/skill/installer.rs`:
+Add to `src/skill/installer.rs`:
 
 ```rust
 /// Result of a dependency installation execution.
@@ -1015,7 +1015,7 @@ impl InstallExecutor {
 
 - [ ] **Step 5: Update mod.rs re-exports**
 
-In `core/src/skill/mod.rs`, update the installer re-export:
+In `src/skill/mod.rs`, update the installer re-export:
 
 ```rust
 pub use installer::{build_install_command, filter_install_specs_for_current_os, select_best_install, InstallExecutor, InstallResult};
@@ -1029,7 +1029,7 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/skill/installer.rs core/src/skill/mod.rs
+git add src/skill/installer.rs src/skill/mod.rs
 git commit -m "skill: add InstallExecutor, select_best_install, InstallResult"
 ```
 
@@ -1040,11 +1040,11 @@ git commit -m "skill: add InstallExecutor, select_best_install, InstallResult"
 ### Task 6: Add register_external and full_status to SkillSystem
 
 **Files:**
-- Modify: `core/src/skill/mod.rs:85-249`
+- Modify: `src/skill/mod.rs:85-249`
 
 - [ ] **Step 1: Write tests**
 
-Add to `core/src/skill/mod.rs` test module:
+Add to `src/skill/mod.rs` test module:
 
 ```rust
 #[tokio::test]
@@ -1086,7 +1086,7 @@ async fn full_status_returns_entries() {
 
 - [ ] **Step 2: Extend Inner struct**
 
-In `core/src/skill/mod.rs`, add to `Inner` struct (line 89-95):
+In `src/skill/mod.rs`, add to `Inner` struct (line 89-95):
 
 ```rust
 struct Inner {
@@ -1299,7 +1299,7 @@ Expected: PASS
 - [ ] **Step 10: Commit**
 
 ```bash
-git add core/src/skill/mod.rs core/src/skill/registry.rs
+git add src/skill/mod.rs src/skill/registry.rs
 git commit -m "skill: extend SkillSystem with register_external, full_status, update_config, install_dependency, remove_skill"
 ```
 
@@ -1310,12 +1310,12 @@ git commit -m "skill: extend SkillSystem with register_external, full_status, up
 ### Task 7: Rewrite skills RPC handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/skills.rs:1-191` (full rewrite)
-- Modify: `core/src/gateway/handlers/mod.rs:301-312` (update registrations)
+- Modify: `src/gateway/handlers/skills.rs:1-191` (full rewrite)
+- Modify: `src/gateway/handlers/mod.rs:301-312` (update registrations)
 
 - [ ] **Step 1: Rewrite skills.rs**
 
-Replace entire `core/src/gateway/handlers/skills.rs` with new handlers that call `SkillSystem`:
+Replace entire `src/gateway/handlers/skills.rs` with new handlers that call `SkillSystem`:
 
 ```rust
 //! Skills RPC handlers — unified interface for skill management.
@@ -1492,11 +1492,11 @@ pub async fn handle_remove(
 }
 ```
 
-Note: The exact `GatewayContext` method names (`skill_system()`, `shared_token_manager()`) must match the actual API. The implementer should check `core/src/gateway/mod.rs` for the exact accessor names and adapt.
+Note: The exact `GatewayContext` method names (`skill_system()`, `shared_token_manager()`) must match the actual API. The implementer should check `src/gateway/mod.rs` for the exact accessor names and adapt.
 
 - [ ] **Step 2: Update handler registrations in mod.rs**
 
-In `core/src/gateway/handlers/mod.rs`, replace the old skill handler registrations (lines ~301-312):
+In `src/gateway/handlers/mod.rs`, replace the old skill handler registrations (lines ~301-312):
 
 Remove:
 ```rust
@@ -1528,7 +1528,7 @@ Expected: PASS (or fix compilation errors from import mismatches)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/handlers/skills.rs core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/skills.rs src/gateway/handlers/mod.rs
 git commit -m "gateway: rewrite skills RPC handlers with unified SkillSystem API"
 ```
 
@@ -1539,12 +1539,12 @@ git commit -m "gateway: rewrite skills RPC handlers with unified SkillSystem API
 ### Task 8: Create skill_status LLM Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/skill_status.rs`
-- Modify: `core/src/builtin_tools/mod.rs` (register tool)
+- Create: `src/builtin_tools/skill_status.rs`
+- Modify: `src/builtin_tools/mod.rs` (register tool)
 
 - [ ] **Step 1: Implement skill_status tool**
 
-Create `core/src/builtin_tools/skill_status.rs`:
+Create `src/builtin_tools/skill_status.rs`:
 
 ```rust
 //! skill_status — LLM Tool for querying skill system status.
@@ -1609,7 +1609,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/builtin_tools/skill_status.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/skill_status.rs src/builtin_tools/mod.rs
 git commit -m "tools: add skill_status LLM Tool for querying skill readiness"
 ```
 
@@ -1618,12 +1618,12 @@ git commit -m "tools: add skill_status LLM Tool for querying skill readiness"
 ### Task 9: Create skill_install LLM Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/skill_install.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/skill_install.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Implement skill_install tool**
 
-Create `core/src/builtin_tools/skill_install.rs`:
+Create `src/builtin_tools/skill_install.rs`:
 
 ```rust
 //! skill_install — LLM Tool for installing skill dependencies.
@@ -1680,7 +1680,7 @@ Add `pub mod skill_install;` and register.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/builtin_tools/skill_install.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/skill_install.rs src/builtin_tools/mod.rs
 git commit -m "tools: add skill_install LLM Tool for dependency installation"
 ```
 
@@ -1689,12 +1689,12 @@ git commit -m "tools: add skill_install LLM Tool for dependency installation"
 ### Task 10: Create skill_manage LLM Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/skill_manage.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/skill_manage.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Implement skill_manage tool**
 
-Create `core/src/builtin_tools/skill_manage.rs`:
+Create `src/builtin_tools/skill_manage.rs`:
 
 ```rust
 //! skill_manage — LLM Tool for toggling and configuring skills.
@@ -1778,7 +1778,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/builtin_tools/skill_manage.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/skill_manage.rs src/builtin_tools/mod.rs
 git commit -m "tools: add skill_manage LLM Tool for toggling and configuring skills"
 ```
 
@@ -2139,25 +2139,25 @@ git commit -m "panel: add skill_install button and add_skill dialog components"
 - Modify: Multiple files that import from `crate::skills::` (legacy module)
 
 **Important:** The list below is partial — the actual codebase has ~18 files importing from `crate::skills::`. Step 1 (grep) is authoritative. Known callers include but are not limited to:
-1. `core/src/gateway/handlers/skills.rs` — Already rewritten in Task 7
-2. `core/src/extension/types/mod.rs` — Remove `pub use skills::*` re-export
-3. `core/src/extension/registry/types.rs` — Update skill type references
-4. `core/src/lib.rs` — Update re-exports
-5. `core/src/capability/strategies/skills.rs` — Update `SkillsRegistry` → `SkillRegistry`
-6. `core/src/capability/mod.rs` — Same
-7. `core/src/dispatcher/registry/registration.rs` — Update `SkillInfo` usage
-8. `core/src/dispatcher/registry/mod.rs` — Same
-9. `core/src/dispatcher/registry/state.rs` — Same
-10. `core/src/dispatcher/tool_index/coordinator.rs` — Update `SkillRegistryEvent`, `SkillsRegistry`
-11. `core/src/dispatcher/tool_index/tests.rs` — Update test imports
-12. `core/src/init_unified/coordinator.rs` — Update `SkillsRegistry`
-13. `core/src/builtin_tools/skill_reader.rs` — Update skill lookup
-14. `core/src/builtin_tools/clawhub.rs` — Update skill install references
-15. `core/src/skills/installer.rs`, `registry.rs`, `health.rs`, `cli_wrapper.rs` — These ARE the legacy module, deleted in Task 17
+1. `src/gateway/handlers/skills.rs` — Already rewritten in Task 7
+2. `src/extension/types/mod.rs` — Remove `pub use skills::*` re-export
+3. `src/extension/registry/types.rs` — Update skill type references
+4. `src/lib.rs` — Update re-exports
+5. `src/capability/strategies/skills.rs` — Update `SkillsRegistry` → `SkillRegistry`
+6. `src/capability/mod.rs` — Same
+7. `src/dispatcher/registry/registration.rs` — Update `SkillInfo` usage
+8. `src/dispatcher/registry/mod.rs` — Same
+9. `src/dispatcher/registry/state.rs` — Same
+10. `src/dispatcher/tool_index/coordinator.rs` — Update `SkillRegistryEvent`, `SkillsRegistry`
+11. `src/dispatcher/tool_index/tests.rs` — Update test imports
+12. `src/init_unified/coordinator.rs` — Update `SkillsRegistry`
+13. `src/builtin_tools/skill_reader.rs` — Update skill lookup
+14. `src/builtin_tools/clawhub.rs` — Update skill install references
+15. `src/skills/installer.rs`, `registry.rs`, `health.rs`, `cli_wrapper.rs` — These ARE the legacy module, deleted in Task 17
 
 - [ ] **Step 1: Find all callers**
 
-Run: `grep -r "crate::skills::" core/src/ --include="*.rs" -l`
+Run: `grep -r "crate::skills::" src/ --include="*.rs" -l`
 
 This will give the definitive list. For each file:
 - Replace `crate::skills::SkillInfo` → use the domain type or new `SkillStatusEntry`
@@ -2185,7 +2185,7 @@ git commit -m "refactor: migrate all legacy skills:: callers to skill:: module"
 ### Task 16: Thin extension/skill_ops.rs to delegation
 
 **Files:**
-- Modify: `core/src/extension/skill_ops.rs:1-222`
+- Modify: `src/extension/skill_ops.rs:1-222`
 
 - [ ] **Step 1: Update ExtensionManager methods to delegate to SkillSystem**
 
@@ -2206,7 +2206,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/extension/skill_ops.rs
+git add src/extension/skill_ops.rs
 git commit -m "refactor: thin skill_ops.rs to delegate to SkillSystem"
 ```
 
@@ -2215,18 +2215,18 @@ git commit -m "refactor: thin skill_ops.rs to delegate to SkillSystem"
 ### Task 17: Delete legacy modules and clean up
 
 **Files to delete:**
-- `core/src/gateway/handlers/markdown_skills.rs`
-- Remove `markdown_skills` module declaration from `core/src/gateway/handlers/mod.rs`
+- `src/gateway/handlers/markdown_skills.rs`
+- Remove `markdown_skills` module declaration from `src/gateway/handlers/mod.rs`
 - Remove `markdown_skills.*` handler registrations from handler registry
 
 **Files to clean:**
-- `core/src/extension/types/skills.rs` — Remove `ExtensionSkill` type alias if all callers migrated
-- `core/src/tools/markdown_skill/` — Evaluate what can be deleted vs. what still serves runtime loading
+- `src/extension/types/skills.rs` — Remove `ExtensionSkill` type alias if all callers migrated
+- `src/tools/markdown_skill/` — Evaluate what can be deleted vs. what still serves runtime loading
 
 - [ ] **Step 1: Delete markdown_skills RPC handler**
 
 ```bash
-git rm core/src/gateway/handlers/markdown_skills.rs
+git rm src/gateway/handlers/markdown_skills.rs
 ```
 
 Remove its module declaration and handler registrations from `mod.rs`.
@@ -2238,10 +2238,10 @@ Fix any compilation errors from missing references.
 
 - [ ] **Step 3: Evaluate legacy skills/ module**
 
-Check if any code still references `core/src/skills/`. If all callers have been migrated (Task 15), the module can be deleted:
+Check if any code still references `src/skills/`. If all callers have been migrated (Task 15), the module can be deleted:
 
 ```bash
-grep -r "crate::skills" core/src/ --include="*.rs" | grep -v "crate::skill::"
+grep -r "crate::skills" src/ --include="*.rs" | grep -v "crate::skill::"
 ```
 
 If no results, delete the legacy module.

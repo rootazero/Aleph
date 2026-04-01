@@ -17,14 +17,14 @@
 Define all media format enums and the unified MediaType enum.
 
 **Files:**
-- Create: `core/src/media/types.rs`
-- Create: `core/src/media/mod.rs`
-- Modify: `core/src/lib.rs` (add `pub mod media;`)
+- Create: `src/media/types.rs`
+- Create: `src/media/mod.rs`
+- Modify: `src/lib.rs` (add `pub mod media;`)
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/types.rs
+// In src/media/types.rs
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -337,7 +337,7 @@ cargo test -p alephcore --lib media::types::tests
 
 **Step 3: Write minimal implementation**
 
-The types.rs above IS the implementation. Create `core/src/media/mod.rs`:
+The types.rs above IS the implementation. Create `src/media/mod.rs`:
 
 ```rust
 //! Media understanding pipeline — unified interface for image, audio, video, and document processing.
@@ -354,7 +354,7 @@ pub use types::{
 };
 ```
 
-Add to `core/src/lib.rs` (after `pub mod memory;`):
+Add to `src/lib.rs` (after `pub mod memory;`):
 
 ```rust
 pub mod media;
@@ -379,14 +379,14 @@ media: add MediaType, format enums, MediaInput/Output types for unified media pi
 Define the error type and provider trait following VisionProvider pattern.
 
 **Files:**
-- Create: `core/src/media/error.rs`
-- Create: `core/src/media/provider.rs`
-- Modify: `core/src/media/mod.rs` (add modules + re-exports)
+- Create: `src/media/error.rs`
+- Create: `src/media/provider.rs`
+- Modify: `src/media/mod.rs` (add modules + re-exports)
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/error.rs
+// In src/media/error.rs
 use thiserror::Error;
 
 /// Errors that can occur during media processing.
@@ -425,7 +425,7 @@ impl From<std::io::Error> for MediaError {
 ```
 
 ```rust
-// In core/src/media/provider.rs
+// In src/media/provider.rs
 use async_trait::async_trait;
 use super::error::MediaError;
 use super::types::{MediaInput, MediaOutput, MediaType};
@@ -533,7 +533,7 @@ cargo test -p alephcore --lib media::provider::tests
 
 **Step 3: Write minimal implementation**
 
-The code above IS the implementation. Update `core/src/media/mod.rs`:
+The code above IS the implementation. Update `src/media/mod.rs`:
 
 ```rust
 //! Media understanding pipeline — unified interface for image, audio, video, and document processing.
@@ -567,13 +567,13 @@ media: add MediaError and MediaProvider trait with fallback support
 ## Task 3: MediaPolicy — Size Enforcement
 
 **Files:**
-- Create: `core/src/media/policy.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/policy.rs`
+- Modify: `src/media/mod.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/policy.rs
+// In src/media/policy.rs
 use std::path::PathBuf;
 use std::time::Duration;
 use schemars::JsonSchema;
@@ -759,7 +759,7 @@ cargo test -p alephcore --lib media::policy::tests
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Update `core/src/media/mod.rs` to add:
+Update `src/media/mod.rs` to add:
 
 ```rust
 pub mod policy;
@@ -787,13 +787,13 @@ media: add MediaPolicy for size and lifecycle enforcement
 Detect media format from file extension and magic bytes.
 
 **Files:**
-- Create: `core/src/media/detect.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/detect.rs`
+- Modify: `src/media/mod.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/detect.rs
+// In src/media/detect.rs
 use super::types::{AudioFormat, DocFormat, MediaImageFormat, MediaType, VideoFormat};
 use super::error::MediaError;
 
@@ -1021,7 +1021,7 @@ cargo test -p alephcore --lib media::detect::tests
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Update `core/src/media/mod.rs`:
+Update `src/media/mod.rs`:
 
 ```rust
 pub mod detect;
@@ -1047,13 +1047,13 @@ media: add format detection via magic bytes and file extension
 The central orchestrator that detects format, enforces policy, routes to providers with fallback.
 
 **Files:**
-- Create: `core/src/media/pipeline.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/pipeline.rs`
+- Modify: `src/media/mod.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/pipeline.rs
+// In src/media/pipeline.rs
 use crate::sync_primitives::Arc;
 use super::error::MediaError;
 use super::policy::MediaPolicy;
@@ -1310,7 +1310,7 @@ cargo test -p alephcore --lib media::pipeline::tests
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Update `core/src/media/mod.rs`:
+Update `src/media/mod.rs`:
 
 ```rust
 pub mod pipeline;
@@ -1336,14 +1336,14 @@ media: add MediaPipeline orchestrator with priority-based provider fallback
 Adapter that wraps existing VisionPipeline as a MediaProvider.
 
 **Files:**
-- Create: `core/src/media/processors/mod.rs`
-- Create: `core/src/media/processors/image.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/processors/mod.rs`
+- Create: `src/media/processors/image.rs`
+- Modify: `src/media/mod.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/processors/image.rs
+// In src/media/processors/image.rs
 //! Image processor — bridges existing VisionPipeline into the media pipeline.
 
 use async_trait::async_trait;
@@ -1522,7 +1522,7 @@ cargo test -p alephcore --lib media::processors::image::tests
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Create `core/src/media/processors/mod.rs`:
+Create `src/media/processors/mod.rs`:
 
 ```rust
 //! Media processors — concrete MediaProvider implementations.
@@ -1531,7 +1531,7 @@ pub mod image;
 pub use image::ImageMediaProvider;
 ```
 
-Update `core/src/media/mod.rs`:
+Update `src/media/mod.rs`:
 
 ```rust
 pub mod processors;
@@ -1557,14 +1557,14 @@ media: add ImageMediaProvider bridging VisionPipeline into media system
 Define trait-only stubs for audio and document processing. No heavy deps.
 
 **Files:**
-- Create: `core/src/media/processors/audio.rs`
-- Create: `core/src/media/processors/document.rs`
-- Modify: `core/src/media/processors/mod.rs`
+- Create: `src/media/processors/audio.rs`
+- Create: `src/media/processors/document.rs`
+- Modify: `src/media/processors/mod.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/processors/audio.rs
+// In src/media/processors/audio.rs
 //! Audio processor — stub MediaProvider for audio transcription.
 //!
 //! Actual processing is delegated to external API providers (e.g., Whisper).
@@ -1620,7 +1620,7 @@ mod tests {
 ```
 
 ```rust
-// In core/src/media/processors/document.rs
+// In src/media/processors/document.rs
 //! Document processor — text extraction for plain text and Markdown.
 //!
 //! Handles TXT and MD natively. PDF and DOCX/XLSX are deferred to plugins (P4).
@@ -1749,7 +1749,7 @@ cargo test -p alephcore --lib media::processors
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Update `core/src/media/processors/mod.rs`:
+Update `src/media/processors/mod.rs`:
 
 ```rust
 pub mod audio;
@@ -1761,7 +1761,7 @@ pub use document::TextDocumentProvider;
 pub use image::ImageMediaProvider;
 ```
 
-Note: Ensure `base64` and `tempfile` (dev-dependency) crates are in Cargo.toml. `base64` is likely already present (common in this codebase). Check with `grep base64 core/Cargo.toml`.
+Note: Ensure `base64` and `tempfile` (dev-dependency) crates are in Cargo.toml. `base64` is likely already present (common in this codebase). Check with `grep base64 Cargo.toml`.
 
 **Step 4: Run test to verify it passes**
 
@@ -1782,14 +1782,14 @@ media: add AudioStubProvider and TextDocumentProvider processors
 Unified entry tool that auto-detects type and routes through MediaPipeline.
 
 **Files:**
-- Create: `core/src/builtin_tools/media_tools/mod.rs`
-- Create: `core/src/builtin_tools/media_tools/understand.rs`
-- Modify: `core/src/builtin_tools/mod.rs` (add `pub mod media_tools;`)
+- Create: `src/builtin_tools/media_tools/mod.rs`
+- Create: `src/builtin_tools/media_tools/understand.rs`
+- Modify: `src/builtin_tools/mod.rs` (add `pub mod media_tools;`)
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/builtin_tools/media_tools/understand.rs
+// In src/builtin_tools/media_tools/understand.rs
 //! `media_understand` tool — unified media understanding entry point.
 
 use async_trait::async_trait;
@@ -2037,7 +2037,7 @@ cargo test -p alephcore --lib builtin_tools::media_tools::understand::tests
 
 **Step 3: Write minimal implementation** — code above IS the implementation.
 
-Create `core/src/builtin_tools/media_tools/mod.rs`:
+Create `src/builtin_tools/media_tools/mod.rs`:
 
 ```rust
 //! Media tools — builtin tools for unified media understanding.
@@ -2047,7 +2047,7 @@ pub mod understand;
 pub use understand::{MediaUnderstandArgs, MediaUnderstandOutput, MediaUnderstandTool};
 ```
 
-Add to `core/src/builtin_tools/mod.rs`:
+Add to `src/builtin_tools/mod.rs`:
 
 ```rust
 pub mod media_tools;
@@ -2073,7 +2073,7 @@ media: add media_understand unified tool with auto-detection
 Add `chart_extract` action to existing VisionTool.
 
 **Files:**
-- Modify: `core/src/builtin_tools/vision.rs`
+- Modify: `src/builtin_tools/vision.rs`
 
 **Step 1: Write the failing test**
 
@@ -2144,8 +2144,8 @@ vision: add chart_extract action to VisionTool for structured data extraction
 Add `media_understand` to `BUILTIN_TOOL_DEFINITIONS` and `create_tool_boxed`.
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
-- Modify: `core/src/executor/builtin_registry/config.rs` (add media pipeline to BuiltinToolConfig)
+- Modify: `src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/config.rs` (add media pipeline to BuiltinToolConfig)
 
 **Step 1: Write the failing test**
 
@@ -2209,8 +2209,8 @@ media: register media_understand tool in builtin registry
 Add `[media]` config section with MediaPolicy settings.
 
 **Files:**
-- Create: `core/src/config/types/media.rs` (or add to existing config types)
-- Modify: `core/src/config/structs.rs` (add `media` field to Config)
+- Create: `src/config/types/media.rs` (or add to existing config types)
+- Modify: `src/config/structs.rs` (add `media` field to Config)
 
 **Step 1: Write the failing test**
 
@@ -2239,7 +2239,7 @@ cargo test -p alephcore --lib config -- media_config
 **Step 3: Write minimal implementation**
 
 ```rust
-// In core/src/config/types/media.rs (or wherever config types live)
+// In src/config/types/media.rs (or wherever config types live)
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use crate::media::policy::MediaPolicy;
@@ -2304,13 +2304,13 @@ config: add [media] section for media pipeline policy configuration
 Wire up public exports and add a simple integration test.
 
 **Files:**
-- Modify: `core/src/lib.rs` (add media exports)
-- Modify: `core/src/media/mod.rs` (final re-exports)
+- Modify: `src/lib.rs` (add media exports)
+- Modify: `src/media/mod.rs` (final re-exports)
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/media/mod.rs, add integration test section:
+// In src/media/mod.rs, add integration test section:
 #[cfg(test)]
 mod integration_tests {
     use super::*;
@@ -2401,7 +2401,7 @@ cargo test -p alephcore --lib media::integration_tests
 
 **Step 3: Write minimal implementation**
 
-Add to `core/src/lib.rs` in the "Vision & Generation Exports" section:
+Add to `src/lib.rs` in the "Vision & Generation Exports" section:
 
 ```rust
 // Media Pipeline Exports
@@ -2411,7 +2411,7 @@ pub use crate::media::{
 };
 ```
 
-Final `core/src/media/mod.rs`:
+Final `src/media/mod.rs`:
 
 ```rust
 //! Media understanding pipeline — unified interface for image, audio, video, and document processing.
@@ -2471,9 +2471,9 @@ media: wire up lib.rs exports and add integration tests
 Add the remaining two tools as thin wrappers over MediaPipeline.
 
 **Files:**
-- Create: `core/src/builtin_tools/media_tools/transcribe.rs`
-- Create: `core/src/builtin_tools/media_tools/extract.rs`
-- Modify: `core/src/builtin_tools/media_tools/mod.rs`
+- Create: `src/builtin_tools/media_tools/transcribe.rs`
+- Create: `src/builtin_tools/media_tools/extract.rs`
+- Modify: `src/builtin_tools/media_tools/mod.rs`
 
 These follow the exact same pattern as `media_understand` but with narrower scope:
 
@@ -2495,7 +2495,7 @@ media: add audio_transcribe and document_extract tool stubs
 Register `audio_transcribe` and `document_extract` in `BUILTIN_TOOL_DEFINITIONS`, run full test suite.
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/definitions.rs`
 
 **Step 1: Run all tests**
 
@@ -2536,8 +2536,8 @@ media: register all media tools and finalize P3 media pipeline
 
 ### Critical Files for Implementation
 
-- `/Users/zouguojun/Workspace/Aleph/core/src/media/mod.rs` - New module root: exports all media types, traits, pipeline, processors
-- `/Users/zouguojun/Workspace/Aleph/core/src/media/pipeline.rs` - Core orchestrator: format detection, policy enforcement, provider fallback chain
-- `/Users/zouguojun/Workspace/Aleph/core/src/media/processors/image.rs` - Critical bridge: adapts existing VisionPipeline into unified MediaProvider interface
-- `/Users/zouguojun/Workspace/Aleph/core/src/builtin_tools/media_tools/understand.rs` - Primary tool: unified entry point for AI agent media understanding
-- `/Users/zouguojun/Workspace/Aleph/core/src/executor/builtin_registry/definitions.rs` - Registration: where new media tools get wired into the agent's tool palette
+- `/Users/zouguojun/Workspace/Aleph/src/media/mod.rs` - New module root: exports all media types, traits, pipeline, processors
+- `/Users/zouguojun/Workspace/Aleph/src/media/pipeline.rs` - Core orchestrator: format detection, policy enforcement, provider fallback chain
+- `/Users/zouguojun/Workspace/Aleph/src/media/processors/image.rs` - Critical bridge: adapts existing VisionPipeline into unified MediaProvider interface
+- `/Users/zouguojun/Workspace/Aleph/src/builtin_tools/media_tools/understand.rs` - Primary tool: unified entry point for AI agent media understanding
+- `/Users/zouguojun/Workspace/Aleph/src/executor/builtin_registry/definitions.rs` - Registration: where new media tools get wired into the agent's tool palette

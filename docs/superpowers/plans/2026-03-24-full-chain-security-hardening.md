@@ -15,13 +15,13 @@
 ## Task 1: Security Module Scaffold
 
 **Files:**
-- Create: `core/src/security/mod.rs`
-- Modify: `core/src/lib.rs:82` (add module declaration)
+- Create: `src/security/mod.rs`
+- Modify: `src/lib.rs:82` (add module declaration)
 
 - [ ] **Step 1: Create the security module directory and mod.rs**
 
 ```rust
-// core/src/security/mod.rs
+// src/security/mod.rs
 //! Cross-cutting security primitives.
 //!
 //! Complements `gateway::security` (auth/identity) with:
@@ -38,7 +38,7 @@ pub mod audit;
 
 - [ ] **Step 2: Register module in lib.rs**
 
-In `core/src/lib.rs`, after `pub mod secrets;` (line 95), add:
+In `src/lib.rs`, after `pub mod secrets;` (line 95), add:
 
 ```rust
 pub mod security;
@@ -47,10 +47,10 @@ pub mod security;
 - [ ] **Step 3: Create placeholder files for compilation**
 
 Create empty files with just a module doc comment so the project compiles:
-- `core/src/security/headers.rs` — `//! Security response headers.`
-- `core/src/security/ssrf.rs` — `//! SSRF protection engine.`
-- `core/src/security/content_sanitizer.rs` — `//! External content sanitization.`
-- `core/src/security/audit.rs` — `//! Persistent security audit log.`
+- `src/security/headers.rs` — `//! Security response headers.`
+- `src/security/ssrf.rs` — `//! SSRF protection engine.`
+- `src/security/content_sanitizer.rs` — `//! External content sanitization.`
+- `src/security/audit.rs` — `//! Persistent security audit log.`
 
 - [ ] **Step 4: Verify compilation**
 
@@ -60,7 +60,7 @@ Expected: Compiles with no errors (warnings OK)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/security/ core/src/lib.rs
+git add src/security/ src/lib.rs
 git commit -m "security: scaffold cross-cutting security module"
 ```
 
@@ -69,12 +69,12 @@ git commit -m "security: scaffold cross-cutting security module"
 ## Task 2: Security Response Headers (Phase 1)
 
 **Files:**
-- Modify: `core/src/security/headers.rs`
-- Modify: `core/src/gateway/server/mod.rs:294-306` (build_router)
+- Modify: `src/security/headers.rs`
+- Modify: `src/gateway/server/mod.rs:294-306` (build_router)
 
 - [ ] **Step 1: Write failing test for security headers**
 
-In `core/src/security/headers.rs`:
+In `src/security/headers.rs`:
 
 ```rust
 //! Security response headers middleware.
@@ -235,7 +235,7 @@ Expected: 2 tests pass
 
 - [ ] **Step 3: Integrate into gateway router**
 
-In `core/src/gateway/server/mod.rs`, add import at the top (after line 30):
+In `src/gateway/server/mod.rs`, add import at the top (after line 30):
 
 ```rust
 use crate::security::headers::SecurityHeadersLayer;
@@ -257,7 +257,7 @@ Expected: Compiles
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/security/headers.rs core/src/gateway/server/mod.rs
+git add src/security/headers.rs src/gateway/server/mod.rs
 git commit -m "security: add HTTP security headers middleware (CSP, HSTS, X-Frame-Options)"
 ```
 
@@ -266,12 +266,12 @@ git commit -m "security: add HTTP security headers middleware (CSP, HSTS, X-Fram
 ## Task 3: Rate Limiter HTTP 429 Integration (Phase 1)
 
 **Files:**
-- Modify: `core/src/gateway/rate_limiter.rs` (add `to_http_response` helper)
-- Modify: `core/src/gateway/server/handler.rs` (wire 429 into WS handler)
+- Modify: `src/gateway/rate_limiter.rs` (add `to_http_response` helper)
+- Modify: `src/gateway/server/handler.rs` (wire 429 into WS handler)
 
 - [ ] **Step 1: Add HTTP response helper to rate limiter**
 
-In `core/src/gateway/rate_limiter.rs`, add a helper method to `RateLimitError`:
+In `src/gateway/rate_limiter.rs`, add a helper method to `RateLimitError`:
 
 ```rust
 impl RateLimitError {
@@ -337,7 +337,7 @@ Expected: All rate limiter tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/rate_limiter.rs
+git add src/gateway/rate_limiter.rs
 git commit -m "security: add HTTP 429 response helpers to rate limiter"
 ```
 
@@ -346,7 +346,7 @@ git commit -m "security: add HTTP 429 response helpers to rate limiter"
 ## Task 4: SSRF Protection Engine (Phase 1)
 
 **Files:**
-- Modify: `core/src/security/ssrf.rs`
+- Modify: `src/security/ssrf.rs`
 
 - [ ] **Step 1: Write SSRF protection with tests**
 
@@ -653,7 +653,7 @@ Expected: All tests pass
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/security/ssrf.rs
+git add src/security/ssrf.rs
 git commit -m "security: add SSRF protection engine with DNS rebinding defense"
 ```
 
@@ -662,12 +662,12 @@ git commit -m "security: add SSRF protection engine with DNS rebinding defense"
 ## Task 5: Unicode/Invisible Character Sanitization (Phase 2)
 
 **Files:**
-- Create: `core/src/exec/sanitize.rs`
-- Modify: `core/src/exec/mod.rs` (add module + re-export)
+- Create: `src/exec/sanitize.rs`
+- Modify: `src/exec/mod.rs` (add module + re-export)
 
 - [ ] **Step 1: Write sanitization module with tests**
 
-Create `core/src/exec/sanitize.rs`:
+Create `src/exec/sanitize.rs`:
 
 ```rust
 //! Unicode/invisible character sanitization for command display and risk assessment.
@@ -792,7 +792,7 @@ mod tests {
 
 - [ ] **Step 2: Register module in exec/mod.rs**
 
-In `core/src/exec/mod.rs`, after `pub mod risk;` (line 25), add:
+In `src/exec/mod.rs`, after `pub mod risk;` (line 25), add:
 
 ```rust
 pub mod sanitize;
@@ -812,7 +812,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/exec/sanitize.rs core/src/exec/mod.rs
+git add src/exec/sanitize.rs src/exec/mod.rs
 git commit -m "security: add Unicode/invisible character sanitization"
 ```
 
@@ -821,12 +821,12 @@ git commit -m "security: add Unicode/invisible character sanitization"
 ## Task 6: Environment Variable Injection Detection (Phase 2)
 
 **Files:**
-- Modify: `core/src/exec/risk.rs` (add env injection patterns to DANGER_PATTERNS)
-- Modify: `core/src/exec/kernel.rs` (add detailed reason for env injection)
+- Modify: `src/exec/risk.rs` (add env injection patterns to DANGER_PATTERNS)
+- Modify: `src/exec/kernel.rs` (add detailed reason for env injection)
 
 - [ ] **Step 1: Write failing tests for env injection detection**
 
-Add to `core/src/exec/risk.rs` tests:
+Add to `src/exec/risk.rs` tests:
 
 ```rust
     #[test]
@@ -864,7 +864,7 @@ Expected: FAIL (patterns not yet added)
 
 - [ ] **Step 3: Add env injection patterns to DANGER_PATTERNS**
 
-In `core/src/exec/risk.rs`, add the following patterns to the `DANGER_PATTERNS` vector, before the closing `]`:
+In `src/exec/risk.rs`, add the following patterns to the `DANGER_PATTERNS` vector, before the closing `]`:
 
 ```rust
         // Environment variable injection — dangerous linker/runtime vars
@@ -890,7 +890,7 @@ Expected: All risk tests pass including new env injection tests
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/exec/risk.rs
+git add src/exec/risk.rs
 git commit -m "security: add env variable injection detection to DANGER_PATTERNS"
 ```
 
@@ -899,11 +899,11 @@ git commit -m "security: add env variable injection detection to DANGER_PATTERNS
 ## Task 7: Invisible Char Risk Escalation in ExecSecurityGate (Phase 2)
 
 **Files:**
-- Modify: `core/src/executor/exec_security_gate.rs`
+- Modify: `src/executor/exec_security_gate.rs`
 
 - [ ] **Step 1: Write failing test for invisible char escalation**
 
-Add to tests in `core/src/executor/exec_security_gate.rs`:
+Add to tests in `src/executor/exec_security_gate.rs`:
 
 ```rust
     #[tokio::test]
@@ -945,7 +945,7 @@ Expected: FAIL (no invisible char handling yet)
 
 - [ ] **Step 3: Add invisible char escalation to pre_execute_with_timeout**
 
-In `core/src/executor/exec_security_gate.rs`, add import at top:
+In `src/executor/exec_security_gate.rs`, add import at top:
 
 ```rust
 use crate::exec::sanitize::has_invisible_chars;
@@ -983,7 +983,7 @@ Expected: All tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/executor/exec_security_gate.rs
+git add src/executor/exec_security_gate.rs
 git commit -m "security: escalate risk level when invisible Unicode chars detected"
 ```
 
@@ -992,12 +992,12 @@ git commit -m "security: escalate risk level when invisible Unicode chars detect
 ## Task 8: Path Canonicalization (Phase 2)
 
 **Files:**
-- Create: `core/src/exec/approval/path_canonicalize.rs`
-- Modify: `core/src/exec/approval/mod.rs` (add module)
+- Create: `src/exec/approval/path_canonicalize.rs`
+- Modify: `src/exec/approval/mod.rs` (add module)
 
 - [ ] **Step 1: Write path canonicalization module with tests**
 
-Create `core/src/exec/approval/path_canonicalize.rs`:
+Create `src/exec/approval/path_canonicalize.rs`:
 
 ```rust
 //! Path canonicalization for secure scope validation.
@@ -1227,7 +1227,7 @@ mod tests {
 
 - [ ] **Step 2: Register module in approval/mod.rs**
 
-In `core/src/exec/approval/mod.rs`, add:
+In `src/exec/approval/mod.rs`, add:
 
 ```rust
 pub mod path_canonicalize;
@@ -1241,7 +1241,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/exec/approval/path_canonicalize.rs core/src/exec/approval/mod.rs
+git add src/exec/approval/path_canonicalize.rs src/exec/approval/mod.rs
 git commit -m "security: add path canonicalization with traversal and percent-decode defense"
 ```
 
@@ -1250,7 +1250,7 @@ git commit -m "security: add path canonicalization with traversal and percent-de
 ## Task 9: External Content Sanitizer (Phase 3)
 
 **Files:**
-- Modify: `core/src/security/content_sanitizer.rs`
+- Modify: `src/security/content_sanitizer.rs`
 
 - [ ] **Step 1: Write content sanitizer with tests**
 
@@ -1498,7 +1498,7 @@ mod tests {
 
 - [ ] **Step 2: Check if `hex` and `rand` crates are available**
 
-Run: `grep -q '^rand\|"rand"' /Users/zouguojun/Workspace/Aleph/core/Cargo.toml && echo "rand available" || echo "need rand"`
+Run: `grep -q '^rand\|"rand"' /Users/zouguojun/Workspace/Aleph/Cargo.toml && echo "rand available" || echo "need rand"`
 
 If `rand` or `hex` are not in Cargo.toml, add them. Check existing deps first.
 
@@ -1510,7 +1510,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/security/content_sanitizer.rs
+git add src/security/content_sanitizer.rs
 git commit -m "security: add external content boundary marking and homoglyph normalization"
 ```
 
@@ -1519,8 +1519,8 @@ git commit -m "security: add external content boundary marking and homoglyph nor
 ## Task 10: Persistent Security Audit Log (Phase 3)
 
 **Files:**
-- Modify: `core/src/security/audit.rs`
-- Modify: `core/src/gateway/security/store.rs` (add migration)
+- Modify: `src/security/audit.rs`
+- Modify: `src/gateway/security/store.rs` (add migration)
 
 - [ ] **Step 1: Write audit log module with tests**
 
@@ -1699,7 +1699,7 @@ mod tests {
 
 - [ ] **Step 2: Add migration to SecurityStore**
 
-In `core/src/gateway/security/store.rs`:
+In `src/gateway/security/store.rs`:
 
 1. Change `SCHEMA_VERSION` from `6` to `7`
 2. Add after the v6 migration block (after line 138), before `self.set_schema_version`:
@@ -1729,7 +1729,7 @@ Expected: Store tests still pass (migration backward compatible)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/security/audit.rs core/src/gateway/security/store.rs
+git add src/security/audit.rs src/gateway/security/store.rs
 git commit -m "security: add persistent audit log with SQLite schema migration"
 ```
 
@@ -1742,7 +1742,7 @@ git commit -m "security: add persistent audit log with SQLite schema migration"
 
 - [ ] **Step 1: Find the web_fetch tool implementation**
 
-Run: `grep -rn "web_fetch\|WebFetch" core/src/builtin_tools/ core/src/tools/ --include="*.rs" | head -20`
+Run: `grep -rn "web_fetch\|WebFetch" src/builtin_tools/ src/tools/ --include="*.rs" | head -20`
 
 Locate the function that performs the HTTP request.
 
@@ -1792,7 +1792,7 @@ git commit -m "security: wire SSRF protection into web_fetch and MCP transport"
 
 - [ ] **Step 1: Find where external tool results enter LLM context**
 
-Run: `grep -rn "tool_result\|ToolResult\|tool_output" core/src/agent_loop/ core/src/executor/ --include="*.rs" | head -20`
+Run: `grep -rn "tool_result\|ToolResult\|tool_output" src/agent_loop/ src/executor/ --include="*.rs" | head -20`
 
 Identify where MCP tool results / web_fetch results are formatted before being added to conversation messages.
 
@@ -1833,12 +1833,12 @@ git commit -m "security: wrap external tool results with content boundary marker
 ## Task 13: Audit Log Wiring
 
 **Files:**
-- Modify: `core/src/gateway/server/mod.rs` (add audit log to shared state)
-- Modify: `core/src/executor/exec_security_gate.rs` (wire audit events)
+- Modify: `src/gateway/server/mod.rs` (add audit log to shared state)
+- Modify: `src/executor/exec_security_gate.rs` (wire audit events)
 
 - [ ] **Step 1: Add SecurityAuditLog to GatewaySharedState**
 
-In `core/src/gateway/server/mod.rs`, add to `GatewaySharedState` struct:
+In `src/gateway/server/mod.rs`, add to `GatewaySharedState` struct:
 
 ```rust
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
@@ -1848,7 +1848,7 @@ Update `build_router()` to set `audit_log: None` in the struct initialization (w
 
 - [ ] **Step 2: Wire audit events in ExecSecurityGate**
 
-In `core/src/executor/exec_security_gate.rs`, add an optional `audit_log` field:
+In `src/executor/exec_security_gate.rs`, add an optional `audit_log` field:
 
 ```rust
 pub struct ExecSecurityGate {
@@ -1895,7 +1895,7 @@ Expected: Compiles
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/server/mod.rs core/src/executor/exec_security_gate.rs
+git add src/gateway/server/mod.rs src/executor/exec_security_gate.rs
 git commit -m "security: wire audit log into gateway state and exec security gate"
 ```
 

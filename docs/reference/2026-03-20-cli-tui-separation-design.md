@@ -7,13 +7,13 @@
 
 当前 CLI 和 TUI 代码存在职责混淆：
 
-- `core/src/bin/aleph/cli.rs` — Gateway 服务端自带 761 行 CLI 定义，与 `apps/cli/` 撞名
+- `src/bin/aleph/cli.rs` — Gateway 服务端自带 761 行 CLI 定义，与 `apps/cli/` 撞名
 - `apps/cli/` — 客户端 CLI + 内嵌 TUI（27+ 命令 + ratatui 交互模式）
 - `apps/cli/src/tui/` — CLI crate 内嵌的 TUI 代码
 - `apps/tui/` — 独立 TUI crate，与上一条功能重叠
 - TUI 的 `SlashCommand` enum（17 个硬编码命令）与 Gateway 的 `CommandParser`/`ToolRegistry` 完全脱节
 
-此外，`core/src/cli/` 中存在一个隐藏的客户端层（`GatewayClient`、`OutputFormat`、config/cron/channels 等命令 handler），被 `core/src/bin/aleph/` 的命令直接调用。这意味着**服务端 crate 内部包含了客户端库**，是最严重的架构问题。
+此外，`src/cli/` 中存在一个隐藏的客户端层（`GatewayClient`、`OutputFormat`、config/cron/channels 等命令 handler），被 `src/bin/aleph/` 的命令直接调用。这意味着**服务端 crate 内部包含了客户端库**，是最严重的架构问题。
 
 目标：严格区分 CLI 和 TUI，消除命名混淆和职责重叠。
 
@@ -31,7 +31,7 @@
 CLI/TUI/WebChat 是 Aleph 的**核心通信通道**（用户与 AI 对话的 interface），不是"应用"。`apps/` 保留给平台特定的桌面扩展能力。
 
 ```
-core/src/bin/aleph-server/
+src/bin/aleph-server/
 └── main.rs              # 极简：解析启动参数 → 启动 Gateway server
                          # 二进制名: aleph-server（不对用户暴露，由 CLI 的 daemon 命令管理）
 
@@ -92,7 +92,7 @@ interfaces/webchat ──→ shared/client    ──→  shared/protocol
 
 - `shared/client` 不依赖 core — 纯协议客户端，基于 `aleph-protocol` crate
 - `interfaces/tui` 不依赖 `interfaces/cli`
-- `core/src/cli/`（现有的隐藏客户端层）已合并到 `shared/client/`，待删除
+- `src/cli/`（现有的隐藏客户端层）已合并到 `shared/client/`，待删除
 
 ### 3. 二进制入口
 
@@ -102,7 +102,7 @@ interfaces/webchat ──→ shared/client    ──→  shared/protocol
   - `aleph chat [--agent <name>]` — 启动 TUI
   - `aleph <command> [args]` — 执行 CLI 命令
   - 无子命令时显示 help
-- **`aleph-server`**（来自 `core/src/bin/aleph-server/`）— Gateway 服务进程
+- **`aleph-server`**（来自 `src/bin/aleph-server/`）— Gateway 服务进程
   - 用户不直接运行，由 `aleph daemon start` 作为子进程或 daemon 启动
   - 仅接受启动参数（端口、数据目录等），无子命令
 
@@ -330,7 +330,7 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 
 ### 12. Gateway 命令迁移清单
 
-从 `core/src/bin/aleph/cli.rs` 迁出：
+从 `src/bin/aleph/cli.rs` 迁出：
 
 | 命令 | 类型 | 迁移目标 |
 |------|------|---------|
@@ -352,14 +352,14 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 ### Phase 1: 提取 `apps/client/` crate
 
 - 从 `apps/cli/src/` 中提取 `client.rs`、`config.rs`、`error.rs` 到 `apps/client/`
-- 将 `core/src/cli/` 中的 `GatewayClient`、`OutputFormat` 等通用客户端代码合并到 `apps/client/`
-- 删除 `core/src/cli/`（服务端 crate 不应包含客户端库）
+- 将 `src/cli/` 中的 `GatewayClient`、`OutputFormat` 等通用客户端代码合并到 `apps/client/`
+- 删除 `src/cli/`（服务端 crate 不应包含客户端库）
 - `apps/cli/` 和 `apps/tui/` 改为依赖 `apps/client/`
 - 验证：现有功能不受影响
 
 ### Phase 2: Gateway 瘦身 + CLI 命令迁移
 
-- Gateway 二进制从 `core/src/bin/aleph/` 重命名为 `core/src/bin/aleph-server/`
+- Gateway 二进制从 `src/bin/aleph/` 重命名为 `src/bin/aleph-server/`
 - `cli.rs` 中的命令迁移到 `apps/cli/commands/`
 - `aleph-server/main.rs` 精简为纯启动逻辑（仅接受启动参数）
 - `apps/cli/` 的 `daemon start` 命令负责启动 `aleph-server` 子进程
@@ -392,7 +392,7 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 
 | 风险 | 缓解措施 |
 |------|---------|
-| `core/src/bin/aleph/cli.rs` 有些命令直接操作内部数据结构，迁移到 RPC 需要新增 RPC 方法 | Phase 2 逐个评估，缺什么 RPC 补什么 |
+| `src/bin/aleph/cli.rs` 有些命令直接操作内部数据结构，迁移到 RPC 需要新增 RPC 方法 | Phase 2 逐个评估，缺什么 RPC 补什么 |
 | `apps/cli/` 现有 27+ 命令可能与迁入的命令冲突 | 命名统一时合并重复，不保留两套 |
 | TUI 接入 Gateway 命令后延迟增加（本地 → RPC） | 命令执行本身是轻量 RPC，延迟可忽略；`/clear` 等纯 UI 操作保持本地 |
 | `secret`、`devices`、`plugins enable/disable` 直接操作本地状态，无对应 RPC | Phase 2 逐个补充 RPC 方法：`vault.*`、`devices.*`、`plugins.enable/disable` |

@@ -34,8 +34,8 @@
 | `crates/desktop-linux/src/lib.rs` | `LinuxPlatform` stub implementing `DesktopPlatform` |
 | `crates/desktop-windows/Cargo.toml` | Windows crate manifest |
 | `crates/desktop-windows/src/lib.rs` | `WindowsPlatform` stub implementing `DesktopPlatform` |
-| `core/src/builtin_tools/system_tool.rs` | `SystemTool` builtin (empty shell) |
-| `core/src/builtin_tools/automation_tool.rs` | `AutomationTool` builtin (empty shell) |
+| `src/builtin_tools/system_tool.rs` | `SystemTool` builtin (empty shell) |
+| `src/builtin_tools/automation_tool.rs` | `AutomationTool` builtin (empty shell) |
 | `apps/macos-bridge/Package.swift` | Swift package manifest |
 | `apps/macos-bridge/Sources/AlephBridge/main.swift` | Swift CLI entry point skeleton |
 
@@ -46,10 +46,10 @@
 | `crates/desktop/src/lib.rs` | Add `pub mod traits`, `pub mod platform`, `pub mod pim_types`, etc. |
 | `crates/desktop/Cargo.toml` | Add `chrono` dependency for PIM date types |
 | `Cargo.toml` (workspace) | Add 3 new crate members |
-| `core/Cargo.toml` | Add conditional platform crate deps |
-| `core/src/builtin_tools/mod.rs` | Add `pub mod system_tool`, `pub mod automation_tool` |
-| `core/src/executor/builtin_registry/registry.rs` | Add `system_tool`, `automation_tool` fields |
-| `core/src/executor/builtin_registry/builder.rs` | Construct platform, new tools, register metadata |
+| `Cargo.toml` | Add conditional platform crate deps |
+| `src/builtin_tools/mod.rs` | Add `pub mod system_tool`, `pub mod automation_tool` |
+| `src/executor/builtin_registry/registry.rs` | Add `system_tool`, `automation_tool` fields |
+| `src/executor/builtin_registry/builder.rs` | Construct platform, new tools, register metadata |
 
 ---
 
@@ -875,9 +875,9 @@ In root `Cargo.toml`, add to `members` array (after `"crates/desktop"`):
 "crates/desktop-windows",
 ```
 
-- [ ] **Step 8: Add conditional platform deps to `core/Cargo.toml`**
+- [ ] **Step 8: Add conditional platform deps to `Cargo.toml`**
 
-Add at the end of `core/Cargo.toml`:
+Add at the end of `Cargo.toml`:
 
 ```toml
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -911,7 +911,7 @@ Expected: all tests PASS
 
 ```bash
 git add crates/desktop-macos/ crates/desktop-linux/ crates/desktop-windows/ \
-    Cargo.toml core/Cargo.toml
+    Cargo.toml Cargo.toml
 git commit -m "desktop: add per-platform crate skeletons (macos, linux, windows)"
 ```
 
@@ -920,11 +920,11 @@ git commit -m "desktop: add per-platform crate skeletons (macos, linux, windows)
 ## Task 4: Create SystemTool and AutomationTool Builtin Tools
 
 **Files:**
-- Create: `core/src/builtin_tools/system_tool.rs`
-- Create: `core/src/builtin_tools/automation_tool.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/system_tool.rs`
+- Create: `src/builtin_tools/automation_tool.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
-- [ ] **Step 1: Create `core/src/builtin_tools/system_tool.rs`**
+- [ ] **Step 1: Create `src/builtin_tools/system_tool.rs`**
 
 Follow the same pattern as existing tools. Uses `DesktopPlatform` instead of `DesktopBridgeClient`.
 
@@ -1103,7 +1103,7 @@ impl AlephTool for SystemTool {
 }
 ```
 
-- [ ] **Step 2: Create `core/src/builtin_tools/automation_tool.rs`**
+- [ ] **Step 2: Create `src/builtin_tools/automation_tool.rs`**
 
 ```rust
 //! Automation tool — run scripts (AppleScript/JXA/Shell) and invoke Shortcuts.
@@ -1254,7 +1254,7 @@ impl AlephTool for AutomationTool {
 }
 ```
 
-- [ ] **Step 3: Update `core/src/builtin_tools/mod.rs`**
+- [ ] **Step 3: Update `src/builtin_tools/mod.rs`**
 
 Add module declarations (after `pub mod desktop;` at line 56):
 
@@ -1278,8 +1278,8 @@ Expected: compiles (new tools aren't wired into registry yet, but module compile
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/system_tool.rs core/src/builtin_tools/automation_tool.rs \
-    core/src/builtin_tools/mod.rs
+git add src/builtin_tools/system_tool.rs src/builtin_tools/automation_tool.rs \
+    src/builtin_tools/mod.rs
 git commit -m "core: add SystemTool and AutomationTool builtin tools"
 ```
 
@@ -1288,8 +1288,8 @@ git commit -m "core: add SystemTool and AutomationTool builtin tools"
 ## Task 5: Wire Up DesktopPlatform and Register New Tools
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/registry.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
+- Modify: `src/executor/builtin_registry/registry.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
 
 - [ ] **Step 1: Add new tool fields to `BuiltinToolRegistry` in `registry.rs`**
 
@@ -1377,8 +1377,8 @@ Expected: compiles with no errors
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/registry.rs \
-    core/src/executor/builtin_registry/builder.rs
+git add src/executor/builtin_registry/registry.rs \
+    src/executor/builtin_registry/builder.rs
 git commit -m "core: wire up DesktopPlatform and register system/automation tools"
 ```
 

@@ -31,24 +31,24 @@
 
 | Action | File | Responsibility |
 |--------|------|---------------|
-| Modify | `core/src/gateway/security/store.rs` | Add channel_policies table (v8 migration) |
-| Modify | `core/src/gateway/inbound_router/permission.rs` | Read DM policy from DB |
-| Modify | `core/src/security/audit.rs` | Add new event types for pairing/permission |
-| Create | `core/src/gateway/security/brute_force.rs` | Pairing brute-force detection |
-| Modify | `core/src/gateway/security/mod.rs` | Export new module |
-| Modify | `core/src/extension/marketplace/manifest.rs` | Add sha256 field |
-| Modify | `core/src/extension/marketplace/installer.rs` | Verify hash on install |
+| Modify | `src/gateway/security/store.rs` | Add channel_policies table (v8 migration) |
+| Modify | `src/gateway/inbound_router/permission.rs` | Read DM policy from DB |
+| Modify | `src/security/audit.rs` | Add new event types for pairing/permission |
+| Create | `src/gateway/security/brute_force.rs` | Pairing brute-force detection |
+| Modify | `src/gateway/security/mod.rs` | Export new module |
+| Modify | `src/extension/marketplace/manifest.rs` | Add sha256 field |
+| Modify | `src/extension/marketplace/installer.rs` | Verify hash on install |
 
 ---
 
 ### Task 1: DM Policy persistence (channel_policies table)
 
 **Files:**
-- Modify: `core/src/gateway/security/store.rs` — v8 migration + CRUD methods
+- Modify: `src/gateway/security/store.rs` — v8 migration + CRUD methods
 
 - [ ] **Step 1: Read store.rs to find exact migration location**
 
-Read `core/src/gateway/security/store.rs` to find:
+Read `src/gateway/security/store.rs` to find:
 - SCHEMA_VERSION constant (should be 7)
 - Location of v7 migration block
 - Pattern for adding new migration
@@ -150,7 +150,7 @@ Run: `cargo test -p alephcore --lib store::tests -- --nocapture`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/security/store.rs
+git add src/gateway/security/store.rs
 git commit -m "security: add channel_policies SQLite table (schema v8) with DM policy CRUD"
 ```
 
@@ -159,14 +159,14 @@ git commit -m "security: add channel_policies SQLite table (schema v8) with DM p
 ### Task 2: Security event emission + brute-force detection
 
 **Files:**
-- Modify: `core/src/security/audit.rs` — add PairingAttempt, PermissionDenied event types
-- Create: `core/src/gateway/security/brute_force.rs` — rate-based detection
-- Modify: `core/src/gateway/security/mod.rs` — export
-- Modify: `core/src/gateway/inbound_router/permission.rs` — emit events
+- Modify: `src/security/audit.rs` — add PairingAttempt, PermissionDenied event types
+- Create: `src/gateway/security/brute_force.rs` — rate-based detection
+- Modify: `src/gateway/security/mod.rs` — export
+- Modify: `src/gateway/inbound_router/permission.rs` — emit events
 
 - [ ] **Step 1: Add new event types to SecurityAuditLog**
 
-In `core/src/security/audit.rs`, add to `AuditEventType` enum:
+In `src/security/audit.rs`, add to `AuditEventType` enum:
 
 ```rust
     PairingAttempt,
@@ -353,7 +353,7 @@ Add `pub mod brute_force;`
 
 - [ ] **Step 4: Wire audit logging into permission.rs**
 
-In `core/src/gateway/inbound_router/permission.rs`, where pairing requests fail or permissions are denied, add audit log calls. This requires passing the audit log into the InboundMessageRouter or using a global reference.
+In `src/gateway/inbound_router/permission.rs`, where pairing requests fail or permissions are denied, add audit log calls. This requires passing the audit log into the InboundMessageRouter or using a global reference.
 
 Simplest approach: add an `audit_log: Option<SecurityAuditLog>` field to InboundMessageRouter and emit events:
 
@@ -386,7 +386,7 @@ Run: `cargo test -p alephcore --lib brute_force -- --nocapture`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/security/ core/src/security/audit.rs
+git add src/gateway/security/ src/security/audit.rs
 git commit -m "security: add brute-force detection and security audit event types"
 ```
 
@@ -395,8 +395,8 @@ git commit -m "security: add brute-force detection and security audit event type
 ### Task 3: Plugin integrity verification
 
 **Files:**
-- Modify: `core/src/extension/marketplace/manifest.rs` — add sha256 field
-- Modify: `core/src/extension/marketplace/installer.rs` — verify hash on install
+- Modify: `src/extension/marketplace/manifest.rs` — add sha256 field
+- Modify: `src/extension/marketplace/installer.rs` — verify hash on install
 
 - [ ] **Step 1: Add sha256 field to MarketplacePluginEntry**
 
@@ -473,7 +473,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/extension/marketplace/
+git add src/extension/marketplace/
 git commit -m "security: add SHA-256 integrity verification for plugin installs"
 ```
 

@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-24
 **Status**: Approved
-**Scope**: core/src/dispatcher/, core/src/thinker/, core/src/providers/
+**Scope**: src/dispatcher/, src/thinker/, src/providers/
 
 ## Problem Statement
 
@@ -30,7 +30,7 @@ Adapted to Aleph's architecture principles (R8 LLM Sovereignty, R9 Everything is
 #### Delete entirely
 
 ```
-core/src/dispatcher/
+src/dispatcher/
 ├── model_router/          (22,712 lines — rules-based routing, violates R8)
 ├── engine/                (1,385 lines — AgentEngine, unused)
 ├── scheduler/             (DAG scheduler, unused)
@@ -43,7 +43,7 @@ core/src/dispatcher/
 ├── analyzer.rs            (task analysis, unused)
 └── context/               (task context, unused)
 
-core/src/config/types/
+src/config/types/
 ├── agent/model_routing.rs
 ├── agent/model_profile.rs
 ├── agent/metrics.rs
@@ -58,7 +58,7 @@ core/src/config/types/
 #### Retain (actively used by gateway/agent_loop)
 
 ```
-core/src/dispatcher/
+src/dispatcher/
 ├── registry/              (ToolRegistry — used by gateway)
 ├── types/                 (UnifiedTool, ToolDefinition — used by agent_loop)
 ├── confirmation.rs        (tool confirmation system)
@@ -83,7 +83,7 @@ Remove `config/types/agent/mod.rs` references to deleted config types.
 
 Replace the trivial `SingleProviderRegistry` / `SwappableProviderRegistry` with a real multi-provider registry.
 
-**File**: `core/src/thinker/mod.rs`
+**File**: `src/thinker/mod.rs`
 
 ```rust
 /// Internal state protected by a single RwLock for snapshot consistency.
@@ -156,7 +156,7 @@ impl MultiProviderRegistry {
 
 #### 2.2 Fallback on Transient Errors
 
-**File**: `core/src/thinker/fallback.rs` (new, ~100 lines)
+**File**: `src/thinker/fallback.rs` (new, ~100 lines)
 
 ```rust
 /// Try primary provider, fall back on transient errors.
@@ -221,7 +221,7 @@ The `call_with_fallback` is optionally used when the registry has fallbacks conf
 **Transient error classification**: Add `is_transient()` to `AlephError`:
 
 ```rust
-// core/src/error.rs
+// src/error.rs
 impl AlephError {
     /// Whether this error is transient (worth retrying with another provider)
     pub fn is_transient(&self) -> bool {
@@ -244,7 +244,7 @@ Note: `AlephError::provider()` already exists as a constructor. No new `AllProvi
 
 #### 2.3 Model Key Resolution
 
-**File**: `core/src/providers/presets.rs` (extend existing)
+**File**: `src/providers/presets.rs` (extend existing)
 
 Add `resolve_provider_from_model(model: &str) -> Option<String>` that maps known model prefixes to provider names. This is mechanical name resolution (not semantic reasoning), staying within R8 bounds:
 
@@ -283,7 +283,7 @@ Add `model_override` field to session state and wire it through:
 
 #### 3.1 ToolChoice in RequestPayload
 
-**File**: `core/src/providers/adapter.rs`
+**File**: `src/providers/adapter.rs`
 
 ```rust
 /// Tool selection control
@@ -377,7 +377,7 @@ if let Some(choice) = &payload.tool_choice {
 
 #### 3.3 Gemini Tool Call ID Improvement
 
-**File**: `core/src/providers/protocols/gemini.rs`
+**File**: `src/providers/protocols/gemini.rs`
 
 Replace index-based synthetic IDs with content-hash-based deterministic IDs:
 
@@ -400,7 +400,7 @@ fn generate_tool_call_id(name: &str, args: &Value, turn_idx: usize, call_idx: us
 
 #### 3.4 OpenAI Argument Parse Error Handling
 
-**File**: `core/src/providers/protocols/openai.rs`
+**File**: `src/providers/protocols/openai.rs`
 
 Replace silent empty-object fallback with error-preserving fallback:
 
@@ -418,7 +418,7 @@ let arguments: Value = serde_json::from_str(&tc.function.arguments)
 
 #### 3.5 Protocol Capabilities Declaration
 
-**File**: `core/src/providers/adapter.rs` (extend ProtocolAdapter)
+**File**: `src/providers/adapter.rs` (extend ProtocolAdapter)
 
 ```rust
 pub trait ProtocolAdapter: Send + Sync {

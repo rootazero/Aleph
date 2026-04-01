@@ -89,7 +89,7 @@ Fix `convert_messages()` to handle `ContentBlock::Image` — see Section 6.
 
 ## Section 2: MediaCache — Download & Temp Storage
 
-**New module**: `core/src/media/cache.rs`
+**New module**: `src/media/cache.rs`
 
 ### Interface
 
@@ -130,8 +130,8 @@ pub struct CachedMedia {
 
 | File | Action |
 |------|--------|
-| `core/src/media/mod.rs` | New module declaration |
-| `core/src/media/cache.rs` | MediaCache implementation |
+| `src/media/mod.rs` | New module declaration |
+| `src/media/cache.rs` | MediaCache implementation |
 
 ## Section 3: Provider Vision Capability Detection
 
@@ -152,7 +152,7 @@ When `supports_vision == false`:
 2. `VisionPipeline.understand_image(&ImageInput::from_base64(b64, mime), "Describe this image concisely")` → `VisionResult`
 3. Return `ContentBlock::Text { text: format!("[Image: {}]", result.description) }`
 
-VisionPipeline already exists at `core/src/vision/mod.rs` with `understand_image(&ImageInput, &str) -> Result<VisionResult>` API. Uses `ImageInput` wrapper (not raw path).
+VisionPipeline already exists at `src/vision/mod.rs` with `understand_image(&ImageInput, &str) -> Result<VisionResult>` API. Uses `ImageInput` wrapper (not raw path).
 
 ### Capability Propagation
 
@@ -171,7 +171,7 @@ The `supports_vision` flag needs to reach `run_loop.rs`. Minimal path:
 
 ### TranscriptionService Trait
 
-**New file**: `core/src/media/transcription.rs`
+**New file**: `src/media/transcription.rs`
 
 ```rust
 #[async_trait]
@@ -187,7 +187,7 @@ pub struct TranscriptionResult {
 
 ### WhisperTranscription Implementation
 
-**New file**: `core/src/media/whisper.rs`
+**New file**: `src/media/whisper.rs`
 
 - Calls OpenAI-compatible `POST /v1/audio/transcriptions` (multipart form-data)
 - Reuses existing Provider API key and base_url from config
@@ -211,12 +211,12 @@ No new config fields. Auto-detect from existing Provider:
 
 | File | Action |
 |------|--------|
-| `core/src/media/transcription.rs` | TranscriptionService trait |
-| `core/src/media/whisper.rs` | WhisperTranscription impl |
+| `src/media/transcription.rs` | TranscriptionService trait |
+| `src/media/whisper.rs` | WhisperTranscription impl |
 
 ## Section 5: MediaProcessor — Unified Entry Point
 
-**New file**: `core/src/media/processor.rs`
+**New file**: `src/media/processor.rs`
 
 ### Interface
 
@@ -265,8 +265,8 @@ Each attachment processed independently. Single failure → fallback text, not a
 
 | File | Action |
 |------|--------|
-| `core/src/media/processor.rs` | MediaProcessor implementation |
-| `core/src/media/mod.rs` | Module declarations |
+| `src/media/processor.rs` | MediaProcessor implementation |
+| `src/media/mod.rs` | Module declarations |
 
 ## Section 6: OpenAI Protocol Adapter Fix
 
@@ -311,7 +311,7 @@ Already supports images via `ImageSource { source_type: "base64", media_type, da
 
 ### Dependency Note
 
-Verify `reqwest` has `multipart` feature enabled in `core/Cargo.toml` (needed for Whisper API upload in Section 4). Add if missing.
+Verify `reqwest` has `multipart` feature enabled in `Cargo.toml` (needed for Whisper API upload in Section 4). Add if missing.
 
 ### Files
 
@@ -336,11 +336,11 @@ Verify `reqwest` has `multipart` feature enabled in `core/Cargo.toml` (needed fo
 
 | File | Responsibility |
 |------|---------------|
-| `core/src/media/mod.rs` | Module declarations |
-| `core/src/media/cache.rs` | MediaCache: download, temp storage, cleanup |
-| `core/src/media/processor.rs` | MediaProcessor: unified attachment → ContentBlock |
-| `core/src/media/transcription.rs` | TranscriptionService trait + TranscriptionResult |
-| `core/src/media/whisper.rs` | WhisperTranscription: OpenAI Whisper API impl |
+| `src/media/mod.rs` | Module declarations |
+| `src/media/cache.rs` | MediaCache: download, temp storage, cleanup |
+| `src/media/processor.rs` | MediaProcessor: unified attachment → ContentBlock |
+| `src/media/transcription.rs` | TranscriptionService trait + TranscriptionResult |
+| `src/media/whisper.rs` | WhisperTranscription: OpenAI Whisper API impl |
 
 ## Modified Files Summary
 

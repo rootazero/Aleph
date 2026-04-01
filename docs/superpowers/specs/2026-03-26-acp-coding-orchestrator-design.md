@@ -292,17 +292,17 @@ Injected as a fixed section in the system prompt template, alongside existing to
 
 | Layer | File | Change |
 |-------|------|--------|
-| Harness dual-mode | `core/src/acp/harnesses/claude_code.rs` | Add native_acp path (`claude --acp`), accept `default_mode` from config |
-| | `core/src/acp/harnesses/codex.rs` | Add native_acp path (`codex --acp`), detect support at registration |
-| | `core/src/acp/harnesses/gemini.rs` | Add oneshot path, accept `default_mode` from config |
-| | `core/src/acp/harness.rs` | Add `supported_modes()` method, keep default impls for oneshot/session |
-| Config | `core/src/config/types/acp.rs` | `mode` → `default_mode` with `#[serde(alias = "mode")]`, fix preset defaults |
-| Manager | `core/src/acp/manager.rs` | `SessionKey` newtype, session pool with extract-use-reinsert pattern, `prompt()` extension |
-| Tools | `core/src/builtin_tools/acp_tools.rs` | `AcpDelegateArgs` + mode/reuse_session, construct `AcpChunkCallback` |
-| Streaming | `core/src/acp/session.rs` | `AcpChunkCallback` type, `prompt()` accepts `Option<AcpChunkCallback>` |
+| Harness dual-mode | `src/acp/harnesses/claude_code.rs` | Add native_acp path (`claude --acp`), accept `default_mode` from config |
+| | `src/acp/harnesses/codex.rs` | Add native_acp path (`codex --acp`), detect support at registration |
+| | `src/acp/harnesses/gemini.rs` | Add oneshot path, accept `default_mode` from config |
+| | `src/acp/harness.rs` | Add `supported_modes()` method, keep default impls for oneshot/session |
+| Config | `src/config/types/acp.rs` | `mode` → `default_mode` with `#[serde(alias = "mode")]`, fix preset defaults |
+| Manager | `src/acp/manager.rs` | `SessionKey` newtype, session pool with extract-use-reinsert pattern, `prompt()` extension |
+| Tools | `src/builtin_tools/acp_tools.rs` | `AcpDelegateArgs` + mode/reuse_session, construct `AcpChunkCallback` |
+| Streaming | `src/acp/session.rs` | `AcpChunkCallback` type, `prompt()` accepts `Option<AcpChunkCallback>` |
 | Prompt | System prompt template | Add orchestration strategy section (~200 words, intent-level not parameter-level) |
 | Panel | `interfaces/webchat/src/views/settings/acp_harnesses.rs` | Display/toggle default_mode, fix mode display bug |
-| Tests | `core/tests/acp_probe/` | Dual-mode tests, session pool tests, parallel tests |
+| Tests | `tests/acp_probe/` | Dual-mode tests, session pool tests, parallel tests |
 | Bug fix | Pre-requisite | Config-vs-harness mode disconnect (root cause: presets all set NativeAcp, harness structs ignore config) |
 
 ### What Does NOT Change

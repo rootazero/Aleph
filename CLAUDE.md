@@ -6,7 +6,7 @@
 
 ### R1. 大脑与四肢绝对分离 (Brain-Limb Separation)
 
-- **禁令**: 严禁在 `core/src` 中直接调用特定平台系统 API (AppKit, Vision, CoreGraphics, windows-rs)
+- **禁令**: 严禁在 `src` 中直接调用特定平台系统 API (AppKit, Vision, CoreGraphics, windows-rs)
 - **原则**: 核心层只定义"能力契约 (Trait)"，物理实现由 Desktop Bridge (Tauri-Rust) 通过 IPC 提供
 
 ### R2. UI 逻辑唯一源 (Single Source of UI Truth)

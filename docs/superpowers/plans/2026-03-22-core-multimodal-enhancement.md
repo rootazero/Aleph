@@ -16,36 +16,36 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `core/src/media/mod.rs` | Create | Module declarations |
-| `core/src/media/cache.rs` | Create | MediaCache: download, temp storage, base64, cleanup |
-| `core/src/media/transcription.rs` | Create | TranscriptionService trait + TranscriptionResult |
-| `core/src/media/whisper.rs` | Create | WhisperTranscription: OpenAI Whisper API |
-| `core/src/media/processor.rs` | Create | MediaProcessor: unified attachment → ContentBlock |
-| `core/src/providers/protocols/openai.rs` | Modify | Handle ContentBlock::Image in convert_messages() |
-| `core/src/providers/message.rs` | Modify | Add user_with_content() constructor |
-| `core/src/gateway/execution_engine/mod.rs` | Modify | Add `attachments` to RunRequest |
-| `core/src/gateway/inbound_router/executor.rs` | Modify | Pass attachments to RunRequest |
-| `core/src/gateway/execution_engine/engine.rs` | Modify | Store summary, add MediaProcessor field |
-| `core/src/gateway/execution_engine/run_loop.rs` | Modify | Build multimodal UnifiedMessage |
-| `core/src/agent_loop/loop_core.rs` | Modify | Add run_with_history_messages() |
+| `src/media/mod.rs` | Create | Module declarations |
+| `src/media/cache.rs` | Create | MediaCache: download, temp storage, base64, cleanup |
+| `src/media/transcription.rs` | Create | TranscriptionService trait + TranscriptionResult |
+| `src/media/whisper.rs` | Create | WhisperTranscription: OpenAI Whisper API |
+| `src/media/processor.rs` | Create | MediaProcessor: unified attachment → ContentBlock |
+| `src/providers/protocols/openai.rs` | Modify | Handle ContentBlock::Image in convert_messages() |
+| `src/providers/message.rs` | Modify | Add user_with_content() constructor |
+| `src/gateway/execution_engine/mod.rs` | Modify | Add `attachments` to RunRequest |
+| `src/gateway/inbound_router/executor.rs` | Modify | Pass attachments to RunRequest |
+| `src/gateway/execution_engine/engine.rs` | Modify | Store summary, add MediaProcessor field |
+| `src/gateway/execution_engine/run_loop.rs` | Modify | Build multimodal UnifiedMessage |
+| `src/agent_loop/loop_core.rs` | Modify | Add run_with_history_messages() |
 
 ---
 
 ## Task 1: Create media module with MediaCache
 
 **Files:**
-- Create: `core/src/media/mod.rs`
-- Create: `core/src/media/cache.rs`
-- Modify: `core/src/lib.rs` (add `pub mod media;`)
+- Create: `src/media/mod.rs`
+- Create: `src/media/cache.rs`
+- Modify: `src/lib.rs` (add `pub mod media;`)
 
 - [ ] **Step 1: Create module skeleton**
 
-`core/src/media/mod.rs`:
+`src/media/mod.rs`:
 ```rust
 pub mod cache;
 ```
 
-`core/src/media/cache.rs`:
+`src/media/cache.rs`:
 ```rust
 //! Media file cache for temporary attachment storage.
 
@@ -192,7 +192,7 @@ impl MediaCache {
 }
 ```
 
-Add `pub mod media;` to `core/src/lib.rs`.
+Add `pub mod media;` to `src/lib.rs`.
 
 - [ ] **Step 2: Write tests**
 
@@ -264,7 +264,7 @@ Expected: ALL PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/media/ core/src/lib.rs && git commit -m "media: add MediaCache for attachment download and temp storage"
+git add src/media/ src/lib.rs && git commit -m "media: add MediaCache for attachment download and temp storage"
 ```
 
 ---
@@ -272,13 +272,13 @@ git add core/src/media/ core/src/lib.rs && git commit -m "media: add MediaCache 
 ## Task 2: TranscriptionService trait and WhisperTranscription
 
 **Files:**
-- Create: `core/src/media/transcription.rs`
-- Create: `core/src/media/whisper.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/transcription.rs`
+- Create: `src/media/whisper.rs`
+- Modify: `src/media/mod.rs`
 
 - [ ] **Step 1: Create TranscriptionService trait**
 
-`core/src/media/transcription.rs`:
+`src/media/transcription.rs`:
 ```rust
 //! Transcription service abstraction for speech-to-text.
 
@@ -302,7 +302,7 @@ pub trait TranscriptionService: Send + Sync {
 
 - [ ] **Step 2: Create WhisperTranscription**
 
-`core/src/media/whisper.rs`:
+`src/media/whisper.rs`:
 ```rust
 //! OpenAI Whisper API transcription provider.
 
@@ -400,7 +400,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/media/ && git commit -m "media: add TranscriptionService trait and WhisperTranscription impl"
+git add src/media/ && git commit -m "media: add TranscriptionService trait and WhisperTranscription impl"
 ```
 
 ---
@@ -408,12 +408,12 @@ git add core/src/media/ && git commit -m "media: add TranscriptionService trait 
 ## Task 3: MediaProcessor — unified entry point
 
 **Files:**
-- Create: `core/src/media/processor.rs`
-- Modify: `core/src/media/mod.rs`
+- Create: `src/media/processor.rs`
+- Modify: `src/media/mod.rs`
 
 - [ ] **Step 1: Create MediaProcessor**
 
-`core/src/media/processor.rs`:
+`src/media/processor.rs`:
 ```rust
 //! MediaProcessor — unified attachment processing entry point.
 //!
@@ -609,7 +609,7 @@ Expected: PASS (may need to adjust imports based on actual vision module paths)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/media/ && git commit -m "media: add MediaProcessor for unified attachment processing"
+git add src/media/ && git commit -m "media: add MediaProcessor for unified attachment processing"
 ```
 
 ---
@@ -617,7 +617,7 @@ git add core/src/media/ && git commit -m "media: add MediaProcessor for unified 
 ## Task 4: Fix OpenAI protocol adapter for vision
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai.rs:109-119`
+- Modify: `src/providers/protocols/openai.rs:109-119`
 
 - [ ] **Step 1: Fix convert_messages User handler**
 
@@ -678,7 +678,7 @@ Expected: PASS — verify the import paths match the actual codebase.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/openai.rs && git commit -m "openai: support ContentBlock::Image in convert_messages (vision)"
+git add src/providers/protocols/openai.rs && git commit -m "openai: support ContentBlock::Image in convert_messages (vision)"
 ```
 
 ---
@@ -686,7 +686,7 @@ git add core/src/providers/protocols/openai.rs && git commit -m "openai: support
 ## Task 5: Add UnifiedMessage multimodal constructor
 
 **Files:**
-- Modify: `core/src/providers/message.rs`
+- Modify: `src/providers/message.rs`
 
 - [ ] **Step 1: Add user_with_content() constructor**
 
@@ -707,7 +707,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/message.rs && git commit -m "providers: add UnifiedMessage::user_with_content() for multimodal"
+git add src/providers/message.rs && git commit -m "providers: add UnifiedMessage::user_with_content() for multimodal"
 ```
 
 ---
@@ -715,8 +715,8 @@ git add core/src/providers/message.rs && git commit -m "providers: add UnifiedMe
 ## Task 6: Add attachments to RunRequest
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/mod.rs:50-63` (RunRequest)
-- Modify: `core/src/gateway/inbound_router/executor.rs:130-136` (construction)
+- Modify: `src/gateway/execution_engine/mod.rs:50-63` (RunRequest)
+- Modify: `src/gateway/inbound_router/executor.rs:130-136` (construction)
 
 - [ ] **Step 1: Add attachments field to RunRequest**
 
@@ -766,9 +766,9 @@ git add -A && git commit -m "gateway: add attachments field to RunRequest"
 ## Task 7: Wire MediaProcessor into ExecutionEngine
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/engine.rs` (add field, store summary)
-- Modify: `core/src/gateway/execution_engine/run_loop.rs` (call MediaProcessor, build multimodal message)
-- Modify: `core/src/agent_loop/loop_core.rs` (add run_with_history_messages)
+- Modify: `src/gateway/execution_engine/engine.rs` (add field, store summary)
+- Modify: `src/gateway/execution_engine/run_loop.rs` (call MediaProcessor, build multimodal message)
+- Modify: `src/agent_loop/loop_core.rs` (add run_with_history_messages)
 
 - [ ] **Step 1: Add MediaProcessor to ExecutionEngine**
 
@@ -892,7 +892,7 @@ git add -A && git commit -m "gateway: wire MediaProcessor into ExecutionEngine f
 ## Task 8: Wire MediaProcessor at server startup
 
 **Files:**
-- Modify: `core/src/bin/aleph-server/commands/start/` (server init code)
+- Modify: `src/bin/aleph-server/commands/start/` (server init code)
 
 - [ ] **Step 1: Find server initialization**
 
@@ -939,7 +939,7 @@ git add -A && git commit -m "server: create and inject MediaProcessor at startup
 
 - [ ] **Step 1: Update media module docs**
 
-In `core/src/media/mod.rs`, add module documentation:
+In `src/media/mod.rs`, add module documentation:
 ```rust
 //! Media processing pipeline for multimodal LLM interaction.
 //!

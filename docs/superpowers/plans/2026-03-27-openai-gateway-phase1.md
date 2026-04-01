@@ -15,14 +15,14 @@
 ### Task 1: Extend ApiError and types.rs
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/auth.rs`
-- Modify: `core/src/gateway/openai_api/types.rs`
+- Modify: `src/gateway/openai_api/auth.rs`
+- Modify: `src/gateway/openai_api/types.rs`
 
 This task adds the missing error variants, the `code` field to error JSON output, and augments the OpenAI types needed by subsequent tasks.
 
 - [ ] **Step 1: Add new ApiError variants and code field**
 
-In `core/src/gateway/openai_api/auth.rs`, add `NotFound`, `Conflict`, `BadGateway`, `GatewayTimeout` variants and a `code()` method:
+In `src/gateway/openai_api/auth.rs`, add `NotFound`, `Conflict`, `BadGateway`, `GatewayTimeout` variants and a `code()` method:
 
 ```rust
 pub enum ApiError {
@@ -162,7 +162,7 @@ Expected: All tests PASS including new and updated tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/auth.rs core/src/gateway/openai_api/types.rs
+git add src/gateway/openai_api/auth.rs src/gateway/openai_api/types.rs
 git commit -m "gateway: extend OpenAI API types and error handling"
 ```
 
@@ -171,9 +171,9 @@ git commit -m "gateway: extend OpenAI API types and error handling"
 ### Task 2: Create state.rs and router.rs
 
 **Files:**
-- Create: `core/src/gateway/openai_api/state.rs`
-- Create: `core/src/gateway/openai_api/router.rs`
-- Modify: `core/src/gateway/openai_api/mod.rs`
+- Create: `src/gateway/openai_api/state.rs`
+- Create: `src/gateway/openai_api/router.rs`
+- Modify: `src/gateway/openai_api/mod.rs`
 
 This task creates the new state struct with all injected dependencies and the route registration.
 
@@ -254,7 +254,7 @@ impl IntoResponse for ApiError {
 
 - [ ] **Step 3: Update mod.rs**
 
-Replace `core/src/gateway/openai_api/mod.rs` contents:
+Replace `src/gateway/openai_api/mod.rs` contents:
 
 ```rust
 //! OpenAI-compatible API — dual-mode chat completions gateway.
@@ -278,17 +278,17 @@ pub use state::OpenAiApiState;
 
 Create empty placeholder files so it compiles. These will be filled in subsequent tasks:
 
-`core/src/gateway/openai_api/models.rs`:
+`src/gateway/openai_api/models.rs`:
 ```rust
 //! GET /v1/models handlers (placeholder)
 ```
 
-`core/src/gateway/openai_api/stream.rs`:
+`src/gateway/openai_api/stream.rs`:
 ```rust
 //! Shared SSE formatting utilities (placeholder)
 ```
 
-`core/src/gateway/openai_api/completions/mod.rs`:
+`src/gateway/openai_api/completions/mod.rs`:
 ```rust
 //! POST /v1/chat/completions — dual-mode dispatch (placeholder)
 ```
@@ -301,7 +301,7 @@ Expected: Compiles (modules referenced but empty placeholders are fine for now).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/
+git add src/gateway/openai_api/
 git commit -m "gateway: create OpenAI API state, router, and module structure"
 ```
 
@@ -310,7 +310,7 @@ git commit -m "gateway: create OpenAI API state, router, and module structure"
 ### Task 3: Implement /v1/models (hybrid list)
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/models.rs`
+- Modify: `src/gateway/openai_api/models.rs`
 
 - [ ] **Step 1: Implement list_models and get_model**
 
@@ -405,7 +405,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/models.rs
+git add src/gateway/openai_api/models.rs
 git commit -m "gateway: implement /v1/models hybrid listing"
 ```
 
@@ -414,7 +414,7 @@ git commit -m "gateway: implement /v1/models hybrid listing"
 ### Task 4: Implement stream.rs (shared SSE formatter)
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/stream.rs`
+- Modify: `src/gateway/openai_api/stream.rs`
 
 This is the core SSE formatting utility shared by both passthrough and agent paths.
 
@@ -647,7 +647,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/stream.rs
+git add src/gateway/openai_api/stream.rs
 git commit -m "gateway: implement shared SSE stream formatter"
 ```
 
@@ -656,8 +656,8 @@ git commit -m "gateway: implement shared SSE stream formatter"
 ### Task 5: Implement passthrough completions path
 
 **Files:**
-- Create: `core/src/gateway/openai_api/completions/passthrough.rs`
-- Modify: `core/src/gateway/openai_api/completions/mod.rs`
+- Create: `src/gateway/openai_api/completions/passthrough.rs`
+- Modify: `src/gateway/openai_api/completions/mod.rs`
 
 - [ ] **Step 1: Implement completions/mod.rs (dispatch logic)**
 
@@ -874,7 +874,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/completions/
+git add src/gateway/openai_api/completions/
 git commit -m "gateway: implement passthrough completions path"
 ```
 
@@ -883,7 +883,7 @@ git commit -m "gateway: implement passthrough completions path"
 ### Task 6: Implement agent completions path
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/completions/agent.rs`
+- Modify: `src/gateway/openai_api/completions/agent.rs`
 
 - [ ] **Step 1: Implement agent path with EventEmitter**
 
@@ -1218,7 +1218,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/openai_api/completions/agent.rs
+git add src/gateway/openai_api/completions/agent.rs
 git commit -m "gateway: implement agent completions path with SSE streaming"
 ```
 
@@ -1227,9 +1227,9 @@ git commit -m "gateway: implement agent completions path with SSE streaming"
 ### Task 7: Wire into GatewayServer and cleanup
 
 **Files:**
-- Modify: `core/src/gateway/server/mod.rs` (build_router)
-- Modify: `core/src/bin/aleph-server/commands/start/mod.rs` (pass dependencies)
-- Delete: `core/src/gateway/openai_api/routes.rs`
+- Modify: `src/gateway/server/mod.rs` (build_router)
+- Modify: `src/bin/aleph-server/commands/start/mod.rs` (pass dependencies)
+- Delete: `src/gateway/openai_api/routes.rs`
 
 This task replaces the old stub with the new state + router and wires the execution adapter and agent registry through from server startup.
 
@@ -1272,7 +1272,7 @@ let openai = openai_routes(openai_state);
 
 - [ ] **Step 3: Wire dependencies from startup code**
 
-In `core/src/bin/aleph-server/commands/start/mod.rs`, after `agent_result` is built, pass the execution adapter and agent registry to the gateway server:
+In `src/bin/aleph-server/commands/start/mod.rs`, after `agent_result` is built, pass the execution adapter and agent registry to the gateway server:
 
 ```rust
 // After agent initialization:
@@ -1301,7 +1301,7 @@ server.provider_map = Arc::new(provider_map);
 - [ ] **Step 4: Delete old routes.rs**
 
 ```bash
-rm core/src/gateway/openai_api/routes.rs
+rm src/gateway/openai_api/routes.rs
 ```
 
 Ensure no remaining references to the deleted file. Update any imports.
@@ -1320,7 +1320,7 @@ Some old tests in the deleted `routes.rs` will need to be recreated or adapted i
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A core/src/gateway/openai_api/ core/src/gateway/server/mod.rs core/src/bin/
+git add -A src/gateway/openai_api/ src/gateway/server/mod.rs src/bin/
 git commit -m "gateway: wire OpenAI API to execution engine, delete old stubs"
 ```
 

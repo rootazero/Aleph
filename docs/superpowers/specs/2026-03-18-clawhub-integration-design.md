@@ -50,10 +50,10 @@
 
 ## Component 1: ClawHub HTTP Client
 
-**Location**: `core/src/clawhub/`
+**Location**: `src/clawhub/`
 
 ```
-core/src/clawhub/
+src/clawhub/
 ├── mod.rs        // module entry, re-exports
 ├── client.rs     // HTTP client
 └── types.rs      // request/response types
@@ -75,7 +75,7 @@ pub struct ClawHubClient {
 
 ### Initialization
 
-`ClawHubClient::new()` is called during server startup in the builder pipeline (`core/src/bin/aleph/commands/start/builder/agent_init.rs`), injected into `BuiltinToolConfig.clawhub_client` and shared with gateway handlers via `Arc<ClawHubClient>`. No config required — the client works out of the box with the default registry URL.
+`ClawHubClient::new()` is called during server startup in the builder pipeline (`src/bin/aleph/commands/start/builder/agent_init.rs`), injected into `BuiltinToolConfig.clawhub_client` and shared with gateway handlers via `Arc<ClawHubClient>`. No config required — the client works out of the box with the default registry URL.
 
 ### API Methods
 
@@ -161,7 +161,7 @@ All errors use existing `AlephError` type. Partial failure cleanup: temp directo
 
 ## Component 2: Builtin Tools (LLM Interface)
 
-**Location**: `core/src/builtin_tools/clawhub.rs`
+**Location**: `src/builtin_tools/clawhub.rs`
 
 Three tools sharing one `ClawHubClient` instance via `BuiltinToolConfig`.
 
@@ -231,7 +231,7 @@ Version comparison: use the `semver` crate (already in dependency tree via Cargo
 
 ## Component 3: Gateway RPC Handlers (Panel Interface)
 
-**Location**: `core/src/gateway/handlers/clawhub.rs`
+**Location**: `src/gateway/handlers/clawhub.rs`
 
 ### RPC Methods
 
@@ -258,7 +258,7 @@ Added alongside existing `skills.list`, `skills.install` etc. in gateway handler
 
 ## Component 4: Skill Format Compatibility
 
-**Modified files**: `core/src/tools/markdown_skill/spec.rs`, `parser.rs`
+**Modified files**: `src/tools/markdown_skill/spec.rs`, `parser.rs`
 
 ### Extended Metadata
 
@@ -416,19 +416,19 @@ No dedicated ClawHub uninstall tool. ClawHub-installed skills appear in the Pane
 
 | Action | Path | Description |
 |--------|------|-------------|
-| **NEW** | `core/src/clawhub/mod.rs` | Module entry |
-| **NEW** | `core/src/clawhub/client.rs` | HTTP client |
-| **NEW** | `core/src/clawhub/types.rs` | Request/response types |
-| **NEW** | `core/src/builtin_tools/clawhub.rs` | 3 builtin tools |
-| **NEW** | `core/src/gateway/handlers/clawhub.rs` | 4 RPC handlers |
-| **MOD** | `core/src/tools/markdown_skill/spec.rs` | Add `OpenClawMetadata` |
-| **MOD** | `core/src/tools/markdown_skill/parser.rs` | Deserialize `openclaw` namespace |
-| **MOD** | `core/src/executor/builtin_registry/definitions.rs` | Register 3 tools |
-| **MOD** | `core/src/executor/builtin_registry/groups.rs` | Add "clawhub" group |
-| **MOD** | `core/src/executor/builtin_registry/config.rs` | Add `clawhub_client` field |
-| **MOD** | `core/src/executor/builtin_registry/registry.rs` | Tool fields + execute match |
-| **MOD** | `core/src/gateway/handlers/mod.rs` | Register clawhub handlers |
-| **MOD** | `core/src/lib.rs` | Add `pub mod clawhub` |
+| **NEW** | `src/clawhub/mod.rs` | Module entry |
+| **NEW** | `src/clawhub/client.rs` | HTTP client |
+| **NEW** | `src/clawhub/types.rs` | Request/response types |
+| **NEW** | `src/builtin_tools/clawhub.rs` | 3 builtin tools |
+| **NEW** | `src/gateway/handlers/clawhub.rs` | 4 RPC handlers |
+| **MOD** | `src/tools/markdown_skill/spec.rs` | Add `OpenClawMetadata` |
+| **MOD** | `src/tools/markdown_skill/parser.rs` | Deserialize `openclaw` namespace |
+| **MOD** | `src/executor/builtin_registry/definitions.rs` | Register 3 tools |
+| **MOD** | `src/executor/builtin_registry/groups.rs` | Add "clawhub" group |
+| **MOD** | `src/executor/builtin_registry/config.rs` | Add `clawhub_client` field |
+| **MOD** | `src/executor/builtin_registry/registry.rs` | Tool fields + execute match |
+| **MOD** | `src/gateway/handlers/mod.rs` | Register clawhub handlers |
+| **MOD** | `src/lib.rs` | Add `pub mod clawhub` |
 | **NEW** | `apps/panel/src/clawhub/` | Leptos UI components |
 
 ## Design Principles Alignment

@@ -145,7 +145,7 @@ The code changes open the pipe for intermediate messages, but the LLM must actua
 
 ### Level 1: BASE_BEHAVIOR (prompt_builder.rs)
 
-Add a behavioral rule to `BASE_BEHAVIOR` in `core/src/agent_loop/prompt_builder.rs`. This is hard-coded and loaded for ALL agents unconditionally:
+Add a behavioral rule to `BASE_BEHAVIOR` in `src/agent_loop/prompt_builder.rs`. This is hard-coded and loaded for ALL agents unconditionally:
 
 ```
 - **KEEP THE USER INFORMED.** When you need to execute multiple steps, briefly tell the user
@@ -157,7 +157,7 @@ Add a behavioral rule to `BASE_BEHAVIOR` in `core/src/agent_loop/prompt_builder.
 
 ### Level 2: SOUL.md Template and Existing Agents
 
-Add a "Communication" section to the SOUL.md template (`default_soul()` in `core/src/config/agent_resolver.rs`) so new agents inherit this guidance from their identity:
+Add a "Communication" section to the SOUL.md template (`default_soul()` in `src/config/agent_resolver.rs`) so new agents inherit this guidance from their identity:
 
 ```markdown
 ## Communication
@@ -220,14 +220,14 @@ AgentLoop iteration 3 (final):
 
 | File | Change |
 |------|--------|
-| `core/src/agent_loop/loop_core.rs` | Add `on_intermediate_text` to trait, change text dispatch logic |
-| `core/src/gateway/event_emitter/types.rs` | Add `is_intermediate` field to `ResponseChunk` |
-| `core/src/gateway/execution_engine/run_loop.rs` | Implement `on_intermediate_text` in `StreamCallback` |
-| `core/src/gateway/reply_emitter.rs` | Handle `is_intermediate` in `emit()` |
-| `core/src/gateway/event_emitter/impls.rs` | Bypass instant-mode buffering for `is_intermediate` chunks |
-| `core/src/gateway/event_emitter/mod.rs` | Add `is_intermediate: false` to `emit_response_chunk()` helper |
-| `core/src/gateway/execution_engine/simple.rs` | Add `is_intermediate: false` to constructions |
-| `core/src/gateway/execution_engine/slash_command.rs` | Add `is_intermediate: false` to constructions |
-| `core/src/agent_loop/prompt_builder.rs` | Add intermediate message guidance to `BASE_BEHAVIOR` |
-| `core/src/config/agent_resolver.rs` | Add "Communication" section to `default_soul()` template |
+| `src/agent_loop/loop_core.rs` | Add `on_intermediate_text` to trait, change text dispatch logic |
+| `src/gateway/event_emitter/types.rs` | Add `is_intermediate` field to `ResponseChunk` |
+| `src/gateway/execution_engine/run_loop.rs` | Implement `on_intermediate_text` in `StreamCallback` |
+| `src/gateway/reply_emitter.rs` | Handle `is_intermediate` in `emit()` |
+| `src/gateway/event_emitter/impls.rs` | Bypass instant-mode buffering for `is_intermediate` chunks |
+| `src/gateway/event_emitter/mod.rs` | Add `is_intermediate: false` to `emit_response_chunk()` helper |
+| `src/gateway/execution_engine/simple.rs` | Add `is_intermediate: false` to constructions |
+| `src/gateway/execution_engine/slash_command.rs` | Add `is_intermediate: false` to constructions |
+| `src/agent_loop/prompt_builder.rs` | Add intermediate message guidance to `BASE_BEHAVIOR` |
+| `src/config/agent_resolver.rs` | Add "Communication" section to `default_soul()` template |
 | `~/.aleph/agents/*/SOUL.md` (5 files) | Add "Communication" section to existing agents |

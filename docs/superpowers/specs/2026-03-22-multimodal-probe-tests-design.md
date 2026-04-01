@@ -70,7 +70,7 @@ tracing::info!(
 
 ## Section 2: Layer A — Rust Integration Tests
 
-**File**: `core/tests/multimodal_probe/mod.rs` (new)
+**File**: `tests/multimodal_probe/mod.rs` (new)
 
 ### Test Scenarios
 
@@ -308,7 +308,7 @@ Result: 6/6 PASS
 | `providers/protocols/openai.rs` | Modify | P6 probe |
 | `providers/protocols/anthropic.rs` | Modify | P6 probe (Anthropic variant) |
 | `gateway/reply_emitter.rs` | Modify | P7 probe |
-| `core/tests/multimodal_probe/mod.rs` | Create | Layer A integration tests (7 tests) |
+| `tests/multimodal_probe/mod.rs` | Create | Layer A integration tests (7 tests) |
 | `e2e_tests/multimodal_e2e.py` | Create | Layer B Telegram E2E monitor |
 
 ## Not In Scope

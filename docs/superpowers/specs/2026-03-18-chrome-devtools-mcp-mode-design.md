@@ -258,21 +258,21 @@ Error recovery:
 
 | File | Purpose | Est. Lines |
 |------|---------|-----------|
-| `core/src/browser/backend.rs` | `BrowserBackend` trait | ~60 |
-| `core/src/browser/chrome_mcp.rs` | `ChromeMcpDriver` — session management, Chrome auto-launch | ~300 |
-| `core/src/browser/chrome_mcp_snapshot.rs` | Snapshot tree-to-flat conversion | ~80 |
-| `core/src/browser/managed_backend.rs` | `ManagedBackend` — wraps `BrowserRuntime` | ~150 |
-| `core/src/browser/chrome_mcp_backend.rs` | `ChromeMcpBackend` — param conversion + MCP calls | ~250 |
+| `src/browser/backend.rs` | `BrowserBackend` trait | ~60 |
+| `src/browser/chrome_mcp.rs` | `ChromeMcpDriver` — session management, Chrome auto-launch | ~300 |
+| `src/browser/chrome_mcp_snapshot.rs` | Snapshot tree-to-flat conversion | ~80 |
+| `src/browser/managed_backend.rs` | `ManagedBackend` — wraps `BrowserRuntime` | ~150 |
+| `src/browser/chrome_mcp_backend.rs` | `ChromeMcpBackend` — param conversion + MCP calls | ~250 |
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `core/src/browser/mod.rs` | Add mod declarations + pub use |
-| `core/src/browser/profile.rs` | Add `BrowserDriver`, `ChromeMcpConfig`, `driver` field to `ProfileConfig`, `chrome_mcp` field to `BrowserSystemConfig` |
-| `core/src/browser/manager.rs` | Add `get_backend()` routing, auto-inject "user" profile, hold `ChromeMcpDriver` |
-| `core/src/browser/error.rs` | Add `AttachFailed`, `ChromeMcpError`, `ProfileNotFound` |
-| `core/src/builtin_tools/browser_tools/*.rs` | Implement actual backend routing via `ProfileManager::get_backend()` (tools are currently stubs with placeholder responses) |
+| `src/browser/mod.rs` | Add mod declarations + pub use |
+| `src/browser/profile.rs` | Add `BrowserDriver`, `ChromeMcpConfig`, `driver` field to `ProfileConfig`, `chrome_mcp` field to `BrowserSystemConfig` |
+| `src/browser/manager.rs` | Add `get_backend()` routing, auto-inject "user" profile, hold `ChromeMcpDriver` |
+| `src/browser/error.rs` | Add `AttachFailed`, `ChromeMcpError`, `ProfileNotFound` |
+| `src/builtin_tools/browser_tools/*.rs` | Implement actual backend routing via `ProfileManager::get_backend()` (tools are currently stubs with placeholder responses) |
 
 ### Unchanged Files
 
@@ -283,7 +283,7 @@ Error recovery:
 | `discovery.rs` | Reused for Chrome auto-launch |
 | `network_policy.rs` | SSRF checks still apply to both modes |
 | `playwright_bridge.rs` | Untouched, may be removed later |
-| `core/src/mcp/` | No changes — `ChromeMcpDriver` uses existing MCP client API |
+| `src/mcp/` | No changes — `ChromeMcpDriver` uses existing MCP client API |
 
 ## Testing Strategy
 

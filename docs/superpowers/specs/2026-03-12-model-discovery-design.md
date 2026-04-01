@@ -22,7 +22,7 @@ Results are cached with a 24-hour TTL and exposed through existing RPC tools for
 
 ### 1. ProtocolAdapter Trait Extension
 
-Add an optional `list_models()` method to the existing `ProtocolAdapter` trait in `core/src/providers/adapter.rs`:
+Add an optional `list_models()` method to the existing `ProtocolAdapter` trait in `src/providers/adapter.rs`:
 
 ```rust
 #[async_trait]
@@ -106,7 +106,7 @@ Empty list → UI/Tool layer prompts user for manual input
 
 ### 3. ModelRegistry Cache Service
 
-New file: `core/src/providers/model_registry.rs`
+New file: `src/providers/model_registry.rs`
 
 ```rust
 pub struct ModelRegistry {
@@ -170,7 +170,7 @@ pub struct AvailableModel {
 3. API returns `None` or fails → check presets → found → write cache with source = Preset
 4. No presets either → return empty list
 
-Lifecycle: `ModelRegistry` is a global singleton via `static Lazy<ModelRegistry>`, following the same pattern as `PROTOCOL_REGISTRY` in `core/src/providers/protocols/registry.rs`. Initialized lazily on first access.
+Lifecycle: `ModelRegistry` is a global singleton via `static Lazy<ModelRegistry>`, following the same pattern as `PROTOCOL_REGISTRY` in `src/providers/protocols/registry.rs`. Initialized lazily on first access.
 
 Concurrency: The `cache` field uses `tokio::sync::RwLock` (not `std::sync::RwLock`) since `list_models()` is async. The lock is acquired for read to check cache, released, then if a refresh is needed, the async API call happens without holding the lock. After the call completes, a write lock is acquired to update the cache. This means two concurrent refreshes for the same provider may both execute, but the last write wins — acceptable since model lists are idempotent.
 
@@ -282,16 +282,16 @@ Agent `model` field behavior change:
 
 | Action | File | Description |
 |--------|------|-------------|
-| Modify | `core/src/providers/adapter.rs` | Add `list_models()` default method + `DiscoveredModel` |
-| Modify | `core/src/providers/protocols/openai.rs` | Implement `list_models` via GET /v1/models |
-| Modify | `core/src/providers/protocols/gemini.rs` | Implement `list_models` via GET /v1beta/models |
-| Modify | `core/src/providers/ollama.rs` | Add `list_models()` method on `OllamaProvider` directly (not via ProtocolAdapter) |
-| No change | `core/src/providers/protocols/anthropic.rs` | Uses default `Ok(None)` |
-| No change | `core/src/providers/protocols/chatgpt.rs` | Uses default `Ok(None)` |
-| New | `core/src/providers/model_registry.rs` | ModelRegistry cache service |
+| Modify | `src/providers/adapter.rs` | Add `list_models()` default method + `DiscoveredModel` |
+| Modify | `src/providers/protocols/openai.rs` | Implement `list_models` via GET /v1/models |
+| Modify | `src/providers/protocols/gemini.rs` | Implement `list_models` via GET /v1beta/models |
+| Modify | `src/providers/ollama.rs` | Add `list_models()` method on `OllamaProvider` directly (not via ProtocolAdapter) |
+| No change | `src/providers/protocols/anthropic.rs` | Uses default `Ok(None)` |
+| No change | `src/providers/protocols/chatgpt.rs` | Uses default `Ok(None)` |
+| New | `src/providers/model_registry.rs` | ModelRegistry cache service |
 | New | `shared/config/model-presets.toml` | Preset model lists per protocol |
-| Modify | `core/src/gateway/handlers/models.rs` | RPC handlers use ModelRegistry |
-| No change | `core/src/config/types/provider.rs` | `model` stays `String` (required) |
+| Modify | `src/gateway/handlers/models.rs` | RPC handlers use ModelRegistry |
+| No change | `src/config/types/provider.rs` | `model` stays `String` (required) |
 
 ## Out of Scope
 

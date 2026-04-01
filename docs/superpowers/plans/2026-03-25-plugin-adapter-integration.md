@@ -17,46 +17,46 @@
 ### Files to Modify
 | File | Change |
 |------|--------|
-| `core/src/extension/registry/types.rs` | Extend SkillRegistration + AgentRegistration with all ExtensionSkill/Agent fields |
-| `core/src/extension/registry/plugin_registry/mod.rs` | Update Default derives, add skill/agent query helpers |
-| `core/src/extension/manifest/adapter.rs` | Add `permissions` field to AdapterOutput |
-| `core/src/extension/manifest/adapters/codex.rs` | Commands→skills, default dirs, apps metadata |
-| `core/src/extension/manifest/adapters/cursor.rs` | Commands→skills, default dirs, manifest rules field |
-| `core/src/extension/manifest/cc_plugin_toml.rs` | Commands→skills merge, permissions extraction |
-| `core/src/extension/manifest/cc_plugin_json.rs` | Commands→skills merge |
-| `core/src/extension/manifest/parsers.rs` | Add is_path_inside(), v2_prompt functions, path security |
-| `core/src/extension/mod.rs` | Rewrite load_all(), remove HashMap fields, add collect_plugin_dirs/sync methods |
-| `core/src/extension/skill_ops.rs` | Rewrite all queries to use PluginRegistry |
-| `core/src/extension/sync_api.rs` | Update types from ExtensionSkill → SkillRegistration |
-| `core/src/extension/skill_tool.rs` | Update to use SkillRegistration |
-| `core/src/extension/template.rs` | Update to use SkillRegistration |
-| `core/src/extension/types/skills.rs` | Make ExtensionSkill/ExtensionCommand type aliases |
-| `core/src/extension/types/agents.rs` | Make ExtensionAgent type alias |
-| `core/src/extension/manifest/mod.rs` | Delete parse_manifest_from_dir_sync, auto_discover_manifest |
+| `src/extension/registry/types.rs` | Extend SkillRegistration + AgentRegistration with all ExtensionSkill/Agent fields |
+| `src/extension/registry/plugin_registry/mod.rs` | Update Default derives, add skill/agent query helpers |
+| `src/extension/manifest/adapter.rs` | Add `permissions` field to AdapterOutput |
+| `src/extension/manifest/adapters/codex.rs` | Commands→skills, default dirs, apps metadata |
+| `src/extension/manifest/adapters/cursor.rs` | Commands→skills, default dirs, manifest rules field |
+| `src/extension/manifest/cc_plugin_toml.rs` | Commands→skills merge, permissions extraction |
+| `src/extension/manifest/cc_plugin_json.rs` | Commands→skills merge |
+| `src/extension/manifest/parsers.rs` | Add is_path_inside(), v2_prompt functions, path security |
+| `src/extension/mod.rs` | Rewrite load_all(), remove HashMap fields, add collect_plugin_dirs/sync methods |
+| `src/extension/skill_ops.rs` | Rewrite all queries to use PluginRegistry |
+| `src/extension/sync_api.rs` | Update types from ExtensionSkill → SkillRegistration |
+| `src/extension/skill_tool.rs` | Update to use SkillRegistration |
+| `src/extension/template.rs` | Update to use SkillRegistration |
+| `src/extension/types/skills.rs` | Make ExtensionSkill/ExtensionCommand type aliases |
+| `src/extension/types/agents.rs` | Make ExtensionAgent type alias |
+| `src/extension/manifest/mod.rs` | Delete parse_manifest_from_dir_sync, auto_discover_manifest |
 
 ### Files to Delete
 | File | Lines | Reason |
 |------|-------|--------|
-| `core/src/extension/legacy_loader.rs` | 506 | Replaced by AdapterRegistry + parsers.rs |
+| `src/extension/legacy_loader.rs` | 506 | Replaced by AdapterRegistry + parsers.rs |
 
 ---
 
 ## Task 1: Type Unification — Extend SkillRegistration & AgentRegistration
 
 **Files:**
-- Modify: `core/src/extension/registry/types.rs`
-- Modify: `core/src/extension/types/skills.rs`
-- Modify: `core/src/extension/types/agents.rs`
+- Modify: `src/extension/registry/types.rs`
+- Modify: `src/extension/types/skills.rs`
+- Modify: `src/extension/types/agents.rs`
 
 This task extends the Registration types to absorb all fields from ExtensionSkill/ExtensionAgent, then makes the old types into aliases.
 
 - [ ] **Step 1: Read ExtensionSkill and ExtensionAgent to confirm fields**
 
-Read `core/src/extension/types/skills.rs` (ExtensionSkill at lines 114-146) and `core/src/extension/types/agents.rs` (ExtensionAgent at lines 49-109). Note all fields and their exact types.
+Read `src/extension/types/skills.rs` (ExtensionSkill at lines 114-146) and `src/extension/types/agents.rs` (ExtensionAgent at lines 49-109). Note all fields and their exact types.
 
 - [ ] **Step 2: Extend SkillRegistration**
 
-In `core/src/extension/registry/types.rs`, add these fields to `SkillRegistration`:
+In `src/extension/registry/types.rs`, add these fields to `SkillRegistration`:
 
 ```rust
 pub struct SkillRegistration {
@@ -123,13 +123,13 @@ Add methods: `qualified_name()`, `is_primary()`, `is_subagent()`.
 
 - [ ] **Step 5: Make ExtensionSkill/ExtensionAgent type aliases**
 
-In `core/src/extension/types/skills.rs`:
+In `src/extension/types/skills.rs`:
 ```rust
 pub type ExtensionSkill = crate::extension::registry::types::SkillRegistration;
 pub type ExtensionCommand = ExtensionSkill;
 ```
 
-In `core/src/extension/types/agents.rs`:
+In `src/extension/types/agents.rs`:
 ```rust
 pub type ExtensionAgent = crate::extension::registry::types::AgentRegistration;
 ```
@@ -157,16 +157,16 @@ git add -A && git commit -m "extension: unify SkillRegistration/AgentRegistratio
 ## Task 2: AdapterOutput Permissions & Format Deepening
 
 **Files:**
-- Modify: `core/src/extension/manifest/adapter.rs`
-- Modify: `core/src/extension/manifest/adapters/codex.rs`
-- Modify: `core/src/extension/manifest/adapters/cursor.rs`
-- Modify: `core/src/extension/manifest/cc_plugin_toml.rs`
-- Modify: `core/src/extension/manifest/cc_plugin_json.rs`
-- Modify: `core/src/extension/manifest/parsers.rs`
+- Modify: `src/extension/manifest/adapter.rs`
+- Modify: `src/extension/manifest/adapters/codex.rs`
+- Modify: `src/extension/manifest/adapters/cursor.rs`
+- Modify: `src/extension/manifest/cc_plugin_toml.rs`
+- Modify: `src/extension/manifest/cc_plugin_json.rs`
+- Modify: `src/extension/manifest/parsers.rs`
 
 - [ ] **Step 1: Add permissions to AdapterOutput**
 
-In `core/src/extension/manifest/adapter.rs`, add to `AdapterOutput`:
+In `src/extension/manifest/adapter.rs`, add to `AdapterOutput`:
 ```rust
 pub permissions: Vec<crate::extension::manifest::types::PluginPermission>,
 ```
@@ -175,7 +175,7 @@ Update all adapter `parse()` methods to include `permissions: vec![]` in their `
 
 - [ ] **Step 2: Add is_path_inside() to parsers.rs**
 
-Add at the top of `core/src/extension/manifest/parsers.rs`:
+Add at the top of `src/extension/manifest/parsers.rs`:
 ```rust
 /// Fail-closed path containment check. Returns false if either path cannot be canonicalized.
 pub(crate) fn is_path_inside(root: &Path, target: &Path) -> bool {
@@ -230,16 +230,16 @@ git add -A && git commit -m "extension: add permissions to AdapterOutput, deepen
 ## Task 3: v2_prompt Migration
 
 **Files:**
-- Modify: `core/src/extension/manifest/parsers.rs`
-- Read: `core/src/extension/legacy_loader.rs` (extract v2_prompt logic)
+- Modify: `src/extension/manifest/parsers.rs`
+- Read: `src/extension/legacy_loader.rs` (extract v2_prompt logic)
 
 - [ ] **Step 1: Read legacy_loader v2_prompt functions**
 
-Read `core/src/extension/legacy_loader.rs` and find `load_v2_prompt()` and `load_v2_tool_prompts()`. Understand what they do and what types they return.
+Read `src/extension/legacy_loader.rs` and find `load_v2_prompt()` and `load_v2_tool_prompts()`. Understand what they do and what types they return.
 
 - [ ] **Step 2: Implement parse_v2_prompts() in parsers.rs**
 
-Add to `core/src/extension/manifest/parsers.rs`:
+Add to `src/extension/manifest/parsers.rs`:
 ```rust
 /// Parse V2 system/tool prompt from plugin directory.
 /// Looks for prompt template files specified in [aleph] manifest section.
@@ -277,14 +277,14 @@ git add -A && git commit -m "extension: migrate v2_prompt functions from legacy_
 ## Task 4: Loading Flow Rewrite
 
 **Files:**
-- Modify: `core/src/extension/mod.rs`
-- Modify: `core/src/extension/types/plugins.rs` (LoadSummary)
+- Modify: `src/extension/mod.rs`
+- Modify: `src/extension/types/plugins.rs` (LoadSummary)
 
 This is the core integration task. Rewrite `load_all()` to use AdapterRegistry.
 
 - [ ] **Step 1: Add LoadSummary helpers**
 
-In `core/src/extension/types/plugins.rs`, add to `LoadSummary`:
+In `src/extension/types/plugins.rs`, add to `LoadSummary`:
 ```rust
 pub fn add_error(&mut self, path: &std::path::Path, error: anyhow::Error) {
     self.errors.push(format!("{}: {}", path.display(), error));
@@ -293,7 +293,7 @@ pub fn add_error(&mut self, path: &std::path::Path, error: anyhow::Error) {
 
 - [ ] **Step 2: Add collect_plugin_dirs() to ExtensionManager**
 
-In `core/src/extension/mod.rs`, add:
+In `src/extension/mod.rs`, add:
 ```rust
 /// Collect all unique plugin directories from discovery, deduplicated by canonical path.
 fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<(PathBuf, PluginOrigin)>> {
@@ -385,15 +385,15 @@ git add -A && git commit -m "extension: rewrite load_all() to use AdapterRegistr
 ## Task 5: ExtensionManager Simplification & Caller Migration
 
 **Files:**
-- Modify: `core/src/extension/mod.rs` (remove HashMap fields)
-- Modify: `core/src/extension/skill_ops.rs` (rewrite all queries)
-- Modify: `core/src/extension/sync_api.rs` (update types)
-- Modify: `core/src/extension/skill_tool.rs` (update to SkillRegistration)
-- Modify: `core/src/extension/template.rs` (update types if needed)
+- Modify: `src/extension/mod.rs` (remove HashMap fields)
+- Modify: `src/extension/skill_ops.rs` (rewrite all queries)
+- Modify: `src/extension/sync_api.rs` (update types)
+- Modify: `src/extension/skill_tool.rs` (update to SkillRegistration)
+- Modify: `src/extension/template.rs` (update types if needed)
 
 - [ ] **Step 1: Remove HashMap fields from ExtensionManager**
 
-In `core/src/extension/mod.rs`, remove:
+In `src/extension/mod.rs`, remove:
 ```rust
 skills: Arc<RwLock<HashMap<String, ExtensionSkill>>>,
 commands: Arc<RwLock<HashMap<String, ExtensionCommand>>>,
@@ -476,21 +476,21 @@ git add -A && git commit -m "extension: remove ExtensionManager HashMaps, all qu
 ## Task 6: Legacy Code Deletion
 
 **Files:**
-- Delete: `core/src/extension/legacy_loader.rs`
-- Modify: `core/src/extension/mod.rs` (remove module declaration)
-- Modify: `core/src/extension/manifest/mod.rs` (delete old functions)
+- Delete: `src/extension/legacy_loader.rs`
+- Modify: `src/extension/mod.rs` (remove module declaration)
+- Modify: `src/extension/manifest/mod.rs` (delete old functions)
 
 - [ ] **Step 1: Delete legacy_loader.rs**
 
 ```bash
-rm core/src/extension/legacy_loader.rs
+rm src/extension/legacy_loader.rs
 ```
 
-Remove `mod legacy_loader;` from `core/src/extension/mod.rs`. Remove any `use` or reference to `legacy_loader`.
+Remove `mod legacy_loader;` from `src/extension/mod.rs`. Remove any `use` or reference to `legacy_loader`.
 
 - [ ] **Step 2: Slim manifest/mod.rs**
 
-Delete `parse_manifest_from_dir_sync()` and `auto_discover_manifest()` and `has_any_component()` from `core/src/extension/manifest/mod.rs`.
+Delete `parse_manifest_from_dir_sync()` and `auto_discover_manifest()` and `has_any_component()` from `src/extension/manifest/mod.rs`.
 
 Keep: module declarations, `parse_frontmatter()`, `sanitize_plugin_id()`, `validate_plugin_id()`.
 
@@ -537,7 +537,7 @@ cargo clippy -p alephcore -- -W clippy::all
 - [ ] **Step 3: Verify line count reduction**
 
 ```bash
-find core/src/extension/ -name "*.rs" -exec wc -l {} + | tail -1
+find src/extension/ -name "*.rs" -exec wc -l {} + | tail -1
 ```
 
 Expected: Down from ~21,153 (lower by ~800+).

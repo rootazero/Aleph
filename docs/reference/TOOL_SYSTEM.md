@@ -12,7 +12,7 @@ Aleph's tool system provides:
 - MCP (Model Context Protocol) integration
 - Extension tools via WASM/Node.js plugins
 
-**Location**: `core/src/tools/`, `core/src/builtin_tools/`
+**Location**: `src/tools/`, `src/builtin_tools/`
 
 ---
 
@@ -72,7 +72,7 @@ impl<T: AlephTool> AlephToolDyn for T { ... }
 
 ## Built-in Tools
 
-**Location**: `core/src/builtin_tools/`
+**Location**: `src/builtin_tools/`
 
 ### File Operations
 
@@ -237,7 +237,7 @@ pub struct ToolDefinition {
 
 ## Tool Server
 
-**Location**: `core/src/tools/server.rs`
+**Location**: `src/tools/server.rs`
 
 The Tool Server manages tool execution:
 
@@ -278,7 +278,7 @@ impl ToolServer {
 
 ## MCP Integration
 
-**Location**: `core/src/mcp/`
+**Location**: `src/mcp/`
 
 Model Context Protocol for external tool servers:
 
@@ -369,7 +369,7 @@ pub fn register_builtins(server: &mut ToolServer) {
 
 ## Tool Filtering
 
-**Location**: `core/src/thinker/tool_filter.rs`
+**Location**: `src/thinker/tool_filter.rs`
 
 Control which tools are available:
 

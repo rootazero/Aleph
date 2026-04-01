@@ -15,14 +15,14 @@
 ## Task 1: Enhanced Sequence Pattern Model Types
 
 **Files:**
-- Create: `core/src/poe/crystallization/pattern_model.rs`
-- Modify: `core/src/poe/crystallization/mod.rs` (add `pub mod pattern_model;`)
+- Create: `src/poe/crystallization/pattern_model.rs`
+- Modify: `src/poe/crystallization/mod.rs` (add `pub mod pattern_model;`)
 - Test: inline `#[cfg(test)] mod tests` in `pattern_model.rs`
 
 **Step 1: Write failing tests for PatternStep serialization**
 
 ```rust
-// core/src/poe/crystallization/pattern_model.rs — tests at bottom
+// src/poe/crystallization/pattern_model.rs — tests at bottom
 
 #[cfg(test)]
 mod tests {
@@ -195,7 +195,7 @@ Expected: compilation errors — module and types don't exist yet.
 **Step 3: Implement pattern_model.rs**
 
 ```rust
-// core/src/poe/crystallization/pattern_model.rs
+// src/poe/crystallization/pattern_model.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -456,7 +456,7 @@ impl PatternSequence {
 
 **Step 4: Register module in mod.rs**
 
-Add `pub mod pattern_model;` to `core/src/poe/crystallization/mod.rs` after line 43 (after existing module declarations).
+Add `pub mod pattern_model;` to `src/poe/crystallization/mod.rs` after line 43 (after existing module declarations).
 
 **Step 5: Run tests to verify they pass**
 
@@ -466,7 +466,7 @@ Expected: all 7 tests PASS.
 **Step 6: Commit**
 
 ```bash
-git add core/src/poe/crystallization/pattern_model.rs core/src/poe/crystallization/mod.rs
+git add src/poe/crystallization/pattern_model.rs src/poe/crystallization/mod.rs
 git commit -m "poe: add enhanced sequence pattern model with predicates and validation"
 ```
 
@@ -475,8 +475,8 @@ git commit -m "poe: add enhanced sequence pattern model with predicates and vali
 ## Task 2: PatternSynthesisBackend Trait
 
 **Files:**
-- Create: `core/src/poe/crystallization/synthesis_backend.rs`
-- Modify: `core/src/poe/crystallization/mod.rs` (add `pub mod synthesis_backend;`)
+- Create: `src/poe/crystallization/synthesis_backend.rs`
+- Modify: `src/poe/crystallization/mod.rs` (add `pub mod synthesis_backend;`)
 - Test: inline `#[cfg(test)] mod tests` in `synthesis_backend.rs`
 
 **Step 1: Write failing tests**
@@ -563,7 +563,7 @@ Run: `cargo test -p alephcore --lib synthesis_backend 2>&1 | head -10`
 **Step 3: Implement synthesis_backend.rs**
 
 ```rust
-// core/src/poe/crystallization/synthesis_backend.rs
+// src/poe/crystallization/synthesis_backend.rs
 
 use super::experience_store::PoeExperience;
 use super::pattern_model::{ParameterMapping, PatternStep};
@@ -619,7 +619,7 @@ pub trait PatternSynthesisBackend: Send + Sync {
 
 **Step 4: Register module**
 
-Add `pub mod synthesis_backend;` to `core/src/poe/crystallization/mod.rs`.
+Add `pub mod synthesis_backend;` to `src/poe/crystallization/mod.rs`.
 
 **Step 5: Run tests — expect PASS**
 
@@ -628,7 +628,7 @@ Run: `cargo test -p alephcore --lib synthesis_backend`
 **Step 6: Commit**
 
 ```bash
-git add core/src/poe/crystallization/synthesis_backend.rs core/src/poe/crystallization/mod.rs
+git add src/poe/crystallization/synthesis_backend.rs src/poe/crystallization/mod.rs
 git commit -m "poe: add PatternSynthesisBackend trait for dependency-inverted LLM access"
 ```
 
@@ -637,7 +637,7 @@ git commit -m "poe: add PatternSynthesisBackend trait for dependency-inverted LL
 ## Task 3: Refactor PatternExtractor to Use Backend
 
 **Files:**
-- Modify: `core/src/poe/crystallization/pattern_extractor.rs` (inject backend)
+- Modify: `src/poe/crystallization/pattern_extractor.rs` (inject backend)
 - Test: existing tests + new integration test
 
 **Step 1: Write failing test for backend injection**
@@ -780,7 +780,7 @@ Run: `cargo check -p alephcore`
 **Step 6: Commit**
 
 ```bash
-git add core/src/poe/crystallization/pattern_extractor.rs
+git add src/poe/crystallization/pattern_extractor.rs
 git commit -m "poe: inject PatternSynthesisBackend into PatternExtractor"
 ```
 
@@ -789,7 +789,7 @@ git commit -m "poe: inject PatternSynthesisBackend into PatternExtractor"
 ## Task 4: ExperienceStore API Extensions
 
 **Files:**
-- Modify: `core/src/poe/crystallization/experience_store.rs` (add `delete`, `get_by_ids`)
+- Modify: `src/poe/crystallization/experience_store.rs` (add `delete`, `get_by_ids`)
 - Test: extend existing tests in same file
 
 **Step 1: Write failing tests**
@@ -884,7 +884,7 @@ Note: Any other implementations of ExperienceStore (e.g., LanceDB-backed) will n
 **Step 6: Commit**
 
 ```bash
-git add core/src/poe/crystallization/experience_store.rs
+git add src/poe/crystallization/experience_store.rs
 git commit -m "poe: extend ExperienceStore trait with delete and get_by_ids"
 ```
 
@@ -893,15 +893,15 @@ git commit -m "poe: extend ExperienceStore trait with delete and get_by_ids"
 ## Task 5: Skill Risk Profiler
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/mod.rs`
-- Create: `core/src/skill_evolution/validation/risk_profiler.rs`
-- Modify: `core/src/skill_evolution/mod.rs` (add `pub mod validation;`)
+- Create: `src/skill_evolution/validation/mod.rs`
+- Create: `src/skill_evolution/validation/risk_profiler.rs`
+- Modify: `src/skill_evolution/mod.rs` (add `pub mod validation;`)
 - Test: inline in `risk_profiler.rs`
 
 **Step 1: Write failing tests**
 
 ```rust
-// core/src/skill_evolution/validation/risk_profiler.rs — tests
+// src/skill_evolution/validation/risk_profiler.rs — tests
 
 #[cfg(test)]
 mod tests {
@@ -982,14 +982,14 @@ mod tests {
 **Step 3: Create validation module**
 
 ```rust
-// core/src/skill_evolution/validation/mod.rs
+// src/skill_evolution/validation/mod.rs
 pub mod risk_profiler;
 
 pub use risk_profiler::{SkillRiskLevel, SkillRiskProfile, SkillRiskProfiler};
 ```
 
 ```rust
-// core/src/skill_evolution/validation/risk_profiler.rs
+// src/skill_evolution/validation/risk_profiler.rs
 
 use crate::poe::crystallization::pattern_model::*;
 use serde::{Deserialize, Serialize};
@@ -1086,7 +1086,7 @@ impl SkillRiskProfiler {
 }
 ```
 
-Add `pub mod validation;` to `core/src/skill_evolution/mod.rs`.
+Add `pub mod validation;` to `src/skill_evolution/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -1095,7 +1095,7 @@ Run: `cargo test -p alephcore --lib risk_profiler`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/ core/src/skill_evolution/mod.rs
+git add src/skill_evolution/validation/ src/skill_evolution/mod.rs
 git commit -m "evolution: add skill risk profiler with tiered classification"
 ```
 
@@ -1104,8 +1104,8 @@ git commit -m "evolution: add skill risk profiler with tiered classification"
 ## Task 6: Test Set Generator (Cluster + Boundary Sampling)
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/test_set_generator.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs`
+- Create: `src/skill_evolution/validation/test_set_generator.rs`
+- Modify: `src/skill_evolution/validation/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -1206,7 +1206,7 @@ mod tests {
 **Step 3: Implement test_set_generator.rs**
 
 ```rust
-// core/src/skill_evolution/validation/test_set_generator.rs
+// src/skill_evolution/validation/test_set_generator.rs
 
 use crate::poe::crystallization::experience_store::{ExperienceStore, PoeExperience};
 use serde::{Deserialize, Serialize};
@@ -1333,7 +1333,7 @@ impl TestSetGenerator {
 }
 ```
 
-Update `core/src/skill_evolution/validation/mod.rs`:
+Update `src/skill_evolution/validation/mod.rs`:
 
 ```rust
 pub mod risk_profiler;
@@ -1350,7 +1350,7 @@ Run: `cargo test -p alephcore --lib test_set_generator`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/
+git add src/skill_evolution/validation/
 git commit -m "evolution: add test set generator with cluster and boundary sampling"
 ```
 
@@ -1359,8 +1359,8 @@ git commit -m "evolution: add test set generator with cluster and boundary sampl
 ## Task 7: Structural Linter (L1 Validation)
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/structural_linter.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs`
+- Create: `src/skill_evolution/validation/structural_linter.rs`
+- Modify: `src/skill_evolution/validation/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -1453,7 +1453,7 @@ mod tests {
 **Step 3: Implement structural_linter.rs**
 
 ```rust
-// core/src/skill_evolution/validation/structural_linter.rs
+// src/skill_evolution/validation/structural_linter.rs
 
 use crate::poe::crystallization::pattern_model::PatternSequence;
 use super::test_set_generator::ValidationTestSet;
@@ -1503,7 +1503,7 @@ Run: `cargo test -p alephcore --lib structural_linter`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/
+git add src/skill_evolution/validation/
 git commit -m "evolution: add L1 structural linter for pattern validation"
 ```
 
@@ -1512,8 +1512,8 @@ git commit -m "evolution: add L1 structural linter for pattern validation"
 ## Task 8: Semantic Replayer (L2 Validation)
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/semantic_replayer.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs`
+- Create: `src/skill_evolution/validation/semantic_replayer.rs`
+- Modify: `src/skill_evolution/validation/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -1607,7 +1607,7 @@ mod tests {
 **Step 3: Implement semantic_replayer.rs**
 
 ```rust
-// core/src/skill_evolution/validation/semantic_replayer.rs
+// src/skill_evolution/validation/semantic_replayer.rs
 
 use crate::poe::crystallization::pattern_model::PatternSequence;
 use crate::poe::crystallization::synthesis_backend::PatternSynthesisBackend;
@@ -1705,7 +1705,7 @@ Run: `cargo test -p alephcore --lib semantic_replayer`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/
+git add src/skill_evolution/validation/
 git commit -m "evolution: add L2 semantic replayer for pattern validation"
 ```
 
@@ -1714,8 +1714,8 @@ git commit -m "evolution: add L2 semantic replayer for pattern validation"
 ## Task 9: Differential Testing Engine
 
 **Files:**
-- Create: `core/src/skill_evolution/differential.rs`
-- Modify: `core/src/skill_evolution/mod.rs`
+- Create: `src/skill_evolution/differential.rs`
+- Modify: `src/skill_evolution/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -1795,7 +1795,7 @@ mod tests {
 **Step 3: Implement differential.rs**
 
 ```rust
-// core/src/skill_evolution/differential.rs
+// src/skill_evolution/differential.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -1831,7 +1831,7 @@ impl EfficiencyDiff {
 }
 ```
 
-Add `pub mod differential;` to `core/src/skill_evolution/mod.rs`.
+Add `pub mod differential;` to `src/skill_evolution/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -1840,7 +1840,7 @@ Run: `cargo test -p alephcore --lib differential`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/differential.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/differential.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add differential testing engine for efficiency comparison"
 ```
 
@@ -1849,8 +1849,8 @@ git commit -m "evolution: add differential testing engine for efficiency compari
 ## Task 10: Skill Lifecycle State Machine
 
 **Files:**
-- Create: `core/src/skill_evolution/lifecycle.rs`
-- Modify: `core/src/skill_evolution/mod.rs`
+- Create: `src/skill_evolution/lifecycle.rs`
+- Modify: `src/skill_evolution/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -1926,7 +1926,7 @@ mod tests {
 **Step 3: Implement lifecycle.rs**
 
 ```rust
-// core/src/skill_evolution/lifecycle.rs
+// src/skill_evolution/lifecycle.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -2032,7 +2032,7 @@ pub enum LifecycleTransition {
 }
 ```
 
-Add `pub mod lifecycle;` to `core/src/skill_evolution/mod.rs`.
+Add `pub mod lifecycle;` to `src/skill_evolution/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -2041,7 +2041,7 @@ Run: `cargo test -p alephcore --lib lifecycle`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/lifecycle.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/lifecycle.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add skill lifecycle state machine with promotion/demotion"
 ```
 
@@ -2050,8 +2050,8 @@ git commit -m "evolution: add skill lifecycle state machine with promotion/demot
 ## Task 11: Shadow Deployer
 
 **Files:**
-- Create: `core/src/skill_evolution/shadow_deployer.rs`
-- Modify: `core/src/skill_evolution/mod.rs`
+- Create: `src/skill_evolution/shadow_deployer.rs`
+- Modify: `src/skill_evolution/mod.rs`
 - Test: inline (using tempdir)
 
 **Step 1: Write failing tests**
@@ -2132,7 +2132,7 @@ mod tests {
 **Step 3: Implement shadow_deployer.rs**
 
 ```rust
-// core/src/skill_evolution/shadow_deployer.rs
+// src/skill_evolution/shadow_deployer.rs
 
 use super::lifecycle::*;
 use std::path::{Path, PathBuf};
@@ -2267,7 +2267,7 @@ fn now_ms() -> i64 {
 }
 ```
 
-Add `pub mod shadow_deployer;` to `core/src/skill_evolution/mod.rs`.
+Add `pub mod shadow_deployer;` to `src/skill_evolution/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -2276,7 +2276,7 @@ Run: `cargo test -p alephcore --lib shadow_deployer`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/shadow_deployer.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/shadow_deployer.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add shadow deployer with promote/demote lifecycle"
 ```
 
@@ -2285,8 +2285,8 @@ git commit -m "evolution: add shadow deployer with promote/demote lifecycle"
 ## Task 12: Idle Detector
 
 **Files:**
-- Create: `core/src/poe/crystallization/idle_detector.rs`
-- Modify: `core/src/poe/crystallization/mod.rs`
+- Create: `src/poe/crystallization/idle_detector.rs`
+- Modify: `src/poe/crystallization/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -2337,7 +2337,7 @@ mod tests {
 **Step 3: Implement idle_detector.rs**
 
 ```rust
-// core/src/poe/crystallization/idle_detector.rs
+// src/poe/crystallization/idle_detector.rs
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -2388,7 +2388,7 @@ impl IdleDetector {
 }
 ```
 
-Add `pub mod idle_detector;` to `core/src/poe/crystallization/mod.rs`.
+Add `pub mod idle_detector;` to `src/poe/crystallization/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -2397,7 +2397,7 @@ Run: `cargo test -p alephcore --lib idle_detector`
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/idle_detector.rs core/src/poe/crystallization/mod.rs
+git add src/poe/crystallization/idle_detector.rs src/poe/crystallization/mod.rs
 git commit -m "poe: add idle detector for dreaming trigger"
 ```
 
@@ -2406,8 +2406,8 @@ git commit -m "poe: add idle detector for dreaming trigger"
 ## Task 13: Cognitive Entropy Tracker
 
 **Files:**
-- Create: `core/src/poe/crystallization/cognitive_entropy.rs`
-- Modify: `core/src/poe/crystallization/mod.rs`
+- Create: `src/poe/crystallization/cognitive_entropy.rs`
+- Modify: `src/poe/crystallization/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -2460,7 +2460,7 @@ mod tests {
 **Step 3: Implement cognitive_entropy.rs**
 
 ```rust
-// core/src/poe/crystallization/cognitive_entropy.rs
+// src/poe/crystallization/cognitive_entropy.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -2560,7 +2560,7 @@ impl CognitiveEntropyTracker {
 }
 ```
 
-Add `pub mod cognitive_entropy;` to `core/src/poe/crystallization/mod.rs`.
+Add `pub mod cognitive_entropy;` to `src/poe/crystallization/mod.rs`.
 
 **Step 4: Run tests — expect PASS**
 
@@ -2569,7 +2569,7 @@ Run: `cargo test -p alephcore --lib cognitive_entropy`
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/cognitive_entropy.rs core/src/poe/crystallization/mod.rs
+git add src/poe/crystallization/cognitive_entropy.rs src/poe/crystallization/mod.rs
 git commit -m "poe: add cognitive entropy tracker for priority-driven dreaming"
 ```
 
@@ -2578,7 +2578,7 @@ git commit -m "poe: add cognitive entropy tracker for priority-driven dreaming"
 ## Task 14: Clustering Merge Implementation
 
 **Files:**
-- Modify: `core/src/poe/crystallization/clustering.rs` (add `merge_clusters` method)
+- Modify: `src/poe/crystallization/clustering.rs` (add `merge_clusters` method)
 - Test: extend existing tests
 
 **Step 1: Write failing tests**
@@ -2672,7 +2672,7 @@ Run: `cargo test -p alephcore --lib clustering`
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/clustering.rs
+git add src/poe/crystallization/clustering.rs
 git commit -m "poe: implement cluster merge with redundant entry deletion"
 ```
 
@@ -2681,8 +2681,8 @@ git commit -m "poe: implement cluster merge with redundant entry deletion"
 ## Task 15: Tiered Validator Orchestrator
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/tiered_validator.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs`
+- Create: `src/skill_evolution/validation/tiered_validator.rs`
+- Modify: `src/skill_evolution/validation/mod.rs`
 - Test: inline
 
 **Step 1: Write failing tests**
@@ -2799,7 +2799,7 @@ mod tests {
 **Step 3: Implement tiered_validator.rs**
 
 ```rust
-// core/src/skill_evolution/validation/tiered_validator.rs
+// src/skill_evolution/validation/tiered_validator.rs
 
 use crate::poe::crystallization::experience_store::ExperienceStore;
 use crate::poe::crystallization::pattern_model::PatternSequence;
@@ -2918,7 +2918,7 @@ Run: `cargo test -p alephcore --lib tiered_validator`
 **Step 5: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/
+git add src/skill_evolution/validation/
 git commit -m "evolution: add tiered validator orchestrating L1+L2+risk-gated L3"
 ```
 
@@ -2927,7 +2927,7 @@ git commit -m "evolution: add tiered validator orchestrating L1+L2+risk-gated L3
 ## Task 16: Full Pipeline Integration
 
 **Files:**
-- Modify: `core/src/skill_evolution/pipeline.rs` (add `EvolutionPipelineBeta`)
+- Modify: `src/skill_evolution/pipeline.rs` (add `EvolutionPipelineBeta`)
 - Test: inline integration test
 
 **Step 1: Write failing test**
@@ -3080,7 +3080,7 @@ Run: `cargo check -p alephcore`
 **Step 6: Commit**
 
 ```bash
-git add core/src/skill_evolution/pipeline.rs
+git add src/skill_evolution/pipeline.rs
 git commit -m "evolution: integrate beta pipeline with differential testing and tiered validation"
 ```
 
@@ -3121,27 +3121,27 @@ git commit -m "evolution: fix clippy warnings and finalize beta integration"
 
 | File | Component | Lines (est.) |
 |------|-----------|-------------|
-| `core/src/poe/crystallization/pattern_model.rs` | Enhanced Sequence Model | ~250 |
-| `core/src/poe/crystallization/synthesis_backend.rs` | Backend Trait | ~60 |
-| `core/src/poe/crystallization/idle_detector.rs` | Idle Detection | ~50 |
-| `core/src/poe/crystallization/cognitive_entropy.rs` | Entropy Tracking | ~100 |
-| `core/src/skill_evolution/validation/mod.rs` | Validation Module | ~15 |
-| `core/src/skill_evolution/validation/risk_profiler.rs` | Risk Classification | ~100 |
-| `core/src/skill_evolution/validation/test_set_generator.rs` | Test Set Sampling | ~120 |
-| `core/src/skill_evolution/validation/structural_linter.rs` | L1 Linter | ~40 |
-| `core/src/skill_evolution/validation/semantic_replayer.rs` | L2 Replayer | ~80 |
-| `core/src/skill_evolution/validation/tiered_validator.rs` | Orchestrator | ~100 |
-| `core/src/skill_evolution/differential.rs` | Efficiency Comparison | ~50 |
-| `core/src/skill_evolution/lifecycle.rs` | State Machine | ~120 |
-| `core/src/skill_evolution/shadow_deployer.rs` | Shadow Deployment | ~120 |
+| `src/poe/crystallization/pattern_model.rs` | Enhanced Sequence Model | ~250 |
+| `src/poe/crystallization/synthesis_backend.rs` | Backend Trait | ~60 |
+| `src/poe/crystallization/idle_detector.rs` | Idle Detection | ~50 |
+| `src/poe/crystallization/cognitive_entropy.rs` | Entropy Tracking | ~100 |
+| `src/skill_evolution/validation/mod.rs` | Validation Module | ~15 |
+| `src/skill_evolution/validation/risk_profiler.rs` | Risk Classification | ~100 |
+| `src/skill_evolution/validation/test_set_generator.rs` | Test Set Sampling | ~120 |
+| `src/skill_evolution/validation/structural_linter.rs` | L1 Linter | ~40 |
+| `src/skill_evolution/validation/semantic_replayer.rs` | L2 Replayer | ~80 |
+| `src/skill_evolution/validation/tiered_validator.rs` | Orchestrator | ~100 |
+| `src/skill_evolution/differential.rs` | Efficiency Comparison | ~50 |
+| `src/skill_evolution/lifecycle.rs` | State Machine | ~120 |
+| `src/skill_evolution/shadow_deployer.rs` | Shadow Deployment | ~120 |
 
 ## Modified Files
 
 | File | Change |
 |------|--------|
-| `core/src/poe/crystallization/mod.rs` | Add 4 module declarations |
-| `core/src/poe/crystallization/pattern_extractor.rs` | Inject backend, add `with_backend` |
-| `core/src/poe/crystallization/experience_store.rs` | Add `delete` + `get_by_ids` to trait |
-| `core/src/poe/crystallization/clustering.rs` | Add `merge_clusters` function |
-| `core/src/skill_evolution/mod.rs` | Add 3 module declarations |
-| `core/src/skill_evolution/pipeline.rs` | Add `EvolutionPipelineBeta` |
+| `src/poe/crystallization/mod.rs` | Add 4 module declarations |
+| `src/poe/crystallization/pattern_extractor.rs` | Inject backend, add `with_backend` |
+| `src/poe/crystallization/experience_store.rs` | Add `delete` + `get_by_ids` to trait |
+| `src/poe/crystallization/clustering.rs` | Add `merge_clusters` function |
+| `src/skill_evolution/mod.rs` | Add 3 module declarations |
+| `src/skill_evolution/pipeline.rs` | Add `EvolutionPipelineBeta` |

@@ -218,8 +218,8 @@ Update `CLAUDE.md` documentation index table to include the new reference.
 
 | File | Change | Lines |
 |------|--------|-------|
-| `core/src/executor/builtin_registry/groups.rs` | Split `agent_mgmt` into mode-based groups | ~30 |
-| `core/src/gateway/handlers/commands.rs` | Add `"team"` and `"task"` to `TOOL_NAMESPACES` | ~2 |
+| `src/executor/builtin_registry/groups.rs` | Split `agent_mgmt` into mode-based groups | ~30 |
+| `src/gateway/handlers/commands.rs` | Add `"team"` and `"task"` to `TOOL_NAMESPACES` | ~2 |
 | `docs/reference/MULTI_AGENT_SYSTEM.md` | New reference document | ~150 |
 | `CLAUDE.md` | Add doc index entry | ~1 |
 | **Total** | | **~183** |

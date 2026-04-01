@@ -17,10 +17,10 @@
 ### Task 1: Create UnifiedMessage and ContentBlock types
 
 **Files:**
-- Create: `core/src/providers/message.rs`
-- Modify: `core/src/providers/mod.rs` (add `pub mod message;`)
+- Create: `src/providers/message.rs`
+- Modify: `src/providers/mod.rs` (add `pub mod message;`)
 
-- [ ] **Step 1: Create `core/src/providers/message.rs` with type definitions**
+- [ ] **Step 1: Create `src/providers/message.rs` with type definitions**
 
 ```rust
 //! Unified message types for provider-agnostic conversation representation.
@@ -216,7 +216,7 @@ impl ContentBlock {
 }
 ```
 
-- [ ] **Step 2: Add module declaration to `core/src/providers/mod.rs`**
+- [ ] **Step 2: Add module declaration to `src/providers/mod.rs`**
 
 Find `pub mod adapter;` and add after it:
 
@@ -232,7 +232,7 @@ Expected: Compiles successfully (message.rs is standalone, no existing code depe
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/message.rs core/src/providers/mod.rs
+git add src/providers/message.rs src/providers/mod.rs
 git commit -m "providers: add UnifiedMessage and ContentBlock types
 
 New unified message types for provider-agnostic conversation representation.
@@ -242,7 +242,7 @@ These replace the flat string input in RequestPayload."
 ### Task 2: Add transform_messages pre-processing
 
 **Files:**
-- Modify: `core/src/providers/message.rs`
+- Modify: `src/providers/message.rs`
 
 - [ ] **Step 1: Add transform_messages and repair_orphaned_tool_calls to message.rs**
 
@@ -486,7 +486,7 @@ Expected: All tests pass
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/message.rs
+git add src/providers/message.rs
 git commit -m "providers: add transform_messages and message type tests"
 ```
 
@@ -499,8 +499,8 @@ This chunk changes `RequestPayload`, `AiProvider`, and all provider implementati
 ### Task 3: Refactor RequestPayload and AiProvider trait
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs`
-- Modify: `core/src/providers/mod.rs`
+- Modify: `src/providers/adapter.rs`
+- Modify: `src/providers/mod.rs`
 
 - [ ] **Step 1: Refactor `RequestPayload` in `adapter.rs`**
 
@@ -644,12 +644,12 @@ pub trait AiProvider: Send + Sync {
 ### Task 4: Update all AiProvider implementors
 
 **Files:**
-- Modify: `core/src/providers/http_provider.rs`
-- Modify: `core/src/providers/ollama.rs`
-- Modify: `core/src/providers/mock.rs`
-- Modify: `core/src/providers/failover.rs`
-- Modify: `core/src/providers/auth_profile_registry.rs`
-- Modify: `core/src/providers/registry.rs` (if it has trait impls)
+- Modify: `src/providers/http_provider.rs`
+- Modify: `src/providers/ollama.rs`
+- Modify: `src/providers/mock.rs`
+- Modify: `src/providers/failover.rs`
+- Modify: `src/providers/auth_profile_registry.rs`
+- Modify: `src/providers/registry.rs` (if it has trait impls)
 
 - [ ] **Step 1: Update `HttpProvider` in `http_provider.rs`**
 
@@ -802,11 +802,11 @@ Update the inline test provider to match the new trait.
 ### Task 5: Update all protocol adapters
 
 **Files:**
-- Modify: `core/src/providers/protocols/chatgpt.rs`
-- Modify: `core/src/providers/protocols/anthropic.rs`
-- Modify: `core/src/providers/protocols/openai.rs`
-- Modify: `core/src/providers/protocols/gemini.rs`
-- Modify: `core/src/providers/protocols/configurable.rs`
+- Modify: `src/providers/protocols/chatgpt.rs`
+- Modify: `src/providers/protocols/anthropic.rs`
+- Modify: `src/providers/protocols/openai.rs`
+- Modify: `src/providers/protocols/gemini.rs`
+- Modify: `src/providers/protocols/configurable.rs`
 
 Each adapter's `build_request` must change from reading `payload.input` (flat string) to reading `payload.messages` (&[UnifiedMessage]) and converting to native format.
 
@@ -974,10 +974,10 @@ let input_text = payload.messages.iter().rev()
 ### Task 6: Replace LoopMessage with UnifiedMessage in agent loop
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs`
-- Modify: `core/src/agent_loop/provider_bridge.rs`
-- Modify: `core/src/agent_loop/tool.rs` (if ToolDefinition changes)
-- Modify: `core/src/agent_loop/mod.rs` (if it re-exports LoopMessage)
+- Modify: `src/agent_loop/loop_core.rs`
+- Modify: `src/agent_loop/provider_bridge.rs`
+- Modify: `src/agent_loop/tool.rs` (if ToolDefinition changes)
+- Modify: `src/agent_loop/mod.rs` (if it re-exports LoopMessage)
 
 - [ ] **Step 1: Update `LoopProvider` trait in `loop_core.rs`**
 

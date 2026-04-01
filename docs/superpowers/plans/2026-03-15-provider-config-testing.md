@@ -17,20 +17,20 @@
 ### Task 1: Create provider_config_probe module structure
 
 **Files:**
-- Create: `core/tests/provider_config_probe/mod.rs`
-- Create: `core/tests/provider_config_probe/serde_tests.rs`
-- Create: `core/tests/provider_config_probe/config_crud_tests.rs`
-- Create: `core/tests/provider_config_probe/edge_case_tests.rs`
-- Create: `core/tests/provider_config_probe.rs` (test entry point)
+- Create: `tests/provider_config_probe/mod.rs`
+- Create: `tests/provider_config_probe/serde_tests.rs`
+- Create: `tests/provider_config_probe/config_crud_tests.rs`
+- Create: `tests/provider_config_probe/edge_case_tests.rs`
+- Create: `tests/provider_config_probe.rs` (test entry point)
 
 - [ ] **Step 1: Create the entry point file**
 
-Create `core/tests/provider_config_probe.rs`:
+Create `tests/provider_config_probe.rs`:
 ```rust
 mod provider_config_probe;
 ```
 
-Create `core/tests/provider_config_probe/mod.rs`:
+Create `tests/provider_config_probe/mod.rs`:
 ```rust
 mod serde_tests;
 mod config_crud_tests;
@@ -45,7 +45,7 @@ Expected: Compiles (no tests yet).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_config_probe.rs core/tests/provider_config_probe/
+git add tests/provider_config_probe.rs tests/provider_config_probe/
 git commit -m "test: scaffold provider_config_probe module structure
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -56,7 +56,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 2: Serialization & backward compatibility tests
 
 **Files:**
-- Modify: `core/tests/provider_config_probe/serde_tests.rs`
+- Modify: `tests/provider_config_probe/serde_tests.rs`
 
 - [ ] **Step 1: Write all serialization tests**
 
@@ -217,7 +217,7 @@ Expected: All pass. If any import paths are wrong, fix them based on compiler er
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_config_probe/serde_tests.rs
+git add tests/provider_config_probe/serde_tests.rs
 git commit -m "test: add serialization and backward compat tests for provider config
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -228,7 +228,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 3: Config struct CRUD tests (no I/O)
 
 **Files:**
-- Modify: `core/tests/provider_config_probe/config_crud_tests.rs`
+- Modify: `tests/provider_config_probe/config_crud_tests.rs`
 
 - [ ] **Step 1: Write config struct manipulation tests**
 
@@ -302,7 +302,7 @@ Expected: All pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_config_probe/config_crud_tests.rs
+git add tests/provider_config_probe/config_crud_tests.rs
 git commit -m "test: add config struct CRUD tests for provider config
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -313,7 +313,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 4: Edge case tests
 
 **Files:**
-- Modify: `core/tests/provider_config_probe/edge_case_tests.rs`
+- Modify: `tests/provider_config_probe/edge_case_tests.rs`
 
 - [ ] **Step 1: Write edge case tests**
 
@@ -386,7 +386,7 @@ Expected: All pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_config_probe/edge_case_tests.rs
+git add tests/provider_config_probe/edge_case_tests.rs
 git commit -m "test: add edge case tests for provider config models
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -399,18 +399,18 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 5: Create RPC probe module and test server harness
 
 **Files:**
-- Create: `core/tests/provider_rpc_probe.rs` (entry point)
-- Create: `core/tests/provider_rpc_probe/mod.rs`
-- Create: `core/tests/provider_rpc_probe/harness.rs`
+- Create: `tests/provider_rpc_probe.rs` (entry point)
+- Create: `tests/provider_rpc_probe/mod.rs`
+- Create: `tests/provider_rpc_probe/harness.rs`
 
 - [ ] **Step 1: Create the test server harness**
 
-Create `core/tests/provider_rpc_probe.rs`:
+Create `tests/provider_rpc_probe.rs`:
 ```rust
 mod provider_rpc_probe;
 ```
 
-Create `core/tests/provider_rpc_probe/mod.rs`:
+Create `tests/provider_rpc_probe/mod.rs`:
 ```rust
 mod harness;
 mod endpoint_tests;
@@ -418,7 +418,7 @@ mod error_tests;
 mod robustness_tests;
 ```
 
-Create `core/tests/provider_rpc_probe/harness.rs`:
+Create `tests/provider_rpc_probe/harness.rs`:
 ```rust
 //! Test harness that spawns a real Aleph server as a child process.
 
@@ -591,7 +591,7 @@ Expected: Compiles (may need to adjust imports based on actual crate structure).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_rpc_probe.rs core/tests/provider_rpc_probe/
+git add tests/provider_rpc_probe.rs tests/provider_rpc_probe/
 git commit -m "test: add RPC integration probe harness with child-process server
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -602,7 +602,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 6: RPC endpoint validation tests
 
 **Files:**
-- Create: `core/tests/provider_rpc_probe/endpoint_tests.rs`
+- Create: `tests/provider_rpc_probe/endpoint_tests.rs`
 
 - [ ] **Step 1: Write endpoint tests**
 
@@ -733,7 +733,7 @@ Expected: All pass. Note: first run will be slow due to binary compilation.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/provider_rpc_probe/endpoint_tests.rs
+git add tests/provider_rpc_probe/endpoint_tests.rs
 git commit -m "test: add RPC endpoint validation tests for provider config
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
@@ -744,12 +744,12 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 7: Error path and robustness tests
 
 **Files:**
-- Create: `core/tests/provider_rpc_probe/error_tests.rs`
-- Create: `core/tests/provider_rpc_probe/robustness_tests.rs`
+- Create: `tests/provider_rpc_probe/error_tests.rs`
+- Create: `tests/provider_rpc_probe/robustness_tests.rs`
 
 - [ ] **Step 1: Write error path tests**
 
-Create `core/tests/provider_rpc_probe/error_tests.rs`:
+Create `tests/provider_rpc_probe/error_tests.rs`:
 ```rust
 //! Error path tests for provider RPC endpoints.
 
@@ -817,7 +817,7 @@ async fn providers_test_unreachable_url() {
 
 - [ ] **Step 2: Write robustness tests**
 
-Create `core/tests/provider_rpc_probe/robustness_tests.rs`:
+Create `tests/provider_rpc_probe/robustness_tests.rs`:
 ```rust
 //! Robustness tests: concurrency, large payloads, malformed input.
 
@@ -886,7 +886,7 @@ Expected: All pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/tests/provider_rpc_probe/error_tests.rs core/tests/provider_rpc_probe/robustness_tests.rs
+git add tests/provider_rpc_probe/error_tests.rs tests/provider_rpc_probe/robustness_tests.rs
 git commit -m "test: add error path and robustness tests for provider RPC
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"

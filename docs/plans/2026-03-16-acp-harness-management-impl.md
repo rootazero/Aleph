@@ -13,14 +13,14 @@
 ### Task 1: Extend AcpConfig Data Model
 
 **Files:**
-- Modify: `core/src/config/types/acp.rs`
+- Modify: `src/config/types/acp.rs`
 
 **Step 1: Expand AcpHarnessEntry to AcpHarnessConfig**
 
 Replace the current minimal `AcpHarnessEntry` with the full configuration struct:
 
 ```rust
-// core/src/config/types/acp.rs
+// src/config/types/acp.rs
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -226,7 +226,7 @@ Expected: Compilation errors in files that import the old `AcpHarnessEntry` — 
 **Step 3: Commit**
 
 ```
-git add core/src/config/types/acp.rs
+git add src/config/types/acp.rs
 git commit -m "acp: expand AcpHarnessEntry with full harness configuration"
 ```
 
@@ -235,14 +235,14 @@ git commit -m "acp: expand AcpHarnessEntry with full harness configuration"
 ### Task 2: Add CustomHarness Implementation
 
 **Files:**
-- Create: `core/src/acp/harnesses/custom.rs`
-- Modify: `core/src/acp/harnesses/mod.rs` (add `pub use custom::CustomHarness;`)
-- Modify: `core/src/acp/harness.rs` (add conversion helpers between HarnessMode ↔ HarnessModeSerde)
+- Create: `src/acp/harnesses/custom.rs`
+- Modify: `src/acp/harnesses/mod.rs` (add `pub use custom::CustomHarness;`)
+- Modify: `src/acp/harness.rs` (add conversion helpers between HarnessMode ↔ HarnessModeSerde)
 
 **Step 1: Create custom.rs**
 
 ```rust
-// core/src/acp/harnesses/custom.rs
+// src/acp/harnesses/custom.rs
 
 //! Custom ACP harness adapter — user-defined CLI tools.
 
@@ -411,7 +411,7 @@ Expected: PASS (or errors from start/mod.rs AcpHarnessEntry usage — fix in Tas
 **Step 5: Commit**
 
 ```
-git add core/src/acp/harnesses/custom.rs core/src/acp/harnesses/mod.rs core/src/acp/harness.rs
+git add src/acp/harnesses/custom.rs src/acp/harnesses/mod.rs src/acp/harness.rs
 git commit -m "acp: add CustomHarness for user-defined CLI tools"
 ```
 
@@ -420,7 +420,7 @@ git commit -m "acp: add CustomHarness for user-defined CLI tools"
 ### Task 3: Extend AcpHarnessManager with Dynamic Registration
 
 **Files:**
-- Modify: `core/src/acp/manager.rs`
+- Modify: `src/acp/manager.rs`
 
 **Step 1: Rewrite manager to support dynamic registration**
 
@@ -569,7 +569,7 @@ Expected: Some tests may fail due to the RwLock change (sync → async). Update 
 **Step 6: Commit**
 
 ```
-git add core/src/acp/manager.rs core/src/bin/aleph/commands/start/mod.rs
+git add src/acp/manager.rs src/bin/aleph/commands/start/mod.rs
 git commit -m "acp: extend AcpHarnessManager with dynamic registration"
 ```
 
@@ -578,17 +578,17 @@ git commit -m "acp: extend AcpHarnessManager with dynamic registration"
 ### Task 4: Add Gateway RPC Handlers
 
 **Files:**
-- Create: `core/src/gateway/handlers/acp_config.rs`
-- Modify: `core/src/gateway/handlers/mod.rs` (add `pub mod acp_config;`)
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs` (register new handlers)
-- Modify: `core/src/bin/aleph/commands/start/mod.rs` (pass acp_manager to register_config_handlers)
+- Create: `src/gateway/handlers/acp_config.rs`
+- Modify: `src/gateway/handlers/mod.rs` (add `pub mod acp_config;`)
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs` (register new handlers)
+- Modify: `src/bin/aleph/commands/start/mod.rs` (pass acp_manager to register_config_handlers)
 
 **Step 1: Create acp_config.rs**
 
 Follow `rerank_config.rs` as reference pattern. Handlers receive `Arc<AcpHarnessManager>` + `Arc<RwLock<Config>>` + `Arc<GatewayEventBus>`.
 
 ```rust
-// core/src/gateway/handlers/acp_config.rs
+// src/gateway/handlers/acp_config.rs
 
 //! ACP Harness Configuration RPC handlers
 //!
@@ -695,9 +695,9 @@ Run: `cargo check --bin aleph 2>&1 | head -30`
 **Step 6: Commit**
 
 ```
-git add core/src/gateway/handlers/acp_config.rs core/src/gateway/handlers/mod.rs \
-  core/src/bin/aleph/commands/start/builder/handlers.rs \
-  core/src/bin/aleph/commands/start/mod.rs
+git add src/gateway/handlers/acp_config.rs src/gateway/handlers/mod.rs \
+  src/bin/aleph/commands/start/builder/handlers.rs \
+  src/bin/aleph/commands/start/mod.rs
 git commit -m "gateway: add ACP harness config RPC handlers"
 ```
 
@@ -993,7 +993,7 @@ git commit -m "panel: add ACP harnesses settings page with split-pane layout"
 ### Task 8: Integration Testing
 
 **Files:**
-- Modify: `core/src/acp/manager.rs` (update existing tests)
+- Modify: `src/acp/manager.rs` (update existing tests)
 
 **Step 1: Update manager tests for async API**
 
@@ -1062,7 +1062,7 @@ Expected: Pre-existing failures only (markdown_skill tests)
 **Step 4: Commit**
 
 ```
-git add core/src/acp/manager.rs
+git add src/acp/manager.rs
 git commit -m "acp: update manager tests for async dynamic registration"
 ```
 

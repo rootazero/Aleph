@@ -15,9 +15,9 @@
 ### Task 1: Extend `SessionListRow` with `agent_id` and `topic`
 
 **Files:**
-- Modify: `core/src/builtin_tools/sessions/list_tool.rs:46-61` (SessionListRow struct)
-- Modify: `core/src/builtin_tools/sessions/list_tool.rs:119-138` (metadata_to_row function)
-- Modify: `core/src/builtin_tools/sessions/list_tool.rs:284-577` (tests)
+- Modify: `src/builtin_tools/sessions/list_tool.rs:46-61` (SessionListRow struct)
+- Modify: `src/builtin_tools/sessions/list_tool.rs:119-138` (metadata_to_row function)
+- Modify: `src/builtin_tools/sessions/list_tool.rs:284-577` (tests)
 
 - [ ] **Step 1: Add `agent_id` and `topic` fields to `SessionListRow`**
 
@@ -89,7 +89,7 @@ Expected: All existing tests pass with new fields populated.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/sessions/list_tool.rs
+git add src/builtin_tools/sessions/list_tool.rs
 git commit -m "sessions: expose agent_id and topic in SessionListRow"
 ```
 
@@ -100,7 +100,7 @@ git commit -m "sessions: expose agent_id and topic in SessionListRow"
 The `close_session` method stores topic in metadata but we need a way to set topic without closing the session (for the async first-message topic generation).
 
 **Files:**
-- Modify: `core/src/gateway/session_manager/ops.rs` (add `set_topic` method near `close_session` at line 388)
+- Modify: `src/gateway/session_manager/ops.rs` (add `set_topic` method near `close_session` at line 388)
 
 - [ ] **Step 1: Add `set_topic` method**
 
@@ -154,7 +154,7 @@ Expected: Compiles without errors.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/session_manager/ops.rs
+git add src/gateway/session_manager/ops.rs
 git commit -m "session_manager: add set_topic method for async topic generation"
 ```
 
@@ -163,8 +163,8 @@ git commit -m "session_manager: add set_topic method for async topic generation"
 ### Task 3: Add async topic generation to `handle_chat_send_with_engine`
 
 **Files:**
-- Modify: `core/src/bin/aleph/server_init.rs:218-357` (handle_chat_send_with_engine)
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs:534-542` (handler registration closure)
+- Modify: `src/bin/aleph/server_init.rs:218-357` (handle_chat_send_with_engine)
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs:534-542` (handler registration closure)
 
 - [ ] **Step 1: Add `provider_registry` and `session_manager` params to `handle_chat_send_with_engine`**
 
@@ -309,7 +309,7 @@ Expected: Compiles without errors. Key API calls verified: `UnifiedMessage::user
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/bin/aleph/server_init.rs core/src/bin/aleph/commands/start/builder/agent_init.rs
+git add src/bin/aleph/server_init.rs src/bin/aleph/commands/start/builder/agent_init.rs
 git commit -m "chat.send: spawn async LLM topic generation for new sessions"
 ```
 
@@ -788,7 +788,7 @@ git commit -m "panel: rebuild WASM with sidebar redesign"
 ### Task 8: Handle `/new` topic fallback
 
 **Files:**
-- Modify: `core/src/builtin_tools/sessions/new_tool.rs`
+- Modify: `src/builtin_tools/sessions/new_tool.rs`
 
 - [ ] **Step 1: Review current `/new` implementation**
 

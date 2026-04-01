@@ -29,7 +29,7 @@ in ChatState, and backend extensions to expose topic and agent_id in `sessions.l
 
 ### 1. Extend `SessionListRow`
 
-**File:** `core/src/builtin_tools/sessions/list_tool.rs`
+**File:** `src/builtin_tools/sessions/list_tool.rs`
 
 Add two fields to `SessionListRow`:
 
@@ -104,7 +104,7 @@ the normal response is returned to the user:
 
 ### 3. `/new` command simplification
 
-**File:** `core/src/builtin_tools/sessions/new_tool.rs`
+**File:** `src/builtin_tools/sessions/new_tool.rs`
 
 `session_new` becomes simpler:
 - Close current session, open new empty session
@@ -214,9 +214,9 @@ User clicks existing session
 
 | File | Change |
 |------|--------|
-| `core/src/builtin_tools/sessions/list_tool.rs` | Add agent_id, topic to SessionListRow; update metadata_to_row |
-| `core/src/bin/aleph/server_init.rs` | Spawn async topic generation via ProviderRegistry on first message |
-| `core/src/builtin_tools/sessions/new_tool.rs` | Simplify: no topic gen, just close+open; fallback topic gen if missing |
+| `src/builtin_tools/sessions/list_tool.rs` | Add agent_id, topic to SessionListRow; update metadata_to_row |
+| `src/bin/aleph/server_init.rs` | Spawn async topic generation via ProviderRegistry on first message |
+| `src/builtin_tools/sessions/new_tool.rs` | Simplify: no topic gen, just close+open; fallback topic gen if missing |
 | `apps/panel/src/views/chat/state.rs` | Add agent_id signal, clear_session() method |
 | `apps/panel/src/components/chat_sidebar.rs` | Full rewrite: two-level hierarchy, fix serde to snake_case |
 | `apps/panel/src/views/chat/view.rs` | Simplify agent_id handling in send_message |

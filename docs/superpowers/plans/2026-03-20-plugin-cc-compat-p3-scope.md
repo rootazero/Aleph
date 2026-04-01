@@ -17,24 +17,24 @@
 ### New Files
 | File | Responsibility |
 |------|---------------|
-| `core/src/extension/scope.rs` | PluginScope path resolution, scope settings I/O |
+| `src/extension/scope.rs` | PluginScope path resolution, scope settings I/O |
 
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/extension/types/plugins.rs` | Move PluginScope to scope.rs or extend it with path methods |
-| `core/src/extension/marketplace/installer.rs` | Accept scope parameter |
-| `core/src/extension/marketplace/mod.rs` | MarketplaceManager install with scope |
-| `core/src/extension/discovery/mod.rs` | Scan scope-ordered directories |
-| `core/src/gateway/handlers/plugins/handlers.rs` | Pass scope to install handler |
+| `src/extension/types/plugins.rs` | Move PluginScope to scope.rs or extend it with path methods |
+| `src/extension/marketplace/installer.rs` | Accept scope parameter |
+| `src/extension/marketplace/mod.rs` | MarketplaceManager install with scope |
+| `src/extension/discovery/mod.rs` | Scan scope-ordered directories |
+| `src/gateway/handlers/plugins/handlers.rs` | Pass scope to install handler |
 
 ---
 
 ## Task 1: Scope path resolution module
 
 **Files:**
-- Create: `core/src/extension/scope.rs`
-- Modify: `core/src/extension/mod.rs` — add `pub mod scope;`
+- Create: `src/extension/scope.rs`
+- Modify: `src/extension/mod.rs` — add `pub mod scope;`
 
 - [ ] **Step 1: Create scope.rs with path resolution**
 
@@ -175,8 +175,8 @@ mod tests {
 ## Task 2: Update marketplace installer for scope
 
 **Files:**
-- Modify: `core/src/extension/marketplace/installer.rs`
-- Modify: `core/src/extension/marketplace/mod.rs`
+- Modify: `src/extension/marketplace/installer.rs`
+- Modify: `src/extension/marketplace/mod.rs`
 
 - [ ] **Step 1: Update `install_plugin_from_cache` to accept install_dir parameter**
 
@@ -235,7 +235,7 @@ Update `handle_marketplace_install` in handlers.rs to use `install_to_scope()` w
 ## Task 3: Update discovery for scope-ordered scanning
 
 **Files:**
-- Modify: `core/src/extension/discovery/mod.rs`
+- Modify: `src/extension/discovery/mod.rs`
 
 - [ ] **Step 1: Add scope directories to discovery**
 

@@ -32,10 +32,10 @@ Add intra-session context management inspired by [lossless-claw](https://github.
 
 ## Architecture
 
-### New Module: `core/src/memory/session_compactor/`
+### New Module: `src/memory/session_compactor/`
 
 ```
-core/src/memory/session_compactor/
+src/memory/session_compactor/
 ├── mod.rs              // SessionCompactor struct + orchestration
 ├── tool_compactor.rs   // Deterministic tool result compression
 ├── summary_engine.rs   // LLM summary generation (depth-aware prompts)

@@ -146,13 +146,13 @@ For each provider in each typed section:
 
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `core/src/generation/providers/url_normalize.rs` | `ResolvedUrl`, `resolve_base_url()`, `needs_auto_complete()` |
-| Modify | `core/src/config/types/generation/*.rs` | Add `image_providers`, `video_providers`, `speech_providers`, `audio_providers` fields |
-| Modify | `core/src/generation/providers/factory.rs` | Accept `GenerationType` param, use `ResolvedUrl` |
-| Modify | `core/src/generation/providers/openai_tts.rs` | Use `ResolvedUrl` for `speech_url()` and new `stt_url()` |
-| Modify | `core/src/generation/providers/openai_image.rs` | Use `ResolvedUrl` for `generations_url()` and new `edits_url()` |
-| Modify | `core/src/generation/providers/openai_compat/builder.rs` | Replace private `normalize_endpoint()` with shared `resolve_base_url()` |
-| Modify | `core/src/bin/aleph-server/commands/start/builder/agent_init.rs` | Iterate 4 typed sections + legacy merge |
+| Create | `src/generation/providers/url_normalize.rs` | `ResolvedUrl`, `resolve_base_url()`, `needs_auto_complete()` |
+| Modify | `src/config/types/generation/*.rs` | Add `image_providers`, `video_providers`, `speech_providers`, `audio_providers` fields |
+| Modify | `src/generation/providers/factory.rs` | Accept `GenerationType` param, use `ResolvedUrl` |
+| Modify | `src/generation/providers/openai_tts.rs` | Use `ResolvedUrl` for `speech_url()` and new `stt_url()` |
+| Modify | `src/generation/providers/openai_image.rs` | Use `ResolvedUrl` for `generations_url()` and new `edits_url()` |
+| Modify | `src/generation/providers/openai_compat/builder.rs` | Replace private `normalize_endpoint()` with shared `resolve_base_url()` |
+| Modify | `src/bin/aleph-server/commands/start/builder/agent_init.rs` | Iterate 4 typed sections + legacy merge |
 
 ## YAGNI
 

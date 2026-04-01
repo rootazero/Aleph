@@ -240,7 +240,7 @@ Note: Some features may need adjustment based on actual crate API. The implement
 
 ## Tool Integration
 
-**File:** `core/src/builtin_tools/desktop/mod.rs`
+**File:** `src/builtin_tools/desktop/mod.rs`
 
 New action `screen_record` on the existing `desktop` tool:
 
@@ -299,7 +299,7 @@ Integration tests require macOS with display + ScreenRecording TCC permission.
 | Modify | `crates/desktop/src/perception.rs` | macOS ScreenCaptureKit implementation |
 | Modify | `crates/desktop/src/native_screen.rs` | NativeScreen delegates screen_record |
 | Modify | `crates/desktop/Cargo.toml` | Add SCK, CoreMedia, AVFoundation deps |
-| Modify | `core/src/builtin_tools/desktop/mod.rs` | Add screen_record action |
+| Modify | `src/builtin_tools/desktop/mod.rs` | Add screen_record action |
 
 ## Non-Goals
 

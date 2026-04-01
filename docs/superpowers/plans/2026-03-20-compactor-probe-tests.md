@@ -18,42 +18,42 @@
 
 | File | Responsibility |
 |------|---------------|
-| `core/tests/session_compactor_probe.rs` | Top-level test entry (mod declarations) |
-| `core/tests/session_compactor_probe/harness.rs` | CompactorProbeHarness: build SessionCompactor + LanceDB in-process |
-| `core/tests/session_compactor_probe/mock_llm.rs` | MockLlmProvider adapted for compression scenarios |
-| `core/tests/session_compactor_probe/tool_compaction.rs` | Scenario 1: ToolCompactor trigger |
-| `core/tests/session_compactor_probe/summary_gen.rs` | Scenario 2: d0 summary generation |
-| `core/tests/session_compactor_probe/depth_upgrade.rs` | Scenario 3: d0→d1 condensation |
-| `core/tests/session_compactor_probe/history_assembly.rs` | Scenario 4: prepare_history assembly |
-| `core/tests/session_compactor_probe/session_search.rs` | Scenario 5: memory_search scope |
-| `core/tests/session_compactor_probe/fallback_chain.rs` | Scenario 6: three-level fallback |
-| `core/tests/session_compactor_probe/prompt_layer.rs` | Scenario 7: SessionContextGuideLayer |
-| `core/tests/compactor_e2e_probe.rs` | Top-level e2e test entry |
-| `core/tests/compactor_e2e_probe/harness.rs` | E2E harness: spawn aleph + WebSocket |
-| `core/tests/compactor_e2e_probe/multi_turn.rs` | Scenario A: multi-turn → summary |
-| `core/tests/compactor_e2e_probe/compression_depth.rs` | Scenario B: depth upgrade |
-| `core/tests/compactor_e2e_probe/session_recall.rs` | Scenario C: memory recall |
+| `tests/session_compactor_probe.rs` | Top-level test entry (mod declarations) |
+| `tests/session_compactor_probe/harness.rs` | CompactorProbeHarness: build SessionCompactor + LanceDB in-process |
+| `tests/session_compactor_probe/mock_llm.rs` | MockLlmProvider adapted for compression scenarios |
+| `tests/session_compactor_probe/tool_compaction.rs` | Scenario 1: ToolCompactor trigger |
+| `tests/session_compactor_probe/summary_gen.rs` | Scenario 2: d0 summary generation |
+| `tests/session_compactor_probe/depth_upgrade.rs` | Scenario 3: d0→d1 condensation |
+| `tests/session_compactor_probe/history_assembly.rs` | Scenario 4: prepare_history assembly |
+| `tests/session_compactor_probe/session_search.rs` | Scenario 5: memory_search scope |
+| `tests/session_compactor_probe/fallback_chain.rs` | Scenario 6: three-level fallback |
+| `tests/session_compactor_probe/prompt_layer.rs` | Scenario 7: SessionContextGuideLayer |
+| `tests/compactor_e2e_probe.rs` | Top-level e2e test entry |
+| `tests/compactor_e2e_probe/harness.rs` | E2E harness: spawn aleph + WebSocket |
+| `tests/compactor_e2e_probe/multi_turn.rs` | Scenario A: multi-turn → summary |
+| `tests/compactor_e2e_probe/compression_depth.rs` | Scenario B: depth upgrade |
+| `tests/compactor_e2e_probe/session_recall.rs` | Scenario C: memory recall |
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `core/src/memory/session_compactor/mod.rs` | Add `CompactorMetrics`, wire counters, add tracing |
-| `core/src/memory/session_compactor/tool_compactor.rs` | Add tracing at compact_if_needed |
-| `core/src/memory/mod.rs` | Re-export `CompactorMetrics` |
+| `src/memory/session_compactor/mod.rs` | Add `CompactorMetrics`, wire counters, add tracing |
+| `src/memory/session_compactor/tool_compactor.rs` | Add tracing at compact_if_needed |
+| `src/memory/mod.rs` | Re-export `CompactorMetrics` |
 
 ---
 
 ## Task 1: Add CompactorMetrics and Tracing
 
 **Files:**
-- Modify: `core/src/memory/session_compactor/mod.rs`
-- Modify: `core/src/memory/session_compactor/tool_compactor.rs`
-- Modify: `core/src/memory/mod.rs`
+- Modify: `src/memory/session_compactor/mod.rs`
+- Modify: `src/memory/session_compactor/tool_compactor.rs`
+- Modify: `src/memory/mod.rs`
 
 - [ ] **Step 1: Add CompactorMetrics struct**
 
-In `core/src/memory/session_compactor/mod.rs`, add after the imports:
+In `src/memory/session_compactor/mod.rs`, add after the imports:
 
 ```rust
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -127,7 +127,7 @@ Decision: Skip `tool_compactions` counter for now — the in-process test direct
 
 - [ ] **Step 6: Re-export in memory/mod.rs**
 
-Add `pub use session_compactor::CompactorMetrics;` in `core/src/memory/mod.rs`.
+Add `pub use session_compactor::CompactorMetrics;` in `src/memory/mod.rs`.
 
 - [ ] **Step 7: Verify compilation and tests**
 
@@ -137,7 +137,7 @@ Expected: All 147 existing tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/ core/src/memory/mod.rs
+git add src/memory/session_compactor/ src/memory/mod.rs
 git commit -m "session_compactor: add CompactorMetrics counters and structured tracing"
 ```
 
@@ -146,13 +146,13 @@ git commit -m "session_compactor: add CompactorMetrics counters and structured t
 ## Task 2: In-Process Probe Harness and MockLlm
 
 **Files:**
-- Create: `core/tests/session_compactor_probe.rs`
-- Create: `core/tests/session_compactor_probe/harness.rs`
-- Create: `core/tests/session_compactor_probe/mock_llm.rs`
+- Create: `tests/session_compactor_probe.rs`
+- Create: `tests/session_compactor_probe/harness.rs`
+- Create: `tests/session_compactor_probe/mock_llm.rs`
 
 - [ ] **Step 1: Create top-level test entry**
 
-Create `core/tests/session_compactor_probe.rs`:
+Create `tests/session_compactor_probe.rs`:
 
 ```rust
 mod session_compactor_probe;
@@ -160,7 +160,7 @@ mod session_compactor_probe;
 
 - [ ] **Step 2: Create mock_llm.rs**
 
-Copy and adapt from `core/tests/session_probe/mock_llm.rs`. The key adaptation: default response should be a plausible summary (not just "Hello"):
+Copy and adapt from `tests/session_probe/mock_llm.rs`. The key adaptation: default response should be a plausible summary (not just "Hello"):
 
 ```rust
 // Default response for summary generation
@@ -170,7 +170,7 @@ const DEFAULT_SUMMARY: &str = "Key decisions: implemented feature X. Files modif
 
 Keep the same API: `new()`, `failing()`, `enqueue()`, `call_count()`, `last_input()`, `set_failing()`.
 
-Read `core/tests/session_probe/mock_llm.rs` first to understand exact imports and `AiProvider` trait implementation.
+Read `tests/session_probe/mock_llm.rs` first to understand exact imports and `AiProvider` trait implementation.
 
 - [ ] **Step 3: Create harness.rs**
 
@@ -186,7 +186,7 @@ pub struct CompactorProbeHarness {
 ```
 
 Key implementation notes:
-- Read `core/src/memory/store/` to find `LanceMemoryBackend::open_or_create` or equivalent constructor
+- Read `src/memory/store/` to find `LanceMemoryBackend::open_or_create` or equivalent constructor
 - `SessionCompactor::new(database, config).with_provider(mock_llm.clone())`
 - Config with aggressive thresholds for testing: `fresh_tail_count=5, leaf_chunk_tokens=300, d1_min_fanout=3`
 
@@ -202,7 +202,7 @@ Important: Read the actual SessionCompactor API carefully. `post_turn_compress` 
 
 - [ ] **Step 4: Create mod.rs for the probe directory**
 
-Create `core/tests/session_compactor_probe/mod.rs`:
+Create `tests/session_compactor_probe/mod.rs`:
 
 ```rust
 pub mod harness;
@@ -226,7 +226,7 @@ Expected: Compiles, lists 0 tests (harness has no test functions yet).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe.rs core/tests/session_compactor_probe/
+git add tests/session_compactor_probe.rs tests/session_compactor_probe/
 git commit -m "session_compactor_probe: add harness and MockLlmProvider"
 ```
 
@@ -235,7 +235,7 @@ git commit -m "session_compactor_probe: add harness and MockLlmProvider"
 ## Task 3: Scenario 1 — ToolCompactor Trigger
 
 **Files:**
-- Modify: `core/tests/session_compactor_probe/tool_compaction.rs`
+- Modify: `tests/session_compactor_probe/tool_compaction.rs`
 
 - [ ] **Step 1: Write ToolCompactor test**
 
@@ -304,7 +304,7 @@ fn p1_no_compaction_under_threshold() {
 }
 ```
 
-Note: Adapt `UnifiedMessage::tool_result` constructor and `tool_result_info()` return type to match actual API. Read `core/src/providers/message.rs` for exact signatures.
+Note: Adapt `UnifiedMessage::tool_result` constructor and `tool_result_info()` return type to match actual API. Read `src/providers/message.rs` for exact signatures.
 
 - [ ] **Step 2: Run tests**
 
@@ -314,7 +314,7 @@ Expected: All tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe/tool_compaction.rs
+git add tests/session_compactor_probe/tool_compaction.rs
 git commit -m "session_compactor_probe: add Scenario 1 — ToolCompactor trigger tests"
 ```
 
@@ -323,7 +323,7 @@ git commit -m "session_compactor_probe: add Scenario 1 — ToolCompactor trigger
 ## Task 4: Scenario 2 — Post-Turn d0 Summary Generation
 
 **Files:**
-- Modify: `core/tests/session_compactor_probe/summary_gen.rs`
+- Modify: `tests/session_compactor_probe/summary_gen.rs`
 
 - [ ] **Step 1: Write d0 summary generation test**
 
@@ -373,7 +373,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe/summary_gen.rs
+git add tests/session_compactor_probe/summary_gen.rs
 git commit -m "session_compactor_probe: add Scenario 2 — d0 summary generation"
 ```
 
@@ -382,7 +382,7 @@ git commit -m "session_compactor_probe: add Scenario 2 — d0 summary generation
 ## Task 5: Scenario 3 — Depth Upgrade d0→d1
 
 **Files:**
-- Modify: `core/tests/session_compactor_probe/depth_upgrade.rs`
+- Modify: `tests/session_compactor_probe/depth_upgrade.rs`
 
 - [ ] **Step 1: Write depth upgrade test**
 
@@ -425,7 +425,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe/depth_upgrade.rs
+git add tests/session_compactor_probe/depth_upgrade.rs
 git commit -m "session_compactor_probe: add Scenario 3 — d0→d1 depth upgrade"
 ```
 
@@ -434,7 +434,7 @@ git commit -m "session_compactor_probe: add Scenario 3 — d0→d1 depth upgrade
 ## Task 6: Scenario 4 — prepare_history Assembly
 
 **Files:**
-- Modify: `core/tests/session_compactor_probe/history_assembly.rs`
+- Modify: `tests/session_compactor_probe/history_assembly.rs`
 
 - [ ] **Step 1: Write history assembly tests**
 
@@ -489,7 +489,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe/history_assembly.rs
+git add tests/session_compactor_probe/history_assembly.rs
 git commit -m "session_compactor_probe: add Scenario 4 — prepare_history assembly"
 ```
 
@@ -498,9 +498,9 @@ git commit -m "session_compactor_probe: add Scenario 4 — prepare_history assem
 ## Task 7: Scenarios 5, 6, 7 — Session Search, Fallback, Prompt Layer
 
 **Files:**
-- Modify: `core/tests/session_compactor_probe/session_search.rs`
-- Modify: `core/tests/session_compactor_probe/fallback_chain.rs`
-- Modify: `core/tests/session_compactor_probe/prompt_layer.rs`
+- Modify: `tests/session_compactor_probe/session_search.rs`
+- Modify: `tests/session_compactor_probe/fallback_chain.rs`
+- Modify: `tests/session_compactor_probe/prompt_layer.rs`
 
 - [ ] **Step 1: Write session search test (Scenario 5)**
 
@@ -600,7 +600,7 @@ Expected: All scenarios pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/tests/session_compactor_probe/session_search.rs core/tests/session_compactor_probe/fallback_chain.rs core/tests/session_compactor_probe/prompt_layer.rs
+git add tests/session_compactor_probe/session_search.rs tests/session_compactor_probe/fallback_chain.rs tests/session_compactor_probe/prompt_layer.rs
 git commit -m "session_compactor_probe: add Scenarios 5-7 — search, fallback, prompt layer"
 ```
 
@@ -609,13 +609,13 @@ git commit -m "session_compactor_probe: add Scenarios 5-7 — search, fallback, 
 ## Task 8: End-to-End Probe Harness
 
 **Files:**
-- Create: `core/tests/compactor_e2e_probe.rs`
-- Create: `core/tests/compactor_e2e_probe/harness.rs`
-- Create: `core/tests/compactor_e2e_probe/mod.rs`
+- Create: `tests/compactor_e2e_probe.rs`
+- Create: `tests/compactor_e2e_probe/harness.rs`
+- Create: `tests/compactor_e2e_probe/mod.rs`
 
 - [ ] **Step 1: Study AlephTestServer pattern**
 
-Read `core/tests/provider_rpc_probe/harness.rs` to understand:
+Read `tests/provider_rpc_probe/harness.rs` to understand:
 - How the server is spawned (`Command::new`)
 - How config is written (temp TOML)
 - How WebSocket connection is established
@@ -679,7 +679,7 @@ Expected: Compiles, lists 0 tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/tests/compactor_e2e_probe.rs core/tests/compactor_e2e_probe/
+git add tests/compactor_e2e_probe.rs tests/compactor_e2e_probe/
 git commit -m "compactor_e2e_probe: add E2E harness with WebSocket JSON-RPC"
 ```
 
@@ -688,7 +688,7 @@ git commit -m "compactor_e2e_probe: add E2E harness with WebSocket JSON-RPC"
 ## Task 9: E2E Scenario A — Multi-Turn Conversation
 
 **Files:**
-- Modify: `core/tests/compactor_e2e_probe/multi_turn.rs`
+- Modify: `tests/compactor_e2e_probe/multi_turn.rs`
 
 - [ ] **Step 1: Write multi-turn test**
 
@@ -733,7 +733,7 @@ async fn e2e_multi_turn_triggers_compression() {
 - [ ] **Step 2: Commit**
 
 ```bash
-git add core/tests/compactor_e2e_probe/multi_turn.rs
+git add tests/compactor_e2e_probe/multi_turn.rs
 git commit -m "compactor_e2e_probe: add Scenario A — multi-turn compression"
 ```
 
@@ -742,8 +742,8 @@ git commit -m "compactor_e2e_probe: add Scenario A — multi-turn compression"
 ## Task 10: E2E Scenarios B and C — Depth Upgrade and Recall
 
 **Files:**
-- Modify: `core/tests/compactor_e2e_probe/compression_depth.rs`
-- Modify: `core/tests/compactor_e2e_probe/session_recall.rs`
+- Modify: `tests/compactor_e2e_probe/compression_depth.rs`
+- Modify: `tests/compactor_e2e_probe/session_recall.rs`
 
 - [ ] **Step 1: Write depth upgrade test (Scenario B)**
 
@@ -835,7 +835,7 @@ async fn e2e_compressed_info_retrievable_via_search() {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/compactor_e2e_probe/compression_depth.rs core/tests/compactor_e2e_probe/session_recall.rs
+git add tests/compactor_e2e_probe/compression_depth.rs tests/compactor_e2e_probe/session_recall.rs
 git commit -m "compactor_e2e_probe: add Scenarios B and C — depth upgrade and recall"
 ```
 

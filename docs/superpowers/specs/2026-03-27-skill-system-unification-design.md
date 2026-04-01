@@ -22,7 +22,7 @@ Reference: OpenClaw's skill system (install metadata, Control UI tabs, detail di
 
 `SkillManifest` becomes the **only skill representation**. All sources (file scan, plugin registration, runtime loading) convert to `SkillManifest` at registration time.
 
-New fields added to existing struct in `core/src/domain/skill.rs`:
+New fields added to existing struct in `src/domain/skill.rs`:
 
 ```rust
 pub struct SkillManifest {
@@ -462,8 +462,8 @@ API Key storage reuses existing `vault_store` Tool — no new Tool needed.
 
 | Delete | Reason |
 |--------|--------|
-| `core/src/skills/` entire directory | Legacy, fully replaced by `skill/` |
-| `core/src/tools/markdown_skill/` | Loading logic migrated to `skill/manifest.rs` |
+| `src/skills/` entire directory | Legacy, fully replaced by `skill/` |
+| `src/tools/markdown_skill/` | Loading logic migrated to `skill/manifest.rs` |
 | `ExtensionSkill` type alias in `extension/types/skills.rs` | Use `SkillManifest` directly |
 | `extension/skill_ops.rs` | After callers migrate to `SkillSystem` |
 | `markdown_skills.*` RPC handlers | Unified into `skills.*` |

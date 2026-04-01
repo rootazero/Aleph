@@ -24,7 +24,7 @@
 | Modify | `crates/desktop/src/native_screen.rs` | NativeScreen delegates screen_record |
 | Modify | `crates/desktop/src/perception.rs` | macOS screen_record implementation |
 | Modify | `crates/desktop/Cargo.toml` | Add objc2-screen-capture-kit, dispatch2 |
-| Modify | `core/src/builtin_tools/desktop/mod.rs` | Add screen_record action |
+| Modify | `src/builtin_tools/desktop/mod.rs` | Add screen_record action |
 
 ---
 
@@ -502,7 +502,7 @@ git commit -m "desktop: implement macOS screen recording via SCRecordingOutput +
 
 **Files:**
 - Modify: `crates/desktop/src/native_screen.rs`
-- Modify: `core/src/builtin_tools/desktop/mod.rs`
+- Modify: `src/builtin_tools/desktop/mod.rs`
 
 - [ ] **Step 1: Add screen_record to NativeScreen**
 
@@ -528,7 +528,7 @@ In `crates/desktop/src/native_screen.rs`, add to the `ScreenCapability` impl:
 
 - [ ] **Step 2: Add screen_record action to desktop tool**
 
-In `core/src/builtin_tools/desktop/mod.rs`, add:
+In `src/builtin_tools/desktop/mod.rs`, add:
 
 1. Add to the tool DESCRIPTION string:
 ```
@@ -573,7 +573,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/desktop/src/native_screen.rs core/src/builtin_tools/desktop/mod.rs
+git add crates/desktop/src/native_screen.rs src/builtin_tools/desktop/mod.rs
 git commit -m "desktop: wire screen_record into NativeScreen and desktop tool"
 ```
 

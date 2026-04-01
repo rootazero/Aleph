@@ -23,7 +23,7 @@ Aleph 现有 `cron/` 模块提供完整的定时任务能力（Cron 表达式、
 ## Module Structure
 
 ```
-core/src/tasks/
+src/tasks/
 ├── mod.rs                           # Top-level exports
 ├── shared/
 │   ├── mod.rs
@@ -596,7 +596,7 @@ max_history = 10
 
 | Operation | Description |
 |-----------|-------------|
-| `core/src/cron/` → `core/src/tasks/cron/` | Directory move |
+| `src/cron/` → `src/tasks/cron/` | Directory move |
 | `cron/store.rs` | Split: generic → `tasks/shared/store.rs`, cron-specific stays |
 | `cron/delivery.rs` → `tasks/shared/delivery.rs` | Move shared delivery engine |
 | `cron/clock.rs` → `tasks/shared/clock.rs` | Move clock abstraction |

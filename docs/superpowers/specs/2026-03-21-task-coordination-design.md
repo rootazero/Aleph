@@ -13,7 +13,7 @@ ClawTeam (a Claude Code multi-agent plugin) demonstrates that **task DAG + team 
 ### Why kernel, not plugin
 
 - Task coordination IS scheduling — core's job per R3 ("内核只调度，不搬砖")
-- The swarm module (event bus, collective memory, context injector) already lives in `core/src/agents/swarm/`; putting task coordination in a plugin would split the swarm brain in half
+- The swarm module (event bus, collective memory, context injector) already lives in `src/agents/swarm/`; putting task coordination in a plugin would split the swarm brain in half
 - Event-driven dependency resolution (task completed → blocked tasks auto-unblock) requires tight Event Bus integration that plugins cannot achieve without polling
 
 ## Naming Convention
@@ -490,20 +490,20 @@ This changes the `ContextInjector` constructor signature, which propagates to `S
 ### New files
 
 ```
-core/src/agents/swarm/tasks/
+src/agents/swarm/tasks/
 ├── mod.rs              # TaskStore trait, model types (~80 lines)
 ├── store.rs            # SqliteTaskStore implementation (~200 lines)
 ├── dag.rs              # resolve_dependencies + cycle detection (~80 lines)
 └── template.rs         # Template parser + variable substitution (~100 lines)
 
-core/src/builtin_tools/task_manage/
+src/builtin_tools/task_manage/
 ├── mod.rs
 ├── create.rs           # task_create tool
 ├── update.rs           # task_update tool (triggers DAG unlock)
 ├── list.rs             # task_list tool
 └── wait.rs             # task_wait tool (Event Bus subscription)
 
-core/src/builtin_tools/team_manage/
+src/builtin_tools/team_manage/
 ├── mod.rs
 ├── create.rs           # team_create tool
 ├── launch.rs           # team_launch tool (template → agents + tasks)
@@ -514,11 +514,11 @@ core/src/builtin_tools/team_manage/
 ### Modified files
 
 ```
-core/src/agents/swarm/events.rs           # +4 event types
-core/src/agents/swarm/coordinator.rs      # + TaskStore integration
-core/src/agents/swarm/context_injector.rs # + inject_task_context()
-core/src/executor/builtin_registry/groups.rs      # + task_coordination group
-core/src/executor/builtin_registry/definitions.rs # + 8 tool definitions
+src/agents/swarm/events.rs           # +4 event types
+src/agents/swarm/coordinator.rs      # + TaskStore integration
+src/agents/swarm/context_injector.rs # + inject_task_context()
+src/executor/builtin_registry/groups.rs      # + task_coordination group
+src/executor/builtin_registry/definitions.rs # + 8 tool definitions
 ```
 
 ### Template locations

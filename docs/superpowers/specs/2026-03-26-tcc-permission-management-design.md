@@ -210,7 +210,7 @@ This converts async ObjC callbacks to synchronous Rust, then wrapped in `spawn_b
 
 ## Tool Definition
 
-**File:** `core/src/builtin_tools/permission_tool.rs`
+**File:** `src/builtin_tools/permission_tool.rs`
 
 ```json
 {
@@ -255,7 +255,7 @@ This follows R8 (LLM Sovereignty) — the LLM decides when to check permissions.
 | Create | `crates/desktop/src/permission_types.rs` | TccPermission, PermissionStatus, PermissionInfo |
 | Create | `crates/desktop/src/traits/permission.rs` | PermissionCapability trait |
 | Create | `crates/desktop-macos/src/permission.rs` | macOS TCC implementation |
-| Create | `core/src/builtin_tools/permission_tool.rs` | LLM-facing tool |
+| Create | `src/builtin_tools/permission_tool.rs` | LLM-facing tool |
 | Modify | `crates/desktop/src/traits/mod.rs` | Export PermissionCapability |
 | Modify | `crates/desktop/src/lib.rs` | Export permission_types |
 | Modify | `crates/desktop/src/platform.rs` | Add permission() method |
@@ -263,7 +263,7 @@ This follows R8 (LLM Sovereignty) — the LLM decides when to check permissions.
 | Modify | `crates/desktop-linux/src/lib.rs` | Return None for permission() |
 | Modify | `crates/desktop-windows/src/lib.rs` | Return None for permission() |
 | Modify | `crates/desktop-macos/Cargo.toml` | Add block2, objc2-av-foundation, objc2-speech |
-| Modify | `core/src/executor/builtin_registry/builder.rs` | Register PermissionTool |
+| Modify | `src/executor/builtin_registry/builder.rs` | Register PermissionTool |
 
 ## Dependency Changes
 

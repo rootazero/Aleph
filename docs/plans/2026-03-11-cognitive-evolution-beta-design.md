@@ -25,9 +25,9 @@
 Bridge PatternExtractor's existing prompt logic to actual LLM calls via dependency-inverted trait.
 
 ### Files
-- **New**: `core/src/poe/crystallization/synthesis_backend.rs`
-- **Modify**: `core/src/poe/crystallization/pattern_extractor.rs` (inject backend)
-- **New**: `core/src/poe/crystallization/provider_backend.rs` (ProviderManager impl)
+- **New**: `src/poe/crystallization/synthesis_backend.rs`
+- **Modify**: `src/poe/crystallization/pattern_extractor.rs` (inject backend)
+- **New**: `src/poe/crystallization/provider_backend.rs` (ProviderManager impl)
 
 ### Core Interface
 
@@ -70,9 +70,9 @@ pub trait PatternSynthesisBackend: Send + Sync {
 Upgrade static `(intent, tool_sequence, parameter_mapping)` to support conditional branching and bounded loops.
 
 ### Files
-- **New**: `core/src/poe/crystallization/pattern_model.rs`
-- **Modify**: `core/src/poe/crystallization/experience.rs`
-- **Modify**: `core/src/poe/crystallization/pattern_extractor.rs`
+- **New**: `src/poe/crystallization/pattern_model.rs`
+- **Modify**: `src/poe/crystallization/experience.rs`
+- **Modify**: `src/poe/crystallization/pattern_extractor.rs`
 
 ### Core Types
 
@@ -135,13 +135,13 @@ pub struct PatternSequence {
 Risk-aware validation between SkillGenerator and deployment; ensures "no regression".
 
 ### Files
-- **New**: `core/src/skill_evolution/validation/mod.rs`
-- **New**: `core/src/skill_evolution/validation/risk_profiler.rs`
-- **New**: `core/src/skill_evolution/validation/structural_linter.rs` (L1)
-- **New**: `core/src/skill_evolution/validation/semantic_replayer.rs` (L2)
-- **New**: `core/src/skill_evolution/validation/sandbox_executor.rs` (L3, stub)
-- **New**: `core/src/skill_evolution/validation/test_set_generator.rs`
-- **Modify**: `core/src/skill_evolution/pipeline.rs`
+- **New**: `src/skill_evolution/validation/mod.rs`
+- **New**: `src/skill_evolution/validation/risk_profiler.rs`
+- **New**: `src/skill_evolution/validation/structural_linter.rs` (L1)
+- **New**: `src/skill_evolution/validation/semantic_replayer.rs` (L2)
+- **New**: `src/skill_evolution/validation/sandbox_executor.rs` (L3, stub)
+- **New**: `src/skill_evolution/validation/test_set_generator.rs`
+- **Modify**: `src/skill_evolution/pipeline.rs`
 
 ### Skill Risk Profile
 
@@ -193,10 +193,10 @@ Tool classification: `ReadOnly → Low`, `FileWrite | CrossPlugin → Medium`, `
 Validated skills enter a probation period; promoted or demoted based on real-world performance.
 
 ### Files
-- **New**: `core/src/skill_evolution/shadow_deployer.rs`
-- **New**: `core/src/skill_evolution/lifecycle.rs`
-- **Modify**: `core/src/skill_evolution/pipeline.rs`
-- **Modify**: `core/src/skill_evolution/tracker.rs`
+- **New**: `src/skill_evolution/shadow_deployer.rs`
+- **New**: `src/skill_evolution/lifecycle.rs`
+- **Modify**: `src/skill_evolution/pipeline.rs`
+- **Modify**: `src/skill_evolution/tracker.rs`
 
 ### Lifecycle State Machine
 
@@ -254,11 +254,11 @@ pub struct SkillMetadata {
 Replace placeholder idle detection; make dreaming priority-driven by cognitive entropy.
 
 ### Files
-- **New**: `core/src/poe/crystallization/idle_detector.rs`
-- **New**: `core/src/poe/crystallization/cognitive_entropy.rs`
-- **Modify**: `core/src/poe/crystallization/dreaming.rs`
-- **Modify**: `core/src/poe/crystallization/clustering.rs`
-- **Modify**: `core/src/poe/crystallization/experience_store.rs`
+- **New**: `src/poe/crystallization/idle_detector.rs`
+- **New**: `src/poe/crystallization/cognitive_entropy.rs`
+- **Modify**: `src/poe/crystallization/dreaming.rs`
+- **Modify**: `src/poe/crystallization/clustering.rs`
+- **Modify**: `src/poe/crystallization/experience_store.rs`
 
 ### Idle Detector
 - Tracks `last_activity` via `AtomicU64` (unix timestamp)

@@ -91,7 +91,7 @@ Zero LLM cost, pattern-based detection:
 
 Invoked only when System 1 returns indeterminate (gray zone):
 
-- **Context-aware**: Evaluate objective vs codebase architecture (modifying `core/src/lib.rs` >> `examples/`)
+- **Context-aware**: Evaluate objective vs codebase architecture (modifying `src/lib.rs` >> `examples/`)
 - **Side-effect reasoning**: Detect cascading impacts (e.g., modifying a common Error enum breaks dozens of modules)
 
 **Critical Principle: System 1 conclusions are NEVER downgraded by System 2.**

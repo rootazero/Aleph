@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-16
 **Status:** Approved
-**Scope:** `core/src/providers/`, `core/src/agent_loop/`, 46 caller files
+**Scope:** `src/providers/`, `src/agent_loop/`, 46 caller files
 
 ## Problem
 
@@ -30,7 +30,7 @@ pi-mono/openclaw (TypeScript) solves this with:
 | # | Decision | Choice |
 |---|----------|--------|
 | 1 | Message modeling style | pi-mono style: `AssistantMessage { content: Vec<ContentBlock> }` |
-| 2 | Type location | `core/src/providers/message.rs` |
+| 2 | Type location | `src/providers/message.rs` |
 | 3 | AiProvider migration strategy | One-step replacement — all 46 callers updated at once |
 | 4 | ProtocolAdapter change | `RequestPayload.input` → `RequestPayload.messages`, trait signature unchanged |
 | 5 | Protocol adapter priority | All 5 adapters implemented simultaneously |
@@ -40,7 +40,7 @@ pi-mono/openclaw (TypeScript) solves this with:
 
 ## Unified Message Types
 
-**File: `core/src/providers/message.rs`**
+**File: `src/providers/message.rs`**
 
 ```rust
 /// Unified message type — the single data model for all provider interactions
@@ -93,7 +93,7 @@ impl UnifiedMessage {
 
 ## RequestPayload Refactor
 
-**File: `core/src/providers/adapter.rs`**
+**File: `src/providers/adapter.rs`**
 
 ```rust
 pub struct RequestPayload<'a> {
@@ -116,7 +116,7 @@ pub struct RequestPayload<'a> {
 
 ## AiProvider Trait Simplification
 
-**File: `core/src/providers/mod.rs`**
+**File: `src/providers/mod.rs`**
 
 7 request methods → 1:
 
@@ -227,7 +227,7 @@ Text-only fallback: extracts last User message text as input. Multi-turn history
 
 ## transform_messages Pre-processing
 
-**File: `core/src/providers/message.rs`**
+**File: `src/providers/message.rs`**
 
 ```rust
 pub fn transform_messages(messages: &[UnifiedMessage], target_provider: Option<&str>) -> Vec<UnifiedMessage> {
@@ -249,7 +249,7 @@ UnifiedMessage::tool_result(orphaned_id, orphaned_name, "No result provided — 
 
 ## ProviderResponse Validation
 
-**File: `core/src/providers/adapter.rs`**
+**File: `src/providers/adapter.rs`**
 
 ```rust
 impl ProviderResponse {

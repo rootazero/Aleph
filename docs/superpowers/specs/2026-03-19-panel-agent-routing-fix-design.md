@@ -34,7 +34,7 @@ Add optional `agent_id` parameter to `chat.send` RPC. Panel passes it. Router us
 
 ## Changes
 
-### 1. `core/src/gateway/handlers/chat.rs` — SendParams
+### 1. `src/gateway/handlers/chat.rs` — SendParams
 
 ```rust
 pub struct SendParams {
@@ -50,7 +50,7 @@ pub struct SendParams {
 
 Forward `agent_id` to `AgentRunParams`.
 
-### 2. `core/src/gateway/handlers/agent.rs` — AgentRunParams + start_run
+### 2. `src/gateway/handlers/agent.rs` — AgentRunParams + start_run
 
 ```rust
 pub struct AgentRunParams {
@@ -61,7 +61,7 @@ pub struct AgentRunParams {
 
 Pass `agent_id` to `router.route()`.
 
-### 3. `core/src/gateway/router.rs` — route()
+### 3. `src/gateway/router.rs` — route()
 
 ```rust
 pub async fn route(
@@ -125,4 +125,4 @@ The chat view already knows which agent is selected (from URL route or sidebar s
 
 - Agent switching UI in panel (already exists via sidebar)
 - Channel binding management UI
-- New routing module integration (`core/src/routing/`)
+- New routing module integration (`src/routing/`)

@@ -342,7 +342,7 @@ All three modes benefit from swarm sensing — it is the shared perception layer
 ## Module Structure
 
 ```
-core/src/teams/
+src/teams/
 ├── mod.rs                  // re-exports
 ├── types.rs                // Team, TeamMember, TeamStatus
 ├── store.rs                // SqliteTeamStore (team/member management)

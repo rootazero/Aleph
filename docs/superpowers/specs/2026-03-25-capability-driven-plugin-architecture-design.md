@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-25
 **Status**: Draft (v2 — post-review fixes)
-**Scope**: `core/src/extension/` module reorganization + multi-platform plugin compatibility + dynamic registration API
+**Scope**: `src/extension/` module reorganization + multi-platform plugin compatibility + dynamic registration API
 
 ## Summary
 
@@ -28,7 +28,7 @@ Redesign Aleph's plugin system from a Claude Code-only static format reader into
 All plugin capabilities — whether parsed from a manifest file or registered at runtime by a running process — are represented as `CapabilityDeclaration`:
 
 ```rust
-// core/src/extension/capability.rs
+// src/extension/capability.rs
 
 #[derive(Debug, Clone)]
 pub enum CapabilityDeclaration {
@@ -80,7 +80,7 @@ pub enum SourceFormat {
 Each `*Declaration` type is a **type alias** for the corresponding `*Registration` type in `registry/types.rs`. They are the same struct — the "Declaration" naming is used in capability.rs for semantic clarity (declaring intent) while "Registration" is used in the registry (stored state). Example:
 
 ```rust
-// core/src/extension/capability.rs
+// src/extension/capability.rs
 pub type ToolDeclaration = crate::extension::registry::types::ToolRegistration;
 pub type HookDeclaration = crate::extension::registry::types::HookRegistration;
 pub type SkillDeclaration = crate::extension::registry::types::SkillRegistration;
@@ -162,7 +162,7 @@ pub trait CapabilityRegistrar: Send + Sync {
 #### AdapterRegistry
 
 ```rust
-// core/src/extension/manifest/adapter.rs
+// src/extension/manifest/adapter.rs
 
 pub struct AdapterRegistry {
     adapters: Vec<Box<dyn ManifestAdapter>>,
@@ -212,7 +212,7 @@ impl AdapterRegistry {
 All adapters share bottom-level component parsers to avoid code duplication:
 
 ```rust
-// core/src/extension/manifest/parsers.rs
+// src/extension/manifest/parsers.rs
 
 pub fn parse_skills_dir(base: &Path, rel: &str) -> Result<Vec<CapabilityDeclaration>> { ... }
 pub fn parse_commands_dir(base: &Path, rel: &str) -> Result<Vec<CapabilityDeclaration>> { ... }
@@ -230,7 +230,7 @@ The unified API surface for writing capabilities into PluginRegistry.
 **Lifetime strategy**: `CapabilityApi` takes `&mut PluginRegistry` (borrowed) for synchronous callers (static path, WASM host functions). For async callers (MCP registrar), the pattern is **collect-then-batch**: the async code collects all `CapabilityDeclaration`s first, then acquires the lock once and batch-writes via `CapabilityApi`. This avoids holding `RwLockWriteGuard` across await points.
 
 ```rust
-// core/src/extension/registrar/api.rs
+// src/extension/registrar/api.rs
 
 /// Synchronous API for writing capabilities into PluginRegistry.
 /// Callers must acquire the RwLock before creating this.
@@ -317,7 +317,7 @@ impl<'a> CapabilityApi<'a> {
 Uses **collect-then-batch** pattern: async probe collects declarations without holding any lock, then a synchronous batch writes them into the registry via `CapabilityApi`.
 
 ```rust
-// core/src/extension/registrar/mcp_registrar.rs
+// src/extension/registrar/mcp_registrar.rs
 
 pub struct McpRegistrar {
     plugin_id: String,
@@ -374,7 +374,7 @@ impl McpRegistrar {
 WASM host functions run synchronously (Extism is sync), so they can acquire the `RwLock` directly.
 
 ```rust
-// core/src/extension/registrar/wasm_registrar.rs
+// src/extension/registrar/wasm_registrar.rs
 
 /// Host function exposed to WASM plugins: aleph_register(json_bytes) -> status
 /// Called from within Extism host function context (synchronous).
@@ -458,7 +458,7 @@ pub struct ExtensionManager {
 
 **Fields removed**: `skills: Arc<RwLock<HashMap<String, ExtensionSkill>>>`, `commands: Arc<RwLock<HashMap<String, ExtensionCommand>>>`, `agents: Arc<RwLock<HashMap<String, ExtensionAgent>>>`, `loader: ContentLoader` (the old content loader).
 
-**Fields retained**: `config_manager` (it's `config/` directory with 4 files, 1265 lines — handles aleph.jsonc), `skill_system` (independent bounded context at `core/src/skill/` for v2 prompt-driven skills).
+**Fields retained**: `config_manager` (it's `config/` directory with 4 files, 1265 lines — handles aleph.jsonc), `skill_system` (independent bounded context at `src/skill/` for v2 prompt-driven skills).
 
 **Migration of query methods**:
 - `get_skills()` → delegates to `plugin_registry.read().list_skills()`
@@ -530,7 +530,7 @@ Static plugins from CC/Codex/Cursor format (no `[aleph.permissions]`) default to
 ### After reorganization
 
 ```
-core/src/extension/
+src/extension/
 ├── mod.rs                    ← ExtensionManager (~250 lines, down from 480)
 ├── capability.rs             ← NEW: CapabilityDeclaration, CapabilitySource, SourceFormat
 │

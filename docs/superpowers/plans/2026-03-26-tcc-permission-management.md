@@ -21,7 +21,7 @@
 | Create | `crates/desktop/src/permission_types.rs` | TccPermission, PermissionStatus, PermissionInfo |
 | Create | `crates/desktop/src/traits/permission.rs` | PermissionCapability trait |
 | Create | `crates/desktop-macos/src/permission.rs` | macOS TCC implementation (objc2 + C FFI) |
-| Create | `core/src/builtin_tools/permission_tool.rs` | LLM-facing permission tool |
+| Create | `src/builtin_tools/permission_tool.rs` | LLM-facing permission tool |
 | Modify | `crates/desktop/src/traits/mod.rs` | Add `pub mod permission` + re-export |
 | Modify | `crates/desktop/src/lib.rs` | Add `pub mod permission_types` |
 | Modify | `crates/desktop/src/platform.rs` | Add `fn permission()` to DesktopPlatform |
@@ -29,8 +29,8 @@
 | Modify | `crates/desktop-macos/Cargo.toml` | Add block2, objc2-av-foundation, objc2-speech |
 | Modify | `crates/desktop-linux/src/lib.rs` | Return None for permission() |
 | Modify | `crates/desktop-windows/src/lib.rs` | Return None for permission() |
-| Modify | `core/src/builtin_tools/mod.rs` | Add `pub mod permission_tool` |
-| Modify | `core/src/executor/builtin_registry/builder.rs` | Instantiate + register PermissionTool |
+| Modify | `src/builtin_tools/mod.rs` | Add `pub mod permission_tool` |
+| Modify | `src/executor/builtin_registry/builder.rs` | Instantiate + register PermissionTool |
 
 ---
 
@@ -661,13 +661,13 @@ git commit -m "desktop-macos: implement TCC permission check/request via objc2 +
 ### Task 4: Permission Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/permission_tool.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
+- Create: `src/builtin_tools/permission_tool.rs`
+- Modify: `src/builtin_tools/mod.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
 
 - [ ] **Step 1: Create permission_tool.rs**
 
-Create `core/src/builtin_tools/permission_tool.rs`:
+Create `src/builtin_tools/permission_tool.rs`:
 
 ```rust
 //! Permission tool — TCC permission detection and request.
@@ -868,14 +868,14 @@ Examples:
 
 - [ ] **Step 2: Add to mod.rs**
 
-In `core/src/builtin_tools/mod.rs`, add:
+In `src/builtin_tools/mod.rs`, add:
 ```rust
 pub mod permission_tool;
 ```
 
 - [ ] **Step 3: Register in builder.rs**
 
-In `core/src/executor/builtin_registry/builder.rs`:
+In `src/executor/builtin_registry/builder.rs`:
 
 After `let automation_tool = AutomationTool::new(...)` add:
 ```rust
@@ -899,7 +899,7 @@ Expected: compiles
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/permission_tool.rs core/src/builtin_tools/mod.rs core/src/executor/builtin_registry/builder.rs core/src/executor/builtin_registry/registry.rs
+git add src/builtin_tools/permission_tool.rs src/builtin_tools/mod.rs src/executor/builtin_registry/builder.rs src/executor/builtin_registry/registry.rs
 git commit -m "core: add permission tool for TCC management"
 ```
 

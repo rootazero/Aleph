@@ -22,7 +22,7 @@ This design implements a layered security hardening in three phases, ordered by 
 
 ### Module placement rationale
 
-Aleph already has `core/src/gateway/security/` for auth/pairing/tokens/policy. The new `core/src/security/` module is a **peer**, not a replacement. The split is intentional:
+Aleph already has `src/gateway/security/` for auth/pairing/tokens/policy. The new `src/security/` module is a **peer**, not a replacement. The split is intentional:
 
 - `gateway/security/` — Authentication, authorization, identity (gateway-specific concerns)
 - `security/` — Cross-cutting security primitives (headers, SSRF, content sanitization, audit) used by gateway, exec, and agent_loop alike
@@ -30,7 +30,7 @@ Aleph already has `core/src/gateway/security/` for auth/pairing/tokens/policy. T
 ### New modules
 
 ```
-core/src/security/
+src/security/
 ├── mod.rs                  — Module entry
 ├── headers.rs              — Security response headers (tower Layer)
 ├── ssrf.rs                 — SSRF protection engine
@@ -41,21 +41,21 @@ core/src/security/
 ### Modified modules
 
 ```
-core/src/exec/
+src/exec/
 ├── kernel.rs               — Extend: env variable injection detection rules
 ├── risk.rs                 — Extend: new risk rules for env injection
 └── sanitize.rs             — New: Unicode/invisible character sanitization
 
-core/src/exec/approval/
+src/exec/approval/
 └── path_canonicalize.rs    — New: canonical path validation (test file already exists at approval/tests/security_path_traversal.rs)
 
-core/src/gateway/
+src/gateway/
 └── rate_limiter.rs          — Extend: add HTTP-level rate limit scope + 429 response helper (reuse existing implementation)
 
-core/src/gateway/server/
+src/gateway/server/
 └── mod.rs                  — Integrate: add tower layers (headers + rate limit)
 
-core/src/agent_loop/
+src/agent_loop/
 └── prompt_builder.rs       — Integrate: external content boundary injection
 ```
 
@@ -91,7 +91,7 @@ A tower `Layer` that injects security headers on all HTTP responses.
 
 ### 1.2 Request Rate Limiter (extend existing `gateway/rate_limiter.rs`)
 
-Aleph already has a comprehensive sliding-window rate limiter at `core/src/gateway/rate_limiter.rs` with:
+Aleph already has a comprehensive sliding-window rate limiter at `src/gateway/rate_limiter.rs` with:
 - `RateLimiter` struct backed by `DashMap` (lock-free concurrent access)
 - Per-identity, per-scope limiting with `RateLimitScope` enum (`Auth`, `RpcDefault`, `RpcWrite`, `RpcHeavy`, `WebhookAuth`)
 - Lockout support for auth scopes (5 min default)
@@ -224,7 +224,7 @@ pub fn has_invisible_chars(text: &str) -> bool
 
 1. **Approval display** — `ExecApprovalManager` calls `sanitize_display_text()` before showing command to user. If `has_invisible_chars()` returns true, appends warning indicator to the display.
 
-2. **Risk escalation** — In `ExecSecurityGate::pre_execute()` (file: `core/src/executor/exec_security_gate.rs`), after `SecurityKernel::assess()` returns a `RiskLevel`, check `has_invisible_chars()` on the command. If true, escalate by one tier:
+2. **Risk escalation** — In `ExecSecurityGate::pre_execute()` (file: `src/executor/exec_security_gate.rs`), after `SecurityKernel::assess()` returns a `RiskLevel`, check `has_invisible_chars()` on the command. If true, escalate by one tier:
    - Safe → Caution
    - Caution → Danger
    - Danger/Blocked → unchanged

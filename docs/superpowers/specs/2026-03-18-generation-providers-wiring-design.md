@@ -21,7 +21,7 @@ Three changes:
 
 ### 1. Startup Wiring
 
-**File:** `core/src/bin/aleph/commands/start/builder/agent_init.rs`
+**File:** `src/bin/aleph/commands/start/builder/agent_init.rs`
 
 Create and populate the generation registry **unconditionally** (independent of whether an AI chat provider exists, since generation and chat are separate capabilities):
 
@@ -57,7 +57,7 @@ let tool_config = BuiltinToolConfig {
 
 ### 2. Hot-Reload
 
-**File:** `core/src/bin/aleph/commands/start/builder/agent_init.rs`
+**File:** `src/bin/aleph/commands/start/builder/agent_init.rs`
 
 After startup wiring, spawn a background task. The task needs access to the vault (`SharedTokenManager`) because RPC handlers set `api_key = None` in config and store keys in the vault separately.
 
@@ -124,7 +124,7 @@ After startup wiring, spawn a background task. The task needs access to the vaul
 
 #### 3a. Config change
 
-**File:** `core/src/config/types/generation/provider.rs`
+**File:** `src/config/types/generation/provider.rs`
 
 Add `edit_url` field to `GenerationProviderConfig`:
 
@@ -136,13 +136,13 @@ pub edit_url: Option<String>,
 
 #### 3b. Provider struct change
 
-**File:** `core/src/generation/providers/openai_compat/provider.rs`
+**File:** `src/generation/providers/openai_compat/provider.rs`
 
 Add `edit_endpoint: Option<String>` field to `OpenAiCompatProvider` struct.
 
 #### 3c. Builder change
 
-**File:** `core/src/generation/providers/openai_compat/builder.rs`
+**File:** `src/generation/providers/openai_compat/builder.rs`
 
 Two changes:
 
@@ -165,7 +165,7 @@ This is necessary because `base_url` is now the full endpoint URL. The old norma
 
 #### 3d. URL logic change
 
-**File:** `core/src/generation/providers/openai_compat/helpers.rs`
+**File:** `src/generation/providers/openai_compat/helpers.rs`
 
 ```rust
 // Before:
@@ -194,7 +194,7 @@ pub(crate) fn edits_url(&self) -> String {
 
 #### 3e. Factory change
 
-**File:** `core/src/generation/providers/mod.rs`
+**File:** `src/generation/providers/mod.rs`
 
 In `create_provider()`, pass `config.edit_url` to `OpenAiCompatProviderBuilder`:
 
@@ -224,12 +224,12 @@ In `create_provider()`, pass `config.edit_url` to `OpenAiCompatProviderBuilder`:
 
 | File | Change |
 |------|--------|
-| `core/src/bin/aleph/commands/start/builder/agent_init.rs` | Startup wiring + hot-reload task (needs vault access) |
-| `core/src/generation/providers/openai_compat/helpers.rs` | URL logic: use endpoint directly |
-| `core/src/generation/providers/openai_compat/provider.rs` | Add `edit_endpoint` field |
-| `core/src/generation/providers/openai_compat/builder.rs` | Add `edit_endpoint()` method; remove `/v1` normalization |
-| `core/src/generation/providers/mod.rs` | Pass `edit_url` in factory |
-| `core/src/config/types/generation/provider.rs` | Add `edit_url` field |
+| `src/bin/aleph/commands/start/builder/agent_init.rs` | Startup wiring + hot-reload task (needs vault access) |
+| `src/generation/providers/openai_compat/helpers.rs` | URL logic: use endpoint directly |
+| `src/generation/providers/openai_compat/provider.rs` | Add `edit_endpoint` field |
+| `src/generation/providers/openai_compat/builder.rs` | Add `edit_endpoint()` method; remove `/v1` normalization |
+| `src/generation/providers/mod.rs` | Pass `edit_url` in factory |
+| `src/config/types/generation/provider.rs` | Add `edit_url` field |
 | `apps/panel/src/views/settings/generation_providers.rs` | Label change + edit_url input |
 | `apps/panel/src/api.rs` | Add `edit_url` field |
 

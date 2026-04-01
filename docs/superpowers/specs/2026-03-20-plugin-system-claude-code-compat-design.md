@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-20
 **Status**: Draft
-**Scope**: core/src/extension/, apps/cli/, Aleph-plugins repo
+**Scope**: src/extension/, apps/cli/, Aleph-plugins repo
 
 ## Summary
 
@@ -430,11 +430,11 @@ The LLM can invoke these via natural language (e.g., "install the diagnostics pl
 
 ### Placement Note (R3 alignment)
 
-Marketplace git operations (`clone`, `pull`) are I/O operations, not business logic — they belong in `core/src/extension/marketplace/` as infrastructure, not in a separate crate. The marketplace module is a thin wrapper around `git2` or `Command::new("git")`, not a "heavy third-party library" that R3 prohibits.
+Marketplace git operations (`clone`, `pull`) are I/O operations, not business logic — they belong in `src/extension/marketplace/` as infrastructure, not in a separate crate. The marketplace module is a thin wrapper around `git2` or `Command::new("git")`, not a "heavy third-party library" that R3 prohibits.
 
 ### Code Changes
 
-- New: `core/src/extension/marketplace/` module
+- New: `src/extension/marketplace/` module
   - `mod.rs` — MarketplaceManager trait + implementation
   - `types.rs` — MarketplaceConfig, MarketplaceManifest, PluginEntry
   - `github_source.rs` — GitHub clone/pull logic
@@ -488,9 +488,9 @@ Same-name plugin in multiple scopes: higher scope wins, lower is shadowed (no er
 
 ### Code Changes
 
-- New: `core/src/extension/scope.rs` — `PluginScope` enum + path resolution
+- New: `src/extension/scope.rs` — `PluginScope` enum + path resolution
 - Modify: `discovery/mod.rs` — scope-ordered scanning with shadow handling
-- Modify: `core/src/config/` — read/write `plugins` and `plugin_marketplaces` from scope-specific settings files
+- Modify: `src/config/` — read/write `plugins` and `plugin_marketplaces` from scope-specific settings files
 - Install/uninstall operations write to the appropriate scope's settings file and directory
 
 ---

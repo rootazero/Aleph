@@ -25,99 +25,99 @@
 ### Phase 1 — Layer 1: Task Unification + Artifacts
 
 **New Files:**
-- `core/src/teams/artifacts.rs` — TaskArtifact, ArtifactType types + SQLite storage
-- `core/src/teams/events.rs` — TeamEvent, TeamEventType types + SQLite event log store
-- `core/src/builtin_tools/team/task_submit.rs` — task_submit tool
-- `core/src/builtin_tools/team/task_read_artifact.rs` — task_read_artifact tool
+- `src/teams/artifacts.rs` — TaskArtifact, ArtifactType types + SQLite storage
+- `src/teams/events.rs` — TeamEvent, TeamEventType types + SQLite event log store
+- `src/builtin_tools/team/task_submit.rs` — task_submit tool
+- `src/builtin_tools/team/task_read_artifact.rs` — task_read_artifact tool
 
 **Modified Files:**
-- `core/src/teams/types.rs` — Remove TeamTask, TeamTaskStatus (retired)
-- `core/src/teams/store.rs` — Remove task methods from TeamStore trait + SqliteTeamStore; add artifact + event store traits
-- `core/src/teams/mod.rs` — Add `pub mod artifacts; pub mod events;`
-- `core/src/builtin_tools/team/delegate.rs` — Migrate from TeamStore tasks to CoordTaskStore; auto-persist artifacts
-- `core/src/builtin_tools/team/status.rs` — Read tasks from CoordTaskStore instead of TeamStore
-- `core/src/builtin_tools/team/mod.rs` — Export new tools
-- `core/src/executor/builtin_registry/definitions.rs` — Add task_submit, task_read_artifact definitions
-- `core/src/executor/builtin_registry/registry.rs` — Add tool fields
-- `core/src/executor/builtin_registry/builder.rs` — Instantiate new tools
-- `core/src/executor/builtin_registry/groups.rs` — Add to "team" category
+- `src/teams/types.rs` — Remove TeamTask, TeamTaskStatus (retired)
+- `src/teams/store.rs` — Remove task methods from TeamStore trait + SqliteTeamStore; add artifact + event store traits
+- `src/teams/mod.rs` — Add `pub mod artifacts; pub mod events;`
+- `src/builtin_tools/team/delegate.rs` — Migrate from TeamStore tasks to CoordTaskStore; auto-persist artifacts
+- `src/builtin_tools/team/status.rs` — Read tasks from CoordTaskStore instead of TeamStore
+- `src/builtin_tools/team/mod.rs` — Export new tools
+- `src/executor/builtin_registry/definitions.rs` — Add task_submit, task_read_artifact definitions
+- `src/executor/builtin_registry/registry.rs` — Add tool fields
+- `src/executor/builtin_registry/builder.rs` — Instantiate new tools
+- `src/executor/builtin_registry/groups.rs` — Add to "team" category
 
 ### Phase 2 — Layer 2: MessageRouter
 
 **New Files:**
-- `core/src/teams/messages/mod.rs` — Re-exports
-- `core/src/teams/messages/types.rs` — TeamMessage, Recipient, RecipientRole, MessageType
-- `core/src/teams/messages/store.rs` — MessageStore trait + SqliteMessageStore (3 tables)
-- `core/src/teams/messages/router.rs` — MessageRouter: send, TTL computation, escalation check
-- `core/src/teams/messages/inbox.rs` — Inbox: read, thread, expire
-- `core/src/teams/context.rs` — InboxContext for ContextInjector integration
-- `core/src/builtin_tools/team/message_send.rs` — message_send tool
-- `core/src/builtin_tools/team/inbox_read.rs` — inbox_read tool (inbox + thread mode)
-- `core/src/builtin_tools/team/team_digest.rs` — team_digest tool
+- `src/teams/messages/mod.rs` — Re-exports
+- `src/teams/messages/types.rs` — TeamMessage, Recipient, RecipientRole, MessageType
+- `src/teams/messages/store.rs` — MessageStore trait + SqliteMessageStore (3 tables)
+- `src/teams/messages/router.rs` — MessageRouter: send, TTL computation, escalation check
+- `src/teams/messages/inbox.rs` — Inbox: read, thread, expire
+- `src/teams/context.rs` — InboxContext for ContextInjector integration
+- `src/builtin_tools/team/message_send.rs` — message_send tool
+- `src/builtin_tools/team/inbox_read.rs` — inbox_read tool (inbox + thread mode)
+- `src/builtin_tools/team/team_digest.rs` — team_digest tool
 
 **Modified Files:**
-- `core/src/teams/mod.rs` — Add `pub mod messages; pub mod context;`
-- `core/src/agents/swarm/context_injector.rs` — Add inbox awareness (InboxContext)
-- `core/src/builtin_tools/team/mod.rs` — Export new tools
-- `core/src/executor/builtin_registry/definitions.rs` — Add message_send, inbox_read, team_digest
-- `core/src/executor/builtin_registry/registry.rs` — Add tool fields
-- `core/src/executor/builtin_registry/builder.rs` — Instantiate new tools
-- `core/src/executor/builtin_registry/groups.rs` — Add to "team" category
+- `src/teams/mod.rs` — Add `pub mod messages; pub mod context;`
+- `src/agents/swarm/context_injector.rs` — Add inbox awareness (InboxContext)
+- `src/builtin_tools/team/mod.rs` — Export new tools
+- `src/executor/builtin_registry/definitions.rs` — Add message_send, inbox_read, team_digest
+- `src/executor/builtin_registry/registry.rs` — Add tool fields
+- `src/executor/builtin_registry/builder.rs` — Instantiate new tools
+- `src/executor/builtin_registry/groups.rs` — Add to "team" category
 
 ### Phase 3 — Layer 3: CollaborativeSession
 
 **New Files:**
-- `core/src/teams/sessions/mod.rs` — Re-exports
-- `core/src/teams/sessions/types.rs` — CollaborativeSession, SessionTurn, SessionOutcome, SessionTrigger, SessionStatus, EscalationRule
-- `core/src/teams/sessions/store.rs` — SessionStore trait + SqliteSessionStore
-- `core/src/teams/sessions/coordinator.rs` — Session lifecycle: create, add turn, conclude, cancel
-- `core/src/builtin_tools/team/session_collaborate.rs` — session_collaborate tool
-- `core/src/builtin_tools/team/session_turn.rs` — session_turn tool (respond/conclude modes)
-- `core/src/builtin_tools/team/session_read.rs` — session_read tool
+- `src/teams/sessions/mod.rs` — Re-exports
+- `src/teams/sessions/types.rs` — CollaborativeSession, SessionTurn, SessionOutcome, SessionTrigger, SessionStatus, EscalationRule
+- `src/teams/sessions/store.rs` — SessionStore trait + SqliteSessionStore
+- `src/teams/sessions/coordinator.rs` — Session lifecycle: create, add turn, conclude, cancel
+- `src/builtin_tools/team/session_collaborate.rs` — session_collaborate tool
+- `src/builtin_tools/team/session_turn.rs` — session_turn tool (respond/conclude modes)
+- `src/builtin_tools/team/session_read.rs` — session_read tool
 
 **Modified Files:**
-- `core/src/teams/mod.rs` — Add `pub mod sessions;`
-- `core/src/teams/messages/router.rs` — Add escalation check after message delivery
-- `core/src/builtin_tools/team/mod.rs` — Export new tools
-- `core/src/executor/builtin_registry/definitions.rs` — Add 3 session tools
-- `core/src/executor/builtin_registry/registry.rs` — Add tool fields
-- `core/src/executor/builtin_registry/builder.rs` — Instantiate new tools
-- `core/src/executor/builtin_registry/groups.rs` — Add to "team" category
+- `src/teams/mod.rs` — Add `pub mod sessions;`
+- `src/teams/messages/router.rs` — Add escalation check after message delivery
+- `src/builtin_tools/team/mod.rs` — Export new tools
+- `src/executor/builtin_registry/definitions.rs` — Add 3 session tools
+- `src/executor/builtin_registry/registry.rs` — Add tool fields
+- `src/executor/builtin_registry/builder.rs` — Instantiate new tools
+- `src/executor/builtin_registry/groups.rs` — Add to "team" category
 
 ### Phase 4 — Role Mechanism
 
 **New Files:**
-- `core/src/teams/roles/mod.rs` — Re-exports
-- `core/src/teams/roles/types.rs` — AgentRole, TeamRoleConfig, Severity
-- `core/src/teams/roles/review.rs` — ReviewScore, DimensionScore, Challenge types + validation logic
-- `core/src/builtin_tools/team/review_score.rs` — review_score tool with configurable validation
+- `src/teams/roles/mod.rs` — Re-exports
+- `src/teams/roles/types.rs` — AgentRole, TeamRoleConfig, Severity
+- `src/teams/roles/review.rs` — ReviewScore, DimensionScore, Challenge types + validation logic
+- `src/builtin_tools/team/review_score.rs` — review_score tool with configurable validation
 
 **Modified Files:**
-- `core/src/teams/mod.rs` — Add `pub mod roles;`
-- `core/src/teams/types.rs` — Add role config to TeamMember or Team
-- `core/src/builtin_tools/team/mod.rs` — Export new tool
-- `core/src/executor/builtin_registry/definitions.rs` — Add review_score
-- `core/src/executor/builtin_registry/registry.rs` — Add tool field
-- `core/src/executor/builtin_registry/builder.rs` — Instantiate new tool
-- `core/src/executor/builtin_registry/groups.rs` — Add to "team" category
+- `src/teams/mod.rs` — Add `pub mod roles;`
+- `src/teams/types.rs` — Add role config to TeamMember or Team
+- `src/builtin_tools/team/mod.rs` — Export new tool
+- `src/executor/builtin_registry/definitions.rs` — Add review_score
+- `src/executor/builtin_registry/registry.rs` — Add tool field
+- `src/executor/builtin_registry/builder.rs` — Instantiate new tool
+- `src/executor/builtin_registry/groups.rs` — Add to "team" category
 
 ---
 
 ## Task 1: Retire TeamTask — Unify on CoordTask
 
 **Files:**
-- Modify: `core/src/teams/types.rs`
-- Modify: `core/src/teams/store.rs`
-- Modify: `core/src/builtin_tools/team/delegate.rs`
-- Modify: `core/src/builtin_tools/team/status.rs`
+- Modify: `src/teams/types.rs`
+- Modify: `src/teams/store.rs`
+- Modify: `src/builtin_tools/team/delegate.rs`
+- Modify: `src/builtin_tools/team/status.rs`
 
 - [ ] **Step 0: Verify NewCoordTask has team_id field**
 
-Check `core/src/agents/swarm/tasks/mod.rs` — confirm `NewCoordTask` struct has `pub team_id: Option<String>`. If not present, add it and update `SqliteCoordTaskStore::create_task()` in `core/src/agents/swarm/tasks/store.rs` to persist it.
+Check `src/agents/swarm/tasks/mod.rs` — confirm `NewCoordTask` struct has `pub team_id: Option<String>`. If not present, add it and update `SqliteCoordTaskStore::create_task()` in `src/agents/swarm/tasks/store.rs` to persist it.
 
 - [ ] **Step 1: Write test verifying CoordTaskStore is used for team delegation**
 
-Add to `#[cfg(test)] mod tests` at the bottom of `core/src/teams/store.rs`:
+Add to `#[cfg(test)] mod tests` at the bottom of `src/teams/store.rs`:
 
 ```rust
 #[tokio::test]
@@ -145,7 +145,7 @@ Run: `cargo test -p alephcore --lib test_team_delegate_uses_coord_task_store`
 
 - [ ] **Step 3: Remove TeamTask, TeamTaskStatus, NewTeamTask from types.rs**
 
-In `core/src/teams/types.rs`, remove:
+In `src/teams/types.rs`, remove:
 - `TeamTaskStatus` enum and its impls
 - `TeamTask` struct
 - `NewTeamTask` struct
@@ -154,14 +154,14 @@ Keep: `Team`, `TeamMember`, `TeamSummary`, `NewTeam`, `NewTeamMember`, `TeamId`,
 
 - [ ] **Step 4: Remove task methods from TeamStore trait and SqliteTeamStore**
 
-In `core/src/teams/store.rs`:
+In `src/teams/store.rs`:
 - Remove `create_task`, `update_task_status`, `get_tasks` from `TeamStore` trait
 - Remove their implementations in `SqliteTeamStore`
 - Keep the `team_tasks` table in SQLite migration for backward compatibility (data migration not needed — old tasks are historical records)
 
 - [ ] **Step 5: Update TeamDelegateTool to use CoordTaskStore**
 
-In `core/src/builtin_tools/team/delegate.rs`:
+In `src/builtin_tools/team/delegate.rs`:
 - Add `coord_store: Arc<dyn CoordTaskStore>` field to `TeamDelegateTool`
 - Replace `self.store.create_task(NewTeamTask{..})` with `self.coord_store.create_task(NewCoordTask{..})`
 - Replace `self.store.update_task_status(...)` with `self.coord_store.update_task(id, CoordTaskUpdate{..})`
@@ -169,14 +169,14 @@ In `core/src/builtin_tools/team/delegate.rs`:
 
 - [ ] **Step 6: Update TeamStatusTool to read from CoordTaskStore**
 
-In `core/src/builtin_tools/team/status.rs`:
+In `src/builtin_tools/team/status.rs`:
 - Add `coord_store: Arc<dyn CoordTaskStore>` field
 - Replace `self.store.get_tasks(team_id)` with `self.coord_store.list_tasks(CoordTaskFilter { team_id: Some(team_id), .. })`
 - Map `CoordTask` fields to the existing `TaskInfo` output type
 
 - [ ] **Step 7: Update builder.rs to pass CoordTaskStore to team tools**
 
-In `core/src/executor/builtin_registry/builder.rs`:
+In `src/executor/builtin_registry/builder.rs`:
 - Pass `coord_task_store` to `TeamDelegateTool::new()` and `TeamStatusTool::new()`
 
 - [ ] **Step 8: Run all tests**
@@ -195,12 +195,12 @@ git add -A && git commit -m "teams: unify task system — retire TeamTask in fav
 ## Task 2: Task Artifact System — Types + Storage
 
 **Files:**
-- Create: `core/src/teams/artifacts.rs`
-- Modify: `core/src/teams/mod.rs`
+- Create: `src/teams/artifacts.rs`
+- Modify: `src/teams/mod.rs`
 
 - [ ] **Step 1: Write tests for artifact storage**
 
-Add to `core/src/teams/artifacts.rs`:
+Add to `src/teams/artifacts.rs`:
 
 ```rust
 #[cfg(test)]
@@ -251,7 +251,7 @@ Expected: FAIL — module doesn't exist yet.
 
 - [ ] **Step 3: Implement artifact types and store**
 
-Create `core/src/teams/artifacts.rs`:
+Create `src/teams/artifacts.rs`:
 
 ```rust
 use chrono::{DateTime, Utc};
@@ -419,7 +419,7 @@ impl ArtifactStore for SqliteArtifactStore {
 
 - [ ] **Step 4: Add module to teams/mod.rs**
 
-Add `pub mod artifacts;` to `core/src/teams/mod.rs`.
+Add `pub mod artifacts;` to `src/teams/mod.rs`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -437,8 +437,8 @@ git add -A && git commit -m "teams: add TaskArtifact types and SQLite storage"
 ## Task 3: Event Log System
 
 **Files:**
-- Create: `core/src/teams/events.rs`
-- Modify: `core/src/teams/mod.rs`
+- Create: `src/teams/events.rs`
+- Modify: `src/teams/mod.rs`
 
 - [ ] **Step 1: Write tests for event log**
 
@@ -484,7 +484,7 @@ Expected: FAIL
 
 - [ ] **Step 3: Implement TeamEvent types and SqliteEventLogStore**
 
-Create `core/src/teams/events.rs` with:
+Create `src/teams/events.rs` with:
 - `TeamEventType` enum (MessageSent, MessageRead, TaskCreated, TaskCompleted, TaskFailed, ArtifactSubmitted, ReviewScoreSubmitted, SessionStarted, SessionConcluded, DigestGenerated) with `as_str()`/`from_stored()` pattern
 - `TeamEvent` struct (id, team_id, event_type, agent_id, payload: Value, timestamp: DateTime<Utc>)
 - `NewTeamEvent` input struct
@@ -493,7 +493,7 @@ Create `core/src/teams/events.rs` with:
 
 - [ ] **Step 4: Add module and run tests**
 
-Add `pub mod events;` to `core/src/teams/mod.rs`.
+Add `pub mod events;` to `src/teams/mod.rs`.
 
 Run: `cargo test -p alephcore --lib test_log_and_query_events test_prune_old_events`
 Expected: PASS
@@ -509,17 +509,17 @@ git add -A && git commit -m "teams: add event log system with retention policy"
 ## Task 4: task_submit and task_read_artifact Tools
 
 **Files:**
-- Create: `core/src/builtin_tools/team/task_submit.rs`
-- Create: `core/src/builtin_tools/team/task_read_artifact.rs`
-- Modify: `core/src/builtin_tools/team/mod.rs`
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
-- Modify: `core/src/executor/builtin_registry/registry.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
-- Modify: `core/src/executor/builtin_registry/groups.rs`
+- Create: `src/builtin_tools/team/task_submit.rs`
+- Create: `src/builtin_tools/team/task_read_artifact.rs`
+- Modify: `src/builtin_tools/team/mod.rs`
+- Modify: `src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/registry.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
 
 - [ ] **Step 1: Implement TaskSubmitTool**
 
-Create `core/src/builtin_tools/team/task_submit.rs`:
+Create `src/builtin_tools/team/task_submit.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -592,7 +592,7 @@ impl AlephTool for TaskSubmitTool {
 
 - [ ] **Step 2: Implement TaskReadArtifactTool**
 
-Create `core/src/builtin_tools/team/task_read_artifact.rs` following the same pattern. Args: `task_id: String, artifact_id: Option<String>`. If artifact_id provided, return single artifact; otherwise return all artifacts for the task.
+Create `src/builtin_tools/team/task_read_artifact.rs` following the same pattern. Args: `task_id: String, artifact_id: Option<String>`. If artifact_id provided, return single artifact; otherwise return all artifacts for the task.
 
 - [ ] **Step 3: Export tools from team/mod.rs**
 
@@ -628,7 +628,7 @@ git add -A && git commit -m "teams: add task_submit and task_read_artifact tools
 ## Task 5: Wire Artifact Persistence into TeamDelegateTool
 
 **Files:**
-- Modify: `core/src/builtin_tools/team/delegate.rs`
+- Modify: `src/builtin_tools/team/delegate.rs`
 
 - [ ] **Step 1: Add artifact_store to TeamDelegateTool**
 
@@ -666,10 +666,10 @@ git add -A && git commit -m "teams: auto-persist delegation results as artifacts
 ## Task 6: Message Types and Store
 
 **Files:**
-- Create: `core/src/teams/messages/mod.rs`
-- Create: `core/src/teams/messages/types.rs`
-- Create: `core/src/teams/messages/store.rs`
-- Modify: `core/src/teams/mod.rs`
+- Create: `src/teams/messages/mod.rs`
+- Create: `src/teams/messages/types.rs`
+- Create: `src/teams/messages/store.rs`
+- Modify: `src/teams/mod.rs`
 
 - [ ] **Step 1: Write tests for message store**
 
@@ -757,14 +757,14 @@ Expected: FAIL
 
 - [ ] **Step 3: Implement message types**
 
-Create `core/src/teams/messages/types.rs` with all types from spec:
+Create `src/teams/messages/types.rs` with all types from spec:
 - `TeamMessage`, `Recipient`, `RecipientRole` (To/Cc), `MessageType` (Message, Discovery, Challenge, ReviewRequest, ReviewResult, SystemNotification, Idle, PlanApprovalRequest, PlanApproved, PlanRejected)
 - `NewMessage` input struct
 - `InboxFilter` for read queries
 
 - [ ] **Step 4: Implement SqliteMessageStore**
 
-Create `core/src/teams/messages/store.rs`:
+Create `src/teams/messages/store.rs`:
 - 3 tables: `team_messages`, `message_recipients`, `message_attachments` (per spec SQL schema)
 - Thread ID logic: if `reply_to` is set, look up the replied message's `thread_id`; otherwise `thread_id = id`
 - TTL computation: `expires_at = created_at + ttl` where TTL depends on recipient roles (to: 2h, cc: 30m, system: 15m)
@@ -774,8 +774,8 @@ Create `core/src/teams/messages/store.rs`:
 
 - [ ] **Step 5: Wire up mod.rs**
 
-Create `core/src/teams/messages/mod.rs` with re-exports.
-Add `pub mod messages;` to `core/src/teams/mod.rs`.
+Create `src/teams/messages/mod.rs` with re-exports.
+Add `pub mod messages;` to `src/teams/mod.rs`.
 
 - [ ] **Step 6: Run tests**
 
@@ -793,8 +793,8 @@ git add -A && git commit -m "teams: add message types and SQLite message store w
 ## Task 7: MessageRouter — Send, TTL, Escalation Check
 
 **Files:**
-- Create: `core/src/teams/messages/router.rs`
-- Create: `core/src/teams/messages/inbox.rs`
+- Create: `src/teams/messages/router.rs`
+- Create: `src/teams/messages/inbox.rs`
 
 - [ ] **Step 1: Write tests for router**
 
@@ -868,7 +868,7 @@ async fn test_escalation_suggestion() {
 
 - [ ] **Step 2: Implement MessageRouter**
 
-`core/src/teams/messages/router.rs`:
+`src/teams/messages/router.rs`:
 - `MessageRouter` struct with `msg_store`, `event_store`, `escalation_rules`
 - `send()` method: creates message via store, logs event, checks escalation rules
 - Escalation check: count messages in thread, if >= threshold, send `SystemNotification` to team leader
@@ -876,7 +876,7 @@ async fn test_escalation_suggestion() {
 
 - [ ] **Step 3: Implement Inbox helper**
 
-`core/src/teams/messages/inbox.rs`:
+`src/teams/messages/inbox.rs`:
 - `Inbox` struct wrapping `msg_store`
 - `read()`: read unread messages for agent (with optional filter)
 - `read_thread()`: read full thread
@@ -899,17 +899,17 @@ git add -A && git commit -m "teams: add MessageRouter with TTL, escalation sugge
 ## Task 8: message_send and inbox_read Tools
 
 **Files:**
-- Create: `core/src/builtin_tools/team/message_send.rs`
-- Create: `core/src/builtin_tools/team/inbox_read.rs`
-- Modify: `core/src/builtin_tools/team/mod.rs`
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
-- Modify: `core/src/executor/builtin_registry/registry.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
-- Modify: `core/src/executor/builtin_registry/groups.rs`
+- Create: `src/builtin_tools/team/message_send.rs`
+- Create: `src/builtin_tools/team/inbox_read.rs`
+- Modify: `src/builtin_tools/team/mod.rs`
+- Modify: `src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/registry.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
 
 - [ ] **Step 1: Implement MessageSendTool**
 
-`core/src/builtin_tools/team/message_send.rs`:
+`src/builtin_tools/team/message_send.rs`:
 
 ```rust
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -940,7 +940,7 @@ Impl `AlephTool` with `NAME = "message_send"`. The tool calls `router.send()`.
 
 - [ ] **Step 2: Implement InboxReadTool**
 
-`core/src/builtin_tools/team/inbox_read.rs`:
+`src/builtin_tools/team/inbox_read.rs`:
 
 ```rust
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -983,7 +983,7 @@ git add -A && git commit -m "teams: add message_send and inbox_read tools"
 ## Task 9: team_digest Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/team/team_digest.rs`
+- Create: `src/builtin_tools/team/team_digest.rs`
 - Modify: registration files
 
 - [ ] **Step 1: Implement TeamDigestTool**
@@ -1027,12 +1027,12 @@ git add -A && git commit -m "teams: add team_digest tool"
 ## Task 10: ContextInjector Integration
 
 **Files:**
-- Create: `core/src/teams/context.rs`
-- Modify: `core/src/agents/swarm/context_injector.rs`
+- Create: `src/teams/context.rs`
+- Modify: `src/agents/swarm/context_injector.rs`
 
 - [ ] **Step 1: Create InboxContext type**
 
-`core/src/teams/context.rs`:
+`src/teams/context.rs`:
 
 ```rust
 #[derive(Debug, Clone, Default)]
@@ -1066,7 +1066,7 @@ impl InboxContext {
 
 - [ ] **Step 2: Extend ContextInjector**
 
-In `core/src/agents/swarm/context_injector.rs`:
+In `src/agents/swarm/context_injector.rs`:
 - Add `inbox_provider: Option<Arc<dyn InboxContextProvider>>` field
 - Define `InboxContextProvider` trait: `async fn get_inbox_context(agent_id: &str) -> InboxContext`
 - In `inject_swarm_state()`, append inbox context text if available
@@ -1087,10 +1087,10 @@ git add -A && git commit -m "teams: integrate inbox context into ContextInjector
 ## Task 11: CollaborativeSession Types + Store
 
 **Files:**
-- Create: `core/src/teams/sessions/mod.rs`
-- Create: `core/src/teams/sessions/types.rs`
-- Create: `core/src/teams/sessions/store.rs`
-- Modify: `core/src/teams/mod.rs`
+- Create: `src/teams/sessions/mod.rs`
+- Create: `src/teams/sessions/types.rs`
+- Create: `src/teams/sessions/store.rs`
+- Modify: `src/teams/mod.rs`
 
 - [ ] **Step 1: Write tests for session store**
 
@@ -1157,11 +1157,11 @@ async fn test_max_rounds_enforcement() {
 
 - [ ] **Step 3: Implement session types**
 
-`core/src/teams/sessions/types.rs`: All types from spec — `CollaborativeSession`, `SessionTurn`, `SessionOutcome`, `SessionTrigger` (Explicit/AutoEscalation), `SessionStatus` (Active/Concluded/Deadlocked/Cancelled), `EscalationRule`, `NewSession`.
+`src/teams/sessions/types.rs`: All types from spec — `CollaborativeSession`, `SessionTurn`, `SessionOutcome`, `SessionTrigger` (Explicit/AutoEscalation), `SessionStatus` (Active/Concluded/Deadlocked/Cancelled), `EscalationRule`, `NewSession`.
 
 - [ ] **Step 4: Implement SqliteSessionStore**
 
-`core/src/teams/sessions/store.rs`:
+`src/teams/sessions/store.rs`:
 - Tables: `collaborative_sessions` (id, team_id, topic, trigger_json, thread_id, max_rounds, status, outcome_json, created_at), `session_participants` (session_id, agent_id), `session_turns` (session_id, agent_id, content, turn_number, timestamp)
 - `create_session()`, `get_session()`, `add_turn()` (checks max_rounds), `conclude_session()`, `cancel_session()`, `list_active_sessions(team_id)`
 
@@ -1178,7 +1178,7 @@ git add -A && git commit -m "teams: add CollaborativeSession types and SQLite st
 ## Task 12: Session Coordinator Logic
 
 **Files:**
-- Create: `core/src/teams/sessions/coordinator.rs`
+- Create: `src/teams/sessions/coordinator.rs`
 
 - [ ] **Step 1: Implement SessionCoordinator**
 
@@ -1221,9 +1221,9 @@ git add -A && git commit -m "teams: add SessionCoordinator helper"
 ## Task 13: Session Tools (session_collaborate, session_turn, session_read)
 
 **Files:**
-- Create: `core/src/builtin_tools/team/session_collaborate.rs`
-- Create: `core/src/builtin_tools/team/session_turn.rs`
-- Create: `core/src/builtin_tools/team/session_read.rs`
+- Create: `src/builtin_tools/team/session_collaborate.rs`
+- Create: `src/builtin_tools/team/session_turn.rs`
+- Create: `src/builtin_tools/team/session_read.rs`
 - Modify: registration files
 
 - [ ] **Step 1: Implement SessionCollaborateTool**
@@ -1270,7 +1270,7 @@ Args: `session_id`. Returns session metadata, transcript, and outcome if conclud
 
 - [ ] **Step 3.5: Add active_sessions to InboxContext**
 
-Now that `SessionStore` exists, go back to `core/src/teams/context.rs` and add:
+Now that `SessionStore` exists, go back to `src/teams/context.rs` and add:
 - `pub active_sessions: Vec<String>` field to `InboxContext`
 - Active sessions check in `to_injection_text()`
 - Update `ContextInjector` to query `session_store.list_active_sessions(team_id)` when building InboxContext
@@ -1294,7 +1294,7 @@ git add -A && git commit -m "teams: add session_collaborate, session_turn, sessi
 ## Task 14: Escalation Check in MessageRouter
 
 **Files:**
-- Modify: `core/src/teams/messages/router.rs`
+- Modify: `src/teams/messages/router.rs`
 
 - [ ] **Step 1: Write test for escalation suggestion**
 
@@ -1326,14 +1326,14 @@ git add -A && git commit -m "teams: add escalation suggestion check to MessageRo
 ## Task 15: Role Types and Configuration
 
 **Files:**
-- Create: `core/src/teams/roles/mod.rs`
-- Create: `core/src/teams/roles/types.rs`
-- Create: `core/src/teams/roles/review.rs`
-- Modify: `core/src/teams/mod.rs`
+- Create: `src/teams/roles/mod.rs`
+- Create: `src/teams/roles/types.rs`
+- Create: `src/teams/roles/review.rs`
+- Modify: `src/teams/mod.rs`
 
 - [ ] **Step 1: Implement role types**
 
-`core/src/teams/roles/types.rs`:
+`src/teams/roles/types.rs`:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -1368,7 +1368,7 @@ pub enum Severity {
 
 - [ ] **Step 2: Implement review types and validation**
 
-`core/src/teams/roles/review.rs`:
+`src/teams/roles/review.rs`:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1488,7 +1488,7 @@ git add -A && git commit -m "teams: add role types, review scoring, and validati
 ## Task 16: review_score Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/team/review_score.rs`
+- Create: `src/builtin_tools/team/review_score.rs`
 - Modify: registration files
 
 - [ ] **Step 1: Implement ReviewScoreTool**
@@ -1542,12 +1542,12 @@ git add -A && git commit -m "teams: add review_score tool with configurable vali
 ## Task 17: Disbandment Cleanup + Missing Tests
 
 **Files:**
-- Modify: `core/src/builtin_tools/team/disband.rs`
+- Modify: `src/builtin_tools/team/disband.rs`
 - Various test files
 
 - [ ] **Step 1: Add cleanup to TeamDisbandTool**
 
-In `core/src/builtin_tools/team/disband.rs`, after marking team as disbanded:
+In `src/builtin_tools/team/disband.rs`, after marking team as disbanded:
 - Call `msg_store.expire_all_for_team(team_id)` to mark all pending messages as expired
 - Call `session_store.cancel_all_for_team(team_id)` to cancel active collaborative sessions
 - Call `event_store.prune_events(team_id, Duration::hours(24))` to clean old events
@@ -1556,7 +1556,7 @@ Add `msg_store`, `session_store`, `event_store` as optional fields (they may not
 
 - [ ] **Step 2: Add mark-as-read test**
 
-In `core/src/teams/messages/store.rs` tests:
+In `src/teams/messages/store.rs` tests:
 ```rust
 #[tokio::test]
 async fn test_inbox_read_marks_as_read() {
@@ -1579,7 +1579,7 @@ async fn test_inbox_read_marks_as_read() {
 
 - [ ] **Step 3: Add message_send tool validation test**
 
-In `core/src/builtin_tools/team/message_send.rs` tests:
+In `src/builtin_tools/team/message_send.rs` tests:
 ```rust
 #[tokio::test]
 async fn test_message_send_requires_team_membership() {
@@ -1600,7 +1600,7 @@ git add -A && git commit -m "teams: add disbandment cleanup and missing test cov
 ## Task 18: Update Tool Categories and Final Integration
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/groups.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
 
 - [ ] **Step 1: Update the "team" category**
 

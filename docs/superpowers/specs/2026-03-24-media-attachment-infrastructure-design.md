@@ -37,7 +37,7 @@ Channel::send(OutboundMessage { text, attachments }) — existing channel delive
 ### New Types
 
 ```rust
-// core/src/gateway/media.rs
+// src/gateway/media.rs
 
 /// Media item declared by tool output via `_media` convention.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,7 +111,7 @@ use the media_send tool to deliver them directly in the chat.
 
 #### 3. Core Media Downloader (reuse existing `media/cache.rs`)
 
-**Key insight**: `core/src/media/cache.rs` already implements HTTP download, inline data handling, local path passthrough, and session-scoped cleanup. We extend `MediaCache` with a `download_media_item()` method rather than building a parallel downloader.
+**Key insight**: `src/media/cache.rs` already implements HTTP download, inline data handling, local path passthrough, and session-scoped cleanup. We extend `MediaCache` with a `download_media_item()` method rather than building a parallel downloader.
 
 Existing infrastructure:
 - `MediaCache::resolve()` — downloads `Attachment` to local file, returns `CachedMedia`
@@ -121,7 +121,7 @@ Existing infrastructure:
 New method:
 
 ```rust
-// core/src/media/cache.rs — extend MediaCache
+// src/media/cache.rs — extend MediaCache
 
 impl MediaCache {
     /// Convert a MediaItem (from tool _media output) to a channel Attachment.
@@ -324,15 +324,15 @@ This ensures media generated before an `AskUser` interruption is delivered immed
 
 | Action | File | Description |
 |--------|------|-------------|
-| Create | `core/src/gateway/media.rs` | `MediaItem`, `PendingMedia` type alias |
-| Create | `core/src/builtin_tools/media_send.rs` | `media_send` tool |
-| Modify | `core/src/media/cache.rs` | Add `download_media_item()` method, raise `MAX_FILE_SIZE` to 50MB, timeout to 60s |
-| Modify | `core/src/builtin_tools/generation/image_generate.rs` | Add `_media` to output |
-| Modify | `core/src/builtin_tools/generation/video_generate.rs` | Add `_media` to output |
-| Modify | `core/src/builtin_tools/generation/audio_generate.rs` | Add `_media` to output |
-| Modify | `core/src/builtin_tools/generation/speech_generate.rs` | Add `_media` to output |
-| Modify | `core/src/gateway/reply_emitter.rs` | Add `pending_media` field + `drain_and_send_media()` + inject in all 3 paths |
-| Modify | `core/src/gateway/execution_engine/run_loop.rs` | Add `pending_media` to `StreamCallback`, extract `_media` in `on_tool_done` |
-| Modify | `core/src/agent_loop/prompt_builder.rs` | Add `media_send` guidance to BASE_BEHAVIOR |
-| Modify | `core/src/executor/builtin_registry/groups.rs` | Register `media_send` in tool groups |
-| Modify | `core/src/gateway/mod.rs` | Export `media` module |
+| Create | `src/gateway/media.rs` | `MediaItem`, `PendingMedia` type alias |
+| Create | `src/builtin_tools/media_send.rs` | `media_send` tool |
+| Modify | `src/media/cache.rs` | Add `download_media_item()` method, raise `MAX_FILE_SIZE` to 50MB, timeout to 60s |
+| Modify | `src/builtin_tools/generation/image_generate.rs` | Add `_media` to output |
+| Modify | `src/builtin_tools/generation/video_generate.rs` | Add `_media` to output |
+| Modify | `src/builtin_tools/generation/audio_generate.rs` | Add `_media` to output |
+| Modify | `src/builtin_tools/generation/speech_generate.rs` | Add `_media` to output |
+| Modify | `src/gateway/reply_emitter.rs` | Add `pending_media` field + `drain_and_send_media()` + inject in all 3 paths |
+| Modify | `src/gateway/execution_engine/run_loop.rs` | Add `pending_media` to `StreamCallback`, extract `_media` in `on_tool_done` |
+| Modify | `src/agent_loop/prompt_builder.rs` | Add `media_send` guidance to BASE_BEHAVIOR |
+| Modify | `src/executor/builtin_registry/groups.rs` | Register `media_send` in tool groups |
+| Modify | `src/gateway/mod.rs` | Export `media` module |

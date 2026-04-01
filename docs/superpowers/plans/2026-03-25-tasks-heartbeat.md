@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Refactor `core/src/cron/` → `core/src/tasks/` with shared infrastructure, and add a heartbeat subsystem with L1 probe + L2 Agent two-level execution, semantic embedding dedup, wake request queue, and UI redesign.
+**Goal:** Refactor `src/cron/` → `src/tasks/` with shared infrastructure, and add a heartbeat subsystem with L1 probe + L2 Agent two-level execution, semantic embedding dedup, wake request queue, and UI redesign.
 
 **Architecture:** Dual-track system under `tasks/` — cron and heartbeat share Store/Delivery/Clock/Schedule infrastructure but have independent execution engines and timer loops. Heartbeat uses L1 Tool-based probes to filter empty polls before triggering L2 Agent turns.
 
@@ -18,24 +18,24 @@
 
 | File | Responsibility |
 |------|---------------|
-| `core/src/tasks/mod.rs` | Top-level module, re-exports SharedCronService + SharedHeartbeatService |
-| `core/src/tasks/shared/mod.rs` | Shared sub-module root |
-| `core/src/tasks/shared/store.rs` | `TaskDatabase` — unified SQLite connection wrapper |
-| `core/src/tasks/shared/delivery.rs` | Generalized `DeliveryTarget` trait + `DeliveryPayload` + `DeliveryEngine` |
-| `core/src/tasks/heartbeat/mod.rs` | `HeartbeatService`, `SharedHeartbeatService` |
-| `core/src/tasks/heartbeat/config.rs` | `HeartbeatTask`, `ProbeConfig`, `TriggerCondition`, `HeartbeatState`, `HeartbeatConfig`, `DedupConfig` |
-| `core/src/tasks/heartbeat/store.rs` | `HeartbeatStore` — SQLite CRUD for heartbeat_tasks table |
-| `core/src/tasks/heartbeat/probe.rs` | `ProbeExecutor` trait + `execute_probe()` + `ProbeResult` |
-| `core/src/tasks/heartbeat/dedup.rs` | `DedupEngine` — semantic embedding dedup |
-| `core/src/tasks/heartbeat/wake.rs` | `WakeQueue` + `WakeRequest` + `WakePriority` |
-| `core/src/tasks/heartbeat/executor.rs` | L2 Agent turn executor + `heartbeat_report` tool |
-| `core/src/tasks/heartbeat/service/mod.rs` | Service sub-module root |
-| `core/src/tasks/heartbeat/service/state.rs` | `HeartbeatServiceState` with AtomicBool guards |
-| `core/src/tasks/heartbeat/service/ops.rs` | CRUD operations + schedule recomputation |
-| `core/src/tasks/heartbeat/service/timer.rs` | Heartbeat timer loop (10s tick + wake select) |
-| `core/src/tasks/heartbeat/history.rs` | SQLite schema + insert/query for heartbeat_runs |
-| `core/src/gateway/handlers/heartbeat.rs` | 8 JSON-RPC handlers (heartbeat.*) |
-| `core/src/builtin_tools/heartbeat_manage.rs` | LLM-callable tools for heartbeat CRUD |
+| `src/tasks/mod.rs` | Top-level module, re-exports SharedCronService + SharedHeartbeatService |
+| `src/tasks/shared/mod.rs` | Shared sub-module root |
+| `src/tasks/shared/store.rs` | `TaskDatabase` — unified SQLite connection wrapper |
+| `src/tasks/shared/delivery.rs` | Generalized `DeliveryTarget` trait + `DeliveryPayload` + `DeliveryEngine` |
+| `src/tasks/heartbeat/mod.rs` | `HeartbeatService`, `SharedHeartbeatService` |
+| `src/tasks/heartbeat/config.rs` | `HeartbeatTask`, `ProbeConfig`, `TriggerCondition`, `HeartbeatState`, `HeartbeatConfig`, `DedupConfig` |
+| `src/tasks/heartbeat/store.rs` | `HeartbeatStore` — SQLite CRUD for heartbeat_tasks table |
+| `src/tasks/heartbeat/probe.rs` | `ProbeExecutor` trait + `execute_probe()` + `ProbeResult` |
+| `src/tasks/heartbeat/dedup.rs` | `DedupEngine` — semantic embedding dedup |
+| `src/tasks/heartbeat/wake.rs` | `WakeQueue` + `WakeRequest` + `WakePriority` |
+| `src/tasks/heartbeat/executor.rs` | L2 Agent turn executor + `heartbeat_report` tool |
+| `src/tasks/heartbeat/service/mod.rs` | Service sub-module root |
+| `src/tasks/heartbeat/service/state.rs` | `HeartbeatServiceState` with AtomicBool guards |
+| `src/tasks/heartbeat/service/ops.rs` | CRUD operations + schedule recomputation |
+| `src/tasks/heartbeat/service/timer.rs` | Heartbeat timer loop (10s tick + wake select) |
+| `src/tasks/heartbeat/history.rs` | SQLite schema + insert/query for heartbeat_runs |
+| `src/gateway/handlers/heartbeat.rs` | 8 JSON-RPC handlers (heartbeat.*) |
+| `src/builtin_tools/heartbeat_manage.rs` | LLM-callable tools for heartbeat CRUD |
 | `interfaces/webchat/src/api/heartbeat.rs` | Frontend DTO + JSON-RPC API wrapper |
 | `interfaces/webchat/src/views/tasks.rs` | Unified tasks view with cron + heartbeat tabs |
 
@@ -43,34 +43,34 @@
 
 | From | To |
 |------|-----|
-| `core/src/cron/mod.rs` | `core/src/tasks/cron/mod.rs` |
-| `core/src/cron/config.rs` | `core/src/tasks/cron/config.rs` |
-| `core/src/cron/store.rs` | `core/src/tasks/cron/store.rs` |
-| `core/src/cron/executor.rs` | `core/src/tasks/cron/executor.rs` |
-| `core/src/cron/schedule.rs` | `core/src/tasks/shared/schedule.rs` |
-| `core/src/cron/clock.rs` | `core/src/tasks/shared/clock.rs` |
-| `core/src/cron/history.rs` | `core/src/tasks/cron/history.rs` |
-| `core/src/cron/chain.rs` | `core/src/tasks/cron/chain.rs` |
-| `core/src/cron/alert.rs` | `core/src/tasks/cron/alert.rs` |
-| `core/src/cron/stagger.rs` | `core/src/tasks/cron/stagger.rs` |
-| `core/src/cron/template.rs` | `core/src/tasks/cron/template.rs` |
-| `core/src/cron/webhook_target.rs` | `core/src/tasks/cron/webhook_target.rs` |
-| `core/src/cron/execution/*` | `core/src/tasks/cron/execution/*` |
-| `core/src/cron/service/*` | `core/src/tasks/cron/service/*` |
+| `src/cron/mod.rs` | `src/tasks/cron/mod.rs` |
+| `src/cron/config.rs` | `src/tasks/cron/config.rs` |
+| `src/cron/store.rs` | `src/tasks/cron/store.rs` |
+| `src/cron/executor.rs` | `src/tasks/cron/executor.rs` |
+| `src/cron/schedule.rs` | `src/tasks/shared/schedule.rs` |
+| `src/cron/clock.rs` | `src/tasks/shared/clock.rs` |
+| `src/cron/history.rs` | `src/tasks/cron/history.rs` |
+| `src/cron/chain.rs` | `src/tasks/cron/chain.rs` |
+| `src/cron/alert.rs` | `src/tasks/cron/alert.rs` |
+| `src/cron/stagger.rs` | `src/tasks/cron/stagger.rs` |
+| `src/cron/template.rs` | `src/tasks/cron/template.rs` |
+| `src/cron/webhook_target.rs` | `src/tasks/cron/webhook_target.rs` |
+| `src/cron/execution/*` | `src/tasks/cron/execution/*` |
+| `src/cron/service/*` | `src/tasks/cron/service/*` |
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `core/src/lib.rs:109` | `pub mod cron` → `pub mod tasks` |
-| `core/src/config/structs.rs:6,109,319` | `cron::CronConfig` → `tasks::cron::CronConfig`, add `heartbeat: HeartbeatConfig` |
-| `core/src/bin/aleph-server/commands/start/mod.rs:21-24,446-460,629-669` | Update imports, add HeartbeatService init |
-| `core/src/bin/aleph-server/commands/start/builder/handlers.rs:787-808` | Update imports, add heartbeat handler registration |
-| `core/src/gateway/handlers/mod.rs` | Add `pub mod heartbeat` |
-| `core/src/gateway/handlers/cron.rs:13-18` | Update `use crate::cron::` → `use crate::tasks::cron::` |
-| `core/src/builtin_tools/cron_manage.rs:13` | Update import path |
-| `core/src/cron/delivery.rs` → `core/src/tasks/shared/delivery.rs` | Generalize `DeliveryTarget` to accept `DeliveryPayload` |
-| All `core/src/cron/**/*.rs` internal imports | `use crate::cron::` → `use crate::tasks::cron::` or `use crate::tasks::shared::` |
+| `src/lib.rs:109` | `pub mod cron` → `pub mod tasks` |
+| `src/config/structs.rs:6,109,319` | `cron::CronConfig` → `tasks::cron::CronConfig`, add `heartbeat: HeartbeatConfig` |
+| `src/bin/aleph-server/commands/start/mod.rs:21-24,446-460,629-669` | Update imports, add HeartbeatService init |
+| `src/bin/aleph-server/commands/start/builder/handlers.rs:787-808` | Update imports, add heartbeat handler registration |
+| `src/gateway/handlers/mod.rs` | Add `pub mod heartbeat` |
+| `src/gateway/handlers/cron.rs:13-18` | Update `use crate::cron::` → `use crate::tasks::cron::` |
+| `src/builtin_tools/cron_manage.rs:13` | Update import path |
+| `src/cron/delivery.rs` → `src/tasks/shared/delivery.rs` | Generalize `DeliveryTarget` to accept `DeliveryPayload` |
+| All `src/cron/**/*.rs` internal imports | `use crate::cron::` → `use crate::tasks::cron::` or `use crate::tasks::shared::` |
 | `interfaces/webchat/src/api.rs:7` | `pub mod cron` stays, add `pub mod heartbeat` |
 | `interfaces/webchat/src/views/mod.rs:7` | `pub mod cron` → `pub mod tasks` |
 | `interfaces/webchat/src/views/cron.rs` → `views/tasks.rs` | Wrap in tabs, add heartbeat tab |
@@ -81,27 +81,27 @@
 ## Task 1: Directory Migration — Move cron/ to tasks/cron/
 
 **Files:**
-- Move: `core/src/cron/` → `core/src/tasks/cron/`
-- Create: `core/src/tasks/mod.rs`
-- Modify: `core/src/lib.rs:109`
+- Move: `src/cron/` → `src/tasks/cron/`
+- Create: `src/tasks/mod.rs`
+- Modify: `src/lib.rs:109`
 
 - [ ] **Step 1: Create tasks directory and move cron files**
 
 ```bash
-mkdir -p core/src/tasks
-git mv core/src/cron core/src/tasks/cron
+mkdir -p src/tasks
+git mv src/cron src/tasks/cron
 ```
 
 - [ ] **Step 2: Create tasks/mod.rs**
 
 ```rust
-// core/src/tasks/mod.rs
+// src/tasks/mod.rs
 pub mod cron;
 ```
 
 - [ ] **Step 3: Update lib.rs module declaration**
 
-In `core/src/lib.rs`, change line 109:
+In `src/lib.rs`, change line 109:
 ```rust
 // Before:
 pub mod cron;
@@ -111,31 +111,31 @@ pub mod tasks;
 
 - [ ] **Step 4: Batch update all internal cron imports**
 
-All `use crate::cron::` inside `core/src/tasks/cron/**/*.rs` must become `use crate::tasks::cron::`. Files to update (internal cross-references):
+All `use crate::cron::` inside `src/tasks/cron/**/*.rs` must become `use crate::tasks::cron::`. Files to update (internal cross-references):
 
 ```bash
 # Use perl for reliable batch replacement within tasks/cron/ only
-find core/src/tasks/cron -name '*.rs' -exec perl -pi -e 's/use crate::cron::/use crate::tasks::cron::/g' {} +
+find src/tasks/cron -name '*.rs' -exec perl -pi -e 's/use crate::cron::/use crate::tasks::cron::/g' {} +
 ```
 
 Verify no references to old path remain:
 ```bash
-grep -r "use crate::cron::" core/src/tasks/
+grep -r "use crate::cron::" src/tasks/
 ```
 
 - [ ] **Step 5: Update external imports**
 
 Files that import from `crate::cron` outside the cron module:
 
-1. `core/src/config/structs.rs:6` — `use crate::cron::CronConfig` → `use crate::tasks::cron::CronConfig`
-2. `core/src/gateway/handlers/cron.rs:13-18` — update all `use crate::cron::` → `use crate::tasks::cron::`
-3. `core/src/builtin_tools/cron_manage.rs:13` — update import path
-4. `core/src/bin/aleph-server/commands/start/mod.rs:21-24` — `use alephcore::cron::` → `use alephcore::tasks::cron::`
-5. `core/src/bin/aleph-server/commands/start/builder/handlers.rs` — update `alephcore::cron::` references
+1. `src/config/structs.rs:6` — `use crate::cron::CronConfig` → `use crate::tasks::cron::CronConfig`
+2. `src/gateway/handlers/cron.rs:13-18` — update all `use crate::cron::` → `use crate::tasks::cron::`
+3. `src/builtin_tools/cron_manage.rs:13` — update import path
+4. `src/bin/aleph-server/commands/start/mod.rs:21-24` — `use alephcore::cron::` → `use alephcore::tasks::cron::`
+5. `src/bin/aleph-server/commands/start/builder/handlers.rs` — update `alephcore::cron::` references
 
 ```bash
 # Verify all external references updated
-grep -rn "use.*cron::" core/src/ --include='*.rs' | grep -v "tasks/cron/"
+grep -rn "use.*cron::" src/ --include='*.rs' | grep -v "tasks/cron/"
 # Should only show the gateway/handlers/cron.rs file references (already updated above)
 ```
 
@@ -167,19 +167,19 @@ git commit -m "refactor: move cron/ to tasks/cron/ — directory migration"
 ## Task 2: Extract Shared Infrastructure — clock, schedule, delivery
 
 **Files:**
-- Create: `core/src/tasks/shared/mod.rs`, `core/src/tasks/shared/store.rs`
-- Move: `core/src/tasks/cron/clock.rs` → `core/src/tasks/shared/clock.rs`
-- Move: `core/src/tasks/cron/schedule.rs` → `core/src/tasks/shared/schedule.rs`
-- Move + Modify: `core/src/tasks/cron/delivery.rs` → `core/src/tasks/shared/delivery.rs`
+- Create: `src/tasks/shared/mod.rs`, `src/tasks/shared/store.rs`
+- Move: `src/tasks/cron/clock.rs` → `src/tasks/shared/clock.rs`
+- Move: `src/tasks/cron/schedule.rs` → `src/tasks/shared/schedule.rs`
+- Move + Modify: `src/tasks/cron/delivery.rs` → `src/tasks/shared/delivery.rs`
 
 - [ ] **Step 1: Create shared module structure**
 
 ```bash
-mkdir -p core/src/tasks/shared
+mkdir -p src/tasks/shared
 ```
 
 ```rust
-// core/src/tasks/shared/mod.rs
+// src/tasks/shared/mod.rs
 pub mod clock;
 pub mod delivery;
 pub mod schedule;
@@ -189,8 +189,8 @@ pub mod store;
 - [ ] **Step 2: Move clock.rs and schedule.rs**
 
 ```bash
-git mv core/src/tasks/cron/clock.rs core/src/tasks/shared/clock.rs
-git mv core/src/tasks/cron/schedule.rs core/src/tasks/shared/schedule.rs
+git mv src/tasks/cron/clock.rs src/tasks/shared/clock.rs
+git mv src/tasks/cron/schedule.rs src/tasks/shared/schedule.rs
 ```
 
 Update internal imports in moved files:
@@ -202,15 +202,15 @@ Update internal imports in moved files:
 All files that imported `crate::tasks::cron::clock` or `crate::tasks::cron::schedule` now import from `crate::tasks::shared::`:
 
 ```bash
-find core/src/tasks/cron -name '*.rs' -exec perl -pi -e \
+find src/tasks/cron -name '*.rs' -exec perl -pi -e \
   's/use crate::tasks::cron::clock/use crate::tasks::shared::clock/g; s/use crate::tasks::cron::schedule/use crate::tasks::shared::schedule/g' {} +
 ```
 
-Also update `core/src/gateway/handlers/cron.rs` if it imports clock.
+Also update `src/gateway/handlers/cron.rs` if it imports clock.
 
 - [ ] **Step 4: Update cron/mod.rs module declarations**
 
-Remove `pub mod clock` and `pub mod schedule` from `core/src/tasks/cron/mod.rs`. Add re-exports if needed for backward compatibility:
+Remove `pub mod clock` and `pub mod schedule` from `src/tasks/cron/mod.rs`. Add re-exports if needed for backward compatibility:
 
 ```rust
 // In tasks/cron/mod.rs, remove these lines:
@@ -225,7 +225,7 @@ pub use crate::tasks::shared::schedule;
 - [ ] **Step 5: Update tasks/mod.rs**
 
 ```rust
-// core/src/tasks/mod.rs
+// src/tasks/mod.rs
 pub mod cron;
 pub mod shared;
 ```
@@ -234,7 +234,7 @@ pub mod shared;
 
 First, extract delivery-related types from `cron/config.rs` into a new shared location. The types `DeliveryConfig`, `DeliveryMode`, `DeliveryTargetConfig`, `DeliveryOutcome`, `DeliveryStatus` are used by both cron and heartbeat, so they belong in shared.
 
-Move these types from `core/src/tasks/cron/config.rs` to `core/src/tasks/shared/delivery.rs` (they will live alongside the `DeliveryTarget` trait and `DeliveryEngine`).
+Move these types from `src/tasks/cron/config.rs` to `src/tasks/shared/delivery.rs` (they will live alongside the `DeliveryTarget` trait and `DeliveryEngine`).
 
 In `cron/config.rs`, replace the moved type definitions with re-exports:
 ```rust
@@ -248,10 +248,10 @@ This avoids circular dependencies: shared/delivery.rs defines both the types AND
 - [ ] **Step 7: Move and generalize delivery.rs**
 
 ```bash
-git mv core/src/tasks/cron/delivery.rs core/src/tasks/shared/delivery.rs
+git mv src/tasks/cron/delivery.rs src/tasks/shared/delivery.rs
 ```
 
-In `core/src/tasks/shared/delivery.rs`:
+In `src/tasks/shared/delivery.rs`:
 1. Move the delivery types from Step 6 into this file
 2. Add the generic `DeliveryPayload` struct
 3. Update `DeliveryTarget` trait to accept `&DeliveryPayload` instead of `&CronJob, &JobRun`
@@ -283,11 +283,11 @@ pub trait DeliveryTarget: Send + Sync {
 
 - [ ] **Step 8: Update webhook_target.rs to match new trait**
 
-In `core/src/tasks/cron/webhook_target.rs`, update `DeliveryTarget::deliver` impl to accept `&DeliveryPayload` instead of `&CronJob, &JobRun`. Update import from `crate::tasks::shared::delivery`.
+In `src/tasks/cron/webhook_target.rs`, update `DeliveryTarget::deliver` impl to accept `&DeliveryPayload` instead of `&CronJob, &JobRun`. Update import from `crate::tasks::shared::delivery`.
 
 - [ ] **Step 9: Add DeliveryPayload conversion to CronJob**
 
-In `core/src/tasks/cron/config.rs`, add:
+In `src/tasks/cron/config.rs`, add:
 
 ```rust
 use crate::tasks::shared::delivery::DeliveryPayload;
@@ -314,7 +314,7 @@ Update all call sites in `cron/service/concurrency.rs` and `cron/service/timer.r
 
 - [ ] **Step 10: Update cron/mod.rs re-exports**
 
-In `core/src/tasks/cron/mod.rs`:
+In `src/tasks/cron/mod.rs`:
 1. Remove `pub mod delivery`
 2. Update the `pub use` line that re-exports `DeliveryEngine, DeliveryTarget` to point to shared:
 ```rust
@@ -324,7 +324,7 @@ pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryTarget};
 - [ ] **Step 11: Create shared/store.rs — TaskDatabase wrapper**
 
 ```rust
-// core/src/tasks/shared/store.rs
+// src/tasks/shared/store.rs
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -355,7 +355,7 @@ Note: CronStore currently owns its own `Connection`. We will NOT change CronStor
 
 - [ ] **Step 12: Update cron db_path default**
 
-In `core/src/tasks/cron/config.rs`, update the default `db_path` from `"~/.aleph/data/cron.db"` to `"~/.aleph/data/tasks.db"`.
+In `src/tasks/cron/config.rs`, update the default `db_path` from `"~/.aleph/data/cron.db"` to `"~/.aleph/data/tasks.db"`.
 
 - [ ] **Step 13: Compile check and test**
 
@@ -376,15 +376,15 @@ git commit -m "refactor: extract shared infrastructure (clock, schedule, deliver
 ## Task 3: Heartbeat Types & Configuration
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/mod.rs`
-- Create: `core/src/tasks/heartbeat/config.rs`
-- Modify: `core/src/tasks/mod.rs`
-- Modify: `core/src/config/structs.rs`
+- Create: `src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/config.rs`
+- Modify: `src/tasks/mod.rs`
+- Modify: `src/config/structs.rs`
 
 - [ ] **Step 1: Write tests for config types**
 
 ```rust
-// In core/src/tasks/heartbeat/config.rs (at bottom, #[cfg(test)] mod)
+// In src/tasks/heartbeat/config.rs (at bottom, #[cfg(test)] mod)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,7 +452,7 @@ Expected: FAIL (module not found)
 
 - [ ] **Step 3: Implement heartbeat config types**
 
-Create `core/src/tasks/heartbeat/config.rs` with all types from the spec:
+Create `src/tasks/heartbeat/config.rs` with all types from the spec:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -465,13 +465,13 @@ use serde::{Deserialize, Serialize};
 
 Key types: `HeartbeatTask`, `ProbeConfig`, `TriggerCondition`, `HeartbeatState`, `HeartbeatConfig`, `DedupConfig`, `error_backoff_ms()`.
 
-Also create `core/src/tasks/heartbeat/mod.rs`:
+Also create `src/tasks/heartbeat/mod.rs`:
 
 ```rust
 pub mod config;
 ```
 
-Update `core/src/tasks/mod.rs`:
+Update `src/tasks/mod.rs`:
 ```rust
 pub mod cron;
 pub mod heartbeat;
@@ -488,7 +488,7 @@ Expected: all 4 tests PASS.
 
 - [ ] **Step 5: Add HeartbeatConfig to app config**
 
-In `core/src/config/structs.rs`, add:
+In `src/config/structs.rs`, add:
 ```rust
 use crate::tasks::heartbeat::config::HeartbeatConfig;
 
@@ -521,14 +521,14 @@ git commit -m "feat(heartbeat): add config types and HeartbeatConfig"
 ## Task 4: HeartbeatStore — SQLite Persistence
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/store.rs`
-- Create: `core/src/tasks/heartbeat/history.rs`
-- Modify: `core/src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/store.rs`
+- Create: `src/tasks/heartbeat/history.rs`
+- Modify: `src/tasks/heartbeat/mod.rs`
 
 - [ ] **Step 1: Write store tests**
 
 ```rust
-// In core/src/tasks/heartbeat/store.rs (at bottom)
+// In src/tasks/heartbeat/store.rs (at bottom)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,11 +588,11 @@ cargo test -p alephcore --lib heartbeat::store 2>&1 | tail -20
 
 - [ ] **Step 3: Implement HeartbeatStore**
 
-Create `core/src/tasks/heartbeat/store.rs`. Follow `CronStore` pattern exactly — in-memory `Vec<HeartbeatTask>` + dirty flag + SQLite backend. Table: `heartbeat_tasks (id, name, agent_id, enabled, data)`.
+Create `src/tasks/heartbeat/store.rs`. Follow `CronStore` pattern exactly — in-memory `Vec<HeartbeatTask>` + dirty flag + SQLite backend. Table: `heartbeat_tasks (id, name, agent_id, enabled, data)`.
 
 - [ ] **Step 4: Implement heartbeat history**
 
-Create `core/src/tasks/heartbeat/history.rs`. Table: `heartbeat_runs` with L1/L2 split fields per spec. Functions: `init_schema()`, `insert_run_record()`, `get_run_records()`, `prune_old_records()`.
+Create `src/tasks/heartbeat/history.rs`. Table: `heartbeat_runs` with L1/L2 split fields per spec. Functions: `init_schema()`, `insert_run_record()`, `get_run_records()`, `prune_old_records()`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -612,8 +612,8 @@ git commit -m "feat(heartbeat): add HeartbeatStore and history persistence"
 ## Task 5: ProbeExecutor — L1 Probe Framework
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/probe.rs`
-- Modify: `core/src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/probe.rs`
+- Modify: `src/tasks/heartbeat/mod.rs`
 
 - [ ] **Step 1: Write probe tests**
 
@@ -666,7 +666,7 @@ cargo test -p alephcore --lib heartbeat::probe 2>&1 | tail -20
 
 - [ ] **Step 3: Implement probe module**
 
-Create `core/src/tasks/heartbeat/probe.rs`:
+Create `src/tasks/heartbeat/probe.rs`:
 
 ```rust
 use async_trait::async_trait;
@@ -753,8 +753,8 @@ git commit -m "feat(heartbeat): add ProbeExecutor trait and L1 trigger evaluatio
 ## Task 6: DedupEngine — Semantic Embedding Dedup
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/dedup.rs`
-- Modify: `core/src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/dedup.rs`
+- Modify: `src/tasks/heartbeat/mod.rs`
 
 - [ ] **Step 1: Write dedup tests**
 
@@ -796,7 +796,7 @@ mod tests {
 
 - [ ] **Step 2: Implement DedupEngine**
 
-Create `core/src/tasks/heartbeat/dedup.rs`:
+Create `src/tasks/heartbeat/dedup.rs`:
 - `cosine_similarity(a, b) -> f32` — pure function
 - `DedupEngine` struct holding DB connection + `Arc<dyn EmbeddingProvider>`
 - `is_duplicate(task_id, output) -> bool` — read DB (lock), release, embed (async), relock, compare
@@ -826,8 +826,8 @@ git commit -m "feat(heartbeat): add DedupEngine with semantic embedding dedup"
 ## Task 7: WakeQueue — Event-Driven Wake Requests
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/wake.rs`
-- Modify: `core/src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/wake.rs`
+- Modify: `src/tasks/heartbeat/mod.rs`
 
 - [ ] **Step 1: Write wake queue tests**
 
@@ -884,7 +884,7 @@ mod tests {
 
 - [ ] **Step 2: Implement WakeQueue**
 
-Create `core/src/tasks/heartbeat/wake.rs`:
+Create `src/tasks/heartbeat/wake.rs`:
 
 ```rust
 use std::collections::HashMap;
@@ -938,12 +938,12 @@ git commit -m "feat(heartbeat): add WakeQueue with priority coalescing"
 ## Task 8: HeartbeatService — State, Ops, Timer Loop
 
 **Files:**
-- Create: `core/src/tasks/heartbeat/service/mod.rs`
-- Create: `core/src/tasks/heartbeat/service/state.rs`
-- Create: `core/src/tasks/heartbeat/service/ops.rs`
-- Create: `core/src/tasks/heartbeat/service/timer.rs`
-- Create: `core/src/tasks/heartbeat/executor.rs`
-- Modify: `core/src/tasks/heartbeat/mod.rs`
+- Create: `src/tasks/heartbeat/service/mod.rs`
+- Create: `src/tasks/heartbeat/service/state.rs`
+- Create: `src/tasks/heartbeat/service/ops.rs`
+- Create: `src/tasks/heartbeat/service/timer.rs`
+- Create: `src/tasks/heartbeat/executor.rs`
+- Modify: `src/tasks/heartbeat/mod.rs`
 
 - [ ] **Step 1: Implement HeartbeatServiceState**
 
@@ -965,7 +965,7 @@ Refer to spec section "Timer Loop & Concurrency" for exact pseudocode.
 
 - [ ] **Step 5: Implement DefaultProbeExecutor**
 
-Create `core/src/tasks/heartbeat/probe.rs` addition — `DefaultProbeExecutor` struct:
+Create `src/tasks/heartbeat/probe.rs` addition — `DefaultProbeExecutor` struct:
 
 ```rust
 /// Production ProbeExecutor that routes between builtin and MCP tools
@@ -1026,32 +1026,32 @@ git commit -m "feat(heartbeat): add HeartbeatService with timer loop and L1/L2 e
 ## Task 9: Gateway Handlers + LLM Tools
 
 **Files:**
-- Create: `core/src/gateway/handlers/heartbeat.rs`
-- Create: `core/src/builtin_tools/heartbeat_manage.rs`
-- Modify: `core/src/gateway/handlers/mod.rs`
-- Modify: `core/src/bin/aleph-server/commands/start/mod.rs`
-- Modify: `core/src/bin/aleph-server/commands/start/builder/handlers.rs`
+- Create: `src/gateway/handlers/heartbeat.rs`
+- Create: `src/builtin_tools/heartbeat_manage.rs`
+- Modify: `src/gateway/handlers/mod.rs`
+- Modify: `src/bin/aleph-server/commands/start/mod.rs`
+- Modify: `src/bin/aleph-server/commands/start/builder/handlers.rs`
 
 - [ ] **Step 1: Implement gateway handlers**
 
-Create `core/src/gateway/handlers/heartbeat.rs` — 8 handlers following `cron.rs` patterns:
+Create `src/gateway/handlers/heartbeat.rs` — 8 handlers following `cron.rs` patterns:
 - `handle_heartbeat_list`, `handle_heartbeat_get`, `handle_heartbeat_create`, `handle_heartbeat_update`, `handle_heartbeat_delete`, `handle_heartbeat_toggle`, `handle_heartbeat_wake`, `handle_heartbeat_runs`
 
-Add `pub mod heartbeat;` to `core/src/gateway/handlers/mod.rs`.
+Add `pub mod heartbeat;` to `src/gateway/handlers/mod.rs`.
 
 - [ ] **Step 2: Register handlers in builder**
 
-In `core/src/bin/aleph-server/commands/start/builder/handlers.rs`, add `register_heartbeat_handlers()` function following `register_cron_handlers()` pattern. Register 8 RPC methods: `heartbeat.list`, `heartbeat.get`, etc.
+In `src/bin/aleph-server/commands/start/builder/handlers.rs`, add `register_heartbeat_handlers()` function following `register_cron_handlers()` pattern. Register 8 RPC methods: `heartbeat.list`, `heartbeat.get`, etc.
 
 - [ ] **Step 3: Implement builtin tools**
 
-Create `core/src/builtin_tools/heartbeat_manage.rs` — LLM-callable tools: `heartbeat_create`, `heartbeat_list`, `heartbeat_update`, `heartbeat_delete`, `heartbeat_toggle`. Follow `cron_manage.rs` pattern.
+Create `src/builtin_tools/heartbeat_manage.rs` — LLM-callable tools: `heartbeat_create`, `heartbeat_list`, `heartbeat_update`, `heartbeat_delete`, `heartbeat_toggle`. Follow `cron_manage.rs` pattern.
 
-Register in `core/src/executor/builtin_registry/` (definitions + registry match arms).
+Register in `src/executor/builtin_registry/` (definitions + registry match arms).
 
 - [ ] **Step 4: Implement migrate_task_db()**
 
-Add to `core/src/tasks/shared/store.rs`:
+Add to `src/tasks/shared/store.rs`:
 
 ```rust
 pub fn migrate_task_db(old_cron_path: &Path, new_path: &Path) -> Result<(), String> {
@@ -1076,7 +1076,7 @@ pub fn migrate_task_db(old_cron_path: &Path, new_path: &Path) -> Result<(), Stri
 
 - [ ] **Step 5: Update server startup**
 
-In `core/src/bin/aleph-server/commands/start/mod.rs`:
+In `src/bin/aleph-server/commands/start/mod.rs`:
 1. Add imports for HeartbeatService
 2. Call `migrate_task_db()` before creating CronService
 3. Create HeartbeatService after CronService
@@ -1162,7 +1162,7 @@ git commit -m "feat(heartbeat): add tasks view with cron + heartbeat tabs"
 ## Task 11: Final Cleanup
 
 **Files:**
-- Remove: old `core/src/cron/` directory (if any remnants)
+- Remove: old `src/cron/` directory (if any remnants)
 
 Note: `migrate_task_db()` was implemented in Task 9 Step 4.
 
@@ -1170,9 +1170,9 @@ Note: `migrate_task_db()` was implemented in Task 9 Step 4.
 
 ```bash
 # Should return nothing:
-grep -rn "crate::cron\b" core/src/ --include='*.rs' | grep -v "tasks/cron/" | grep -v "tasks/shared/"
-grep -rn "alephcore::cron\b" core/src/ --include='*.rs' | grep -v "tasks/cron/"
-ls core/src/cron/ 2>/dev/null  # Should not exist
+grep -rn "crate::cron\b" src/ --include='*.rs' | grep -v "tasks/cron/" | grep -v "tasks/shared/"
+grep -rn "alephcore::cron\b" src/ --include='*.rs' | grep -v "tasks/cron/"
+ls src/cron/ 2>/dev/null  # Should not exist
 ```
 
 - [ ] **Step 3: Full test suite**

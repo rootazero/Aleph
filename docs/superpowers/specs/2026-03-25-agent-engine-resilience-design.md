@@ -323,23 +323,23 @@ Follows `section_save!` macro + `RwSignal` pattern from existing pages.
 
 | File | Change |
 |------|--------|
-| `core/src/agent_loop/loop_core.rs` | Remove `timeout_secs` from `LoopConfig`, delete timeout check in loop, rewrite `enforce_context_limit` for pair-awareness |
-| `core/src/gateway/execution_engine/mod.rs` | Update `ExecutionEngineConfig` default to 48h |
-| `core/src/gateway/execution_engine/engine.rs` | Replace fixed sleep with resettable deadline, pass deadline to `run_agent_loop`, add cascade timeout resolution |
-| `core/src/gateway/execution_engine/run_loop.rs` | Accept deadline param, wrap compression in deadline extension, **delete duplicate timeout resolution at lines 151-153** |
-| `core/src/config/types/orchestrator.rs` | Update default timeout to 48h (vestigial — `timeout()` method is defined but never called in execution path; changed for consistency only) |
-| `core/src/memory/session_compactor/mod.rs` | Add early return in `prepare_history` for short sessions |
-| `core/src/gateway/agent_instance.rs` | Add `timeout_secs: Option<u64>` to `AgentInstanceConfig` |
-| `core/src/gateway/handlers/mod.rs` | Register `execution_config` handler |
-| `core/src/config/types/mod.rs` | Add `execution: ExecutionConfig` field to `Config` |
+| `src/agent_loop/loop_core.rs` | Remove `timeout_secs` from `LoopConfig`, delete timeout check in loop, rewrite `enforce_context_limit` for pair-awareness |
+| `src/gateway/execution_engine/mod.rs` | Update `ExecutionEngineConfig` default to 48h |
+| `src/gateway/execution_engine/engine.rs` | Replace fixed sleep with resettable deadline, pass deadline to `run_agent_loop`, add cascade timeout resolution |
+| `src/gateway/execution_engine/run_loop.rs` | Accept deadline param, wrap compression in deadline extension, **delete duplicate timeout resolution at lines 151-153** |
+| `src/config/types/orchestrator.rs` | Update default timeout to 48h (vestigial — `timeout()` method is defined but never called in execution path; changed for consistency only) |
+| `src/memory/session_compactor/mod.rs` | Add early return in `prepare_history` for short sessions |
+| `src/gateway/agent_instance.rs` | Add `timeout_secs: Option<u64>` to `AgentInstanceConfig` |
+| `src/gateway/handlers/mod.rs` | Register `execution_config` handler |
+| `src/config/types/mod.rs` | Add `execution: ExecutionConfig` field to `Config` |
 | `interfaces/webchat/src/views/settings/mod.rs` | Add Execution tab |
 
 ### New Files
 
 | File | Purpose |
 |------|---------|
-| `core/src/config/types/execution.rs` | `ExecutionConfig` struct with serde + JsonSchema |
-| `core/src/gateway/handlers/execution_config.rs` | RPC handler for `execution_config.get` / `execution_config.update` |
+| `src/config/types/execution.rs` | `ExecutionConfig` struct with serde + JsonSchema |
+| `src/gateway/handlers/execution_config.rs` | RPC handler for `execution_config.get` / `execution_config.update` |
 | `interfaces/webchat/src/views/settings/execution.rs` | Panel Execution settings page |
 
 ### Deleted Code

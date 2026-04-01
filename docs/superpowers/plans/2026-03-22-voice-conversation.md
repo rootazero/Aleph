@@ -15,21 +15,21 @@
 ### Task 1: VoiceState Data Model
 
 **Files:**
-- Create: `core/src/gateway/voice/mod.rs`
-- Create: `core/src/gateway/voice/state.rs`
-- Modify: `core/src/gateway/mod.rs` — add `pub mod voice;`
-- Modify: `core/src/gateway/channel_registry.rs:43` — add `voice_states` field
+- Create: `src/gateway/voice/mod.rs`
+- Create: `src/gateway/voice/state.rs`
+- Modify: `src/gateway/mod.rs` — add `pub mod voice;`
+- Modify: `src/gateway/channel_registry.rs:43` — add `voice_states` field
 
 - [ ] **Step 1: Create voice module with VoiceState**
 
 ```rust
-// core/src/gateway/voice/mod.rs
+// src/gateway/voice/mod.rs
 pub mod state;
 pub use state::VoiceState;
 ```
 
 ```rust
-// core/src/gateway/voice/state.rs
+// src/gateway/voice/state.rs
 use serde::{Deserialize, Serialize};
 
 /// Per-channel voice mode state
@@ -101,14 +101,14 @@ mod tests {
 
 - [ ] **Step 2: Register voice module in gateway**
 
-Add to `core/src/gateway/mod.rs`:
+Add to `src/gateway/mod.rs`:
 ```rust
 pub mod voice;
 ```
 
 - [ ] **Step 3: Add voice_states to ChannelRegistry**
 
-In `core/src/gateway/channel_registry.rs`, add field to ChannelRegistry struct (around line 43):
+In `src/gateway/channel_registry.rs`, add field to ChannelRegistry struct (around line 43):
 ```rust
 use std::collections::HashMap;
 use crate::sync_primitives::RwLock;
@@ -162,7 +162,7 @@ Expected: No errors
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/voice/ core/src/gateway/mod.rs core/src/gateway/channel_registry.rs
+git add src/gateway/voice/ src/gateway/mod.rs src/gateway/channel_registry.rs
 git commit -m "voice: add VoiceState data model and ChannelRegistry integration"
 ```
 
@@ -171,11 +171,11 @@ git commit -m "voice: add VoiceState data model and ChannelRegistry integration"
 ### Task 2: Gateway InboundContext — voice_reply_hint
 
 **Files:**
-- Modify: `core/src/gateway/inbound_context.rs:49-84` — add `voice_reply_hint` field
+- Modify: `src/gateway/inbound_context.rs:49-84` — add `voice_reply_hint` field
 
 - [ ] **Step 1: Write test**
 
-Add to existing tests in `core/src/gateway/inbound_context.rs`:
+Add to existing tests in `src/gateway/inbound_context.rs`:
 ```rust
 #[test]
 fn test_voice_reply_hint_default_false() {
@@ -239,7 +239,7 @@ Expected: All tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/inbound_context.rs
+git add src/gateway/inbound_context.rs
 git commit -m "voice: add voice_reply_hint to gateway InboundContext"
 ```
 
@@ -248,13 +248,13 @@ git commit -m "voice: add voice_reply_hint to gateway InboundContext"
 ### Task 3: Thinker InboundContext — voice_mode_active + Prompt Layer
 
 **Files:**
-- Modify: `core/src/thinker/inbound_context.rs:57-62` — add `voice_mode_active` field
-- Create: `core/src/thinker/layers/voice_mode.rs` — new prompt layer
-- Modify: `core/src/thinker/layers/mod.rs` — register VoiceModeLayer
+- Modify: `src/thinker/inbound_context.rs:57-62` — add `voice_mode_active` field
+- Create: `src/thinker/layers/voice_mode.rs` — new prompt layer
+- Modify: `src/thinker/layers/mod.rs` — register VoiceModeLayer
 
 - [ ] **Step 1: Write test for voice_mode_active on InboundContext**
 
-Add to `core/src/thinker/inbound_context.rs` tests:
+Add to `src/thinker/inbound_context.rs` tests:
 ```rust
 #[test]
 fn voice_mode_active_included_in_prompt() {
@@ -315,7 +315,7 @@ Expected: All pass
 - [ ] **Step 5: Create VoiceModeLayer**
 
 ```rust
-// core/src/thinker/layers/voice_mode.rs
+// src/thinker/layers/voice_mode.rs
 //! VoiceModeLayer — injects voice mode guidelines when active (priority 1710)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
@@ -407,7 +407,7 @@ mod tests {
 
 - [ ] **Step 6: Register VoiceModeLayer in layers/mod.rs**
 
-Add to `core/src/thinker/layers/mod.rs`:
+Add to `src/thinker/layers/mod.rs`:
 ```rust
 pub mod voice_mode;
 ```
@@ -427,7 +427,7 @@ Expected: No errors
 - [ ] **Step 9: Commit**
 
 ```bash
-git add core/src/thinker/inbound_context.rs core/src/thinker/layers/voice_mode.rs core/src/thinker/layers/mod.rs
+git add src/thinker/inbound_context.rs src/thinker/layers/voice_mode.rs src/thinker/layers/mod.rs
 git commit -m "voice: add VoiceModeLayer prompt injection for voice-appropriate LLM output"
 ```
 
@@ -436,13 +436,13 @@ git commit -m "voice: add VoiceModeLayer prompt injection for voice-appropriate 
 ### Task 4: InboundVoiceMiddleware — STT Processing
 
 **Files:**
-- Create: `core/src/gateway/voice/inbound.rs`
-- Modify: `core/src/gateway/voice/mod.rs` — add `pub mod inbound;`
+- Create: `src/gateway/voice/inbound.rs`
+- Modify: `src/gateway/voice/mod.rs` — add `pub mod inbound;`
 
 - [ ] **Step 1: Write test for audio detection**
 
 ```rust
-// core/src/gateway/voice/inbound.rs
+// src/gateway/voice/inbound.rs
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,7 +512,7 @@ mod tests {
 - [ ] **Step 2: Implement audio detection**
 
 ```rust
-// core/src/gateway/voice/inbound.rs
+// src/gateway/voice/inbound.rs
 //! Inbound Voice Middleware — transcribes audio attachments via STT
 
 use crate::gateway::channel::InboundMessage;
@@ -620,7 +620,7 @@ async fn transcribe_attachment(
 
 - [ ] **Step 5: Update mod.rs**
 
-In `core/src/gateway/voice/mod.rs`:
+In `src/gateway/voice/mod.rs`:
 ```rust
 pub mod inbound;
 pub mod state;
@@ -635,7 +635,7 @@ Expected: No errors (adjust types if `Attachment` fields differ from expected)
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/voice/
+git add src/gateway/voice/
 git commit -m "voice: add InboundVoiceMiddleware for STT transcription"
 ```
 
@@ -644,13 +644,13 @@ git commit -m "voice: add InboundVoiceMiddleware for STT transcription"
 ### Task 5: ReplyEmitter Voice Mode — TTS Output
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs` — add voice mode to emit()
-- Create: `core/src/gateway/voice/outbound.rs` — TTS generation helper
+- Modify: `src/gateway/reply_emitter.rs` — add voice mode to emit()
+- Create: `src/gateway/voice/outbound.rs` — TTS generation helper
 
 - [ ] **Step 1: Create outbound voice helper**
 
 ```rust
-// core/src/gateway/voice/outbound.rs
+// src/gateway/voice/outbound.rs
 //! Outbound voice processing — TTS generation for ReplyEmitter voice mode
 
 use crate::gateway::channel::{Attachment, ChannelCapabilities, ChannelId};
@@ -783,7 +783,7 @@ Expected: 3 timeout tests pass
 
 - [ ] **Step 3: Add voice fields to ReplyEmitter**
 
-In `core/src/gateway/reply_emitter.rs`, add to `ReplyEmitterConfig`:
+In `src/gateway/reply_emitter.rs`, add to `ReplyEmitterConfig`:
 ```rust
 /// Whether voice mode is active for this request
 pub voice_enabled: bool,
@@ -888,7 +888,7 @@ Expected: No errors (may need to adjust GenerationProviderRegistry type paths)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/reply_emitter.rs core/src/gateway/voice/outbound.rs core/src/gateway/voice/mod.rs
+git add src/gateway/reply_emitter.rs src/gateway/voice/outbound.rs src/gateway/voice/mod.rs
 git commit -m "voice: add ReplyEmitter voice mode with TTS output"
 ```
 
@@ -897,14 +897,14 @@ git commit -m "voice: add ReplyEmitter voice mode with TTS output"
 ### Task 6: voice_mode_set Tool
 
 **Files:**
-- Create: `core/src/builtin_tools/voice_tools/mod.rs`
-- Create: `core/src/builtin_tools/voice_tools/voice_mode_set.rs`
-- Modify: `core/src/builtin_tools/mod.rs` — register module
+- Create: `src/builtin_tools/voice_tools/mod.rs`
+- Create: `src/builtin_tools/voice_tools/voice_mode_set.rs`
+- Modify: `src/builtin_tools/mod.rs` — register module
 
 - [ ] **Step 1: Create voice_mode_set tool**
 
 ```rust
-// core/src/builtin_tools/voice_tools/voice_mode_set.rs
+// src/builtin_tools/voice_tools/voice_mode_set.rs
 //! voice_mode_set — Toggle voice mode on/off for a channel (R9: Everything is a Tool)
 
 use async_trait::async_trait;
@@ -1000,21 +1000,21 @@ impl VoiceModeSetTool {
 - [ ] **Step 2: Create mod.rs**
 
 ```rust
-// core/src/builtin_tools/voice_tools/mod.rs
+// src/builtin_tools/voice_tools/mod.rs
 pub mod voice_mode_set;
 pub use voice_mode_set::{VoiceModeSetTool, VoiceModeSetArgs, VoiceModeSetOutput};
 ```
 
 - [ ] **Step 3: Register in builtin_tools/mod.rs**
 
-Add to `core/src/builtin_tools/mod.rs`:
+Add to `src/builtin_tools/mod.rs`:
 ```rust
 pub mod voice_tools;
 ```
 
 - [ ] **Step 4: Register tool in tool registry**
 
-Find where `SpeechGenerateTool` and other builtin tools are registered in the `BuiltinRegistry` (in `core/src/executor/builtin_registry/registry.rs`). Add `VoiceModeSetTool` registration following the same pattern. The tool name should be `"voice_mode_set"`, description: `"Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio."`.
+Find where `SpeechGenerateTool` and other builtin tools are registered in the `BuiltinRegistry` (in `src/executor/builtin_registry/registry.rs`). Add `VoiceModeSetTool` registration following the same pattern. The tool name should be `"voice_mode_set"`, description: `"Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio."`.
 
 - [ ] **Step 5: Compile check**
 
@@ -1024,7 +1024,7 @@ Expected: No errors
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/builtin_tools/voice_tools/ core/src/builtin_tools/mod.rs core/src/executor/builtin_registry/
+git add src/builtin_tools/voice_tools/ src/builtin_tools/mod.rs src/executor/builtin_registry/
 git commit -m "voice: add voice_mode_set tool (R9: Everything is a Tool)"
 ```
 
@@ -1033,12 +1033,12 @@ git commit -m "voice: add voice_mode_set tool (R9: Everything is a Tool)"
 ### Task 7: Wire Inbound Middleware into Gateway Pipeline
 
 **Files:**
-- Modify: `core/src/gateway/channel_registry.rs` — call InboundVoiceMiddleware in message forwarder
-- Modify: `core/src/gateway/inbound_router/executor.rs` — pass voice state to ReplyEmitter
+- Modify: `src/gateway/channel_registry.rs` — call InboundVoiceMiddleware in message forwarder
+- Modify: `src/gateway/inbound_router/executor.rs` — pass voice state to ReplyEmitter
 
 - [ ] **Step 1: Add voice processing in channel message forwarder**
 
-In `core/src/gateway/channel_registry.rs`, find `start_message_forwarder()` (around line 323). In the message forwarding loop where `InboundMessage` is received from channels, add voice processing before forwarding:
+In `src/gateway/channel_registry.rs`, find `start_message_forwarder()` (around line 323). In the message forwarding loop where `InboundMessage` is received from channels, add voice processing before forwarding:
 
 ```rust
 // After receiving msg from channel, before forwarding:
@@ -1055,7 +1055,7 @@ Note: The exact integration point depends on how `start_message_forwarder` curre
 
 - [ ] **Step 2: Pass voice state to ReplyEmitter in executor**
 
-In `core/src/gateway/inbound_router/executor.rs`, where `ReplyEmitter::with_config()` is called (around line 99):
+In `src/gateway/inbound_router/executor.rs`, where `ReplyEmitter::with_config()` is called (around line 99):
 
 ```rust
 // Read voice state for this channel
@@ -1109,7 +1109,7 @@ Start aleph-server, send a voice message via Telegram (if configured), verify:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/
+git add src/gateway/
 git commit -m "voice: wire InboundVoiceMiddleware and ReplyEmitter voice mode into gateway pipeline"
 ```
 
@@ -1118,14 +1118,14 @@ git commit -m "voice: wire InboundVoiceMiddleware and ReplyEmitter voice mode in
 ### Task 8: GenerationProvider list_voices() + RPC Endpoint
 
 **Files:**
-- Modify: `core/src/generation/mod.rs` — add `list_voices()` to trait
-- Modify: `core/src/generation/providers/openai_tts.rs` — implement `list_voices()`
-- Modify: `core/src/generation/providers/elevenlabs.rs` — implement `list_voices()`
-- Modify: `core/src/gateway/handlers/generation_providers.rs` — add RPC handler
+- Modify: `src/generation/mod.rs` — add `list_voices()` to trait
+- Modify: `src/generation/providers/openai_tts.rs` — implement `list_voices()`
+- Modify: `src/generation/providers/elevenlabs.rs` — implement `list_voices()`
+- Modify: `src/gateway/handlers/generation_providers.rs` — add RPC handler
 
 - [ ] **Step 1: Define VoiceInfo and add list_voices() to trait**
 
-In `core/src/generation/mod.rs`, add:
+In `src/generation/mod.rs`, add:
 ```rust
 /// Voice information for TTS providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1144,7 +1144,7 @@ fn list_voices(&self) -> Vec<VoiceInfo> {
 
 - [ ] **Step 2: Implement for OpenAI TTS**
 
-In `core/src/generation/providers/openai_tts.rs`:
+In `src/generation/providers/openai_tts.rs`:
 ```rust
 fn list_voices(&self) -> Vec<VoiceInfo> {
     vec![
@@ -1160,7 +1160,7 @@ fn list_voices(&self) -> Vec<VoiceInfo> {
 
 - [ ] **Step 3: Implement for ElevenLabs**
 
-In `core/src/generation/providers/elevenlabs.rs`:
+In `src/generation/providers/elevenlabs.rs`:
 ```rust
 fn list_voices(&self) -> Vec<VoiceInfo> {
     vec![
@@ -1205,7 +1205,7 @@ pub fn get_voices_for_provider(&self, provider_id: &str) -> Vec<VoiceInfo> {
 
 - [ ] **Step 5: Add RPC handler**
 
-In `core/src/gateway/handlers/generation_providers.rs`, add handler for `generation_providers.voices`:
+In `src/gateway/handlers/generation_providers.rs`, add handler for `generation_providers.voices`:
 
 ```rust
 "generation_providers.voices" => {
@@ -1225,7 +1225,7 @@ Expected: No errors
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/generation/ core/src/gateway/handlers/generation_providers.rs
+git add src/generation/ src/gateway/handlers/generation_providers.rs
 git commit -m "voice: add list_voices() to GenerationProvider trait and RPC endpoint"
 ```
 

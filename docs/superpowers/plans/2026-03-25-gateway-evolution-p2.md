@@ -20,26 +20,26 @@ AgentRouter is NOT used in InboundMessageRouter. InboundRouter uses `workspace_m
 
 | Action | File | Responsibility |
 |--------|------|---------------|
-| Modify | `core/src/gateway/inbound_router/mod.rs` | Add route_bindings + session_config fields, builder method |
-| Modify | `core/src/gateway/inbound_router/agent_resolver.rs` | Replace single-tier with resolve_route() |
-| Modify | `core/src/gateway/inbound_router/command_handler.rs` | Add /btw handler |
-| Modify | `core/src/gateway/inbound_router/executor.rs` | Pass workspace from ResolvedRoute |
-| Modify | `core/src/gateway/presence.rs` | Add ConnectionRole enum to PresenceEntry |
-| Modify | `core/src/gateway/server/handler.rs` | Set ConnectionRole on auth |
-| Modify | `core/src/gateway/hello_snapshot.rs` | Serialize role field |
-| Modify | `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` | Wire route_bindings into InboundRouter |
+| Modify | `src/gateway/inbound_router/mod.rs` | Add route_bindings + session_config fields, builder method |
+| Modify | `src/gateway/inbound_router/agent_resolver.rs` | Replace single-tier with resolve_route() |
+| Modify | `src/gateway/inbound_router/command_handler.rs` | Add /btw handler |
+| Modify | `src/gateway/inbound_router/executor.rs` | Pass workspace from ResolvedRoute |
+| Modify | `src/gateway/presence.rs` | Add ConnectionRole enum to PresenceEntry |
+| Modify | `src/gateway/server/handler.rs` | Set ConnectionRole on auth |
+| Modify | `src/gateway/hello_snapshot.rs` | Serialize role field |
+| Modify | `src/bin/aleph-server/commands/start/builder/subsystems.rs` | Wire route_bindings into InboundRouter |
 
 ---
 
 ### Task 1: Add resolve_route() to InboundRouter agent resolution
 
 **Files:**
-- Modify: `core/src/gateway/inbound_router/mod.rs` — add fields + builder
-- Modify: `core/src/gateway/inbound_router/agent_resolver.rs` — new resolution logic
+- Modify: `src/gateway/inbound_router/mod.rs` — add fields + builder
+- Modify: `src/gateway/inbound_router/agent_resolver.rs` — new resolution logic
 
 - [ ] **Step 1: Add route_bindings and session_config fields to InboundMessageRouter**
 
-In `core/src/gateway/inbound_router/mod.rs`, add these imports at the top (after existing imports):
+In `src/gateway/inbound_router/mod.rs`, add these imports at the top (after existing imports):
 
 ```rust
 use crate::routing::config::{RouteBinding, SessionConfig};
@@ -176,7 +176,7 @@ Expected: Compiles (warnings OK)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/inbound_router/
+git add src/gateway/inbound_router/
 git commit -m "gateway: connect resolve_route() to InboundRouter with workspace fallback"
 ```
 
@@ -185,8 +185,8 @@ git commit -m "gateway: connect resolve_route() to InboundRouter with workspace 
 ### Task 2: Add /btw sidebar conversation
 
 **Files:**
-- Modify: `core/src/gateway/inbound_router/mod.rs` — intercept /btw before command parser
-- Modify: `core/src/gateway/inbound_router/command_handler.rs` — add handle_btw()
+- Modify: `src/gateway/inbound_router/mod.rs` — intercept /btw before command parser
+- Modify: `src/gateway/inbound_router/command_handler.rs` — add handle_btw()
 
 - [ ] **Step 1: Add handle_btw() to command_handler.rs**
 
@@ -250,7 +250,7 @@ Expected: Compiles
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/inbound_router/
+git add src/gateway/inbound_router/
 git commit -m "gateway: add /btw ephemeral sidebar conversation command"
 ```
 
@@ -259,13 +259,13 @@ git commit -m "gateway: add /btw ephemeral sidebar conversation command"
 ### Task 3: Add ConnectionRole to Presence
 
 **Files:**
-- Modify: `core/src/gateway/presence.rs` — add ConnectionRole enum + field
-- Modify: `core/src/gateway/server/handler.rs` — set role on auth
-- Modify: `core/src/gateway/hello_snapshot.rs` — update test helpers
+- Modify: `src/gateway/presence.rs` — add ConnectionRole enum + field
+- Modify: `src/gateway/server/handler.rs` — set role on auth
+- Modify: `src/gateway/hello_snapshot.rs` — update test helpers
 
 - [ ] **Step 1: Add ConnectionRole enum and field to PresenceEntry**
 
-In `core/src/gateway/presence.rs`, add before `PresenceEntry` struct:
+In `src/gateway/presence.rs`, add before `PresenceEntry` struct:
 
 ```rust
 /// Connection role for presence classification.
@@ -301,7 +301,7 @@ Update `make_entry` in tests to include `role: ConnectionRole::User`.
 
 - [ ] **Step 2: Set role in handler.rs when creating PresenceEntry**
 
-In `core/src/gateway/server/handler.rs`, wherever `PresenceEntry` is created (search for `PresenceEntry {`), add:
+In `src/gateway/server/handler.rs`, wherever `PresenceEntry` is created (search for `PresenceEntry {`), add:
 
 ```rust
                                             role: crate::gateway::presence::ConnectionRole::User,
@@ -334,7 +334,7 @@ Expected: All pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/presence.rs core/src/gateway/server/handler.rs core/src/gateway/hello_snapshot.rs
+git add src/gateway/presence.rs src/gateway/server/handler.rs src/gateway/hello_snapshot.rs
 git commit -m "gateway: add ConnectionRole to PresenceEntry for device classification"
 ```
 
@@ -343,7 +343,7 @@ git commit -m "gateway: add ConnectionRole to PresenceEntry for device classific
 ### Task 4: Wire route_bindings from server startup
 
 **Files:**
-- Modify: `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` — pass bindings to InboundRouter
+- Modify: `src/bin/aleph-server/commands/start/builder/subsystems.rs` — pass bindings to InboundRouter
 
 - [ ] **Step 1: Pass route_bindings to InboundRouter builder**
 
@@ -368,7 +368,7 @@ Expected: Full workspace compiles
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/bin/aleph-server/
+git add src/bin/aleph-server/
 git commit -m "gateway: wire route_bindings from config into InboundRouter"
 ```
 

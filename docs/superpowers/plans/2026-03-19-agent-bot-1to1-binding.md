@@ -17,8 +17,8 @@
 Method signatures stay unchanged (3 params with `peer_id`). Add 1:1 constraint check, reverse lookup, and bulk bindings query.
 
 **Files:**
-- Modify: `core/src/gateway/workspace/manager_ops.rs:269-306`
-- Modify: `core/src/gateway/workspace/mod.rs` (WorkspaceError enum)
+- Modify: `src/gateway/workspace/manager_ops.rs:269-306`
+- Modify: `src/gateway/workspace/mod.rs` (WorkspaceError enum)
 
 - [ ] **Step 1: Add `AgentAlreadyBound` variant to `WorkspaceError`**
 
@@ -110,7 +110,7 @@ Expected: Clean compile — no signature changes, so no downstream breakage.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/workspace/manager_ops.rs core/src/gateway/workspace/mod.rs
+git add src/gateway/workspace/manager_ops.rs src/gateway/workspace/mod.rs
 git commit -m "workspace: add 1:1 binding constraint and reverse lookup"
 ```
 
@@ -121,7 +121,7 @@ git commit -m "workspace: add 1:1 binding constraint and reverse lookup"
 Replace three-tier resolution with direct channel config lookup.
 
 **Files:**
-- Modify: `core/src/gateway/inbound_router/agent_resolver.rs`
+- Modify: `src/gateway/inbound_router/agent_resolver.rs`
 
 - [ ] **Step 1: Replace `resolve_agent_id_async` with single-tier lookup**
 
@@ -151,7 +151,7 @@ In `agent_resolver.rs`, remove the `AgentRouter` reference (layers 2 and 3 of th
 
 - [ ] **Step 3: Update the caller in `mod.rs` to handle unbound channels**
 
-Find where `resolve_agent_id_async` is called in `core/src/gateway/inbound_router/mod.rs`. Update to handle `None`:
+Find where `resolve_agent_id_async` is called in `src/gateway/inbound_router/mod.rs`. Update to handle `None`:
 
 ```rust
 // Replace:
@@ -180,7 +180,7 @@ Expected: May see warnings about unused `agent_router` field. Errors from switch
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/inbound_router/agent_resolver.rs core/src/gateway/inbound_router/mod.rs
+git add src/gateway/inbound_router/agent_resolver.rs src/gateway/inbound_router/mod.rs
 git commit -m "routing: simplify agent resolution to single-tier channel binding"
 ```
 
@@ -191,35 +191,35 @@ git commit -m "routing: simplify agent resolution to single-tier channel binding
 Remove all in-conversation agent switching mechanisms.
 
 **Files:**
-- Delete: `core/src/builtin_tools/agent_manage/switch.rs`
-- Delete: `core/src/gateway/intent_detector.rs`
-- Delete: `core/src/gateway/inbound_router/switch_intent.rs`
-- Modify: `core/src/builtin_tools/agent_manage/mod.rs` — remove `pub mod switch` and re-exports
-- Modify: `core/src/gateway/mod.rs` — remove `pub mod intent_detector` and re-export
-- Modify: `core/src/gateway/inbound_router/mod.rs` — remove `intent_detector` field, `with_intent_detector()`, and `try_handle_switch_intent()` call
-- Modify: `core/src/gateway/inbound_router/command_handler.rs` — remove `/switch` handler
-- Modify: `core/src/bin/aleph/commands/start/builder/subsystems.rs` — remove IntentDetector wiring block
-- Modify: `core/src/executor/builtin_registry/registry.rs` — remove `agent_switch_tool` field and match arm
-- Modify: `core/src/executor/builtin_registry/builder.rs` — remove `agent_switch_tool` construction
-- Modify: `core/src/executor/builtin_registry/definitions.rs` — remove `agent_switch` definition
-- Modify: `core/src/executor/builtin_registry/groups.rs` — remove `agent_switch` from group
+- Delete: `src/builtin_tools/agent_manage/switch.rs`
+- Delete: `src/gateway/intent_detector.rs`
+- Delete: `src/gateway/inbound_router/switch_intent.rs`
+- Modify: `src/builtin_tools/agent_manage/mod.rs` — remove `pub mod switch` and re-exports
+- Modify: `src/gateway/mod.rs` — remove `pub mod intent_detector` and re-export
+- Modify: `src/gateway/inbound_router/mod.rs` — remove `intent_detector` field, `with_intent_detector()`, and `try_handle_switch_intent()` call
+- Modify: `src/gateway/inbound_router/command_handler.rs` — remove `/switch` handler
+- Modify: `src/bin/aleph/commands/start/builder/subsystems.rs` — remove IntentDetector wiring block
+- Modify: `src/executor/builtin_registry/registry.rs` — remove `agent_switch_tool` field and match arm
+- Modify: `src/executor/builtin_registry/builder.rs` — remove `agent_switch_tool` construction
+- Modify: `src/executor/builtin_registry/definitions.rs` — remove `agent_switch` definition
+- Modify: `src/executor/builtin_registry/groups.rs` — remove `agent_switch` from group
 
 - [ ] **Step 1: Delete switch.rs file**
 
 ```bash
-rm core/src/builtin_tools/agent_manage/switch.rs
+rm src/builtin_tools/agent_manage/switch.rs
 ```
 
 - [ ] **Step 2: Delete intent_detector.rs file**
 
 ```bash
-rm core/src/gateway/intent_detector.rs
+rm src/gateway/intent_detector.rs
 ```
 
 - [ ] **Step 3: Delete switch_intent.rs file**
 
 ```bash
-rm core/src/gateway/inbound_router/switch_intent.rs
+rm src/gateway/inbound_router/switch_intent.rs
 ```
 
 - [ ] **Step 4: Update `builtin_tools/agent_manage/mod.rs`**
@@ -252,7 +252,7 @@ Remove `handle_switch_command` method entirely. Remove any match arm dispatching
 
 - [ ] **Step 8: Update `subsystems.rs` — remove IntentDetector wiring**
 
-In `core/src/bin/aleph/commands/start/builder/subsystems.rs`, remove the entire block (lines ~337-362):
+In `src/bin/aleph/commands/start/builder/subsystems.rs`, remove the entire block (lines ~337-362):
 ```rust
 // Wire intent detector for natural language agent switching (LLM-based)
 {
@@ -299,9 +299,9 @@ git commit -m "cleanup: remove agent switching (tool, intent detector, /switch c
 Delete `apply_agent_prefix` and related fields.
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
-- Modify: `core/src/gateway/channel.rs`
-- Modify: `core/src/gateway/inbound_router/executor.rs`
+- Modify: `src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/channel.rs`
+- Modify: `src/gateway/inbound_router/executor.rs`
 
 - [ ] **Step 1: Remove `apply_agent_prefix` function and `format_content` prefix logic**
 
@@ -346,7 +346,7 @@ Expected: Clean compile. Fix any remaining references to removed fields.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/reply_emitter.rs core/src/gateway/channel.rs core/src/gateway/inbound_router/executor.rs
+git add src/gateway/reply_emitter.rs src/gateway/channel.rs src/gateway/inbound_router/executor.rs
 git commit -m "reply: remove agent name prefix from bot messages"
 ```
 
@@ -357,9 +357,9 @@ git commit -m "reply: remove agent name prefix from bot messages"
 Adapt remaining agent management tools for the new 1:1 model.
 
 **Files:**
-- Modify: `core/src/builtin_tools/agent_manage/create.rs`
-- Modify: `core/src/builtin_tools/agent_manage/delete.rs`
-- Modify: `core/src/builtin_tools/agent_manage/list.rs`
+- Modify: `src/builtin_tools/agent_manage/create.rs`
+- Modify: `src/builtin_tools/agent_manage/delete.rs`
+- Modify: `src/builtin_tools/agent_manage/list.rs`
 
 - [ ] **Step 1: `create.rs` — remove auto-switch on create**
 
@@ -418,7 +418,7 @@ Expected: Clean compile. Also run `cargo test -p alephcore --lib` to check for t
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/agent_manage/create.rs core/src/builtin_tools/agent_manage/delete.rs core/src/builtin_tools/agent_manage/list.rs
+git add src/builtin_tools/agent_manage/create.rs src/builtin_tools/agent_manage/delete.rs src/builtin_tools/agent_manage/list.rs
 git commit -m "agent tools: adapt create/delete/list for 1:1 binding model"
 ```
 
@@ -429,9 +429,9 @@ git commit -m "agent tools: adapt create/delete/list for 1:1 binding model"
 Remove dead event variant. Clean up unused AgentRouter references.
 
 **Files:**
-- Modify: `core/src/gateway/agent_lifecycle.rs`
-- Modify: `core/src/gateway/inbound_router/mod.rs` — remove `agent_router` field and builder/constructor refs
-- Modify: `core/src/bin/aleph/commands/start/builder/subsystems.rs` — remove AgentRouter wiring if present
+- Modify: `src/gateway/agent_lifecycle.rs`
+- Modify: `src/gateway/inbound_router/mod.rs` — remove `agent_router` field and builder/constructor refs
+- Modify: `src/bin/aleph/commands/start/builder/subsystems.rs` — remove AgentRouter wiring if present
 
 - [ ] **Step 1: Remove `Switched` variant from `AgentLifecycleEvent`**
 
@@ -482,8 +482,8 @@ git commit -m "cleanup: remove AgentLifecycleEvent::Switched and AgentRouter fro
 Replace with new `channels.set_agent` and `agents.bindings` RPCs.
 
 **Files:**
-- Modify: `core/src/gateway/handlers/workspace.rs` — remove `handle_switch` and `handle_get_active`
-- Modify: `core/src/gateway/handlers/mod.rs` — remove `workspace.switch` and `workspace.getActive` registration, add new RPCs
+- Modify: `src/gateway/handlers/workspace.rs` — remove `handle_switch` and `handle_get_active`
+- Modify: `src/gateway/handlers/mod.rs` — remove `workspace.switch` and `workspace.getActive` registration, add new RPCs
 
 - [ ] **Step 1: Remove old RPC handlers from `workspace.rs`**
 
@@ -569,7 +569,7 @@ Expected: Clean compile and passing tests.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/handlers/workspace.rs core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/workspace.rs src/gateway/handlers/mod.rs
 git commit -m "rpc: replace workspace.switch/getActive with channels.set_agent and agents.bindings"
 ```
 
@@ -793,7 +793,7 @@ Fix any new clippy warnings from our changes (unused imports, dead code, etc.).
 
 Search for any remaining `AgentRouter` imports or usages:
 ```bash
-grep -r "AgentRouter\|agent_router" core/src/ --include="*.rs" | grep -v target
+grep -r "AgentRouter\|agent_router" src/ --include="*.rs" | grep -v target
 ```
 
 Remove any that are now unused.

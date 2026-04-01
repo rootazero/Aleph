@@ -24,9 +24,9 @@
 Replace the simple threshold checks in `SkillLifecycleState` with a continuous vitality metric that captures health, usage, cost, and human alignment.
 
 ### Files
-- **New**: `core/src/skill_evolution/vitality.rs`
-- **Modify**: `core/src/skill_evolution/lifecycle.rs` (use VitalityScore for transitions)
-- **Modify**: `core/src/skill_evolution/tracker.rs` (add vitality computation query)
+- **New**: `src/skill_evolution/vitality.rs`
+- **Modify**: `src/skill_evolution/lifecycle.rs` (use VitalityScore for transitions)
+- **Modify**: `src/skill_evolution/tracker.rs` (add vitality computation query)
 
 ### Core Formula
 
@@ -80,9 +80,9 @@ pub struct VitalityComponents {
 Automatically detect and handle skill degradation through three defense layers.
 
 ### Files
-- **New**: `core/src/skill_evolution/desolidification.rs`
-- **Modify**: `core/src/skill_evolution/lifecycle.rs` (add Observation state)
-- **Modify**: `core/src/poe/crystallization/dreaming.rs` (periodic vitality check)
+- **New**: `src/skill_evolution/desolidification.rs`
+- **Modify**: `src/skill_evolution/lifecycle.rs` (add Observation state)
+- **Modify**: `src/poe/crystallization/dreaming.rs` (periodic vitality check)
 
 ### Layer 1: Circuit Breaker (Immediate)
 
@@ -163,9 +163,9 @@ pub enum ObservationReason {
 Prevent skill explosion by detecting semantically similar skills and merging them.
 
 ### Files
-- **New**: `core/src/skill_evolution/consolidator.rs`
-- **Modify**: `core/src/skill_evolution/pipeline.rs` (pre-deployment dedup check)
-- **Modify**: `core/src/poe/crystallization/clustering.rs` (expose similarity API)
+- **New**: `src/skill_evolution/consolidator.rs`
+- **Modify**: `src/skill_evolution/pipeline.rs` (pre-deployment dedup check)
+- **Modify**: `src/poe/crystallization/clustering.rs` (expose similarity API)
 
 ### Deduplication Flow
 
@@ -217,10 +217,10 @@ pub enum MergeType {
 Replace the Beta stub with a real isolated execution environment for High-risk skill validation.
 
 ### Files
-- **New**: `core/src/skill_evolution/validation/sandbox_executor.rs`
-- **New**: `core/src/skill_evolution/validation/restricted_tools.rs`
-- **New**: `core/src/skill_evolution/validation/shadow_fs.rs`
-- **Modify**: `core/src/skill_evolution/validation/tiered_validator.rs` (wire L3)
+- **New**: `src/skill_evolution/validation/sandbox_executor.rs`
+- **New**: `src/skill_evolution/validation/restricted_tools.rs`
+- **New**: `src/skill_evolution/validation/shadow_fs.rs`
+- **Modify**: `src/skill_evolution/validation/tiered_validator.rs` (wire L3)
 
 ### Architecture: Software-Defined Sandbox
 
@@ -315,8 +315,8 @@ High-risk skills:
 Archive retired/demoted skills as negative constraints for future skill generation.
 
 ### Files
-- **New**: `core/src/skill_evolution/graveyard.rs`
-- **Modify**: `core/src/skill_evolution/shadow_deployer.rs` (archive on demotion/retirement)
+- **New**: `src/skill_evolution/graveyard.rs`
+- **Modify**: `src/skill_evolution/shadow_deployer.rs` (archive on demotion/retirement)
 
 ### Structure
 

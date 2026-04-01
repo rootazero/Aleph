@@ -17,25 +17,25 @@
 ### New Files
 | File | Purpose |
 |------|---------|
-| `core/src/gateway/streaming_sink.rs` | `StreamingDeltaSink` — bridges ProviderDelta to EventEmitter with throttle |
+| `src/gateway/streaming_sink.rs` | `StreamingDeltaSink` — bridges ProviderDelta to EventEmitter with throttle |
 
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/gateway/mod.rs` | Add `pub mod streaming_sink;` after line 89 |
-| `core/src/gateway/execution_engine/run_loop.rs` | Add `streaming_active` + `has_emitted_text` to `StreamCallback`; create + inject `StreamingDeltaSink` in `run_agent_loop()` |
+| `src/gateway/mod.rs` | Add `pub mod streaming_sink;` after line 89 |
+| `src/gateway/execution_engine/run_loop.rs` | Add `streaming_active` + `has_emitted_text` to `StreamCallback`; create + inject `StreamingDeltaSink` in `run_agent_loop()` |
 
 ---
 
 ## Task 1: StreamingDeltaSink Implementation
 
 **Files:**
-- Create: `core/src/gateway/streaming_sink.rs`
-- Modify: `core/src/gateway/mod.rs` — add `pub mod streaming_sink;`
+- Create: `src/gateway/streaming_sink.rs`
+- Modify: `src/gateway/mod.rs` — add `pub mod streaming_sink;`
 
 - [ ] **Step 1: Write tests for StreamingDeltaSink**
 
-Create `core/src/gateway/streaming_sink.rs` with tests at the bottom. Use a `CollectingEventEmitter` (or build a minimal mock) to verify emit behavior.
+Create `src/gateway/streaming_sink.rs` with tests at the bottom. Use a `CollectingEventEmitter` (or build a minimal mock) to verify emit behavior.
 
 ```rust
 #[cfg(test)]
@@ -108,7 +108,7 @@ mod tests {
 }
 ```
 
-Note: If `CollectingEventEmitter` exists (check `core/src/gateway/event_emitter/`), use it. Otherwise create a minimal test helper.
+Note: If `CollectingEventEmitter` exists (check `src/gateway/event_emitter/`), use it. Otherwise create a minimal test helper.
 
 - [ ] **Step 2: Implement StreamingDeltaSink**
 
@@ -215,7 +215,7 @@ impl DeltaSink for StreamingDeltaSink {
 
 - [ ] **Step 3: Add module to gateway/mod.rs**
 
-In `core/src/gateway/mod.rs`, add after line 89 (`pub mod media;`):
+In `src/gateway/mod.rs`, add after line 89 (`pub mod media;`):
 ```rust
 pub mod streaming_sink;
 ```
@@ -233,7 +233,7 @@ Expected: Compiles (new module, no existing code changed).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/streaming_sink.rs core/src/gateway/mod.rs
+git add src/gateway/streaming_sink.rs src/gateway/mod.rs
 git commit -m "gateway: add StreamingDeltaSink with throttle buffering"
 ```
 
@@ -242,7 +242,7 @@ git commit -m "gateway: add StreamingDeltaSink with throttle buffering"
 ## Task 2: StreamCallback Coordination
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs`
+- Modify: `src/gateway/execution_engine/run_loop.rs`
   - `StreamCallback` struct (line ~313): add `streaming_active: bool`, `has_emitted_text: Arc<AtomicBool>`
   - `StreamCallback::new()` (line ~322): add parameters
   - `on_text()` (line ~336): conditional skip
@@ -346,7 +346,7 @@ Expected: All tests pass. Behavior unchanged (streaming_active=false preserves o
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "gateway: add streaming_active flag to StreamCallback for dedup coordination"
 ```
 
@@ -355,7 +355,7 @@ git commit -m "gateway: add streaming_active flag to StreamCallback for dedup co
 ## Task 3: ExecutionEngine Injection — Wire Everything Together
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs`
+- Modify: `src/gateway/execution_engine/run_loop.rs`
   - Where AgentLoop is constructed (line ~169) and callback created (line ~192)
 
 - [ ] **Step 1: Import StreamingDeltaSink**
@@ -426,7 +426,7 @@ Expected: Builds successfully.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "gateway: wire StreamingDeltaSink into ExecutionEngine for real-time token streaming"
 ```
 

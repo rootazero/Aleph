@@ -23,7 +23,7 @@ Add a new channel implementation for Feishu/Lark, following Aleph's existing `Ch
 ## Module Structure
 
 ```
-core/src/gateway/interfaces/feishu/
+src/gateway/interfaces/feishu/
 ├── mod.rs          # FeishuChannel, FeishuChannelFactory, FeishuConfig
 ├── client.rs       # FeishuClient: token lifecycle, HTTP API, WebSocket connection
 ├── types.rs        # Feishu API request/response types, event enums
@@ -274,7 +274,7 @@ impl ChannelProvider for FeishuChannel {
 }
 ```
 
-Note: The `agent` field in the channel config (e.g., `agent = "default"`) is resolved externally by `AgentResolver` (`core/src/config/agent_resolver.rs`), not by `FeishuConfig`.
+Note: The `agent` field in the channel config (e.g., `agent = "default"`) is resolved externally by `AgentResolver` (`src/config/agent_resolver.rs`), not by `FeishuConfig`.
 
 ## Security Notes
 
@@ -296,15 +296,15 @@ Note: The `agent` field in the channel config (e.g., `agent = "default"`) is res
 ## Integration Points
 
 **New files:**
-- `core/src/gateway/interfaces/feishu/mod.rs`
-- `core/src/gateway/interfaces/feishu/client.rs`
-- `core/src/gateway/interfaces/feishu/types.rs`
-- `core/src/gateway/interfaces/feishu/events.rs`
+- `src/gateway/interfaces/feishu/mod.rs`
+- `src/gateway/interfaces/feishu/client.rs`
+- `src/gateway/interfaces/feishu/types.rs`
+- `src/gateway/interfaces/feishu/events.rs`
 
 **Modified files:**
-- `core/src/gateway/interfaces/mod.rs` — add `pub mod feishu;`
-- `core/src/gateway/handlers/channel.rs` — add `"feishu"` arm to `create_channel_from_config()` match block
-- `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` — add `"feishu"` case to startup channel creation
+- `src/gateway/interfaces/mod.rs` — add `pub mod feishu;`
+- `src/gateway/handlers/channel.rs` — add `"feishu"` arm to `create_channel_from_config()` match block
+- `src/bin/aleph-server/commands/start/builder/subsystems.rs` — add `"feishu"` case to startup channel creation
 
 **No changes to:**
 - `Channel` trait, `ChannelRegistry`, `InboundMessageRouter`, `ReplyEmitter`

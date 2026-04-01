@@ -30,7 +30,7 @@ The cron module redesign produced 150 unit tests, all co-located with source cod
 | Dimension | Decision | Rationale |
 |-----------|----------|-----------|
 | Scope | End-to-end integration + fault injection | Full coverage of gaps |
-| Location | `core/tests/cron_probe.rs` + `core/tests/cron_probe/` | Matches existing `real_api_probe.rs` pattern |
+| Location | `tests/cron_probe.rs` + `tests/cron_probe/` | Matches existing `real_api_probe.rs` pattern |
 | Execution | Mock executor (default) + `#[ignore]` real agent | Fast CI + optional real validation |
 | Fault depth | Process-level (fork + kill) for crash tests | True crash recovery validation |
 
@@ -39,7 +39,7 @@ The cron module redesign produced 150 unit tests, all co-located with source cod
 ## 1. Architecture
 
 ```
-core/tests/
+tests/
 ├── cron_probe.rs              // Main entry, mod declarations
 ├── cron_probe/
 │   ├── harness.rs             // CronTestHarness — core test infrastructure
@@ -115,7 +115,7 @@ API:
 **Prerequisite**: `CronService` is currently hardcoded to `SystemClock`. Before the harness can work, a test-only constructor must be added:
 
 ```rust
-// In core/src/cron/mod.rs — gated behind test-helpers
+// In src/cron/mod.rs — gated behind test-helpers
 #[cfg(any(test, feature = "test-helpers"))]
 pub fn new_with_clock<C: Clock>(config: CronConfig, clock: Arc<C>) -> Result<Self, String> { ... }
 ```

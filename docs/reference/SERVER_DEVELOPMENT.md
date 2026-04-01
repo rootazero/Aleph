@@ -63,7 +63,7 @@ cargo run --bin aleph-server -- --port 8080
 
 ```bash
 # 1. 修改 Core 代码
-vim core/src/gateway/...
+vim src/gateway/...
 
 # 2. 运行测试
 cargo test
@@ -263,7 +263,7 @@ cargo install --path core --bin aleph-server
 **方式 3: 发布到 crates.io**
 ```bash
 # 1. 更新版本号
-vim core/Cargo.toml  # 修改 version
+vim Cargo.toml  # 修改 version
 
 # 2. 发布
 cd core

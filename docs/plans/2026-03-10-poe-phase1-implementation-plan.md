@@ -15,12 +15,12 @@
 ## Task 1: Core BlastRadius Types
 
 **Files:**
-- Modify: `core/src/poe/types.rs` (add BlastRadius, RiskLevel, embed in SuccessManifest)
-- Modify: `core/src/poe/mod.rs` (re-export new types)
+- Modify: `src/poe/types.rs` (add BlastRadius, RiskLevel, embed in SuccessManifest)
+- Modify: `src/poe/mod.rs` (re-export new types)
 
 **Step 1: Write the failing test**
 
-Add to end of `core/src/poe/proptest_types.rs` (or inline `#[cfg(test)]` in `types.rs`):
+Add to end of `src/poe/proptest_types.rs` (or inline `#[cfg(test)]` in `types.rs`):
 
 ```rust
 #[cfg(test)]
@@ -73,7 +73,7 @@ Expected: FAIL — `RiskLevel` and `BlastRadius` not defined
 
 **Step 3: Write minimal implementation**
 
-In `core/src/poe/types.rs`, add after the `ModelTier` section (~line 283):
+In `src/poe/types.rs`, add after the `ModelTier` section (~line 283):
 
 ```rust
 // ============================================================================
@@ -173,7 +173,7 @@ Add builder method to `impl SuccessManifest`:
 
 Update `SuccessManifest::new()` to include `blast_radius: None`.
 
-In `core/src/poe/mod.rs`, add to the re-exports:
+In `src/poe/mod.rs`, add to the re-exports:
 
 ```rust
 pub use types::{BlastRadius, RiskLevel};
@@ -187,7 +187,7 @@ Expected: PASS (4 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/types.rs core/src/poe/mod.rs
+git add src/poe/types.rs src/poe/mod.rs
 git commit -m "poe: add BlastRadius and RiskLevel core types"
 ```
 
@@ -196,13 +196,13 @@ git commit -m "poe: add BlastRadius and RiskLevel core types"
 ## Task 2: StaticSafetyScanner (System 1)
 
 **Files:**
-- Create: `core/src/poe/blast_radius/mod.rs`
-- Create: `core/src/poe/blast_radius/static_scanner.rs`
-- Modify: `core/src/poe/mod.rs` (add module)
+- Create: `src/poe/blast_radius/mod.rs`
+- Create: `src/poe/blast_radius/static_scanner.rs`
+- Modify: `src/poe/mod.rs` (add module)
 
 **Step 1: Write the failing test**
 
-In `core/src/poe/blast_radius/static_scanner.rs`:
+In `src/poe/blast_radius/static_scanner.rs`:
 
 ```rust
 #[cfg(test)]
@@ -339,7 +339,7 @@ Expected: FAIL — module doesn't exist
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/poe/blast_radius/mod.rs`:
+Create `src/poe/blast_radius/mod.rs`:
 
 ```rust
 //! Blast radius risk assessment for POE tasks.
@@ -351,7 +351,7 @@ Create `core/src/poe/blast_radius/mod.rs`:
 pub mod static_scanner;
 ```
 
-Create `core/src/poe/blast_radius/static_scanner.rs`:
+Create `src/poe/blast_radius/static_scanner.rs`:
 
 ```rust
 //! System 1: Deterministic safety scanner for POE manifests.
@@ -668,7 +668,7 @@ impl StaticSafetyScanner {
 }
 ```
 
-Add to `core/src/poe/mod.rs`:
+Add to `src/poe/mod.rs`:
 
 ```rust
 pub mod blast_radius;
@@ -683,7 +683,7 @@ Expected: PASS (10 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/blast_radius/ core/src/poe/mod.rs
+git add src/poe/blast_radius/ src/poe/mod.rs
 git commit -m "poe: add StaticSafetyScanner (System 1 blast radius)"
 ```
 
@@ -692,12 +692,12 @@ git commit -m "poe: add StaticSafetyScanner (System 1 blast radius)"
 ## Task 3: SemanticRiskAnalyzer (System 2)
 
 **Files:**
-- Create: `core/src/poe/blast_radius/semantic_analyzer.rs`
-- Modify: `core/src/poe/blast_radius/mod.rs`
+- Create: `src/poe/blast_radius/semantic_analyzer.rs`
+- Modify: `src/poe/blast_radius/mod.rs`
 
 **Step 1: Write the failing test**
 
-In `core/src/poe/blast_radius/semantic_analyzer.rs`:
+In `src/poe/blast_radius/semantic_analyzer.rs`:
 
 ```rust
 #[cfg(test)]
@@ -754,7 +754,7 @@ Expected: FAIL — module doesn't exist
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/poe/blast_radius/semantic_analyzer.rs`:
+Create `src/poe/blast_radius/semantic_analyzer.rs`:
 
 ```rust
 //! System 2: LLM-based semantic risk analysis.
@@ -904,7 +904,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 }
 ```
 
-Update `core/src/poe/blast_radius/mod.rs`:
+Update `src/poe/blast_radius/mod.rs`:
 
 ```rust
 pub mod semantic_analyzer;
@@ -919,7 +919,7 @@ Expected: PASS (5 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/blast_radius/
+git add src/poe/blast_radius/
 git commit -m "poe: add SemanticRiskAnalyzer (System 2 blast radius)"
 ```
 
@@ -928,13 +928,13 @@ git commit -m "poe: add SemanticRiskAnalyzer (System 2 blast radius)"
 ## Task 4: BlastRadius Assessor (Orchestrates System 1 + System 2)
 
 **Files:**
-- Create: `core/src/poe/blast_radius/assessor.rs`
-- Modify: `core/src/poe/blast_radius/mod.rs`
-- Modify: `core/src/poe/mod.rs` (re-exports)
+- Create: `src/poe/blast_radius/assessor.rs`
+- Modify: `src/poe/blast_radius/mod.rs`
+- Modify: `src/poe/mod.rs` (re-exports)
 
 **Step 1: Write the failing test**
 
-In `core/src/poe/blast_radius/assessor.rs`:
+In `src/poe/blast_radius/assessor.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1024,7 +1024,7 @@ Expected: FAIL — module doesn't exist
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/poe/blast_radius/assessor.rs`:
+Create `src/poe/blast_radius/assessor.rs`:
 
 ```rust
 //! Orchestrates System 1 + System 2 blast radius assessment.
@@ -1130,7 +1130,7 @@ impl BlastRadiusAssessor {
 }
 ```
 
-Update `core/src/poe/blast_radius/mod.rs`:
+Update `src/poe/blast_radius/mod.rs`:
 
 ```rust
 pub mod assessor;
@@ -1138,7 +1138,7 @@ pub mod semantic_analyzer;
 pub mod static_scanner;
 ```
 
-Add re-exports in `core/src/poe/mod.rs`:
+Add re-exports in `src/poe/mod.rs`:
 
 ```rust
 pub use blast_radius::assessor::{AssessmentResult, BlastRadiusAssessor};
@@ -1152,7 +1152,7 @@ Expected: PASS (5 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/blast_radius/ core/src/poe/mod.rs
+git add src/poe/blast_radius/ src/poe/mod.rs
 git commit -m "poe: add BlastRadiusAssessor orchestrating System 1 + System 2"
 ```
 
@@ -1161,11 +1161,11 @@ git commit -m "poe: add BlastRadiusAssessor orchestrating System 1 + System 2"
 ## Task 5: Integrate BlastRadius into TrustEvaluator
 
 **Files:**
-- Modify: `core/src/poe/trust.rs` (update WhitelistTrustEvaluator and ExperienceTrustEvaluator to check blast_radius)
+- Modify: `src/poe/trust.rs` (update WhitelistTrustEvaluator and ExperienceTrustEvaluator to check blast_radius)
 
 **Step 1: Write the failing test**
 
-Add to existing test module in `core/src/poe/trust.rs`:
+Add to existing test module in `src/poe/trust.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1257,7 +1257,7 @@ Also run: `cargo test -p alephcore --lib trust` to ensure existing tests still p
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/trust.rs
+git add src/poe/trust.rs
 git commit -m "poe: integrate BlastRadius into TrustEvaluator decision logic"
 ```
 
@@ -1266,13 +1266,13 @@ git commit -m "poe: integrate BlastRadius into TrustEvaluator decision logic"
 ## Task 6: TabooBuffer Core Component
 
 **Files:**
-- Create: `core/src/poe/taboo/mod.rs`
-- Create: `core/src/poe/taboo/buffer.rs`
-- Modify: `core/src/poe/mod.rs`
+- Create: `src/poe/taboo/mod.rs`
+- Create: `src/poe/taboo/buffer.rs`
+- Modify: `src/poe/mod.rs`
 
 **Step 1: Write the failing test**
 
-In `core/src/poe/taboo/buffer.rs`:
+In `src/poe/taboo/buffer.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1369,7 +1369,7 @@ Expected: FAIL — module doesn't exist
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/poe/taboo/mod.rs`:
+Create `src/poe/taboo/mod.rs`:
 
 ```rust
 //! Taboo crystallization: anti-pattern learning for POE.
@@ -1380,7 +1380,7 @@ Create `core/src/poe/taboo/mod.rs`:
 pub mod buffer;
 ```
 
-Create `core/src/poe/taboo/buffer.rs`:
+Create `src/poe/taboo/buffer.rs`:
 
 ```rust
 //! TabooBuffer: sliding window for detecting repetitive failure patterns.
@@ -1499,7 +1499,7 @@ impl TabooBuffer {
 }
 ```
 
-Add to `core/src/poe/mod.rs`:
+Add to `src/poe/mod.rs`:
 
 ```rust
 pub mod taboo;
@@ -1514,7 +1514,7 @@ Expected: PASS (7 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/taboo/ core/src/poe/mod.rs
+git add src/poe/taboo/ src/poe/mod.rs
 git commit -m "poe: add TabooBuffer for micro-taboo detection"
 ```
 
@@ -1523,11 +1523,11 @@ git commit -m "poe: add TabooBuffer for micro-taboo detection"
 ## Task 7: Integrate TabooBuffer into PoeManager
 
 **Files:**
-- Modify: `core/src/poe/manager.rs` (add TabooBuffer to PoeManager, inject micro-taboo into retry prompt)
+- Modify: `src/poe/manager.rs` (add TabooBuffer to PoeManager, inject micro-taboo into retry prompt)
 
 **Step 1: Write the failing test**
 
-Add to `core/src/poe/manager.rs` test module:
+Add to `src/poe/manager.rs` test module:
 
 ```rust
 #[cfg(test)]
@@ -1583,7 +1583,7 @@ Expected: PASS (basic compilation check)
 
 **Step 3: Integrate TabooBuffer into PoeManager**
 
-In `core/src/poe/manager.rs`, add to `PoeManager` struct:
+In `src/poe/manager.rs`, add to `PoeManager` struct:
 
 ```rust
 use crate::poe::taboo::buffer::{TabooBuffer, TaggedVerdict};
@@ -1678,7 +1678,7 @@ Run: `cargo check -p alephcore` to verify compilation.
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/manager.rs
+git add src/poe/manager.rs
 git commit -m "poe: integrate TabooBuffer into PoeManager execution loop"
 ```
 
@@ -1687,13 +1687,13 @@ git commit -m "poe: integrate TabooBuffer into PoeManager execution loop"
 ## Task 8: Macro-Taboo Persistence (AntiPattern in ExperienceStore)
 
 **Files:**
-- Create: `core/src/poe/taboo/anti_pattern.rs`
-- Modify: `core/src/poe/taboo/mod.rs`
-- Modify: `core/src/poe/mod.rs`
+- Create: `src/poe/taboo/anti_pattern.rs`
+- Modify: `src/poe/taboo/mod.rs`
+- Modify: `src/poe/mod.rs`
 
 **Step 1: Write the failing test**
 
-In `core/src/poe/taboo/anti_pattern.rs`:
+In `src/poe/taboo/anti_pattern.rs`:
 
 ```rust
 #[cfg(test)]
@@ -1749,7 +1749,7 @@ Expected: FAIL
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/poe/taboo/anti_pattern.rs`:
+Create `src/poe/taboo/anti_pattern.rs`:
 
 ```rust
 //! Anti-pattern persistence for Macro-Taboo crystallization.
@@ -1855,14 +1855,14 @@ impl Default for InMemoryAntiPatternStore {
 }
 ```
 
-Update `core/src/poe/taboo/mod.rs`:
+Update `src/poe/taboo/mod.rs`:
 
 ```rust
 pub mod anti_pattern;
 pub mod buffer;
 ```
 
-Add re-exports in `core/src/poe/mod.rs`:
+Add re-exports in `src/poe/mod.rs`:
 
 ```rust
 pub use taboo::anti_pattern::{AntiPattern, InMemoryAntiPatternStore};
@@ -1876,7 +1876,7 @@ Expected: PASS (4 tests)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/taboo/ core/src/poe/mod.rs
+git add src/poe/taboo/ src/poe/mod.rs
 git commit -m "poe: add AntiPattern type and in-memory store for Macro-Taboo"
 ```
 
@@ -1885,9 +1885,9 @@ git commit -m "poe: add AntiPattern type and in-memory store for Macro-Taboo"
 ## Task 9: Phase 2/3 Interface Stubs
 
 **Files:**
-- Modify: `core/src/poe/types.rs` (add DecompositionRequired to PoeOutcome, metadata to PoeTask)
-- Modify: `core/src/poe/manager.rs` (add max_depth to PoeConfig)
-- Modify: `core/src/poe/worker/mod.rs` (add supports_isolation to Worker trait)
+- Modify: `src/poe/types.rs` (add DecompositionRequired to PoeOutcome, metadata to PoeTask)
+- Modify: `src/poe/manager.rs` (add max_depth to PoeConfig)
+- Modify: `src/poe/worker/mod.rs` (add supports_isolation to Worker trait)
 
 **Step 1: Write the failing test**
 
@@ -1981,7 +1981,7 @@ Expected: PASS — all existing tests + new tests pass
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/types.rs core/src/poe/manager.rs core/src/poe/worker/mod.rs
+git add src/poe/types.rs src/poe/manager.rs src/poe/worker/mod.rs
 git commit -m "poe: add Phase 2/3 interface stubs (DecompositionRequired, max_depth, metadata)"
 ```
 
@@ -1990,7 +1990,7 @@ git commit -m "poe: add Phase 2/3 interface stubs (DecompositionRequired, max_de
 ## Task 10: Full Integration Test
 
 **Files:**
-- Create: `core/tests/poe_blast_radius_integration.rs`
+- Create: `tests/poe_blast_radius_integration.rs`
 
 **Step 1: Write the integration test**
 
@@ -2096,7 +2096,7 @@ Expected: PASS (5 tests)
 **Step 3: Commit**
 
 ```bash
-git add core/tests/poe_blast_radius_integration.rs
+git add tests/poe_blast_radius_integration.rs
 git commit -m "poe: add integration tests for BlastRadius + TabooBuffer"
 ```
 

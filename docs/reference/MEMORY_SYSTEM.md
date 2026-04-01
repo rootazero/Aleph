@@ -17,7 +17,7 @@ Aleph's memory system provides:
 - **Contradiction Resolution**: Automatic detection and evolution tracking
 - **User Profiling**: Frequency-based characteristic distillation
 
-**Location**: `core/src/memory/`
+**Location**: `src/memory/`
 
 ---
 
@@ -72,11 +72,11 @@ Aleph's memory system provides:
 
 ## Facts Database
 
-**Location**: `core/src/memory/store/` (LanceDB backend)
+**Location**: `src/memory/store/` (LanceDB backend)
 
 > **Migration Note**: The storage layer was migrated from SQLite + sqlite-vec to LanceDB in Feb 2026.
 > All memory operations (facts, sessions, graph, search) now use LanceDB via the `MemoryBackend` type alias.
-> SQLite (`StateDatabase`) is retained only for resilience state management at `core/src/resilience/database/`.
+> SQLite (`StateDatabase`) is retained only for resilience state management at `src/resilience/database/`.
 
 ### Storage Architecture
 
@@ -147,7 +147,7 @@ pub struct MemoryFact {
 
 ## Embedding
 
-**Location**: `core/src/memory/embedding_provider.rs`, `core/src/memory/embedding_manager.rs`
+**Location**: `src/memory/embedding_provider.rs`, `src/memory/embedding_manager.rs`
 
 All embeddings go through remote OpenAI-compatible APIs via `EmbeddingProvider` trait:
 
@@ -187,7 +187,7 @@ LanceDB stores multiple vector columns (`vec_768`, `vec_1024`, `vec_1536`) allow
 
 ## Hybrid Retrieval
 
-**Location**: `core/src/memory/hybrid_retrieval/`
+**Location**: `src/memory/hybrid_retrieval/`
 
 Combines vector similarity and keyword search:
 
@@ -258,7 +258,7 @@ Query: "How to configure API keys?"
 
 ## Context Augmentation
 
-**Location**: `core/src/memory/augmentation.rs`
+**Location**: `src/memory/augmentation.rs`
 
 Inject relevant memories into agent prompts:
 
@@ -305,7 +305,7 @@ impl ContextAugmenter {
 
 ## Session Compression
 
-**Location**: `core/src/memory/compression.rs`
+**Location**: `src/memory/compression.rs`
 
 When session history exceeds token limit:
 
@@ -364,7 +364,7 @@ Compressed History (4,000 tokens)
 
 ## Memory Decay
 
-**Location**: `core/src/memory/decay.rs`
+**Location**: `src/memory/decay.rs`
 
 Older, unused facts decay over time:
 
@@ -393,7 +393,7 @@ pub async fn cleanup_decayed_facts(
 
 ## Cognitive Memory Architecture (ACMA)
 
-**Location**: `core/src/memory/composer.rs`, `core/src/memory/decay.rs`, `core/src/memory/dreaming.rs`
+**Location**: `src/memory/composer.rs`, `src/memory/decay.rs`, `src/memory/dreaming.rs`
 
 Aleph's memory system uses three orthogonal dimensions for each `MemoryFact`:
 
@@ -458,7 +458,7 @@ cooldown_days = 1             # minimum interval between checks
 
 ## Retention Policies
 
-**Location**: `core/src/memory/retention.rs`
+**Location**: `src/memory/retention.rs`
 
 ```rust
 pub struct RetentionPolicy {
@@ -480,7 +480,7 @@ pub struct RetentionPolicy {
 
 ## Memory Graph
 
-**Location**: `core/src/memory/graph.rs`
+**Location**: `src/memory/graph.rs`
 
 The memory graph maintains lightweight entity nodes and relations used for disambiguation and
 graph-assisted filtering. Entities are extracted from compressed facts and DreamDaemon summaries,
@@ -494,7 +494,7 @@ LanceDB tables:
 
 ## DreamDaemon
 
-**Location**: `core/src/memory/dreaming.rs`
+**Location**: `src/memory/dreaming.rs`
 
 DreamDaemon runs during idle windows to:
 - Cluster recent memories (default lookback: 24h)
@@ -512,7 +512,7 @@ The following components were added in the Memory System Evolution project to pr
 
 ### TranscriptIndexer
 
-**Location**: `core/src/memory/transcript_indexer/`
+**Location**: `src/memory/transcript_indexer/`
 
 Provides near-realtime conversation transcript indexing with semantic chunking.
 
@@ -566,7 +566,7 @@ pub struct SemanticChunkerConfig {
 
 ### ContextComptroller
 
-**Location**: `core/src/memory/context_comptroller/`
+**Location**: `src/memory/context_comptroller/`
 
 Post-retrieval arbitration with redundancy detection and token budget management.
 
@@ -607,7 +607,7 @@ pub enum RetentionMode {
 
 ### ValueEstimator
 
-**Location**: `core/src/memory/value_estimator/`
+**Location**: `src/memory/value_estimator/`
 
 Importance scoring for memory facts with hybrid LLM + keyword approach.
 
@@ -669,7 +669,7 @@ final_score = (llm_score * 0.7) + (keyword_score * 0.3)
 
 ### CompressionDaemon
 
-**Location**: `core/src/memory/compression_daemon/`
+**Location**: `src/memory/compression_daemon/`
 
 Background scheduler for automatic memory compression during idle periods.
 
@@ -700,7 +700,7 @@ pub struct CompressionDaemonConfig {
 
 ### RippleTask
 
-**Location**: `core/src/memory/ripple/`
+**Location**: `src/memory/ripple/`
 
 Local knowledge exploration through multi-hop vector similarity traversal.
 
@@ -736,7 +736,7 @@ pub struct RippleConfig {
 
 ### Fact Evolution Chain
 
-**Location**: `core/src/memory/evolution/`
+**Location**: `src/memory/evolution/`
 
 Automatic contradiction detection and resolution with evolution tracking.
 
@@ -780,7 +780,7 @@ Fact B (2024-06-01): "User prefers Rust"
 
 ### ConsolidationTask
 
-**Location**: `core/src/memory/consolidation/`
+**Location**: `src/memory/consolidation/`
 
 User profile distillation through frequency analysis and categorization.
 
@@ -824,7 +824,7 @@ Where:
 
 ### memory_search Tool
 
-**Location**: `core/src/builtin_tools/memory_search.rs`
+**Location**: `src/builtin_tools/memory_search.rs`
 
 AlephTool implementation that integrates all memory components.
 

@@ -205,21 +205,21 @@ Thinker Decision (tool_use)
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| **gateway** | `core/src/gateway/` | WebSocket server, JSON-RPC routing, interfaces |
-| **agent_loop** | `core/src/agent_loop/` | Observe-Think-Act-Feedback cycle |
-| **thinker** | `core/src/thinker/` | LLM interaction, prompt building, streaming |
-| **dispatcher** | `core/src/dispatcher/` | Task orchestration, tool filtering |
-| **executor** | `core/src/executor/` | Tool execution engine |
-| **providers** | `core/src/providers/` | AI provider implementations |
-| **tools** | `core/src/tools/` | AlephTool trait, tool server |
-| **builtin_tools** | `core/src/builtin_tools/` | Built-in tool implementations |
-| **memory** | `core/src/memory/` | Facts DB, hybrid retrieval |
-| **extension** | `core/src/extension/` | Plugin system (WASM, Node.js) |
-| **exec** | `core/src/exec/` | Shell execution, approval system, OS-native sandboxing |
-| **mcp** | `core/src/mcp/` | MCP client implementation |
-| **routing** | `core/src/routing/` | Session key resolution |
-| **config** | `core/src/config/` | Configuration management |
-| **runtimes** | `core/src/runtimes/` | Capability ledger — probe, bootstrap, persist external tool status |
+| **gateway** | `src/gateway/` | WebSocket server, JSON-RPC routing, interfaces |
+| **agent_loop** | `src/agent_loop/` | Observe-Think-Act-Feedback cycle |
+| **thinker** | `src/thinker/` | LLM interaction, prompt building, streaming |
+| **dispatcher** | `src/dispatcher/` | Task orchestration, tool filtering |
+| **executor** | `src/executor/` | Tool execution engine |
+| **providers** | `src/providers/` | AI provider implementations |
+| **tools** | `src/tools/` | AlephTool trait, tool server |
+| **builtin_tools** | `src/builtin_tools/` | Built-in tool implementations |
+| **memory** | `src/memory/` | Facts DB, hybrid retrieval |
+| **extension** | `src/extension/` | Plugin system (WASM, Node.js) |
+| **exec** | `src/exec/` | Shell execution, approval system, OS-native sandboxing |
+| **mcp** | `src/mcp/` | MCP client implementation |
+| **routing** | `src/routing/` | Session key resolution |
+| **config** | `src/config/` | Configuration management |
+| **runtimes** | `src/runtimes/` | Capability ledger — probe, bootstrap, persist external tool status |
 
 ---
 
@@ -605,13 +605,13 @@ let result2 = executor.execute(&action2, &identity).await;
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
 | **IdentityContext** | `shared/protocol/src/auth.rs` | Immutable identity snapshot |
-| **SessionIdentityMeta** | `core/src/gateway/session_manager.rs` | Persistent identity metadata |
-| **PolicyEngine** | `core/src/gateway/security/policy_engine.rs` | Stateless permission checker |
-| **InvitationManager** | `core/src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
-| **SessionManager** | `core/src/gateway/session_manager.rs` | Identity construction |
-| **ExecutionEngine** | `core/src/gateway/execution_engine.rs` | Identity injection |
-| **AgentLoop** | `core/src/agent_loop/agent_loop.rs` | Identity propagation |
-| **Executor** | `core/src/executor/` | Permission enforcement |
+| **SessionIdentityMeta** | `src/gateway/session_manager.rs` | Persistent identity metadata |
+| **PolicyEngine** | `src/gateway/security/policy_engine.rs` | Stateless permission checker |
+| **InvitationManager** | `src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
+| **SessionManager** | `src/gateway/session_manager.rs` | Identity construction |
+| **ExecutionEngine** | `src/gateway/execution_engine.rs` | Identity injection |
+| **AgentLoop** | `src/agent_loop/agent_loop.rs` | Identity propagation |
+| **Executor** | `src/executor/` | Permission enforcement |
 
 ### Security Properties
 

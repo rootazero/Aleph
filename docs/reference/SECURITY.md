@@ -15,7 +15,7 @@ Aleph's security system provides:
 - **Allowlist/Blocklist**: Fine-grained command control
 - **Output Masking**: Sensitive data protection
 
-**Location**: `core/src/gateway/security/`, `core/src/exec/`
+**Location**: `src/gateway/security/`, `src/exec/`
 
 ---
 
@@ -123,7 +123,7 @@ pub struct GuestScope {
 
 ### PolicyEngine
 
-**Location**: `core/src/gateway/security/policy_engine.rs`
+**Location**: `src/gateway/security/policy_engine.rs`
 
 Stateless permission checker:
 
@@ -157,7 +157,7 @@ pub enum PermissionResult {
 
 ### Invitation Manager
 
-**Location**: `core/src/gateway/security/invitation_manager.rs`
+**Location**: `src/gateway/security/invitation_manager.rs`
 
 Manages guest invitation lifecycle:
 
@@ -188,7 +188,7 @@ impl InvitationManager {
 
 ### Session Identity Metadata
 
-**Location**: `core/src/gateway/session_manager.rs`
+**Location**: `src/gateway/session_manager.rs`
 
 Identity metadata stored in session database:
 
@@ -323,7 +323,7 @@ aleph guests revoke <guest_id>
 
 ## Exec Kernel
 
-**Location**: `core/src/exec/kernel.rs`
+**Location**: `src/exec/kernel.rs`
 
 Central security enforcement for shell commands:
 
@@ -366,7 +366,7 @@ impl ExecKernel {
 
 ## Command Parser
 
-**Location**: `core/src/exec/parser.rs`
+**Location**: `src/exec/parser.rs`
 
 Parse shell commands into structured form:
 
@@ -405,7 +405,7 @@ pub enum RedirectMode {
 
 ## Risk Analyzer
 
-**Location**: `core/src/exec/risk.rs`
+**Location**: `src/exec/risk.rs`
 
 Evaluate command risk level:
 
@@ -455,7 +455,7 @@ pub enum RiskLevel {
 
 ## Approval Manager
 
-**Location**: `core/src/exec/manager.rs`
+**Location**: `src/exec/manager.rs`
 
 Manage approval workflows:
 
@@ -513,7 +513,7 @@ pub enum ApprovalScope {
 
 ## Allowlist System
 
-**Location**: `core/src/exec/allowlist.rs`
+**Location**: `src/exec/allowlist.rs`
 
 ```rust
 pub struct Allowlist {
@@ -561,7 +561,7 @@ impl Allowlist {
 
 ## Output Masking
 
-**Location**: `core/src/exec/masker.rs`
+**Location**: `src/exec/masker.rs`
 
 Protect sensitive data in command output:
 
@@ -597,7 +597,7 @@ impl OutputMasker {
 
 ## Permission System
 
-**Location**: `core/src/permission/`
+**Location**: `src/permission/`
 
 ### Permission Rules
 
@@ -673,7 +673,7 @@ impl PermissionManager {
 
 ## Audit Logging
 
-**Location**: `core/src/exec/storage.rs`
+**Location**: `src/exec/storage.rs`
 
 All exec decisions are logged:
 
@@ -703,7 +703,7 @@ ORDER BY timestamp DESC;
 
 ## IPC Security
 
-**Location**: `core/src/exec/ipc.rs`
+**Location**: `src/exec/ipc.rs`
 
 Secure communication for approval requests:
 
@@ -787,7 +787,7 @@ impl ApprovalBridge {
 
 > Server-Side Request Forgery defense: DNS pinning, redirect chain validation, IP classification, legacy literal blocking
 
-**Location**: `core/src/security/ssrf/`
+**Location**: `src/security/ssrf/`
 
 ### Overview
 
@@ -803,7 +803,7 @@ Aleph's SSRF engine validates ALL outbound HTTP requests before they leave the s
 ### Architecture
 
 ```
-core/src/security/ssrf/
+src/security/ssrf/
 ├── mod.rs        — Public API: validate_url, validate_url_async, safe_fetch, SsrfError
 ├── policy.rs     — SsrfPolicy configuration struct
 ├── ip.rs         — IPv4/IPv6 classification against blocked ranges
@@ -937,7 +937,7 @@ All outbound HTTP requests go through the SSRF engine:
 
 ### Browser SSRF Guard
 
-**Location**: `core/src/browser/network_policy.rs`
+**Location**: `src/browser/network_policy.rs`
 
 Thin wrapper over the core SSRF engine with browser-specific features:
 
@@ -956,7 +956,7 @@ impl BrowserSsrfGuard {
 
 ### Content Sanitization
 
-**Location**: `core/src/security/content_sanitizer.rs`
+**Location**: `src/security/content_sanitizer.rs`
 
 Wraps fetched external content with boundary markers to prevent prompt injection:
 
@@ -966,7 +966,7 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String
 
 ### Audit Logging
 
-**Location**: `core/src/security/audit.rs`
+**Location**: `src/security/audit.rs`
 
 SSRF blocks are logged with context, hostname, and rejection reason for security monitoring.
 
@@ -1020,14 +1020,14 @@ blocked_hosts = ["*.malware.com"]
 
 | Module | Location | Purpose |
 |--------|----------|---------|
-| SSRF Engine | `core/src/security/ssrf/` | Outbound request validation |
-| HTTP Headers | `core/src/security/headers.rs` | Security response headers |
-| Content Sanitizer | `core/src/security/content_sanitizer.rs` | Prompt injection defense |
-| Audit Logger | `core/src/security/audit.rs` | Security event logging |
-| Browser Guard | `core/src/browser/network_policy.rs` | Browser navigation SSRF |
-| Identity/Auth | `core/src/gateway/security/` | Session, pairing, permissions |
-| Exec Kernel | `core/src/exec/` | Shell command safety |
-| Policy Engine | `core/src/gateway/security/policy_engine.rs` | Role-based access control |
+| SSRF Engine | `src/security/ssrf/` | Outbound request validation |
+| HTTP Headers | `src/security/headers.rs` | Security response headers |
+| Content Sanitizer | `src/security/content_sanitizer.rs` | Prompt injection defense |
+| Audit Logger | `src/security/audit.rs` | Security event logging |
+| Browser Guard | `src/browser/network_policy.rs` | Browser navigation SSRF |
+| Identity/Auth | `src/gateway/security/` | Session, pairing, permissions |
+| Exec Kernel | `src/exec/` | Shell command safety |
+| Policy Engine | `src/gateway/security/policy_engine.rs` | Role-based access control |
 
 ---
 

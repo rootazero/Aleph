@@ -13,12 +13,12 @@
 ### Task 1: ProviderBackend — Struct and Constructor
 
 **Files:**
-- Create: `core/src/poe/crystallization/provider_backend.rs`
-- Modify: `core/src/poe/crystallization/mod.rs:47` (add module declaration)
+- Create: `src/poe/crystallization/provider_backend.rs`
+- Modify: `src/poe/crystallization/mod.rs:47` (add module declaration)
 
 **Step 1: Write the failing test**
 
-Add to `core/src/poe/crystallization/provider_backend.rs`:
+Add to `src/poe/crystallization/provider_backend.rs`:
 
 ```rust
 //! Real LLM implementation of PatternSynthesisBackend.
@@ -80,7 +80,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/poe/crystallization/mod.rs`, add after line 47 (`pub mod synthesis_backend;`):
+In `src/poe/crystallization/mod.rs`, add after line 47 (`pub mod synthesis_backend;`):
 
 ```rust
 pub mod provider_backend;
@@ -94,7 +94,7 @@ Expected: PASS
 **Step 4: Commit**
 
 ```bash
-git add core/src/poe/crystallization/provider_backend.rs core/src/poe/crystallization/mod.rs
+git add src/poe/crystallization/provider_backend.rs src/poe/crystallization/mod.rs
 git commit -m "poe: add ProviderBackend struct and constructor"
 ```
 
@@ -103,7 +103,7 @@ git commit -m "poe: add ProviderBackend struct and constructor"
 ### Task 2: ProviderBackend — evaluate_confidence Heuristic
 
 **Files:**
-- Modify: `core/src/poe/crystallization/provider_backend.rs`
+- Modify: `src/poe/crystallization/provider_backend.rs`
 
 **Step 1: Write the failing tests**
 
@@ -240,7 +240,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/provider_backend.rs
+git add src/poe/crystallization/provider_backend.rs
 git commit -m "poe: implement heuristic evaluate_confidence for ProviderBackend"
 ```
 
@@ -249,7 +249,7 @@ git commit -m "poe: implement heuristic evaluate_confidence for ProviderBackend"
 ### Task 3: ProviderBackend — synthesize_pattern LLM Call
 
 **Files:**
-- Modify: `core/src/poe/crystallization/provider_backend.rs`
+- Modify: `src/poe/crystallization/provider_backend.rs`
 
 **Step 1: Write the failing tests**
 
@@ -452,7 +452,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/provider_backend.rs
+git add src/poe/crystallization/provider_backend.rs
 git commit -m "poe: implement synthesize_pattern with LLM call for ProviderBackend"
 ```
 
@@ -461,7 +461,7 @@ git commit -m "poe: implement synthesize_pattern with LLM call for ProviderBacke
 ### Task 4: CortexDreamingService — Inject IdleDetector
 
 **Files:**
-- Modify: `core/src/poe/crystallization/dreaming.rs`
+- Modify: `src/poe/crystallization/dreaming.rs`
 
 **Step 1: Update struct and constructor**
 
@@ -608,7 +608,7 @@ Expected: PASS
 **Step 7: Commit**
 
 ```bash
-git add core/src/poe/crystallization/dreaming.rs
+git add src/poe/crystallization/dreaming.rs
 git commit -m "poe: inject IdleDetector into CortexDreamingService, remove get_idle_seconds stub"
 ```
 
@@ -617,7 +617,7 @@ git commit -m "poe: inject IdleDetector into CortexDreamingService, remove get_i
 ### Task 5: CortexDreamingService — Rename process_batch to process_value_batch
 
 **Files:**
-- Modify: `core/src/poe/crystallization/dreaming.rs`
+- Modify: `src/poe/crystallization/dreaming.rs`
 
 **Step 1: Rename process_batch to process_value_batch**
 
@@ -635,7 +635,7 @@ Expected: PASS (no public API change)
 **Step 3: Commit**
 
 ```bash
-git add core/src/poe/crystallization/dreaming.rs
+git add src/poe/crystallization/dreaming.rs
 git commit -m "poe: rename process_batch to process_value_batch for dual-queue clarity"
 ```
 
@@ -644,7 +644,7 @@ git commit -m "poe: rename process_batch to process_value_batch for dual-queue c
 ### Task 6: CortexDreamingService — Add process_entropy_batch
 
 **Files:**
-- Modify: `core/src/poe/crystallization/dreaming.rs`
+- Modify: `src/poe/crystallization/dreaming.rs`
 
 **Step 1: Add import for CognitiveEntropyTracker**
 
@@ -728,7 +728,7 @@ Expected: PASS
 **Step 4: Commit**
 
 ```bash
-git add core/src/poe/crystallization/dreaming.rs
+git add src/poe/crystallization/dreaming.rs
 git commit -m "poe: add process_entropy_batch for high-entropy pattern distillation"
 ```
 
@@ -737,7 +737,7 @@ git commit -m "poe: add process_entropy_batch for high-entropy pattern distillat
 ### Task 7: CortexDreamingService — Wire Dual-Queue in worker_loop
 
 **Files:**
-- Modify: `core/src/poe/crystallization/dreaming.rs`
+- Modify: `src/poe/crystallization/dreaming.rs`
 
 **Step 1: Update idle processing block in worker_loop**
 
@@ -830,7 +830,7 @@ Expected: PASS (no regressions)
 **Step 5: Commit**
 
 ```bash
-git add core/src/poe/crystallization/dreaming.rs
+git add src/poe/crystallization/dreaming.rs
 git commit -m "poe: wire dual-queue (entropy + value) processing in CortexDreamingService worker_loop"
 ```
 

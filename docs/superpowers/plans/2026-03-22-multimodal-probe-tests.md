@@ -16,14 +16,14 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `core/src/gateway/interfaces/telegram/mod.rs` | Modify | P1_inbound probe |
-| `core/src/gateway/inbound_router/executor.rs` | Modify | P2_resolve probe |
-| `core/src/media/processor.rs` | Modify | P3_download + P4_process probes, add `run_id` param |
-| `core/src/gateway/execution_engine/run_loop.rs` | Modify | P5_inject probe, pass `run_id` to processor |
-| `core/src/providers/protocols/openai.rs` | Modify | P6_provider probe |
-| `core/src/providers/protocols/anthropic.rs` | Modify | P6_provider probe (Anthropic) |
-| `core/src/gateway/reply_emitter.rs` | Modify | P7_reaction probe |
-| `core/tests/multimodal_probe.rs` | Create | Layer A integration tests |
+| `src/gateway/interfaces/telegram/mod.rs` | Modify | P1_inbound probe |
+| `src/gateway/inbound_router/executor.rs` | Modify | P2_resolve probe |
+| `src/media/processor.rs` | Modify | P3_download + P4_process probes, add `run_id` param |
+| `src/gateway/execution_engine/run_loop.rs` | Modify | P5_inject probe, pass `run_id` to processor |
+| `src/providers/protocols/openai.rs` | Modify | P6_provider probe |
+| `src/providers/protocols/anthropic.rs` | Modify | P6_provider probe (Anthropic) |
+| `src/gateway/reply_emitter.rs` | Modify | P7_reaction probe |
+| `tests/multimodal_probe.rs` | Create | Layer A integration tests |
 | `e2e_tests/multimodal_e2e.py` | Create | Layer B Telegram E2E monitor |
 
 ---
@@ -31,8 +31,8 @@
 ## Task 1: Add probes P1-P2 (Channel + RunRequest)
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
-- Modify: `core/src/gateway/inbound_router/executor.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/inbound_router/executor.rs`
 
 - [ ] **Step 1: Add P1_inbound probe to Telegram convert_message**
 
@@ -86,8 +86,8 @@ git add -A && git commit -m "probes: add P1_inbound and P2_resolve multimodal lo
 ## Task 2: Add probes P3-P4 (MediaProcessor) + run_id propagation
 
 **Files:**
-- Modify: `core/src/media/processor.rs` (add `run_id` param, add P3+P4 probes)
-- Modify: `core/src/gateway/execution_engine/run_loop.rs` (pass `run_id` to processor)
+- Modify: `src/media/processor.rs` (add `run_id` param, add P3+P4 probes)
+- Modify: `src/gateway/execution_engine/run_loop.rs` (pass `run_id` to processor)
 
 - [ ] **Step 1: Add `run_id` parameter to MediaProcessor::process()**
 
@@ -174,9 +174,9 @@ git add -A && git commit -m "probes: add P3_download and P4_process probes with 
 ## Task 3: Add probes P5-P6 (Inject + Provider)
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs` (P5)
-- Modify: `core/src/providers/protocols/openai.rs` (P6)
-- Modify: `core/src/providers/protocols/anthropic.rs` (P6)
+- Modify: `src/gateway/execution_engine/run_loop.rs` (P5)
+- Modify: `src/providers/protocols/openai.rs` (P6)
+- Modify: `src/providers/protocols/anthropic.rs` (P6)
 
 - [ ] **Step 1: Add P5_inject probe in run_loop.rs**
 
@@ -250,7 +250,7 @@ git add -A && git commit -m "probes: add P5_inject and P6_provider multimodal pr
 ## Task 4: Add probe P7 (Reaction)
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/reply_emitter.rs`
 
 - [ ] **Step 1: Add P7_reaction probe in react_on_inbound**
 
@@ -292,7 +292,7 @@ git add -A && git commit -m "probes: add P7_reaction multimodal probe"
 ## Task 5: Layer A — Rust integration tests
 
 **Files:**
-- Create: `core/tests/multimodal_probe.rs`
+- Create: `tests/multimodal_probe.rs`
 
 - [ ] **Step 1: Create integration test file**
 
@@ -496,7 +496,7 @@ Expected: ALL PASS (adjust import paths if needed — `alephcore` may be `aleph_
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/multimodal_probe.rs && git commit -m "tests: add Layer A multimodal pipeline integration tests"
+git add tests/multimodal_probe.rs && git commit -m "tests: add Layer A multimodal pipeline integration tests"
 ```
 
 ---

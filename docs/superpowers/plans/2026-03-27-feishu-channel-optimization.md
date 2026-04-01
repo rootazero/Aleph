@@ -16,36 +16,36 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `core/src/gateway/interfaces/feishu/config.rs` | **CREATE** | FeishuConfig + validation + GroupSessionScope |
-| `core/src/gateway/interfaces/feishu/auth.rs` | **CREATE** | TokenManager: get/refresh/background renewal |
-| `core/src/gateway/interfaces/feishu/api.rs` | **CREATE** | FeishuApi: all HTTP API calls + FeishuSendError |
-| `core/src/gateway/interfaces/feishu/dedup.rs` | **CREATE** | MessageDedup with TTL + capacity |
-| `core/src/gateway/interfaces/feishu/user_cache.rs` | **CREATE** | UserProfileCache: sender name resolution |
-| `core/src/gateway/interfaces/feishu/websocket.rs` | **CREATE** | WS connect loop + reconnect + event dispatch |
-| `core/src/gateway/interfaces/feishu/message_ops.rs` | **CREATE** | MessageOperations trait impl for Feishu |
-| `core/src/gateway/interfaces/feishu/events.rs` | **MODIFY** | Add CardAction variant + root_id parsing |
-| `core/src/gateway/interfaces/feishu/streaming.rs` | **MODIFY** | FeishuClient → FeishuApi references |
-| `core/src/gateway/interfaces/feishu/types.rs` | **MODIFY** | Remove config types (moved to config.rs), add root_id to MessageBody |
-| `core/src/gateway/interfaces/feishu/mod.rs` | **REWRITE** | Slim FeishuChannel: lifecycle + Channel trait only |
-| `core/src/gateway/interfaces/feishu/client.rs` | **DELETE** | Replaced by auth.rs + api.rs |
-| `core/src/gateway/handlers/channel.rs` | **MODIFY** | Update factory for new() → Result |
-| `core/src/gateway/inbound_router/executor.rs` | **MODIFY** | FeishuClient → shared Arc\<FeishuApi\> |
+| `src/gateway/interfaces/feishu/config.rs` | **CREATE** | FeishuConfig + validation + GroupSessionScope |
+| `src/gateway/interfaces/feishu/auth.rs` | **CREATE** | TokenManager: get/refresh/background renewal |
+| `src/gateway/interfaces/feishu/api.rs` | **CREATE** | FeishuApi: all HTTP API calls + FeishuSendError |
+| `src/gateway/interfaces/feishu/dedup.rs` | **CREATE** | MessageDedup with TTL + capacity |
+| `src/gateway/interfaces/feishu/user_cache.rs` | **CREATE** | UserProfileCache: sender name resolution |
+| `src/gateway/interfaces/feishu/websocket.rs` | **CREATE** | WS connect loop + reconnect + event dispatch |
+| `src/gateway/interfaces/feishu/message_ops.rs` | **CREATE** | MessageOperations trait impl for Feishu |
+| `src/gateway/interfaces/feishu/events.rs` | **MODIFY** | Add CardAction variant + root_id parsing |
+| `src/gateway/interfaces/feishu/streaming.rs` | **MODIFY** | FeishuClient → FeishuApi references |
+| `src/gateway/interfaces/feishu/types.rs` | **MODIFY** | Remove config types (moved to config.rs), add root_id to MessageBody |
+| `src/gateway/interfaces/feishu/mod.rs` | **REWRITE** | Slim FeishuChannel: lifecycle + Channel trait only |
+| `src/gateway/interfaces/feishu/client.rs` | **DELETE** | Replaced by auth.rs + api.rs |
+| `src/gateway/handlers/channel.rs` | **MODIFY** | Update factory for new() → Result |
+| `src/gateway/inbound_router/executor.rs` | **MODIFY** | FeishuClient → shared Arc\<FeishuApi\> |
 
 ---
 
 ## Task 1: Create `config.rs` — Extract Config + Add Validation + GroupSessionScope
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/config.rs`
-- Modify: `core/src/gateway/interfaces/feishu/types.rs` (remove FeishuConfig + defaults)
-- Modify: `core/src/gateway/interfaces/feishu/mod.rs` (update import)
+- Create: `src/gateway/interfaces/feishu/config.rs`
+- Modify: `src/gateway/interfaces/feishu/types.rs` (remove FeishuConfig + defaults)
+- Modify: `src/gateway/interfaces/feishu/mod.rs` (update import)
 
 - [ ] **Step 1: Create `config.rs` with FeishuConfig, GroupSessionScope, and validate()**
 
 Move `FeishuConfig`, the three default functions (`default_domain`, `default_true`, `default_render_mode`), and `FeishuConfig::base_url()` from `types.rs` into `config.rs`. Add `GroupSessionScope` enum and `group_session_scope` field. Add `validate()` method.
 
 ```rust
-// core/src/gateway/interfaces/feishu/config.rs
+// src/gateway/interfaces/feishu/config.rs
 use serde::Deserialize;
 
 fn default_domain() -> String { "feishu".to_string() }
@@ -194,7 +194,7 @@ Expected: All existing tests pass + new validation tests pass.
 - [ ] **Step 7: Commit**
 
 ```
-git add core/src/gateway/interfaces/feishu/config.rs core/src/gateway/interfaces/feishu/types.rs core/src/gateway/interfaces/feishu/mod.rs
+git add src/gateway/interfaces/feishu/config.rs src/gateway/interfaces/feishu/types.rs src/gateway/interfaces/feishu/mod.rs
 git commit -m "feishu: extract config.rs with validation and GroupSessionScope"
 ```
 
@@ -203,15 +203,15 @@ git commit -m "feishu: extract config.rs with validation and GroupSessionScope"
 ## Task 2: Create `auth.rs` — Extract TokenManager
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/auth.rs`
-- Modify: `core/src/gateway/interfaces/feishu/client.rs` (will be deleted later, but modify now to re-export)
+- Create: `src/gateway/interfaces/feishu/auth.rs`
+- Modify: `src/gateway/interfaces/feishu/client.rs` (will be deleted later, but modify now to re-export)
 
 - [ ] **Step 1: Create `auth.rs` with TokenManager**
 
 Extract `TokenState`, token refresh logic, and background refresh from `client.rs:32-177`.
 
 ```rust
-// core/src/gateway/interfaces/feishu/auth.rs
+// src/gateway/interfaces/feishu/auth.rs
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -384,7 +384,7 @@ git commit -m "feishu: extract auth.rs with TokenManager"
 ## Task 3: Create `api.rs` — Extract FeishuApi
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/api.rs`
+- Create: `src/gateway/interfaces/feishu/api.rs`
 
 - [ ] **Step 1: Create `api.rs` with FeishuApi**
 
@@ -431,12 +431,12 @@ git commit -m "feishu: extract api.rs with FeishuApi and UTF-8 safe truncation"
 ## Task 4: Create `dedup.rs` — Enhanced Deduplication
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/dedup.rs`
+- Create: `src/gateway/interfaces/feishu/dedup.rs`
 
 - [ ] **Step 1: Create `dedup.rs` with MessageDedup**
 
 ```rust
-// core/src/gateway/interfaces/feishu/dedup.rs
+// src/gateway/interfaces/feishu/dedup.rs
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -548,12 +548,12 @@ git commit -m "feishu: add dedup.rs with TTL-based message deduplication"
 ## Task 5: Create `user_cache.rs` — Sender Name Cache
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/user_cache.rs`
+- Create: `src/gateway/interfaces/feishu/user_cache.rs`
 
 - [ ] **Step 1: Create `user_cache.rs`**
 
 ```rust
-// core/src/gateway/interfaces/feishu/user_cache.rs
+// src/gateway/interfaces/feishu/user_cache.rs
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
@@ -659,8 +659,8 @@ git commit -m "feishu: add user_cache.rs for sender name resolution"
 ## Task 6: Update `events.rs` — Add CardAction + root_id
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/feishu/events.rs`
-- Modify: `core/src/gateway/interfaces/feishu/types.rs`
+- Modify: `src/gateway/interfaces/feishu/events.rs`
+- Modify: `src/gateway/interfaces/feishu/types.rs`
 
 - [ ] **Step 1: Add `root_id` to `MessageBody` in `types.rs`**
 
@@ -791,7 +791,7 @@ git commit -m "feishu: add CardAction event + root_id for topic threading"
 ## Task 7: Create `websocket.rs` — Extract WS Loop
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/websocket.rs`
+- Create: `src/gateway/interfaces/feishu/websocket.rs`
 
 - [ ] **Step 1: Create `websocket.rs` with `WsLoopContext` and `run_ws_loop()`**
 
@@ -805,7 +805,7 @@ Extract the WebSocket connection loop from `mod.rs:135-296`. Key changes:
 - Propagates `root_id` from events
 
 ```rust
-// core/src/gateway/interfaces/feishu/websocket.rs
+// src/gateway/interfaces/feishu/websocket.rs
 use std::sync::Mutex as StdMutex;
 use tokio::sync::{mpsc, watch};
 use futures_util::StreamExt;
@@ -1047,12 +1047,12 @@ git commit -m "feishu: extract websocket.rs with session scope and card action h
 ## Task 8: Create `message_ops.rs` — MessageOperations Trait
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/message_ops.rs`
+- Create: `src/gateway/interfaces/feishu/message_ops.rs`
 
 - [ ] **Step 1: Create `message_ops.rs`**
 
 ```rust
-// core/src/gateway/interfaces/feishu/message_ops.rs
+// src/gateway/interfaces/feishu/message_ops.rs
 use async_trait::async_trait;
 use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
@@ -1162,7 +1162,7 @@ mod tests {
 
 - [ ] **Step 2: Add `pub mod message_ops;` and `pub use message_ops::FeishuMessageOps;` to `mod.rs`**
 
-**Note on registration:** The `MessageOperationsRegistry` exists at `core/src/builtin_tools/message/tool.rs` but no channel currently registers into it at runtime (the trait implementations exist but the wiring is incomplete across all channels). For now, just create and export `FeishuMessageOps`. Registration will be wired when the MessageTool is integrated into the execution pipeline — this is a pre-existing gap shared with Telegram/Discord/iMessage.
+**Note on registration:** The `MessageOperationsRegistry` exists at `src/builtin_tools/message/tool.rs` but no channel currently registers into it at runtime (the trait implementations exist but the wiring is incomplete across all channels). For now, just create and export `FeishuMessageOps`. Registration will be wired when the MessageTool is integrated into the execution pipeline — this is a pre-existing gap shared with Telegram/Discord/iMessage.
 
 **Note on `ChannelCapabilities` naming:** The import `crate::builtin_tools::message::ChannelCapabilities` is a DIFFERENT struct from `crate::gateway::channel::ChannelCapabilities` used in `mod.rs`. Both are in scope in the feishu module. Use fully qualified imports to avoid confusion.
 
@@ -1179,7 +1179,7 @@ git commit -m "feishu: add message_ops.rs implementing MessageOperations trait"
 ## Task 9: Update `streaming.rs` — FeishuClient → FeishuApi
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/feishu/streaming.rs`
+- Modify: `src/gateway/interfaces/feishu/streaming.rs`
 
 - [ ] **Step 1: Replace all `FeishuClient` references with `FeishuApi`**
 
@@ -1202,7 +1202,7 @@ git commit -m "feishu: update streaming.rs to use FeishuApi instead of FeishuCli
 ## Task 10: Rewrite `mod.rs` — Slim FeishuChannel
 
 **Files:**
-- Rewrite: `core/src/gateway/interfaces/feishu/mod.rs`
+- Rewrite: `src/gateway/interfaces/feishu/mod.rs`
 
 - [ ] **Step 1: Rewrite `mod.rs`**
 
@@ -1242,9 +1242,9 @@ git commit -m "feishu: rewrite mod.rs with slim FeishuChannel using new modules"
 ## Task 11: Delete `client.rs` + Update External References
 
 **Files:**
-- Delete: `core/src/gateway/interfaces/feishu/client.rs`
-- Modify: `core/src/gateway/inbound_router/executor.rs`
-- Modify: `core/src/gateway/handlers/channel.rs`
+- Delete: `src/gateway/interfaces/feishu/client.rs`
+- Modify: `src/gateway/inbound_router/executor.rs`
+- Modify: `src/gateway/handlers/channel.rs`
 
 - [ ] **Step 1: Delete `client.rs`**
 
@@ -1254,7 +1254,7 @@ Remove the file entirely. All its code now lives in `auth.rs` and `api.rs`.
 
 - [ ] **Step 3: Update `executor.rs` to use shared `Arc<FeishuApi>`**
 
-In `core/src/gateway/inbound_router/executor.rs:233-281`:
+In `src/gateway/inbound_router/executor.rs:233-281`:
 - Change `use crate::gateway::interfaces::feishu::client::FeishuClient;` to `use crate::gateway::interfaces::feishu::api::FeishuApi;`
 - Instead of creating a new `FeishuClient` per emitter (line 254), obtain the shared `Arc<FeishuApi>` from the channel registry. The `FeishuChannel` should expose its api handle via a method like `pub fn api(&self) -> Option<Arc<FeishuApi>>`.
 - If the channel doesn't expose the api yet, add a `pub fn api(&self) -> Option<Arc<FeishuApi>>` method to `FeishuChannel`. The executor can downcast or the channel trait can be extended. Check how the executor currently gets the `FeishuConfig` (via `app_config`) and follow the same pattern but for the shared API handle.
@@ -1263,7 +1263,7 @@ Alternative (simpler, if downcast is complex): Create `FeishuApi` in `executor.r
 
 - [ ] **Step 4: Update channel factory in `channel.rs`**
 
-At `core/src/gateway/handlers/channel.rs:327-328`:
+At `src/gateway/handlers/channel.rs:327-328`:
 ```rust
 // Before:
 "feishu" => serde_json::from_value::<FeishuConfig>(config).ok()
@@ -1306,7 +1306,7 @@ cargo clippy -p alephcore -- -D warnings
 - [ ] **Step 3: Verify file structure**
 
 ```bash
-ls -la core/src/gateway/interfaces/feishu/
+ls -la src/gateway/interfaces/feishu/
 ```
 
 Expected files: `mod.rs`, `config.rs`, `types.rs`, `events.rs`, `auth.rs`, `api.rs`, `websocket.rs`, `streaming.rs`, `message_ops.rs`, `user_cache.rs`, `dedup.rs`. NO `client.rs`.
@@ -1314,7 +1314,7 @@ Expected files: `mod.rs`, `config.rs`, `types.rs`, `events.rs`, `auth.rs`, `api.
 - [ ] **Step 4: Verify no remaining FeishuClient references**
 
 ```bash
-grep -r "FeishuClient" core/src/
+grep -r "FeishuClient" src/
 ```
 
 Expected: zero matches.

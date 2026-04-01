@@ -17,23 +17,23 @@
 ### New Files
 | File | Responsibility |
 |------|---------------|
-| `core/src/extension/manifest/cc_plugin_toml.rs` | Parse `.claude-plugin/plugin.toml` → `PluginManifest` |
-| `core/src/extension/manifest/cc_plugin_json.rs` | Parse `.claude-plugin/plugin.json` → `PluginManifest` |
-| `core/src/extension/manifest/auto_discover.rs` | No-manifest auto-discovery (scan skills/, agents/, etc.) |
-| `core/src/extension/component_id.rs` | `ComponentId` struct for namespaced component references |
+| `src/extension/manifest/cc_plugin_toml.rs` | Parse `.claude-plugin/plugin.toml` → `PluginManifest` |
+| `src/extension/manifest/cc_plugin_json.rs` | Parse `.claude-plugin/plugin.json` → `PluginManifest` |
+| `src/extension/manifest/auto_discover.rs` | No-manifest auto-discovery (scan skills/, agents/, etc.) |
+| `src/extension/component_id.rs` | `ComponentId` struct for namespaced component references |
 
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/extension/manifest/types.rs` | Add `AlephExtensions`, `AlephRuntime` to `PluginManifest` |
-| `core/src/extension/manifest/mod.rs` | New discovery priority, new module imports, deprecation warnings |
-| `core/src/extension/discovery/scanner.rs` | Support auto-discover fallback |
-| `core/src/extension/registry/plugin_registry/mod.rs` | Namespace-aware registration keys |
-| `core/src/extension/registry/types.rs` | Add `ComponentId` usage |
-| `core/src/extension/types/plugins.rs` | Add `PluginScope` enum |
-| `core/src/gateway/handlers/plugins/handlers.rs` | New RPC method names (`plugin.*`) |
-| `core/src/gateway/handlers/plugins/types.rs` | New param types for `plugin.*` methods |
-| `core/src/gateway/handlers/mod.rs` | Register new `plugin.*` methods |
+| `src/extension/manifest/types.rs` | Add `AlephExtensions`, `AlephRuntime` to `PluginManifest` |
+| `src/extension/manifest/mod.rs` | New discovery priority, new module imports, deprecation warnings |
+| `src/extension/discovery/scanner.rs` | Support auto-discover fallback |
+| `src/extension/registry/plugin_registry/mod.rs` | Namespace-aware registration keys |
+| `src/extension/registry/types.rs` | Add `ComponentId` usage |
+| `src/extension/types/plugins.rs` | Add `PluginScope` enum |
+| `src/gateway/handlers/plugins/handlers.rs` | New RPC method names (`plugin.*`) |
+| `src/gateway/handlers/plugins/types.rs` | New param types for `plugin.*` methods |
+| `src/gateway/handlers/mod.rs` | Register new `plugin.*` methods |
 | `apps/cli/src/main.rs` | Add `PluginAction` enum, deprecate `PluginsAction` |
 | `apps/cli/src/commands/plugins_cmd.rs` | Add deprecation wrapper |
 
@@ -42,7 +42,7 @@
 ## Task 1: Add `AlephExtensions` and `AlephRuntime` to PluginManifest
 
 **Files:**
-- Modify: `core/src/extension/manifest/types.rs`
+- Modify: `src/extension/manifest/types.rs`
 
 - [ ] **Step 1: Update imports first**
 
@@ -57,7 +57,7 @@ use super::aleph_plugin_toml::{
 
 - [ ] **Step 2: Add `AlephRuntime` enum and `AlephExtensions` struct**
 
-At the bottom of `core/src/extension/manifest/types.rs`, before the closing, add:
+At the bottom of `src/extension/manifest/types.rs`, before the closing, add:
 
 ```rust
 // =============================================================================
@@ -132,7 +132,7 @@ Expected: PASS (new types added but not yet used externally)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/manifest/types.rs
+git add src/extension/manifest/types.rs
 git commit -m "manifest: add AlephExtensions and AlephRuntime types to PluginManifest"
 ```
 
@@ -141,7 +141,7 @@ git commit -m "manifest: add AlephExtensions and AlephRuntime types to PluginMan
 ## Task 2: CC-format TOML manifest parser (`.claude-plugin/plugin.toml`)
 
 **Files:**
-- Create: `core/src/extension/manifest/cc_plugin_toml.rs`
+- Create: `src/extension/manifest/cc_plugin_toml.rs`
 
 - [ ] **Step 1: Write test for CC TOML parsing**
 
@@ -252,7 +252,7 @@ Expected: FAIL — module does not exist yet
 
 - [ ] **Step 3: Write the parser implementation**
 
-Create `core/src/extension/manifest/cc_plugin_toml.rs`:
+Create `src/extension/manifest/cc_plugin_toml.rs`:
 
 ```rust
 //! Parser for `.claude-plugin/plugin.toml` — Claude Code compatible TOML manifest
@@ -444,7 +444,7 @@ Expected: PASS — all 5 tests
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/manifest/cc_plugin_toml.rs
+git add src/extension/manifest/cc_plugin_toml.rs
 git commit -m "manifest: add CC-format plugin.toml parser"
 ```
 
@@ -453,7 +453,7 @@ git commit -m "manifest: add CC-format plugin.toml parser"
 ## Task 3: CC-format JSON manifest parser (`.claude-plugin/plugin.json`)
 
 **Files:**
-- Create: `core/src/extension/manifest/cc_plugin_json.rs`
+- Create: `src/extension/manifest/cc_plugin_json.rs`
 
 - [ ] **Step 1: Write tests**
 
@@ -515,7 +515,7 @@ Expected: FAIL
 
 - [ ] **Step 3: Write the parser**
 
-Create `core/src/extension/manifest/cc_plugin_json.rs`:
+Create `src/extension/manifest/cc_plugin_json.rs`:
 
 ```rust
 //! Parser for `.claude-plugin/plugin.json` — Claude Code compatible JSON manifest
@@ -688,7 +688,7 @@ Expected: PASS — all 4 tests
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/manifest/cc_plugin_json.rs
+git add src/extension/manifest/cc_plugin_json.rs
 git commit -m "manifest: add CC-format plugin.json parser"
 ```
 
@@ -697,7 +697,7 @@ git commit -m "manifest: add CC-format plugin.json parser"
 ## Task 4: Auto-discover mode (no manifest)
 
 **Files:**
-- Create: `core/src/extension/manifest/auto_discover.rs`
+- Create: `src/extension/manifest/auto_discover.rs`
 
 - [ ] **Step 1: Write tests**
 
@@ -747,7 +747,7 @@ Expected: FAIL
 
 - [ ] **Step 3: Write implementation**
 
-Create `core/src/extension/manifest/auto_discover.rs`:
+Create `src/extension/manifest/auto_discover.rs`:
 
 ```rust
 //! Auto-discover plugin components when no manifest is present.
@@ -866,7 +866,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/manifest/auto_discover.rs
+git add src/extension/manifest/auto_discover.rs
 git commit -m "manifest: add auto-discover mode for no-manifest plugins"
 ```
 
@@ -875,7 +875,7 @@ git commit -m "manifest: add auto-discover mode for no-manifest plugins"
 ## Task 5: Update discovery priority in manifest/mod.rs
 
 **Files:**
-- Modify: `core/src/extension/manifest/mod.rs`
+- Modify: `src/extension/manifest/mod.rs`
 
 - [ ] **Step 1: Add new module declarations and imports**
 
@@ -1020,7 +1020,7 @@ Expected: PASS — all existing tests plus new ones
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/manifest/mod.rs
+git add src/extension/manifest/mod.rs
 git commit -m "manifest: update discovery priority — CC format first, deprecation warnings, auto-discover"
 ```
 
@@ -1029,7 +1029,7 @@ git commit -m "manifest: update discovery priority — CC format first, deprecat
 ## Task 6: Update scanner for auto-discover fallback
 
 **Files:**
-- Modify: `core/src/extension/discovery/scanner.rs`
+- Modify: `src/extension/discovery/scanner.rs`
 
 - [ ] **Step 1: Update `scan_plugin_dir` to use new manifest priority**
 
@@ -1045,7 +1045,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/extension/discovery/scanner.rs
+git add src/extension/discovery/scanner.rs
 git commit -m "discovery: update scanner for new manifest priority and auto-discover"
 ```
 
@@ -1054,7 +1054,7 @@ git commit -m "discovery: update scanner for new manifest priority and auto-disc
 ## Task 7: Add `ComponentId` struct
 
 **Files:**
-- Create: `core/src/extension/component_id.rs`
+- Create: `src/extension/component_id.rs`
 
 - [ ] **Step 1: Write tests**
 
@@ -1106,7 +1106,7 @@ Expected: FAIL
 
 - [ ] **Step 3: Write implementation**
 
-Create `core/src/extension/component_id.rs`:
+Create `src/extension/component_id.rs`:
 
 ```rust
 //! Unified component identification with optional namespace prefix.
@@ -1197,7 +1197,7 @@ Expected: PASS — all 5 tests
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/component_id.rs core/src/extension/mod.rs
+git add src/extension/component_id.rs src/extension/mod.rs
 git commit -m "extension: add ComponentId for namespaced component references"
 ```
 
@@ -1206,8 +1206,8 @@ git commit -m "extension: add ComponentId for namespaced component references"
 ## Task 8: Namespace-aware PluginRegistry
 
 **Files:**
-- Modify: `core/src/extension/registry/plugin_registry/mod.rs`
-- Modify: `core/src/extension/registry/types.rs`
+- Modify: `src/extension/registry/plugin_registry/mod.rs`
+- Modify: `src/extension/registry/types.rs`
 
 **Note:** `ToolRegistration` does NOT impl `Clone`. We use the namespaced key as the primary key and store the short name separately for backward-compat lookup.
 
@@ -1259,7 +1259,7 @@ Expected: PASS — backward compatible (short names still work)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/registry/
+git add src/extension/registry/
 git commit -m "registry: add namespace-aware tool registration (plugin_id:name keys)"
 ```
 
@@ -1268,7 +1268,7 @@ git commit -m "registry: add namespace-aware tool registration (plugin_id:name k
 ## Task 9: Add `PluginScope` enum
 
 **Files:**
-- Modify: `core/src/extension/types/plugins.rs`
+- Modify: `src/extension/types/plugins.rs`
 
 - [ ] **Step 1: Add `PluginScope` enum**
 
@@ -1315,7 +1315,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/extension/types/plugins.rs
+git add src/extension/types/plugins.rs
 git commit -m "types: add PluginScope enum (user/project/local)"
 ```
 
@@ -1476,8 +1476,8 @@ git commit -m "cli: unify 'aleph plugin' (singular) merging lifecycle + dev, dep
 ## Task 11: Update gateway RPC method names
 
 **Files:**
-- Modify: `core/src/gateway/handlers/mod.rs`
-- Modify: `core/src/gateway/handlers/plugins/handlers.rs`
+- Modify: `src/gateway/handlers/mod.rs`
+- Modify: `src/gateway/handlers/plugins/handlers.rs`
 
 - [ ] **Step 1: Register new `plugin.*` methods alongside old `plugins.*`**
 
@@ -1504,7 +1504,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/mod.rs
 git commit -m "gateway: add plugin.* RPC methods (CC-compatible), keep plugins.* as compat aliases"
 ```
 
@@ -1517,7 +1517,7 @@ git commit -m "gateway: add plugin.* RPC methods (CC-compatible), keep plugins.*
 
 - [ ] **Step 1: Write integration test**
 
-Add to an appropriate test module (e.g., `core/src/extension/manifest/cc_plugin_toml.rs` tests):
+Add to an appropriate test module (e.g., `src/extension/manifest/cc_plugin_toml.rs` tests):
 
 ```rust
 #[test]
@@ -1592,7 +1592,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/manifest/
+git add src/extension/manifest/
 git commit -m "test: add integration tests for CC-format plugin loading and backward compat"
 ```
 
@@ -1603,7 +1603,7 @@ git commit -m "test: add integration tests for CC-format plugin loading and back
 The following spec P0/P1 items are **intentionally deferred** from this plan:
 
 - **Environment variables** (`${CLAUDE_PLUGIN_ROOT}`, `${ALEPH_PLUGIN_ROOT}`, etc.): These are set during plugin runtime loading, which is P4 (Runtime Migration). The manifest parser doesn't need them.
-- **Gateway inbound router namespace parsing**: The inbound router (`core/src/gateway/inbound_router/command_handler.rs`) needs to parse `plugin-name:skill-name` format for `/` commands. This requires integration with the skill/command resolution system which is tightly coupled to the content loader. Deferring to a follow-up task when the full content loading pipeline is adapted.
+- **Gateway inbound router namespace parsing**: The inbound router (`src/gateway/inbound_router/command_handler.rs`) needs to parse `plugin-name:skill-name` format for `/` commands. This requires integration with the skill/command resolution system which is tightly coupled to the content loader. Deferring to a follow-up task when the full content loading pipeline is adapted.
 - **Tool/skill/agent invocation path adaptation**: ExtensionManager, SkillSystem, and ContentLoader need to use `ComponentId` for lookups. This is a broad change that touches many files and should be a dedicated task after the registry foundation is in place.
 - **`is_valid_plugin_dir()` in extension/mod.rs**: Needs to also check `.claude-plugin/plugin.toml`. Small fix, include in follow-up.
 

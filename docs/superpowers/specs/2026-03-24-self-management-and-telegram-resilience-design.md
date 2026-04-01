@@ -18,7 +18,7 @@ Four related issues prevent Aleph from reliably handling self-configuration requ
 
 ### Fix 1: Telegram Polling Stall Auto-Restart
 
-**File**: `core/src/gateway/interfaces/telegram/mod.rs`
+**File**: `src/gateway/interfaces/telegram/mod.rs`
 
 #### Mechanism
 
@@ -111,7 +111,7 @@ Self-management moves entirely out of core into a skill. This aligns with R3 (Co
 
 #### 2a. Remove self-management from OperationalGuidelinesLayer
 
-**File**: `core/src/thinker/layers/operational_guidelines.rs`
+**File**: `src/thinker/layers/operational_guidelines.rs`
 
 Remove the "Self-Management" section (lines 46-53) that mentions `read_config_guide`. Keep the "Diagnostic Capabilities" section (read-only monitoring) and "When You Detect Issues" / "What You Must NEVER Do Autonomously" sections — these are safety guidelines, not self-management.
 
@@ -280,7 +280,7 @@ structure templates, field definitions, and caveats you need.
 
 #### 2d. `read_config_guide` Tool and Guides — Preserved
 
-`ReadConfigGuideTool` (`core/src/builtin_tools/config_guide.rs`) and `~/.aleph/guides/*.md` are **kept as-is**. They serve as the data layer that the `/self` skill directs the LLM to use. The skill provides routing knowledge; the tool + guides provide domain knowledge.
+`ReadConfigGuideTool` (`src/builtin_tools/config_guide.rs`) and `~/.aleph/guides/*.md` are **kept as-is**. They serve as the data layer that the `/self` skill directs the LLM to use. The skill provides routing knowledge; the tool + guides provide domain knowledge.
 
 #### 2e. Update `~/.aleph/guides/overview.md`
 
@@ -347,7 +347,7 @@ If `.git` doesn't exist or remote doesn't match, leave as-is and create `skills-
 
 #### 3b. SkillSystem::init() — Scan Both Directories
 
-**File**: `core/src/skill/mod.rs` and startup code
+**File**: `src/skill/mod.rs` and startup code
 
 Update `SkillSystem::init()` to receive both directories:
 
@@ -364,7 +364,7 @@ Scan order matters: user dir is scanned **after** official dir. Since `SkillRegi
 
 #### 3c. Auto-Update on Startup
 
-**File**: New function in `core/src/skills/mod.rs` (or a new `core/src/skills/updater.rs`)
+**File**: New function in `src/skills/mod.rs` (or a new `src/skills/updater.rs`)
 
 On server startup, before `SkillSystem::init()`:
 
@@ -434,10 +434,10 @@ This allows users to disable auto-update or point to a fork.
 
 | File | Change |
 |------|--------|
-| `core/src/gateway/interfaces/telegram/mod.rs` | Retry loop + stall restart |
-| `core/src/thinker/layers/operational_guidelines.rs` | Remove Self-Management section (keep diagnostics/safety) |
-| `core/src/skill/mod.rs` | Scan `skills-official/` in addition to `skills/` |
-| `core/src/skills/mod.rs` (or new `updater.rs`) | `update_official_skills()` function |
+| `src/gateway/interfaces/telegram/mod.rs` | Retry loop + stall restart |
+| `src/thinker/layers/operational_guidelines.rs` | Remove Self-Management section (keep diagnostics/safety) |
+| `src/skill/mod.rs` | Scan `skills-official/` in addition to `skills/` |
+| `src/skills/mod.rs` (or new `updater.rs`) | `update_official_skills()` function |
 | Startup code (`server_init.rs` or `coordinator.rs`) | Call `update_official_skills()` before `SkillSystem::init()`, migration logic |
 | `~/Workspace/Aleph-skills/self/SKILL.md` | **New**: `/self` skill in official repo |
 | `~/.aleph/guides/overview.md` | Add workspace tree with `skills-official/` |

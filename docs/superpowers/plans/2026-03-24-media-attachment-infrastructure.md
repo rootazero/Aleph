@@ -16,31 +16,31 @@
 
 | Action | File | Responsibility |
 |--------|------|----------------|
-| Create | `core/src/gateway/media.rs` | `MediaItem` type, `PendingMedia` type alias, MIME detection helper |
-| Create | `core/src/builtin_tools/media_send.rs` | `media_send` AlephTool — passthrough for LLM-initiated media delivery |
-| Modify | `core/src/media/cache.rs` | Add `download_media_item()`, raise limits (50MB/60s) |
-| Modify | `core/src/builtin_tools/generation/image_generate.rs` | Add `_media` to `ImageGenerateOutput` |
-| Modify | `core/src/builtin_tools/generation/video_generate.rs` | Add `_media` to `VideoGenerateOutput` |
-| Modify | `core/src/builtin_tools/generation/audio_generate.rs` | Add `_media` to `AudioGenerateOutput` |
-| Modify | `core/src/builtin_tools/generation/speech_generate.rs` | Add `_media` to `SpeechGenerateOutput` |
-| Modify | `core/src/gateway/reply_emitter.rs` | Add `pending_media` + `media_cache` fields, `drain_and_send_media()`, `send_media_standalone()` |
-| Modify | `core/src/gateway/execution_engine/run_loop.rs` | Add `pending_media` to `StreamCallback`, extract `_media` in `on_tool_done` |
-| Modify | `core/src/gateway/inbound_router/executor.rs` | Pass `PendingMedia` to ReplyEmitter + StreamCallback construction |
-| Modify | `core/src/gateway/session_scheduler.rs` | Same PendingMedia wiring |
-| Modify | `core/src/agent_loop/prompt_builder.rs` | Add `media_send` guidance to `BASE_BEHAVIOR` |
-| Modify | `core/src/executor/builtin_registry/groups.rs` | Add `media_send` to `content_gen` group |
-| Modify | `core/src/builtin_tools/mod.rs` | Add `pub mod media_send` |
-| Modify | `core/src/gateway/mod.rs` | Add `pub mod media` |
+| Create | `src/gateway/media.rs` | `MediaItem` type, `PendingMedia` type alias, MIME detection helper |
+| Create | `src/builtin_tools/media_send.rs` | `media_send` AlephTool — passthrough for LLM-initiated media delivery |
+| Modify | `src/media/cache.rs` | Add `download_media_item()`, raise limits (50MB/60s) |
+| Modify | `src/builtin_tools/generation/image_generate.rs` | Add `_media` to `ImageGenerateOutput` |
+| Modify | `src/builtin_tools/generation/video_generate.rs` | Add `_media` to `VideoGenerateOutput` |
+| Modify | `src/builtin_tools/generation/audio_generate.rs` | Add `_media` to `AudioGenerateOutput` |
+| Modify | `src/builtin_tools/generation/speech_generate.rs` | Add `_media` to `SpeechGenerateOutput` |
+| Modify | `src/gateway/reply_emitter.rs` | Add `pending_media` + `media_cache` fields, `drain_and_send_media()`, `send_media_standalone()` |
+| Modify | `src/gateway/execution_engine/run_loop.rs` | Add `pending_media` to `StreamCallback`, extract `_media` in `on_tool_done` |
+| Modify | `src/gateway/inbound_router/executor.rs` | Pass `PendingMedia` to ReplyEmitter + StreamCallback construction |
+| Modify | `src/gateway/session_scheduler.rs` | Same PendingMedia wiring |
+| Modify | `src/agent_loop/prompt_builder.rs` | Add `media_send` guidance to `BASE_BEHAVIOR` |
+| Modify | `src/executor/builtin_registry/groups.rs` | Add `media_send` to `content_gen` group |
+| Modify | `src/builtin_tools/mod.rs` | Add `pub mod media_send` |
+| Modify | `src/gateway/mod.rs` | Add `pub mod media` |
 
 ---
 
 ### Task 1: Create `MediaItem` type and `PendingMedia` alias
 
 **Files:**
-- Create: `core/src/gateway/media.rs`
-- Modify: `core/src/gateway/mod.rs`
+- Create: `src/gateway/media.rs`
+- Modify: `src/gateway/mod.rs`
 
-- [ ] **Step 1: Create `core/src/gateway/media.rs`**
+- [ ] **Step 1: Create `src/gateway/media.rs`**
 
 ```rust
 //! Media attachment types for the `_media` tool output convention.
@@ -148,7 +148,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Add module to `core/src/gateway/mod.rs`**
+- [ ] **Step 2: Add module to `src/gateway/mod.rs`**
 
 Add after line 88 (`pub mod voice;`):
 
@@ -164,7 +164,7 @@ Expected: All 4 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/media.rs core/src/gateway/mod.rs
+git add src/gateway/media.rs src/gateway/mod.rs
 git commit -m "gateway: add MediaItem type and PendingMedia for _media convention"
 ```
 
@@ -173,11 +173,11 @@ git commit -m "gateway: add MediaItem type and PendingMedia for _media conventio
 ### Task 2: Extend `MediaCache` with `download_media_item()`
 
 **Files:**
-- Modify: `core/src/media/cache.rs`
+- Modify: `src/media/cache.rs`
 
 - [ ] **Step 1: Write tests for `download_media_item`**
 
-Add these tests at the end of the `mod tests` block in `core/src/media/cache.rs`:
+Add these tests at the end of the `mod tests` block in `src/media/cache.rs`:
 
 ```rust
     #[tokio::test]
@@ -259,7 +259,7 @@ Expected: FAIL — `download_media_item` does not exist yet.
 
 - [ ] **Step 3: Raise limits and implement `download_media_item`**
 
-In `core/src/media/cache.rs`, change constants:
+In `src/media/cache.rs`, change constants:
 
 ```rust
 /// Maximum file size allowed (50 MB — for video files).
@@ -405,7 +405,7 @@ Expected: All tests pass (existing + 3 new).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/media/cache.rs
+git add src/media/cache.rs
 git commit -m "media: add download_media_item() with data URL support and 50MB limit"
 ```
 
@@ -414,14 +414,14 @@ git commit -m "media: add download_media_item() with data URL support and 50MB l
 ### Task 3: Add `_media` field to generation tool outputs
 
 **Files:**
-- Modify: `core/src/builtin_tools/generation/image_generate.rs`
-- Modify: `core/src/builtin_tools/generation/video_generate.rs`
-- Modify: `core/src/builtin_tools/generation/audio_generate.rs`
-- Modify: `core/src/builtin_tools/generation/speech_generate.rs`
+- Modify: `src/builtin_tools/generation/image_generate.rs`
+- Modify: `src/builtin_tools/generation/video_generate.rs`
+- Modify: `src/builtin_tools/generation/audio_generate.rs`
+- Modify: `src/builtin_tools/generation/speech_generate.rs`
 
 - [ ] **Step 1: Add `_media` to `ImageGenerateOutput`**
 
-In `core/src/builtin_tools/generation/image_generate.rs`:
+In `src/builtin_tools/generation/image_generate.rs`:
 
 Add import at top:
 ```rust
@@ -453,7 +453,7 @@ Update test `test_output_serialization` to include `_media` field in the test ou
 
 - [ ] **Step 2: Add `_media` to `VideoGenerateOutput`**
 
-Same pattern in `core/src/builtin_tools/generation/video_generate.rs`:
+Same pattern in `src/builtin_tools/generation/video_generate.rs`:
 
 Add import, add `pub _media: Vec<MediaItem>` field, populate at construction (line ~155):
 ```rust
@@ -467,7 +467,7 @@ Add import, add `pub _media: Vec<MediaItem>` field, populate at construction (li
 
 - [ ] **Step 3: Add `_media` to `AudioGenerateOutput`**
 
-Same pattern in `core/src/builtin_tools/generation/audio_generate.rs`:
+Same pattern in `src/builtin_tools/generation/audio_generate.rs`:
 
 Add import, add `pub _media: Vec<MediaItem>` field, populate at construction (line ~126):
 ```rust
@@ -481,7 +481,7 @@ Add import, add `pub _media: Vec<MediaItem>` field, populate at construction (li
 
 - [ ] **Step 4: Add `_media` to `SpeechGenerateOutput`**
 
-Same pattern in `core/src/builtin_tools/generation/speech_generate.rs`:
+Same pattern in `src/builtin_tools/generation/speech_generate.rs`:
 
 Add import, add `pub _media: Vec<MediaItem>` field, populate at construction (line ~233):
 ```rust
@@ -508,7 +508,7 @@ Expected: All tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/builtin_tools/generation/
+git add src/builtin_tools/generation/
 git commit -m "generation: add _media field to all generation tool outputs"
 ```
 
@@ -517,11 +517,11 @@ git commit -m "generation: add _media field to all generation tool outputs"
 ### Task 4: Create `media_send` built-in tool
 
 **Files:**
-- Create: `core/src/builtin_tools/media_send.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
-- Modify: `core/src/executor/builtin_registry/groups.rs`
+- Create: `src/builtin_tools/media_send.rs`
+- Modify: `src/builtin_tools/mod.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
 
-- [ ] **Step 1: Create `core/src/builtin_tools/media_send.rs`**
+- [ ] **Step 1: Create `src/builtin_tools/media_send.rs`**
 
 ```rust
 //! media_send — LLM-invoked tool for delivering media to the user.
@@ -657,14 +657,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register module in `core/src/builtin_tools/mod.rs`**
+- [ ] **Step 2: Register module in `src/builtin_tools/mod.rs`**
 
 Add after existing module declarations (e.g., after `pub mod voice_tools;` line 75):
 ```rust
 pub mod media_send;
 ```
 
-- [ ] **Step 3: Add `media_send` to `content_gen` group in `core/src/executor/builtin_registry/groups.rs`**
+- [ ] **Step 3: Add `media_send` to `content_gen` group in `src/executor/builtin_registry/groups.rs`**
 
 Change line ~39:
 ```rust
@@ -677,7 +677,7 @@ to:
 
 - [ ] **Step 4: Register `MediaSendTool` in the builtin registry**
 
-Find where other generation tools are registered (search for `ImageGenerateTool` registration in `core/src/executor/builtin_registry/`). Add `MediaSendTool` registration alongside them:
+Find where other generation tools are registered (search for `ImageGenerateTool` registration in `src/executor/builtin_registry/`). Add `MediaSendTool` registration alongside them:
 
 ```rust
 registry.register(MediaSendTool::new());
@@ -701,7 +701,7 @@ Expected: Success.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/builtin_tools/media_send.rs core/src/builtin_tools/mod.rs core/src/executor/builtin_registry/
+git add src/builtin_tools/media_send.rs src/builtin_tools/mod.rs src/executor/builtin_registry/
 git commit -m "tools: add media_send tool for LLM-initiated media delivery"
 ```
 
@@ -710,11 +710,11 @@ git commit -m "tools: add media_send tool for LLM-initiated media delivery"
 ### Task 5: Wire `PendingMedia` into `StreamCallback` for `_media` extraction
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs`
+- Modify: `src/gateway/execution_engine/run_loop.rs`
 
 - [ ] **Step 1: Add `pending_media` field to `StreamCallback`**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, add import at top:
+In `src/gateway/execution_engine/run_loop.rs`, add import at top:
 ```rust
 use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
 ```
@@ -781,7 +781,7 @@ In `on_tool_done` method (line ~394), add media extraction BEFORE the existing c
 
 - [ ] **Step 3: Add `pending_media` to `RunRequest`**
 
-In `core/src/gateway/execution_engine/mod.rs`, add import and field to `RunRequest` (line ~52):
+In `src/gateway/execution_engine/mod.rs`, add import and field to `RunRequest` (line ~52):
 
 ```rust
 use crate::gateway::media::PendingMedia;
@@ -795,9 +795,9 @@ Add field after `attachments`:
 ```
 
 Update all `RunRequest` construction sites to include `pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))` — these will be replaced with the shared Arc in Task 6. Search for `RunRequest {` in:
-- `core/src/gateway/execution_engine/tests.rs`
-- `core/src/gateway/inbound_router/executor.rs`
-- `core/src/gateway/session_scheduler.rs`
+- `src/gateway/execution_engine/tests.rs`
+- `src/gateway/inbound_router/executor.rs`
+- `src/gateway/session_scheduler.rs`
 
 - [ ] **Step 4: Update `StreamCallback::new()` call site to use `request.pending_media`**
 
@@ -821,7 +821,7 @@ Expected: Success.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "gateway: extract _media from tool output in StreamCallback"
 ```
 
@@ -830,11 +830,11 @@ git commit -m "gateway: extract _media from tool output in StreamCallback"
 ### Task 6: Add media delivery to `ReplyEmitter`
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/reply_emitter.rs`
 
 - [ ] **Step 1: Add `pending_media` and `media_cache` fields**
 
-Add imports at top of `core/src/gateway/reply_emitter.rs`:
+Add imports at top of `src/gateway/reply_emitter.rs`:
 ```rust
 use crate::gateway::media::PendingMedia;
 use crate::media::cache::MediaCache;
@@ -967,7 +967,7 @@ In the `StreamEvent::AskUser` arm of `emit()` (reply_emitter.rs line ~786), add 
 
 These constructors now require `pending_media: PendingMedia`. The key wiring pattern is: **create `PendingMedia` Arc, pass to `ReplyEmitter`, AND store it in `RunRequest` so `StreamCallback` gets the same Arc.**
 
-**`core/src/gateway/inbound_router/executor.rs`** (lines ~124, ~134, ~226):
+**`src/gateway/inbound_router/executor.rs`** (lines ~124, ~134, ~226):
 Create `pending_media` before building `ReplyEmitter`, pass to `with_config()`. Then when building `RunRequest`, set `pending_media: pending_media.clone()`. This ensures `StreamCallback` (in `run_loop.rs`) uses the same Arc via `request.pending_media`.
 
 ```rust
@@ -983,10 +983,10 @@ let re = ReplyEmitter::with_config(
 // pending_media: pending_media.clone(),
 ```
 
-**`core/src/gateway/session_scheduler.rs`** (lines ~176, ~392):
+**`src/gateway/session_scheduler.rs`** (lines ~176, ~392):
 Same pattern — create `PendingMedia`, pass to `ReplyEmitter::with_config(...)`, then pass to `RunRequest`.
 
-**`core/src/gateway/reply_emitter.rs` tests** (lines ~857, ~879, ~898, ~913):
+**`src/gateway/reply_emitter.rs` tests** (lines ~857, ~879, ~898, ~913):
 Pass `Arc::new(Mutex::new(Vec::new()))` as the last argument.
 
 - [ ] **Step 8: Compile check**
@@ -1002,7 +1002,7 @@ Expected: All existing tests pass.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add core/src/gateway/reply_emitter.rs core/src/gateway/inbound_router/executor.rs core/src/gateway/session_scheduler.rs core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/reply_emitter.rs src/gateway/inbound_router/executor.rs src/gateway/session_scheduler.rs src/gateway/execution_engine/run_loop.rs
 git commit -m "gateway: wire PendingMedia through ReplyEmitter for media delivery"
 ```
 
@@ -1011,11 +1011,11 @@ git commit -m "gateway: wire PendingMedia through ReplyEmitter for media deliver
 ### Task 7: Add `media_send` prompt guidance
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs`
+- Modify: `src/agent_loop/prompt_builder.rs`
 
 - [ ] **Step 1: Add media_send guidance to `BASE_BEHAVIOR`**
 
-In `core/src/agent_loop/prompt_builder.rs`, find the last line of `BASE_BEHAVIOR` (line ~57, ending with `...use them.";`). Change the closing to continue with a new rule:
+In `src/agent_loop/prompt_builder.rs`, find the last line of `BASE_BEHAVIOR` (line ~57, ending with `...use them.";`). Change the closing to continue with a new rule:
 
 Replace:
 ```rust
@@ -1037,7 +1037,7 @@ Expected: Success.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "prompt: add media_send guidance to BASE_BEHAVIOR"
 ```
 
@@ -1046,7 +1046,7 @@ git commit -m "prompt: add media_send guidance to BASE_BEHAVIOR"
 ### Task 8: Add temp file cleanup at RunComplete
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/reply_emitter.rs`
 
 The spec requires `MediaCache::cleanup_session(session_id)` after run completes. The existing `cleanup_stale()` handles crash residue (1-hour TTL), but we should eagerly clean up after each run.
 
@@ -1064,7 +1064,7 @@ In `reply_emitter.rs`, in the `StreamEvent::RunComplete` arm (line ~716), after 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add core/src/gateway/reply_emitter.rs
+git add src/gateway/reply_emitter.rs
 git commit -m "gateway: cleanup media temp files after run completes"
 ```
 

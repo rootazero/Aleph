@@ -75,16 +75,16 @@ Ollama already has `TagsResponse` struct with serde derive — L1 tests can use 
 
 | Action | File | Layer | Tests |
 |--------|------|-------|-------|
-| Modify | `core/src/providers/protocols/openai.rs` | L1 | ~3 parse tests + extract `parse_models_response()` |
-| Modify | `core/src/providers/protocols/gemini.rs` | L1 | ~3 parse tests + extract `parse_gemini_models_response()` |
-| Modify | `core/src/providers/ollama.rs` | L1 | ~3 parse tests (uses existing `TagsResponse` serde) |
-| Modify | `core/src/providers/model_registry.rs` | — | Add `with_ttl()` builder method |
-| New | `core/tests/model_discovery_integration.rs` | L2 | ~12 wiremock tests |
-| Modify | `core/tests/features/models/chat_handlers.feature` | L3 | Extend with ~10 model discovery scenarios |
-| Modify | `core/tests/steps/models_steps.rs` | L3 | Add model discovery step implementations |
-| New | `core/tests/real_api_probe.rs` | L4 | 4 `#[ignore]` real API tests |
+| Modify | `src/providers/protocols/openai.rs` | L1 | ~3 parse tests + extract `parse_models_response()` |
+| Modify | `src/providers/protocols/gemini.rs` | L1 | ~3 parse tests + extract `parse_gemini_models_response()` |
+| Modify | `src/providers/ollama.rs` | L1 | ~3 parse tests (uses existing `TagsResponse` serde) |
+| Modify | `src/providers/model_registry.rs` | — | Add `with_ttl()` builder method |
+| New | `tests/model_discovery_integration.rs` | L2 | ~12 wiremock tests |
+| Modify | `tests/features/models/chat_handlers.feature` | L3 | Extend with ~10 model discovery scenarios |
+| Modify | `tests/steps/models_steps.rs` | L3 | Add model discovery step implementations |
+| New | `tests/real_api_probe.rs` | L4 | 4 `#[ignore]` real API tests |
 
-Note: L2 and L4 tests go in `core/tests/` (integration test directory), not `core/src/`, to avoid module declaration complexity and follow Rust convention.
+Note: L2 and L4 tests go in `tests/` (integration test directory), not `src/`, to avoid module declaration complexity and follow Rust convention.
 
 Note: L3 BDD scenarios are added to the existing `chat_handlers.feature` rather than a new file, since the existing file already covers `models.*` RPC handlers.
 
@@ -144,7 +144,7 @@ pub(crate) fn parse_gemini_models_response(body: &serde_json::Value) -> Result<V
 
 ### L2: Integration Tests — wiremock + ModelRegistry
 
-Full model discovery flow with mock HTTP servers. Located in `core/tests/model_discovery_integration.rs`.
+Full model discovery flow with mock HTTP servers. Located in `tests/model_discovery_integration.rs`.
 
 Each test spins up a wiremock `MockServer`, creates a `ProviderConfig` with `base_url` pointing to the mock, and exercises `ModelRegistry` methods.
 
@@ -217,7 +217,7 @@ Each test spins up a wiremock `MockServer`, creates a `ProviderConfig` with `bas
 
 ### L3: BDD Scenarios — RPC Handler End-to-End
 
-Added to existing `core/tests/features/models/chat_handlers.feature`. Reuses AlephWorld + ModelsContext with extensions for mutable config.
+Added to existing `tests/features/models/chat_handlers.feature`. Reuses AlephWorld + ModelsContext with extensions for mutable config.
 
 ```gherkin
   # === Model Discovery Scenarios ===
@@ -286,7 +286,7 @@ Implementation notes for new BDD steps:
 
 ### L4: Real API Tests
 
-Located in `core/tests/real_api_probe.rs`. Gated by `#[ignore]`. Run via `cargo test -p alephcore --test real_api_probe -- --ignored`.
+Located in `tests/real_api_probe.rs`. Gated by `#[ignore]`. Run via `cargo test -p alephcore --test real_api_probe -- --ignored`.
 
 ```rust
 #[tokio::test]
@@ -331,7 +331,7 @@ async fn real_full_discovery_flow()
 ## New Dependency
 
 ```toml
-# core/Cargo.toml [dev-dependencies]
+# Cargo.toml [dev-dependencies]
 wiremock = "0.6"
 ```
 

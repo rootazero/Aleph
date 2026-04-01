@@ -246,7 +246,7 @@ impl SwiftBridge {
 Split existing `DesktopTool` into four domain-specific builtin tools:
 
 ```
-core/src/builtin_tools/desktop/
+src/builtin_tools/desktop/
 ├── mod.rs          — Unified re-export
 ├── screen.rs       — ScreenTool
 ├── pim.rs          — PimTool

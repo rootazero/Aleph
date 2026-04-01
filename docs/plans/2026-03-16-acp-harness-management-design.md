@@ -22,7 +22,7 @@ Aleph 已完成 ACP 基础设施（协议层、传输层、会话管理、3 个 
 ### AcpHarnessConfig
 
 ```rust
-// core/src/config/types/acp.rs
+// src/config/types/acp.rs
 
 pub struct AcpConfig {
     pub enabled: bool,
@@ -58,7 +58,7 @@ pub enum OutputFormat {
 
 ## Part 2: Gateway RPC Handlers
 
-New file: `core/src/gateway/handlers/acp_config.rs`
+New file: `src/gateway/handlers/acp_config.rs`
 
 ### API Methods
 
@@ -125,7 +125,7 @@ impl AcpHarnessManager {
 
 ### CustomHarness
 
-New file: `core/src/acp/harnesses/custom.rs`
+New file: `src/acp/harnesses/custom.rs`
 
 ```rust
 pub struct CustomHarness {

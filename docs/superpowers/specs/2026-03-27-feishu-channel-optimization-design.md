@@ -30,7 +30,7 @@ Aleph's Feishu channel (1955 lines, 5 files) is a functional MVP but has signifi
 ## File Structure (After)
 
 ```
-core/src/gateway/interfaces/feishu/
+src/gateway/interfaces/feishu/
 ├── mod.rs          # FeishuChannel: lifecycle + Channel trait (~150 lines)
 ├── config.rs       # FeishuConfig + validation + GroupSessionScope (~100 lines)  [NEW]
 ├── types.rs        # Pure data types: events, API request/response (~200 lines)  [SLIMMED]
@@ -207,7 +207,7 @@ impl MessageOperations for FeishuMessageOps {
 }
 ```
 
-**Registration**: In `FeishuChannel::start()`, after successful auth, register `FeishuMessageOps` into `MessageOperationsRegistry` (at `core/src/builtin_tools/message/tool.rs`). The registry is accessed via `AppContext` — same pattern as Telegram (`telegram/mod.rs` registers in `start()`) and Discord. The channel receives a handle to the registry through the channel factory (`create_channel_from_config` in `core/src/gateway/handlers/channel.rs`).
+**Registration**: In `FeishuChannel::start()`, after successful auth, register `FeishuMessageOps` into `MessageOperationsRegistry` (at `src/builtin_tools/message/tool.rs`). The registry is accessed via `AppContext` — same pattern as Telegram (`telegram/mod.rs` registers in `start()`) and Discord. The channel receives a handle to the registry through the channel factory (`create_channel_from_config` in `src/gateway/handlers/channel.rs`).
 
 ## Section 3: Sender Name Cache (Time-Based Eviction)
 
@@ -368,7 +368,7 @@ Called in `FeishuChannel::new()`, which changes signature to `Result<Self, Chann
 | `FeishuClient` struct | **REPLACED** by `TokenManager` + `FeishuApi` |
 | `ws_reconnect_handle()` | **REPLACED** by `FeishuApi::refresh_ws_endpoint()` |
 | All `FeishuClient` references in `streaming.rs` | **UPDATE** to `FeishuApi` (import, field type, constructor param) |
-| `FeishuClient` in `core/src/gateway/inbound_router/executor.rs` | **UPDATE** — currently creates a fresh `Arc::new(FeishuClient::new(&feishu_cfg))` per emitter (line 254). Change to receive the shared `Arc<FeishuApi>` from `FeishuChannel` via the channel registry, not create a new instance. This avoids duplicate token managers and ensures consistent auth state. |
+| `FeishuClient` in `src/gateway/inbound_router/executor.rs` | **UPDATE** — currently creates a fresh `Arc::new(FeishuClient::new(&feishu_cfg))` per emitter (line 254). Change to receive the shared `Arc<FeishuApi>` from `FeishuChannel` via the channel registry, not create a new instance. This avoids duplicate token managers and ensures consistent auth state. |
 
 ## Testing Strategy
 

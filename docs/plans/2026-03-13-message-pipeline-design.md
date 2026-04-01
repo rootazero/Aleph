@@ -41,7 +41,7 @@ InboundRouter.handle_message()
 ### New Module Layout
 
 ```
-core/src/gateway/
+src/gateway/
     ├── pipeline/
     │   ├── mod.rs                  // MessagePipeline
     │   ├── debounce.rs             // DebounceBuffer

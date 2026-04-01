@@ -58,7 +58,7 @@ This covers v2 `SkillManifest` skills (loaded from the same directories by `Skil
 
 ### 1. Shared guidance constant
 
-**File**: `core/src/skill/prompt.rs`
+**File**: `src/skill/prompt.rs`
 
 Add a constant for the deferred loading guidance text, used by both injection points:
 
@@ -73,22 +73,22 @@ Note: tool name is `skill_read` (not `read_skill`) — matches `ReadSkillTool::N
 
 ### 2. Add guidance to v2 thinker path
 
-**File**: `core/src/thinker/layers/skill_instructions.rs` — `inject()`
+**File**: `src/thinker/layers/skill_instructions.rs` — `inject()`
 
 After `build_skills_prompt_xml()` output, append `DEFERRED_LOADING_GUIDANCE` to the prompt. The existing header text ("You can invoke skills using the `skill` tool...") is kept, with the guidance appended after it.
 
 ### 3. Add guidance to agent_loop path
 
-**File**: `core/src/agent_loop/prompt_builder.rs` — `build()`
+**File**: `src/agent_loop/prompt_builder.rs` — `build()`
 
 Same change as thinker path — append `DEFERRED_LOADING_GUIDANCE` after the skills XML section.
 
 ### 4. Register `ReadSkillTool` in BuiltinToolRegistry
 
 **Files**:
-- `core/src/executor/builtin_registry/registry.rs` — add `read_skill_tool: ReadSkillTool` field
-- `core/src/executor/builtin_registry/builder.rs` — create `ReadSkillTool::default()`, register `"skill_read"` in tools map with schema, add to struct initialization
-- `core/src/executor/builtin_registry/registry.rs` — add `"skill_read"` match arm in `execute_tool()`
+- `src/executor/builtin_registry/registry.rs` — add `read_skill_tool: ReadSkillTool` field
+- `src/executor/builtin_registry/builder.rs` — create `ReadSkillTool::default()`, register `"skill_read"` in tools map with schema, add to struct initialization
+- `src/executor/builtin_registry/registry.rs` — add `"skill_read"` match arm in `execute_tool()`
 
 `ReadSkillTool::default()` calls `with_auto_discover(None)` which discovers global skill directories. This matches the existing `ListSkillsTool::default()` behavior and is sufficient because:
 - Most skills are installed globally (`~/.aleph/skills`)
@@ -97,10 +97,10 @@ Same change as thinker path — append `DEFERRED_LOADING_GUIDANCE` after the ski
 ### 5. Clean up dead code
 
 **Files**:
-- `core/src/extension/mod.rs` — remove `build_skill_instructions()` function (dead code, never called)
-- `core/src/extension/skill_tool.rs` — remove `build_skill_tool_description()`, `build_skill_tool_description_v2()`, and `filter_skills_by_scope()` (dead code / unused prepared v2 API)
-- `core/src/extension/skill_ops.rs` — remove `get_skill_tool_description()` method (only caller of dead code)
-- `core/src/extension/mod.rs` — remove `build_skill_tool_description` from `pub use` exports
+- `src/extension/mod.rs` — remove `build_skill_instructions()` function (dead code, never called)
+- `src/extension/skill_tool.rs` — remove `build_skill_tool_description()`, `build_skill_tool_description_v2()`, and `filter_skills_by_scope()` (dead code / unused prepared v2 API)
+- `src/extension/skill_ops.rs` — remove `get_skill_tool_description()` method (only caller of dead code)
+- `src/extension/mod.rs` — remove `build_skill_tool_description` from `pub use` exports
 
 ## What does NOT change
 

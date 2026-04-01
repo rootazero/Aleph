@@ -17,24 +17,24 @@
 ### New Files
 | File | Responsibility |
 |------|---------------|
-| `core/src/config/types/execution.rs` | `ExecutionConfig` struct (serde + JsonSchema) |
-| `core/src/gateway/handlers/execution_config.rs` | RPC handler: `execution_config.get` / `.update` |
+| `src/config/types/execution.rs` | `ExecutionConfig` struct (serde + JsonSchema) |
+| `src/gateway/handlers/execution_config.rs` | RPC handler: `execution_config.get` / `.update` |
 | `interfaces/webchat/src/views/settings/execution.rs` | Panel Execution settings page |
 
 ### Modified Files
 | File | Change |
 |------|--------|
-| `core/src/agent_loop/loop_core.rs` | Remove `timeout_secs` from `LoopConfig`, delete timeout check, rewrite `enforce_context_limit`, add `find_safe_cut_point` + `remove_oldest_complete_round` |
-| `core/src/gateway/execution_engine/mod.rs` | Update `ExecutionEngineConfig` default to 172_800 |
-| `core/src/gateway/execution_engine/engine.rs` | Resettable deadline, cascade timeout resolution |
-| `core/src/gateway/execution_engine/run_loop.rs` | Accept deadline param, wrap compression, delete duplicate timeout resolution |
-| `core/src/config/types/orchestrator.rs` | Update default timeout to 172_800 |
-| `core/src/config/types/mod.rs` | Add `pub mod execution;` + `pub use execution::*;` |
-| `core/src/config/structs.rs` | Add `execution: ExecutionConfig` field to `Config` |
-| `core/src/memory/session_compactor/mod.rs` | Early return in `prepare_history` |
-| `core/src/gateway/agent_instance.rs` | Add `timeout_secs: Option<u64>` to `AgentInstanceConfig` |
-| `core/src/gateway/handlers/mod.rs` | Add `pub mod execution_config;` |
-| `core/src/bin/aleph-server/commands/start/builder/handlers.rs` | Register `execution_config` RPC handlers |
+| `src/agent_loop/loop_core.rs` | Remove `timeout_secs` from `LoopConfig`, delete timeout check, rewrite `enforce_context_limit`, add `find_safe_cut_point` + `remove_oldest_complete_round` |
+| `src/gateway/execution_engine/mod.rs` | Update `ExecutionEngineConfig` default to 172_800 |
+| `src/gateway/execution_engine/engine.rs` | Resettable deadline, cascade timeout resolution |
+| `src/gateway/execution_engine/run_loop.rs` | Accept deadline param, wrap compression, delete duplicate timeout resolution |
+| `src/config/types/orchestrator.rs` | Update default timeout to 172_800 |
+| `src/config/types/mod.rs` | Add `pub mod execution;` + `pub use execution::*;` |
+| `src/config/structs.rs` | Add `execution: ExecutionConfig` field to `Config` |
+| `src/memory/session_compactor/mod.rs` | Early return in `prepare_history` |
+| `src/gateway/agent_instance.rs` | Add `timeout_secs: Option<u64>` to `AgentInstanceConfig` |
+| `src/gateway/handlers/mod.rs` | Add `pub mod execution_config;` |
+| `src/bin/aleph-server/commands/start/builder/handlers.rs` | Register `execution_config` RPC handlers |
 | `interfaces/webchat/src/views/settings/mod.rs` | Add `pub mod execution;` + `pub use execution::ExecutionView;` |
 | `interfaces/webchat/src/components/settings_sidebar.rs` | Add `Execution` tab to `SettingsTab` enum + Advanced group |
 | `interfaces/webchat/src/app.rs` | Add `/settings/execution` route |
@@ -44,14 +44,14 @@
 ### Task 1: ExecutionConfig type + Config integration
 
 **Files:**
-- Create: `core/src/config/types/execution.rs`
-- Modify: `core/src/config/types/mod.rs:20-71`
-- Modify: `core/src/config/structs.rs:148-152`
+- Create: `src/config/types/execution.rs`
+- Modify: `src/config/types/mod.rs:20-71`
+- Modify: `src/config/structs.rs:148-152`
 
 - [ ] **Step 1: Create `execution.rs` config type**
 
 ```rust
-// core/src/config/types/execution.rs
+// src/config/types/execution.rs
 //! Execution engine configuration types
 
 use schemars::JsonSchema;
@@ -149,7 +149,7 @@ Expected: No errors
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/config/types/execution.rs core/src/config/types/mod.rs core/src/config/structs.rs
+git add src/config/types/execution.rs src/config/types/mod.rs src/config/structs.rs
 git commit -m "config: add ExecutionConfig type (48h default timeout, 200 max iterations)"
 ```
 
@@ -158,14 +158,14 @@ git commit -m "config: add ExecutionConfig type (48h default timeout, 200 max it
 ### Task 2: Timeout unification — remove LoopConfig.timeout_secs
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs:163-177` (LoopConfig), `:337-342` (timeout check)
-- Modify: `core/src/gateway/execution_engine/mod.rs:41-48` (default)
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:150-158` (LoopConfig construction)
-- Modify: `core/src/config/types/orchestrator.rs:47-49` (default)
+- Modify: `src/agent_loop/loop_core.rs:163-177` (LoopConfig), `:337-342` (timeout check)
+- Modify: `src/gateway/execution_engine/mod.rs:41-48` (default)
+- Modify: `src/gateway/execution_engine/run_loop.rs:150-158` (LoopConfig construction)
+- Modify: `src/config/types/orchestrator.rs:47-49` (default)
 
 - [ ] **Step 1: Remove `timeout_secs` from `LoopConfig` and update default**
 
-In `core/src/agent_loop/loop_core.rs`, change `LoopConfig` (lines 163-177):
+In `src/agent_loop/loop_core.rs`, change `LoopConfig` (lines 163-177):
 
 ```rust
 /// Loop configuration — guards against runaway loops.
@@ -186,7 +186,7 @@ impl Default for LoopConfig {
 
 - [ ] **Step 2: Delete timeout check in the loop**
 
-In `core/src/agent_loop/loop_core.rs`, remove lines 338-342 (inside `run_with_history_messages`):
+In `src/agent_loop/loop_core.rs`, remove lines 338-342 (inside `run_with_history_messages`):
 
 Delete:
 ```rust
@@ -201,7 +201,7 @@ Also delete the `let start = Instant::now();` line (334) and the `use std::time:
 
 - [ ] **Step 3: Update `ExecutionEngineConfig` default**
 
-In `core/src/gateway/execution_engine/mod.rs`, change line 45:
+In `src/gateway/execution_engine/mod.rs`, change line 45:
 
 ```rust
             default_timeout_secs: 172_800,
@@ -209,7 +209,7 @@ In `core/src/gateway/execution_engine/mod.rs`, change line 45:
 
 - [ ] **Step 4: Update `run_loop.rs` — remove duplicate timeout and `timeout_secs` from LoopConfig construction**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, change lines 150-159:
+In `src/gateway/execution_engine/run_loop.rs`, change lines 150-159:
 
 Replace:
 ```rust
@@ -239,7 +239,7 @@ With:
 
 - [ ] **Step 5: Wire `Config.execution` into `ExecutionEngineConfig` at startup**
 
-In `core/src/bin/aleph-server/commands/start/builder/agent_init.rs`, replace line 531:
+In `src/bin/aleph-server/commands/start/builder/agent_init.rs`, replace line 531:
 
 Replace:
 ```rust
@@ -274,7 +274,7 @@ to:
 
 - [ ] **Step 6: Update `OrchestratorGuards` default**
 
-In `core/src/config/types/orchestrator.rs`, change `default_timeout_seconds` (line 47-49):
+In `src/config/types/orchestrator.rs`, change `default_timeout_seconds` (line 47-49):
 
 ```rust
 fn default_timeout_seconds() -> u64 {
@@ -289,15 +289,15 @@ Also update the test assertion on line 99:
 
 - [ ] **Step 7: Update all LoopConfig constructions in tests**
 
-In `core/src/agent_loop/loop_core.rs` — approximately 14 test instances that construct `LoopConfig { max_iterations: N, token_budget: M, timeout_secs: T }`. Remove the `timeout_secs` field from each.
+In `src/agent_loop/loop_core.rs` — approximately 14 test instances that construct `LoopConfig { max_iterations: N, token_budget: M, timeout_secs: T }`. Remove the `timeout_secs` field from each.
 
-In `core/src/agent_loop/integration_probe.rs` — line 168: remove `timeout_secs` field.
+In `src/agent_loop/integration_probe.rs` — line 168: remove `timeout_secs` field.
 
-In `core/src/agent_loop/subagent_tool.rs` — line 132: remove `timeout_secs` field.
+In `src/agent_loop/subagent_tool.rs` — line 132: remove `timeout_secs` field.
 
-In `core/src/agent_loop/factory.rs` — lines 135, 158, 187, 214: remove `timeout_secs` field from each.
+In `src/agent_loop/factory.rs` — lines 135, 158, 187, 214: remove `timeout_secs` field from each.
 
-In `core/src/gateway/execution_engine/tests.rs` — update any `LoopConfig` construction.
+In `src/gateway/execution_engine/tests.rs` — update any `LoopConfig` construction.
 
 - [ ] **Step 8: Compile and test**
 
@@ -307,7 +307,7 @@ Expected: All existing tests pass (timeout-related behavior now managed by Engin
 - [ ] **Step 9: Commit**
 
 ```bash
-git add core/src/agent_loop/ core/src/gateway/execution_engine/ core/src/config/types/orchestrator.rs
+git add src/agent_loop/ src/gateway/execution_engine/ src/config/types/orchestrator.rs
 git commit -m "engine: unify timeout to Engine layer, remove LoopConfig.timeout_secs, default 48h"
 ```
 
@@ -316,12 +316,12 @@ git commit -m "engine: unify timeout to Engine layer, remove LoopConfig.timeout_
 ### Task 3: Cascade timeout resolution + agent-level override
 
 **Files:**
-- Modify: `core/src/gateway/agent_instance.rs:17-44` (AgentInstanceConfig)
-- Modify: `core/src/gateway/execution_engine/engine.rs:349-351` (timeout resolution)
+- Modify: `src/gateway/agent_instance.rs:17-44` (AgentInstanceConfig)
+- Modify: `src/gateway/execution_engine/engine.rs:349-351` (timeout resolution)
 
 - [ ] **Step 1: Add `timeout_secs` to `AgentInstanceConfig`**
 
-In `core/src/gateway/agent_instance.rs`, add after `tool_permissions` field (line 43):
+In `src/gateway/agent_instance.rs`, add after `tool_permissions` field (line 43):
 
 ```rust
     /// Optional per-agent timeout override (seconds). None = use global default.
@@ -346,7 +346,7 @@ In `AgentInstanceConfig` impl block (after `tool_permissions()` method, around l
 
 - [ ] **Step 3: Update cascade resolution in `engine.rs`**
 
-In `core/src/gateway/execution_engine/engine.rs`, replace lines 349-351:
+In `src/gateway/execution_engine/engine.rs`, replace lines 349-351:
 
 Replace:
 ```rust
@@ -366,8 +366,8 @@ With:
 - [ ] **Step 4: Update any `AgentInstanceConfig` construction sites that use struct literal syntax**
 
 Search for `AgentInstanceConfig {` across the codebase and add `timeout_secs: None,` where needed. Key locations:
-- `core/src/gateway/agent_instance.rs` — `from_resolved_agent()` method
-- `core/src/bin/aleph-server/commands/start/builder/agent_init.rs`
+- `src/gateway/agent_instance.rs` — `from_resolved_agent()` method
+- `src/bin/aleph-server/commands/start/builder/agent_init.rs`
 - Any test files constructing `AgentInstanceConfig`
 
 Run: `cargo check -p alephcore` to find any missing fields.
@@ -380,7 +380,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/agent_instance.rs core/src/gateway/execution_engine/engine.rs core/src/bin/aleph-server/
+git add src/gateway/agent_instance.rs src/gateway/execution_engine/engine.rs src/bin/aleph-server/
 git commit -m "engine: add agent-level timeout override, three-layer cascade resolution"
 ```
 
@@ -389,8 +389,8 @@ git commit -m "engine: add agent-level timeout override, three-layer cascade res
 ### Task 4: Resettable deadline (compression isolation)
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/engine.rs:348-370` (execute method)
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:34-40,191-201` (run_agent_loop signature + compression wrapping)
+- Modify: `src/gateway/execution_engine/engine.rs:348-370` (execute method)
+- Modify: `src/gateway/execution_engine/run_loop.rs:34-40,191-201` (run_agent_loop signature + compression wrapping)
 
 - [ ] **Step 1: Add `wait_for_deadline` helper in `engine.rs`**
 
@@ -485,7 +485,7 @@ With:
 
 - [ ] **Step 3: Update `run_agent_loop` signature to accept deadline**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, change the signature (lines 34-40):
+In `src/gateway/execution_engine/run_loop.rs`, change the signature (lines 34-40):
 
 Replace:
 ```rust
@@ -560,7 +560,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/engine.rs core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/engine.rs src/gateway/execution_engine/run_loop.rs
 git commit -m "engine: resettable deadline — compression time excluded from agent timeout"
 ```
 
@@ -569,11 +569,11 @@ git commit -m "engine: resettable deadline — compression time excluded from ag
 ### Task 5: Pair-aware truncation
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs:37-116` (enforce_context_limit)
+- Modify: `src/agent_loop/loop_core.rs:37-116` (enforce_context_limit)
 
 - [ ] **Step 1: Write tests for `find_safe_cut_point`**
 
-In `core/src/agent_loop/loop_core.rs`, add to the existing `#[cfg(test)] mod tests` section:
+In `src/agent_loop/loop_core.rs`, add to the existing `#[cfg(test)] mod tests` section:
 
 ```rust
     // --- find_safe_cut_point ---
@@ -687,7 +687,7 @@ Expected: FAIL (functions don't exist yet)
 
 - [ ] **Step 3: Implement `find_safe_cut_point` and `remove_oldest_complete_round`**
 
-In `core/src/agent_loop/loop_core.rs`, add before `enforce_context_limit`:
+In `src/agent_loop/loop_core.rs`, add before `enforce_context_limit`:
 
 ```rust
 const TRUNCATION_NOTICE: &str =
@@ -819,7 +819,7 @@ Expected: All PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/agent_loop/loop_core.rs
+git add src/agent_loop/loop_core.rs
 git commit -m "loop: pair-aware truncation — never orphan ToolCall/ToolResult pairs"
 ```
 
@@ -828,11 +828,11 @@ git commit -m "loop: pair-aware truncation — never orphan ToolCall/ToolResult 
 ### Task 6: Empty session early return
 
 **Files:**
-- Modify: `core/src/memory/session_compactor/mod.rs:170-289` (prepare_history)
+- Modify: `src/memory/session_compactor/mod.rs:170-289` (prepare_history)
 
 - [ ] **Step 1: Add early return in `prepare_history`**
 
-In `core/src/memory/session_compactor/mod.rs`, replace lines 176-187:
+In `src/memory/session_compactor/mod.rs`, replace lines 176-187:
 
 Replace:
 ```rust
@@ -890,7 +890,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/mod.rs
+git add src/memory/session_compactor/mod.rs
 git commit -m "compactor: skip LanceDB query for short sessions (early return)"
 ```
 
@@ -899,14 +899,14 @@ git commit -m "compactor: skip LanceDB query for short sessions (early return)"
 ### Task 7: Backend RPC handler for execution config
 
 **Files:**
-- Create: `core/src/gateway/handlers/execution_config.rs`
-- Modify: `core/src/gateway/handlers/mod.rs`
-- Modify: `core/src/bin/aleph-server/commands/start/builder/handlers.rs`
+- Create: `src/gateway/handlers/execution_config.rs`
+- Modify: `src/gateway/handlers/mod.rs`
+- Modify: `src/bin/aleph-server/commands/start/builder/handlers.rs`
 
 - [ ] **Step 1: Create handler following browser_config pattern**
 
 ```rust
-// core/src/gateway/handlers/execution_config.rs
+// src/gateway/handlers/execution_config.rs
 //! Execution engine configuration RPC handlers
 //!
 //! Provides RPC methods for managing agent execution settings (timeout, iterations).
@@ -1043,7 +1043,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/execution_config.rs core/src/gateway/handlers/mod.rs core/src/bin/aleph-server/commands/start/builder/handlers.rs
+git add src/gateway/handlers/execution_config.rs src/gateway/handlers/mod.rs src/bin/aleph-server/commands/start/builder/handlers.rs
 git commit -m "gateway: add execution_config RPC handler (get/update with validation)"
 ```
 

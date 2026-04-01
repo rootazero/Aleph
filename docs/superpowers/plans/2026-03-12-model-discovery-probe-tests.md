@@ -4,7 +4,7 @@
 
 **Goal:** Add ~35 probe tests across 4 layers (unit, integration, BDD, real API) to validate model discovery at production quality before merging.
 
-**Architecture:** Extract parse helpers from protocol adapters for L1 unit tests. Add wiremock to dev-dependencies for L2 mock HTTP integration tests. Extend existing BDD feature file for L3 RPC handler scenarios. Add `#[ignore]` real API tests in `core/tests/` for L4.
+**Architecture:** Extract parse helpers from protocol adapters for L1 unit tests. Add wiremock to dev-dependencies for L2 mock HTTP integration tests. Extend existing BDD feature file for L3 RPC handler scenarios. Add `#[ignore]` real API tests in `tests/` for L4.
 
 **Tech Stack:** Rust, wiremock 0.6, Cucumber 0.21 (existing), tokio test runtime
 
@@ -16,16 +16,16 @@
 
 | Action | File | Responsibility |
 |--------|------|----------------|
-| Modify | `core/Cargo.toml` | Add `wiremock = "0.6"` dev-dependency |
-| Modify | `core/src/providers/model_registry.rs` | Add `with_ttl()` builder method |
-| Modify | `core/src/providers/protocols/openai.rs` | Extract `parse_models_response()` + 3 L1 tests |
-| Modify | `core/src/providers/protocols/gemini.rs` | Extract `parse_gemini_models_response()` + 3 L1 tests |
-| Modify | `core/src/providers/ollama.rs` | Make `TagsResponse`/`OllamaModelInfo` `pub(crate)` + 3 L1 tests |
-| New | `core/tests/model_discovery_integration.rs` | 12 wiremock integration tests (L2) |
-| Modify | `core/tests/features/models/chat_handlers.feature` | Add 11 model discovery BDD scenarios (L3) |
-| Modify | `core/tests/steps/models_steps.rs` | Add model discovery step implementations (L3) |
-| Modify | `core/tests/world/models_ctx.rs` | Add `get_mutable_config()` for writable handlers |
-| New | `core/tests/real_api_probe.rs` | 4 `#[ignore]` real API tests (L4) |
+| Modify | `Cargo.toml` | Add `wiremock = "0.6"` dev-dependency |
+| Modify | `src/providers/model_registry.rs` | Add `with_ttl()` builder method |
+| Modify | `src/providers/protocols/openai.rs` | Extract `parse_models_response()` + 3 L1 tests |
+| Modify | `src/providers/protocols/gemini.rs` | Extract `parse_gemini_models_response()` + 3 L1 tests |
+| Modify | `src/providers/ollama.rs` | Make `TagsResponse`/`OllamaModelInfo` `pub(crate)` + 3 L1 tests |
+| New | `tests/model_discovery_integration.rs` | 12 wiremock integration tests (L2) |
+| Modify | `tests/features/models/chat_handlers.feature` | Add 11 model discovery BDD scenarios (L3) |
+| Modify | `tests/steps/models_steps.rs` | Add model discovery step implementations (L3) |
+| Modify | `tests/world/models_ctx.rs` | Add `get_mutable_config()` for writable handlers |
+| New | `tests/real_api_probe.rs` | 4 `#[ignore]` real API tests (L4) |
 
 ---
 
@@ -34,11 +34,11 @@
 ### Task 1: Add wiremock dev-dependency
 
 **Files:**
-- Modify: `core/Cargo.toml:211-220` (dev-dependencies section)
+- Modify: `Cargo.toml:211-220` (dev-dependencies section)
 
 - [ ] **Step 1: Add wiremock to dev-dependencies**
 
-In `core/Cargo.toml`, add to `[dev-dependencies]`:
+In `Cargo.toml`, add to `[dev-dependencies]`:
 
 ```toml
 wiremock = "0.6"
@@ -52,7 +52,7 @@ Expected: compiles with no errors
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/Cargo.toml
+git add Cargo.toml
 git commit -m "deps: add wiremock dev-dependency for model discovery probe tests"
 ```
 
@@ -61,7 +61,7 @@ git commit -m "deps: add wiremock dev-dependency for model discovery probe tests
 ### Task 2: Add ModelRegistry::with_ttl()
 
 **Files:**
-- Modify: `core/src/providers/model_registry.rs:65-90`
+- Modify: `src/providers/model_registry.rs:65-90`
 
 - [ ] **Step 1: Write the test**
 
@@ -101,7 +101,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/model_registry.rs
+git add src/providers/model_registry.rs
 git commit -m "providers: add ModelRegistry::with_ttl() for test-configurable cache expiry"
 ```
 
@@ -110,7 +110,7 @@ git commit -m "providers: add ModelRegistry::with_ttl() for test-configurable ca
 ### Task 3: L1 — OpenAI parse_models_response extraction + tests
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai.rs:464-517`
+- Modify: `src/providers/protocols/openai.rs:464-517`
 
 - [ ] **Step 1: Write the 3 L1 tests**
 
@@ -202,7 +202,7 @@ Expected: all pass (new + existing)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/protocols/openai.rs
+git add src/providers/protocols/openai.rs
 git commit -m "providers: extract parse_models_response() from OpenAI list_models with L1 tests"
 ```
 
@@ -211,7 +211,7 @@ git commit -m "providers: extract parse_models_response() from OpenAI list_model
 ### Task 4: L1 — Gemini parse_gemini_models_response extraction + tests
 
 **Files:**
-- Modify: `core/src/providers/protocols/gemini.rs:431-481`
+- Modify: `src/providers/protocols/gemini.rs:431-481`
 
 - [ ] **Step 1: Write the 3 L1 tests**
 
@@ -303,7 +303,7 @@ Expected: all pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/protocols/gemini.rs
+git add src/providers/protocols/gemini.rs
 git commit -m "providers: extract parse_gemini_models_response() with L1 tests"
 ```
 
@@ -312,7 +312,7 @@ git commit -m "providers: extract parse_gemini_models_response() with L1 tests"
 ### Task 5: L1 — Ollama TagsResponse parse tests
 
 **Files:**
-- Modify: `core/src/providers/ollama.rs:125-135,297-330`
+- Modify: `src/providers/ollama.rs:125-135,297-330`
 
 - [ ] **Step 1: Make TagsResponse and OllamaModelInfo pub(crate)**
 
@@ -371,7 +371,7 @@ Expected: all 3 pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/ollama.rs
+git add src/providers/ollama.rs
 git commit -m "providers: make TagsResponse pub(crate) and add L1 parse tests"
 ```
 
@@ -382,13 +382,13 @@ git commit -m "providers: make TagsResponse pub(crate) and add L1 parse tests"
 ### Task 6: L2 — API Probe Success tests (OpenAI, Gemini, Ollama)
 
 **Files:**
-- Create: `core/tests/model_discovery_integration.rs`
+- Create: `tests/model_discovery_integration.rs`
 
-**Reference:** The integration test needs to import from `alephcore` (the crate name in `core/Cargo.toml`). Check `core/Cargo.toml` for `[lib] name = "alephcore"`. The test file goes in `core/tests/` and is automatically picked up by `cargo test -p alephcore --test model_discovery_integration`.
+**Reference:** The integration test needs to import from `alephcore` (the crate name in `Cargo.toml`). Check `Cargo.toml` for `[lib] name = "alephcore"`. The test file goes in `tests/` and is automatically picked up by `cargo test -p alephcore --test model_discovery_integration`.
 
 - [ ] **Step 1: Create test file with OpenAI probe test**
 
-Create `core/tests/model_discovery_integration.rs`:
+Create `tests/model_discovery_integration.rs`:
 
 ```rust
 //! L2 Integration tests: wiremock + ModelRegistry
@@ -447,7 +447,7 @@ async fn probe_openai_models_via_api() {
 Run: `cargo test -p alephcore --test model_discovery_integration probe_openai`
 Expected: PASS
 
-**Note:** `OpenAiProtocol` and `GeminiProtocol` do NOT implement `Default`. They must be constructed via `::new(reqwest::Client::new())`. Check `core/src/providers/protocols/openai.rs:32-36` and `gemini.rs:30-34` for exact constructors.
+**Note:** `OpenAiProtocol` and `GeminiProtocol` do NOT implement `Default`. They must be constructed via `::new(reqwest::Client::new())`. Check `src/providers/protocols/openai.rs:32-36` and `gemini.rs:30-34` for exact constructors.
 
 - [ ] **Step 3: Add Gemini probe test**
 
@@ -496,7 +496,7 @@ async fn probe_gemini_models_via_api() {
 
 - [ ] **Step 4: Add Ollama probe test via OllamaDiscoveryAdapter**
 
-This test is more complex because Ollama uses a separate code path. The `OllamaDiscoveryAdapter` (defined in `core/src/gateway/handlers/models.rs`) wraps `OllamaProvider` to implement `ProtocolAdapter::list_models()`. If `OllamaDiscoveryAdapter` is not public, this test may need to use the mock adapter pattern instead, or the adapter needs to be made `pub(crate)`.
+This test is more complex because Ollama uses a separate code path. The `OllamaDiscoveryAdapter` (defined in `src/gateway/handlers/models.rs`) wraps `OllamaProvider` to implement `ProtocolAdapter::list_models()`. If `OllamaDiscoveryAdapter` is not public, this test may need to use the mock adapter pattern instead, or the adapter needs to be made `pub(crate)`.
 
 ```rust
 #[tokio::test]
@@ -534,7 +534,7 @@ async fn probe_ollama_tags_via_api() {
 }
 ```
 
-**Note:** `OllamaDiscoveryAdapter` in `core/src/gateway/handlers/models.rs` is private. For L2 integration we test `OllamaProvider::list_models()` directly instead of going through ModelRegistry. The ModelRegistry integration for Ollama is implicitly tested through the RPC handler in L3 BDD.
+**Note:** `OllamaDiscoveryAdapter` in `src/gateway/handlers/models.rs` is private. For L2 integration we test `OllamaProvider::list_models()` directly instead of going through ModelRegistry. The ModelRegistry integration for Ollama is implicitly tested through the RPC handler in L3 BDD.
 
 - [ ] **Step 5: Run all probe success tests**
 
@@ -544,7 +544,7 @@ Expected: 2-3 pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/tests/model_discovery_integration.rs
+git add tests/model_discovery_integration.rs
 git commit -m "tests: add L2 API probe success integration tests with wiremock"
 ```
 
@@ -553,7 +553,7 @@ git commit -m "tests: add L2 API probe success integration tests with wiremock"
 ### Task 7: L2 — Fallback Degradation tests
 
 **Files:**
-- Modify: `core/tests/model_discovery_integration.rs`
+- Modify: `tests/model_discovery_integration.rs`
 
 - [ ] **Step 1: Add fallback-to-preset-on-500 test**
 
@@ -744,7 +744,7 @@ Expected: all 5 pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/tests/model_discovery_integration.rs
+git add tests/model_discovery_integration.rs
 git commit -m "tests: add L2 fallback degradation integration tests"
 ```
 
@@ -753,7 +753,7 @@ git commit -m "tests: add L2 fallback degradation integration tests"
 ### Task 8: L2 — Cache Behavior + Concurrency tests
 
 **Files:**
-- Modify: `core/tests/model_discovery_integration.rs`
+- Modify: `tests/model_discovery_integration.rs`
 
 - [ ] **Step 1: Add cache-hit test**
 
@@ -928,7 +928,7 @@ Expected: all tests in the file pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/tests/model_discovery_integration.rs
+git add tests/model_discovery_integration.rs
 git commit -m "tests: add L2 cache behavior and concurrency integration tests"
 ```
 
@@ -939,7 +939,7 @@ git commit -m "tests: add L2 cache behavior and concurrency integration tests"
 ### Task 9: L3 — Extend ModelsContext for mutable config
 
 **Files:**
-- Modify: `core/tests/world/models_ctx.rs`
+- Modify: `tests/world/models_ctx.rs`
 
 - [ ] **Step 1: Add mutable config support**
 
@@ -981,7 +981,7 @@ Expected: compiles
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/world/models_ctx.rs
+git add tests/world/models_ctx.rs
 git commit -m "tests: add mutable config support to ModelsContext for writable RPC handlers"
 ```
 
@@ -990,8 +990,8 @@ git commit -m "tests: add mutable config support to ModelsContext for writable R
 ### Task 10: L3 — BDD model discovery scenarios
 
 **Files:**
-- Modify: `core/tests/features/models/chat_handlers.feature`
-- Modify: `core/tests/steps/models_steps.rs`
+- Modify: `tests/features/models/chat_handlers.feature`
+- Modify: `tests/steps/models_steps.rs`
 
 - [ ] **Step 1: Add BDD scenarios to chat_handlers.feature**
 
@@ -1056,7 +1056,7 @@ Append after existing scenarios:
 
 - [ ] **Step 2: Add step implementations**
 
-Add to `core/tests/steps/models_steps.rs`:
+Add to `tests/steps/models_steps.rs`:
 
 ```rust
 use alephcore::gateway::handlers::models;
@@ -1175,7 +1175,7 @@ async fn given_mutable_config(
 - `handle_refresh` takes `Arc<Config>` (read-only)
 - `handle_set_model` and `handle_set_default` take `Arc<tokio::sync::RwLock<Config>>` (mutable)
 - `handle_set` (backward compat) takes `Arc<tokio::sync::RwLock<Config>>` (delegates to `handle_set_default`)
-- Check actual handler signatures in `core/src/gateway/handlers/models.rs` and adjust
+- Check actual handler signatures in `src/gateway/handlers/models.rs` and adjust
 
 - [ ] **Step 3: Run BDD tests**
 
@@ -1185,7 +1185,7 @@ Expected: existing + new scenarios pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/tests/features/models/chat_handlers.feature core/tests/steps/models_steps.rs
+git add tests/features/models/chat_handlers.feature tests/steps/models_steps.rs
 git commit -m "tests: add L3 BDD model discovery scenarios"
 ```
 
@@ -1194,7 +1194,7 @@ git commit -m "tests: add L3 BDD model discovery scenarios"
 ### Task 11: L4 — Real API probe tests
 
 **Files:**
-- Create: `core/tests/real_api_probe.rs`
+- Create: `tests/real_api_probe.rs`
 
 - [ ] **Step 1: Create real API test file**
 
@@ -1344,7 +1344,7 @@ Expected: compiles (tests not executed)
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/real_api_probe.rs
+git add tests/real_api_probe.rs
 git commit -m "tests: add L4 real API probe tests (ignored, require credentials)"
 ```
 

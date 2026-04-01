@@ -22,8 +22,8 @@
 Implement `PatternSynthesisBackend` trait using `Arc<dyn AiProvider>`, connecting pattern extraction to actual LLM inference.
 
 ### Files
-- **New**: `core/src/poe/crystallization/provider_backend.rs`
-- **Modify**: `core/src/poe/crystallization/mod.rs` (add `pub mod provider_backend`)
+- **New**: `src/poe/crystallization/provider_backend.rs`
+- **Modify**: `src/poe/crystallization/mod.rs` (add `pub mod provider_backend`)
 
 ### Structure
 
@@ -70,7 +70,7 @@ Rationale: Structural inputs (count, satisfaction, timestamps) are sufficient fo
 Replace placeholder `get_idle_seconds()` with real `IdleDetector`, add entropy-driven dual-queue from design doc Section 6.
 
 ### Files
-- **Modify**: `core/src/poe/crystallization/dreaming.rs`
+- **Modify**: `src/poe/crystallization/dreaming.rs`
 
 ### Constructor Change
 

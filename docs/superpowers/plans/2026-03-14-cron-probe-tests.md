@@ -4,7 +4,7 @@
 
 **Goal:** Build 48 integration/probe tests that validate the cron module's production-grade capabilities end-to-end.
 
-**Architecture:** Layered probe architecture — `MockExecutor` (configurable execution mock) → `CronTestHarness` (wraps `ServiceState<FakeClock>` + store + executor) → scenario files (P1-P10). Tests live in `core/tests/cron_probe.rs` + `core/tests/cron_probe/` submodules, following the existing `core/tests/real_api_probe.rs` pattern.
+**Architecture:** Layered probe architecture — `MockExecutor` (configurable execution mock) → `CronTestHarness` (wraps `ServiceState<FakeClock>` + store + executor) → scenario files (P1-P10). Tests live in `tests/cron_probe.rs` + `tests/cron_probe/` submodules, following the existing `tests/real_api_probe.rs` pattern.
 
 **Tech Stack:** Rust, tokio, tempfile, alephcore cron module (ServiceState, FakeClock, CronStore, ops, concurrency, timer, catchup, history)
 
@@ -17,25 +17,25 @@
 ### Prerequisites (production code changes)
 | File | Change |
 |------|--------|
-| `core/src/lib.rs` | Add `pub mod cron;` to export cron module for integration tests |
-| `core/src/cron/service/state.rs` | Make `ServiceState::new` accept bare `CronStore` (wrap in Arc<Mutex> internally) — simplifies test setup |
+| `src/lib.rs` | Add `pub mod cron;` to export cron module for integration tests |
+| `src/cron/service/state.rs` | Make `ServiceState::new` accept bare `CronStore` (wrap in Arc<Mutex> internally) — simplifies test setup |
 
 ### New Test Files
 | File | Responsibility |
 |------|---------------|
-| `core/tests/cron_probe.rs` | Main entry — mod declarations for submodules |
-| `core/tests/cron_probe/mock_executor.rs` | MockExecutor + MockBehavior + ExecutionRecord |
-| `core/tests/cron_probe/harness.rs` | CronTestHarness wrapping ServiceState<FakeClock> |
-| `core/tests/cron_probe/lifecycle.rs` | P1: 8 full lifecycle scenarios |
-| `core/tests/cron_probe/concurrency.rs` | P2: 6 concurrent safety scenarios |
-| `core/tests/cron_probe/scheduling.rs` | P3: 6 scheduling precision scenarios |
-| `core/tests/cron_probe/failure_recovery.rs` | P4: 7 fault recovery scenarios |
-| `core/tests/cron_probe/delivery_alert.rs` | P5: 6 delivery & alert scenarios |
-| `core/tests/cron_probe/chain.rs` | P6: 4 job chaining scenarios |
-| `core/tests/cron_probe/crash.rs` | P7: 3 process-level crash scenarios |
-| `core/tests/cron_probe/gateway.rs` | P9: 3 gateway handler scenarios |
-| `core/tests/cron_probe/history_integration.rs` | P10: 3 history integration scenarios |
-| `core/tests/cron_probe/real_agent.rs` | P8: 2 real agent scenarios (#[ignore]) |
+| `tests/cron_probe.rs` | Main entry — mod declarations for submodules |
+| `tests/cron_probe/mock_executor.rs` | MockExecutor + MockBehavior + ExecutionRecord |
+| `tests/cron_probe/harness.rs` | CronTestHarness wrapping ServiceState<FakeClock> |
+| `tests/cron_probe/lifecycle.rs` | P1: 8 full lifecycle scenarios |
+| `tests/cron_probe/concurrency.rs` | P2: 6 concurrent safety scenarios |
+| `tests/cron_probe/scheduling.rs` | P3: 6 scheduling precision scenarios |
+| `tests/cron_probe/failure_recovery.rs` | P4: 7 fault recovery scenarios |
+| `tests/cron_probe/delivery_alert.rs` | P5: 6 delivery & alert scenarios |
+| `tests/cron_probe/chain.rs` | P6: 4 job chaining scenarios |
+| `tests/cron_probe/crash.rs` | P7: 3 process-level crash scenarios |
+| `tests/cron_probe/gateway.rs` | P9: 3 gateway handler scenarios |
+| `tests/cron_probe/history_integration.rs` | P10: 3 history integration scenarios |
+| `tests/cron_probe/real_agent.rs` | P8: 2 real agent scenarios (#[ignore]) |
 
 ---
 
@@ -44,11 +44,11 @@
 ### Task 1: Export cron module in lib.rs
 
 **Files:**
-- Modify: `core/src/lib.rs`
+- Modify: `src/lib.rs`
 
 - [ ] **Step 1: Add pub mod cron export**
 
-Check if `cron` is already declared. If it's `mod cron` (private), change to `pub mod cron`. If missing, add `pub mod cron;`. This allows integration tests (`core/tests/`) to access `alephcore::cron::*`.
+Check if `cron` is already declared. If it's `mod cron` (private), change to `pub mod cron`. If missing, add `pub mod cron;`. This allows integration tests (`tests/`) to access `alephcore::cron::*`.
 
 - [ ] **Step 2: Verify compilation**
 
@@ -57,7 +57,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/lib.rs
+git add src/lib.rs
 git commit -m "cron: export cron module for integration tests"
 ```
 
@@ -66,20 +66,20 @@ git commit -m "cron: export cron module for integration tests"
 ### Task 2: MockExecutor
 
 **Files:**
-- Create: `core/tests/cron_probe/mock_executor.rs`
-- Create: `core/tests/cron_probe.rs`
+- Create: `tests/cron_probe/mock_executor.rs`
+- Create: `tests/cron_probe.rs`
 
 - [ ] **Step 1: Create main entry file**
 
 ```rust
-// core/tests/cron_probe.rs
+// tests/cron_probe.rs
 mod cron_probe;
 ```
 
 Wait — Rust integration tests require either a single file or `mod.rs` pattern. The correct pattern for a multi-file integration test is:
 
 ```rust
-// core/tests/cron_probe.rs
+// tests/cron_probe.rs
 mod cron_probe {
     pub mod mock_executor;
     pub mod harness;
@@ -87,22 +87,22 @@ mod cron_probe {
 }
 ```
 
-Actually, the standard pattern is to create `core/tests/cron_probe/mod.rs` and have `core/tests/cron_probe.rs` include it. But `cargo test` treats each file in `tests/` as a test crate root. The correct approach:
+Actually, the standard pattern is to create `tests/cron_probe/mod.rs` and have `tests/cron_probe.rs` include it. But `cargo test` treats each file in `tests/` as a test crate root. The correct approach:
 
 ```rust
-// core/tests/cron_probe.rs — this IS the test crate root
-// Submodules are declared here and live in core/tests/cron_probe/
+// tests/cron_probe.rs — this IS the test crate root
+// Submodules are declared here and live in tests/cron_probe/
 mod mock_executor;
 mod harness;
 // (scenario modules added in later tasks)
 ```
 
-And the submodule files go in `core/tests/cron_probe/` directory.
+And the submodule files go in `tests/cron_probe/` directory.
 
 - [ ] **Step 2: Write MockExecutor**
 
 ```rust
-// core/tests/cron_probe/mock_executor.rs
+// tests/cron_probe/mock_executor.rs
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -275,7 +275,7 @@ Run: `cargo test -p alephcore --test cron_probe --no-run`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/tests/cron_probe.rs core/tests/cron_probe/
+git add tests/cron_probe.rs tests/cron_probe/
 git commit -m "cron probe: add MockExecutor test infrastructure"
 ```
 
@@ -284,13 +284,13 @@ git commit -m "cron probe: add MockExecutor test infrastructure"
 ### Task 3: CronTestHarness
 
 **Files:**
-- Create: `core/tests/cron_probe/harness.rs`
-- Modify: `core/tests/cron_probe.rs` (add `pub mod harness;`)
+- Create: `tests/cron_probe/harness.rs`
+- Modify: `tests/cron_probe.rs` (add `pub mod harness;`)
 
 - [ ] **Step 1: Write CronTestHarness**
 
 ```rust
-// core/tests/cron_probe/harness.rs
+// tests/cron_probe/harness.rs
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -610,7 +610,7 @@ impl CronTestHarness {
 
 - [ ] **Step 2: Add module declaration and a smoke test**
 
-Update `core/tests/cron_probe.rs`:
+Update `tests/cron_probe.rs`:
 
 ```rust
 mod mock_executor;
@@ -640,7 +640,7 @@ Expected: 1 test passes.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/tests/cron_probe/ core/tests/cron_probe.rs
+git add tests/cron_probe/ tests/cron_probe.rs
 git commit -m "cron probe: add CronTestHarness with smoke test"
 ```
 
@@ -651,13 +651,13 @@ git commit -m "cron probe: add CronTestHarness with smoke test"
 ### Task 4: P1 Lifecycle Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/lifecycle.rs`
-- Modify: `core/tests/cron_probe.rs` (add `mod lifecycle;`)
+- Create: `tests/cron_probe/lifecycle.rs`
+- Modify: `tests/cron_probe.rs` (add `mod lifecycle;`)
 
 - [ ] **Step 1: Write all 8 lifecycle scenarios**
 
 ```rust
-// core/tests/cron_probe/lifecycle.rs
+// tests/cron_probe/lifecycle.rs
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
 use alephcore::cron::config::{CronJob, ScheduleKind};
@@ -818,7 +818,7 @@ Expected: 8 tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P1 lifecycle probes (8 scenarios)"
 ```
 
@@ -827,13 +827,13 @@ git commit -m "cron probe: P1 lifecycle probes (8 scenarios)"
 ### Task 5: P3 Scheduling Precision Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/scheduling.rs`
-- Modify: `core/tests/cron_probe.rs` (add `mod scheduling;`)
+- Create: `tests/cron_probe/scheduling.rs`
+- Modify: `tests/cron_probe.rs` (add `mod scheduling;`)
 
 - [ ] **Step 1: Write 6 scheduling scenarios**
 
 ```rust
-// core/tests/cron_probe/scheduling.rs
+// tests/cron_probe/scheduling.rs
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
 use alephcore::cron::config::{ErrorReason, ScheduleKind};
@@ -1018,7 +1018,7 @@ Expected: 6 tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P3 scheduling precision probes (6 scenarios)"
 ```
 
@@ -1029,12 +1029,12 @@ git commit -m "cron probe: P3 scheduling precision probes (6 scenarios)"
 ### Task 6: P2 Concurrency Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/concurrency.rs`
+- Create: `tests/cron_probe/concurrency.rs`
 
 - [ ] **Step 1: Write 6 concurrency scenarios**
 
 ```rust
-// core/tests/cron_probe/concurrency.rs
+// tests/cron_probe/concurrency.rs
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
 use alephcore::cron::config::ScheduleKind;
@@ -1209,7 +1209,7 @@ Run: `cargo test -p alephcore --test cron_probe concurrency`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P2 concurrency safety probes (6 scenarios)"
 ```
 
@@ -1218,12 +1218,12 @@ git commit -m "cron probe: P2 concurrency safety probes (6 scenarios)"
 ### Task 7: P4 Fault Recovery Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/failure_recovery.rs`
+- Create: `tests/cron_probe/failure_recovery.rs`
 
 - [ ] **Step 1: Write 7 fault recovery scenarios**
 
 ```rust
-// core/tests/cron_probe/failure_recovery.rs
+// tests/cron_probe/failure_recovery.rs
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
 use alephcore::cron::config::{ErrorReason, RunStatus};
@@ -1413,7 +1413,7 @@ Run: `cargo test -p alephcore --test cron_probe failure_recovery`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P4 fault recovery probes (7 scenarios)"
 ```
 
@@ -1424,12 +1424,12 @@ git commit -m "cron probe: P4 fault recovery probes (7 scenarios)"
 ### Task 8: P5 Delivery & Alert Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/delivery_alert.rs`
+- Create: `tests/cron_probe/delivery_alert.rs`
 
 - [ ] **Step 1: Write 6 delivery/alert scenarios**
 
 ```rust
-// core/tests/cron_probe/delivery_alert.rs
+// tests/cron_probe/delivery_alert.rs
 use super::harness::CronTestHarness;
 use super::mock_executor::MockBehavior;
 use alephcore::cron::alert::should_send_alert;
@@ -1563,7 +1563,7 @@ async fn alert_cooldown_expires() {
 Run: `cargo test -p alephcore --test cron_probe delivery_alert`
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P5 delivery & alert probes (6 scenarios)"
 ```
 
@@ -1572,12 +1572,12 @@ git commit -m "cron probe: P5 delivery & alert probes (6 scenarios)"
 ### Task 9: P6 Chain Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/chain.rs`
+- Create: `tests/cron_probe/chain.rs`
 
 - [ ] **Step 1: Write 4 chain scenarios**
 
 ```rust
-// core/tests/cron_probe/chain.rs
+// tests/cron_probe/chain.rs
 use super::harness::CronTestHarness;
 use alephcore::cron::chain::{detect_cycle, trigger_chain_job};
 use alephcore::cron::config::{CronJob, ScheduleKind};
@@ -1681,7 +1681,7 @@ async fn chain_no_cycle_linear() {
 Run: `cargo test -p alephcore --test cron_probe chain`
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P6 job chaining probes (4 scenarios)"
 ```
 
@@ -1690,12 +1690,12 @@ git commit -m "cron probe: P6 job chaining probes (4 scenarios)"
 ### Task 10: P7 Crash Probes
 
 **Files:**
-- Create: `core/tests/cron_probe/crash.rs`
+- Create: `tests/cron_probe/crash.rs`
 
 - [ ] **Step 1: Write 3 crash scenarios using phase-call + drop pattern**
 
 ```rust
-// core/tests/cron_probe/crash.rs
+// tests/cron_probe/crash.rs
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -1866,7 +1866,7 @@ async fn crash_preserves_store_integrity() {
 Run: `cargo test -p alephcore --test cron_probe crash`
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P7 crash recovery probes (3 scenarios)"
 ```
 
@@ -1877,15 +1877,15 @@ git commit -m "cron probe: P7 crash recovery probes (3 scenarios)"
 ### Task 11: P9 Gateway Handler Probes + P10 History
 
 **Files:**
-- Create: `core/tests/cron_probe/gateway.rs`
-- Create: `core/tests/cron_probe/history_integration.rs`
+- Create: `tests/cron_probe/gateway.rs`
+- Create: `tests/cron_probe/history_integration.rs`
 
 - [ ] **Step 1: Write P9 gateway scenarios (3)**
 
 Test gateway handlers by calling them with mock `SharedCronService`. The handlers are at `alephcore::gateway::handlers::cron::*`. Check if they're accessible — if not, test through `CronService` methods instead (which is what the handlers delegate to).
 
 ```rust
-// core/tests/cron_probe/gateway.rs
+// tests/cron_probe/gateway.rs
 // If gateway handlers are not publicly accessible, test the CronService
 // methods they delegate to — which verifies the same path.
 
@@ -1939,7 +1939,7 @@ async fn service_get_nonexistent_returns_none() {
 - [ ] **Step 2: Write P10 history scenarios (3)**
 
 ```rust
-// core/tests/cron_probe/history_integration.rs
+// tests/cron_probe/history_integration.rs
 use alephcore::cron::history::{init_schema, insert_cron_run, get_cron_runs, cleanup_old_cron_runs, CronRunRecord};
 use rusqlite::Connection;
 
@@ -2047,7 +2047,7 @@ fn history_cleanup_respects_retention() {
 Run: `cargo test -p alephcore --test cron_probe gateway` and `cargo test -p alephcore --test cron_probe history_integration`
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P9 gateway + P10 history integration probes (6 scenarios)"
 ```
 
@@ -2056,13 +2056,13 @@ git commit -m "cron probe: P9 gateway + P10 history integration probes (6 scenar
 ### Task 12: P8 Real Agent Probes + Final Module Declarations
 
 **Files:**
-- Create: `core/tests/cron_probe/real_agent.rs`
-- Modify: `core/tests/cron_probe.rs` (final mod declarations)
+- Create: `tests/cron_probe/real_agent.rs`
+- Modify: `tests/cron_probe.rs` (final mod declarations)
 
 - [ ] **Step 1: Write real agent stubs (2 scenarios, all #[ignore])**
 
 ```rust
-// core/tests/cron_probe/real_agent.rs
+// tests/cron_probe/real_agent.rs
 
 /// Real agent execution probe — requires ALEPH_TEST_AGENT=true
 #[tokio::test]
@@ -2093,7 +2093,7 @@ async fn real_agent_timeout() {
 - [ ] **Step 2: Finalize cron_probe.rs with all module declarations**
 
 ```rust
-// core/tests/cron_probe.rs
+// tests/cron_probe.rs
 mod mock_executor;
 mod harness;
 mod lifecycle;
@@ -2116,7 +2116,7 @@ Expected: 48 tests (46 run + 2 ignored).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/tests/cron_probe/
+git add tests/cron_probe/
 git commit -m "cron probe: P8 real agent stubs + finalize all 48 scenarios"
 ```
 

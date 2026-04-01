@@ -16,11 +16,11 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `core/src/gateway/interfaces/feishu/types.rs` | Modify | Add config fields, card payload types, ReactionResponse |
-| `core/src/gateway/interfaces/feishu/client.rs` | Modify | Add Card Kit API methods, reaction methods, send_card |
-| `core/src/gateway/interfaces/feishu/streaming.rs` | Create | FeishuStreamingCard + FeishuEventEmitter |
-| `core/src/gateway/interfaces/feishu/mod.rs` | Modify | Update send() for markdown cards, update capabilities, add streaming module |
-| `core/src/gateway/inbound_router/executor.rs` | Modify | Construct FeishuEventEmitter when channel is feishu |
+| `src/gateway/interfaces/feishu/types.rs` | Modify | Add config fields, card payload types, ReactionResponse |
+| `src/gateway/interfaces/feishu/client.rs` | Modify | Add Card Kit API methods, reaction methods, send_card |
+| `src/gateway/interfaces/feishu/streaming.rs` | Create | FeishuStreamingCard + FeishuEventEmitter |
+| `src/gateway/interfaces/feishu/mod.rs` | Modify | Update send() for markdown cards, update capabilities, add streaming module |
+| `src/gateway/inbound_router/executor.rs` | Modify | Construct FeishuEventEmitter when channel is feishu |
 | `interfaces/webchat/src/views/settings/channels/definitions.rs` | Modify | Add streaming, render_mode, typing_indicator UI fields |
 
 ---
@@ -28,7 +28,7 @@
 ### Task 1: Extend Types and Config
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/feishu/types.rs`
+- Modify: `src/gateway/interfaces/feishu/types.rs`
 
 - [ ] **Step 1: Add new config fields and types**
 
@@ -130,7 +130,7 @@ Expected: All tests PASS (including 2 new ones)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/types.rs
+git add src/gateway/interfaces/feishu/types.rs
 git commit -m "feat(feishu): add streaming, render_mode, typing config fields and API types"
 ```
 
@@ -139,7 +139,7 @@ git commit -m "feat(feishu): add streaming, render_mode, typing config fields an
 ### Task 2: Extend Client with Card Kit and Reaction APIs
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/feishu/client.rs`
+- Modify: `src/gateway/interfaces/feishu/client.rs`
 
 - [ ] **Step 1: Add Card Kit API methods**
 
@@ -407,7 +407,7 @@ Expected: Compiles (new methods not called yet)
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/client.rs
+git add src/gateway/interfaces/feishu/client.rs
 git commit -m "feat(feishu): add Card Kit streaming, static card, and reaction API methods"
 ```
 
@@ -416,16 +416,16 @@ git commit -m "feat(feishu): add Card Kit streaming, static card, and reaction A
 ### Task 3: Create FeishuEventEmitter (`streaming.rs`)
 
 **Files:**
-- Create: `core/src/gateway/interfaces/feishu/streaming.rs`
-- Reference: `core/src/gateway/event_emitter/mod.rs` (EventEmitter trait: `emit()`, `next_seq()`)
-- Reference: `core/src/gateway/reply_emitter.rs` (ReplyEmitter to wrap)
+- Create: `src/gateway/interfaces/feishu/streaming.rs`
+- Reference: `src/gateway/event_emitter/mod.rs` (EventEmitter trait: `emit()`, `next_seq()`)
+- Reference: `src/gateway/reply_emitter.rs` (ReplyEmitter to wrap)
 
 This is the most complex task. The `FeishuEventEmitter` implements `EventEmitter`, intercepts `ResponseChunk` for real-time card streaming, and manages typing indicators.
 
 - [ ] **Step 1: Create streaming.rs**
 
 ```rust
-// core/src/gateway/interfaces/feishu/streaming.rs
+// src/gateway/interfaces/feishu/streaming.rs
 
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -772,7 +772,7 @@ impl EventEmitter for FeishuEventEmitter {
 
 - [ ] **Step 2: Add module declaration in `mod.rs`**
 
-At the top of `core/src/gateway/interfaces/feishu/mod.rs`, after `pub mod client;`, add:
+At the top of `src/gateway/interfaces/feishu/mod.rs`, after `pub mod client;`, add:
 
 ```rust
 pub mod streaming;
@@ -786,7 +786,7 @@ Expected: Compiles. Fix any import issues if needed.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/streaming.rs core/src/gateway/interfaces/feishu/mod.rs
+git add src/gateway/interfaces/feishu/streaming.rs src/gateway/interfaces/feishu/mod.rs
 git commit -m "feat(feishu): add FeishuEventEmitter with streaming cards and typing indicators"
 ```
 
@@ -795,7 +795,7 @@ git commit -m "feat(feishu): add FeishuEventEmitter with streaming cards and typ
 ### Task 4: Update Channel for Markdown Cards
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/feishu/mod.rs`
+- Modify: `src/gateway/interfaces/feishu/mod.rs`
 
 Update the `send()` method to use card rendering for markdown content, and update capabilities/manifest.
 
@@ -928,7 +928,7 @@ Expected: All tests PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/feishu/mod.rs
+git add src/gateway/interfaces/feishu/mod.rs
 git commit -m "feat(feishu): add markdown card rendering and updated capabilities"
 ```
 
@@ -937,7 +937,7 @@ git commit -m "feat(feishu): add markdown card rendering and updated capabilitie
 ### Task 5: Wire FeishuEventEmitter into Execution Flow
 
 **Files:**
-- Modify: `core/src/gateway/inbound_router/executor.rs:73-90`
+- Modify: `src/gateway/inbound_router/executor.rs:73-90`
 
 This is the key integration point. When the inbound message comes from a feishu channel with streaming enabled, construct a `FeishuEventEmitter` instead of the standard `ReplyEmitter`.
 
@@ -1044,7 +1044,7 @@ Add this method to the impl block that contains `execute_for_context_inner`. You
 
 - [ ] **Step 3: Add `get_channel_type` and `get_feishu_client` to ChannelRegistry**
 
-In `core/src/gateway/channel_registry.rs`, add these helper methods:
+In `src/gateway/channel_registry.rs`, add these helper methods:
 
 ```rust
     /// Get the channel type for a given channel ID.
@@ -1130,7 +1130,7 @@ Expected: All existing tests pass, no regressions
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/inbound_router/executor.rs core/src/gateway/channel_registry.rs
+git add src/gateway/inbound_router/executor.rs src/gateway/channel_registry.rs
 git commit -m "feat(feishu): wire FeishuEventEmitter into execution flow"
 ```
 

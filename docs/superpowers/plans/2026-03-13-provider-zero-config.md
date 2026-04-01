@@ -15,12 +15,12 @@
 ### Task 1: Add `providers.needs_setup` RPC handler
 
 **Files:**
-- Modify: `core/src/gateway/handlers/providers.rs` (append after `handle_test`)
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs:552` (register new handler)
+- Modify: `src/gateway/handlers/providers.rs` (append after `handle_test`)
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs:552` (register new handler)
 
 - [ ] **Step 1: Write the test for `handle_needs_setup`**
 
-Add to `core/src/gateway/handlers/providers.rs` inside the existing `#[cfg(test)]` module:
+Add to `src/gateway/handlers/providers.rs` inside the existing `#[cfg(test)]` module:
 
 ```rust
 #[tokio::test]
@@ -74,7 +74,7 @@ Expected: FAIL — `handle_needs_setup` not found
 
 - [ ] **Step 3: Implement `handle_needs_setup`**
 
-Add to `core/src/gateway/handlers/providers.rs`, after `handle_test` (after line ~706):
+Add to `src/gateway/handlers/providers.rs`, after `handle_test` (after line ~706):
 
 ```rust
 // ============================================================================
@@ -108,7 +108,7 @@ Expected: 3 tests PASS
 
 - [ ] **Step 5: Register handler in binary**
 
-In `core/src/bin/aleph/commands/start/builder/handlers.rs`, add after line 552 (`providers.test` registration):
+In `src/bin/aleph/commands/start/builder/handlers.rs`, add after line 552 (`providers.test` registration):
 
 ```rust
     register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
@@ -122,7 +122,7 @@ Expected: compiles
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/handlers/providers.rs core/src/bin/aleph/commands/start/builder/handlers.rs
+git add src/gateway/handlers/providers.rs src/bin/aleph/commands/start/builder/handlers.rs
 git commit -m "providers: add providers.needsSetup RPC for first-run detection"
 ```
 
@@ -131,12 +131,12 @@ git commit -m "providers: add providers.needsSetup RPC for first-run detection"
 ### Task 2: Add `providers.probe` RPC handler
 
 **Files:**
-- Modify: `core/src/gateway/handlers/providers.rs` (append after `handle_needs_setup`)
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs` (register)
+- Modify: `src/gateway/handlers/providers.rs` (append after `handle_needs_setup`)
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs` (register)
 
 - [ ] **Step 1: Write the unit test for probe params and response types**
 
-Add to the `#[cfg(test)]` module in `core/src/gateway/handlers/providers.rs`:
+Add to the `#[cfg(test)]` module in `src/gateway/handlers/providers.rs`:
 
 ```rust
 #[tokio::test]
@@ -174,7 +174,7 @@ Expected: FAIL — `handle_probe` not found
 
 - [ ] **Step 3: Implement `handle_probe`**
 
-Add to `core/src/gateway/handlers/providers.rs`, after `handle_needs_setup`:
+Add to `src/gateway/handlers/providers.rs`, after `handle_needs_setup`:
 
 ```rust
 // ============================================================================
@@ -315,7 +315,7 @@ pub async fn handle_probe(request: JsonRpcRequest, _config_store: Arc<RwLock<Con
 
 The `OllamaDiscoveryAdapter` is currently private in `models.rs`. Add `pub(super)` visibility:
 
-In `core/src/gateway/handlers/models.rs`, change line 24:
+In `src/gateway/handlers/models.rs`, change line 24:
 ```rust
 // FROM:
 struct OllamaDiscoveryAdapter {
@@ -338,7 +338,7 @@ Expected: 2 tests PASS
 
 - [ ] **Step 6: Register handler in binary**
 
-In `core/src/bin/aleph/commands/start/builder/handlers.rs`, add after the `providers.needsSetup` line:
+In `src/bin/aleph/commands/start/builder/handlers.rs`, add after the `providers.needsSetup` line:
 
 ```rust
     register_handler!(server, "providers.probe", providers::handle_probe, config);
@@ -352,7 +352,7 @@ Expected: compiles
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/gateway/handlers/providers.rs core/src/gateway/handlers/models.rs core/src/bin/aleph/commands/start/builder/handlers.rs
+git add src/gateway/handlers/providers.rs src/gateway/handlers/models.rs src/bin/aleph/commands/start/builder/handlers.rs
 git commit -m "providers: add providers.probe RPC combining connection test + model discovery"
 ```
 
@@ -361,11 +361,11 @@ git commit -m "providers: add providers.probe RPC combining connection test + mo
 ### Task 3: L2 Integration tests for probe and needs_setup
 
 **Files:**
-- Modify: `core/tests/model_discovery_integration.rs` (append new tests)
+- Modify: `tests/model_discovery_integration.rs` (append new tests)
 
 - [ ] **Step 1: Write wiremock integration tests**
 
-Append to `core/tests/model_discovery_integration.rs`:
+Append to `tests/model_discovery_integration.rs`:
 
 ```rust
 // ── providers.probe + providers.needs_setup integration tests ────────────────
@@ -455,7 +455,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/tests/model_discovery_integration.rs
+git add tests/model_discovery_integration.rs
 git commit -m "tests: add L2 integration tests for providers.probe and providers.needsSetup"
 ```
 

@@ -115,10 +115,10 @@ Pass through unchanged. Existing truncation.rs and tool_compactor handle these.
 
 | Action | File | Change |
 |--------|------|--------|
-| Create | `core/src/tool_output/compressor.rs` | All compression logic + tests |
-| Modify | `core/src/tool_output/mod.rs` | Add `pub mod compressor;` |
-| Modify | `core/src/agent_loop/loop_core.rs` | Call `compress_tool_output()` on successful results before pushing to messages |
-| Modify | `core/src/agent_loop/prompt_builder.rs` | Add 2 lines to BASE_BEHAVIOR |
+| Create | `src/tool_output/compressor.rs` | All compression logic + tests |
+| Modify | `src/tool_output/mod.rs` | Add `pub mod compressor;` |
+| Modify | `src/agent_loop/loop_core.rs` | Call `compress_tool_output()` on successful results before pushing to messages |
+| Modify | `src/agent_loop/prompt_builder.rs` | Add 2 lines to BASE_BEHAVIOR |
 
 ## Prompt Change (BASE_BEHAVIOR)
 

@@ -15,12 +15,12 @@
 ### Task 1: Add DEFERRED_LOADING_GUIDANCE constant
 
 **Files:**
-- Modify: `core/src/skill/prompt.rs:1-45`
-- Test: `core/src/skill/prompt.rs` (existing test module)
+- Modify: `src/skill/prompt.rs:1-45`
+- Test: `src/skill/prompt.rs` (existing test module)
 
 - [ ] **Step 1: Add the constant**
 
-In `core/src/skill/prompt.rs`, add after the `use` statement (line 3):
+In `src/skill/prompt.rs`, add after the `use` statement (line 3):
 
 ```rust
 /// Deferred loading guidance appended after skill index in system prompts.
@@ -39,7 +39,7 @@ Expected: compiles successfully
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/skill/prompt.rs
+git add src/skill/prompt.rs
 git commit -m "skill: add DEFERRED_LOADING_GUIDANCE constant"
 ```
 
@@ -48,8 +48,8 @@ git commit -m "skill: add DEFERRED_LOADING_GUIDANCE constant"
 ### Task 2: Add guidance to thinker SkillInstructionsLayer
 
 **Files:**
-- Modify: `core/src/thinker/layers/skill_instructions.rs:1-81`
-- Test: `core/src/thinker/layers/skill_instructions.rs` (existing test module, lines 83-283)
+- Modify: `src/thinker/layers/skill_instructions.rs:1-81`
+- Test: `src/thinker/layers/skill_instructions.rs` (existing test module, lines 83-283)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -112,7 +112,7 @@ Expected: all tests PASS (including existing tests)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/thinker/layers/skill_instructions.rs
+git add src/thinker/layers/skill_instructions.rs
 git commit -m "thinker: add deferred loading guidance to SkillInstructionsLayer"
 ```
 
@@ -121,8 +121,8 @@ git commit -m "thinker: add deferred loading guidance to SkillInstructionsLayer"
 ### Task 3: Add guidance to agent_loop PromptBuilder
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs:198-220`
-- Test: `core/src/agent_loop/prompt_builder.rs` (existing test module)
+- Modify: `src/agent_loop/prompt_builder.rs:198-220`
+- Test: `src/agent_loop/prompt_builder.rs` (existing test module)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -188,7 +188,7 @@ Expected: all tests PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "agent_loop: add deferred loading guidance to PromptBuilder"
 ```
 
@@ -197,9 +197,9 @@ git commit -m "agent_loop: add deferred loading guidance to PromptBuilder"
 ### Task 4: Register ReadSkillTool in BuiltinToolRegistry
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/registry.rs:27-133` (add field)
-- Modify: `core/src/executor/builtin_registry/builder.rs:12-442` (create instance, register, add to struct)
-- Modify: `core/src/executor/builtin_registry/registry.rs:270-575` (add execute_tool match arm)
+- Modify: `src/executor/builtin_registry/registry.rs:27-133` (add field)
+- Modify: `src/executor/builtin_registry/builder.rs:12-442` (create instance, register, add to struct)
+- Modify: `src/executor/builtin_registry/registry.rs:270-575` (add execute_tool match arm)
 
 - [ ] **Step 1: Add field to BuiltinToolRegistry struct**
 
@@ -288,7 +288,7 @@ Run: `cargo test -p alephcore --lib` and manually verify that `BuiltinToolRegist
 - [ ] **Step 10: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/registry.rs core/src/executor/builtin_registry/builder.rs
+git add src/executor/builtin_registry/registry.rs src/executor/builtin_registry/builder.rs
 git commit -m "executor: register ReadSkillTool (skill_read) in BuiltinToolRegistry"
 ```
 
@@ -297,8 +297,8 @@ git commit -m "executor: register ReadSkillTool (skill_read) in BuiltinToolRegis
 ### Task 5: Clean up dead code in extension/skill_tool.rs
 
 **Files:**
-- Modify: `core/src/extension/skill_tool.rs:246-343` (remove dead functions)
-- Modify: `core/src/extension/skill_tool.rs:443-652` (remove dead tests)
+- Modify: `src/extension/skill_tool.rs:246-343` (remove dead functions)
+- Modify: `src/extension/skill_tool.rs:443-652` (remove dead tests)
 
 **Important:** All line numbers below reference the original file state. Perform all deletions in a single pass (delete tests first bottom-to-top, then functions bottom-to-top) to avoid line number shifts.
 
@@ -341,7 +341,7 @@ Expected: remaining tests PASS (permission tests, invoke_skill test)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/extension/skill_tool.rs
+git add src/extension/skill_tool.rs
 git commit -m "extension: remove dead skill_tool_description and scope filtering functions"
 ```
 
@@ -350,9 +350,9 @@ git commit -m "extension: remove dead skill_tool_description and scope filtering
 ### Task 6: Clean up dead code in extension/mod.rs and skill_ops.rs
 
 **Files:**
-- Modify: `core/src/extension/mod.rs:64` (remove pub use export)
-- Modify: `core/src/extension/mod.rs:335-360` (remove dead function)
-- Modify: `core/src/extension/skill_ops.rs:119-124` (remove dead method)
+- Modify: `src/extension/mod.rs:64` (remove pub use export)
+- Modify: `src/extension/mod.rs:335-360` (remove dead function)
+- Modify: `src/extension/skill_ops.rs:119-124` (remove dead method)
 
 - [ ] **Step 1: Remove pub use export**
 
@@ -398,7 +398,7 @@ Expected: all tests PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/mod.rs core/src/extension/skill_ops.rs
+git add src/extension/mod.rs src/extension/skill_ops.rs
 git commit -m "extension: remove dead build_skill_instructions and get_skill_tool_description"
 ```
 

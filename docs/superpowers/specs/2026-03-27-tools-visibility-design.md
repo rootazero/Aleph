@@ -125,7 +125,7 @@ pub struct ToolEntry {
 
 ### Existing Infrastructure
 
-`AgentDef` (at `core/src/agents/types.rs`) already has:
+`AgentDef` (at `src/agents/types.rs`) already has:
 - `denied_tools: Vec<String>` — tool names to exclude
 - `allowed_tools: Vec<String>` — tool names to allow (`"*"` = all)
 - `is_tool_allowed(&self, tool_name: &str) -> bool` — respects both allow and deny lists
@@ -180,7 +180,7 @@ MCP, Skill, and Plugin tools are sub-grouped by their source identifier. Native,
 
 ## Implementation Location
 
-**New file:** `core/src/gateway/handlers/tools_visibility.rs`
+**New file:** `src/gateway/handlers/tools_visibility.rs`
 
 Two handler functions registered in `HandlerRegistry`:
 - `tools.catalog` → `handle_catalog`

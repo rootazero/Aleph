@@ -16,14 +16,14 @@
 
 | File | Responsibility | Task |
 |------|---------------|------|
-| `core/src/gateway/interfaces/telegram/mod.rs` | Telegram polling retry loop + watchdog restart trigger | 1 |
-| `core/src/thinker/layers/operational_guidelines.rs` | Remove Self-Management prompt section | 2 |
+| `src/gateway/interfaces/telegram/mod.rs` | Telegram polling retry loop + watchdog restart trigger | 1 |
+| `src/thinker/layers/operational_guidelines.rs` | Remove Self-Management prompt section | 2 |
 | `/Users/zouguojun/Workspace/Aleph-skills/self/SKILL.md` | NEW: `/self` skill with full workspace map + operation protocol | 3 |
-| `core/src/skill/mod.rs` | Update `guess_source()` — return Bundled for skills-official/ | 4 |
-| `core/src/extension/mod.rs` | Add skills-official/ to SkillSystem scan dirs | 4 |
-| `core/src/skills/updater.rs` | NEW: `update_official_skills()` git pull logic | 5 |
-| `core/src/skills/mod.rs` | Re-export updater module | 5 |
-| `core/src/bin/aleph-server/commands/start/mod.rs` | Call `update_official_skills()` before extension load | 5 |
+| `src/skill/mod.rs` | Update `guess_source()` — return Bundled for skills-official/ | 4 |
+| `src/extension/mod.rs` | Add skills-official/ to SkillSystem scan dirs | 4 |
+| `src/skills/updater.rs` | NEW: `update_official_skills()` git pull logic | 5 |
+| `src/skills/mod.rs` | Re-export updater module | 5 |
+| `src/bin/aleph-server/commands/start/mod.rs` | Call `update_official_skills()` before extension load | 5 |
 | `~/.aleph/guides/overview.md` | Update workspace tree (add `skills-official/`) | 6 |
 | `~/.aleph/guides/generation.md` | Add video/audio examples + URL rules | 6 |
 
@@ -32,13 +32,13 @@
 ### Task 1: Telegram Polling Stall Auto-Restart
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:560-784`
+- Modify: `src/gateway/interfaces/telegram/mod.rs:560-784`
 
 This is the largest task. The current code spawns a single task that builds handlers, creates a dispatcher, spawns a watchdog, and runs `select!` on dispatch/shutdown. We wrap lines 564-781 in a retry loop, move watchdog creation inside the loop, add a stall restart channel, and remove `.enable_ctrlc_handler()`.
 
 - [ ] **Step 1: Add constants at the top of the spawned task block**
 
-At `core/src/gateway/interfaces/telegram/mod.rs`, inside the `tokio::spawn(async move {` block (line 560), before `tracing::info!("Starting Telegram long-polling...");` (line 561), add:
+At `src/gateway/interfaces/telegram/mod.rs`, inside the `tokio::spawn(async move {` block (line 560), before `tracing::info!("Starting Telegram long-polling...");` (line 561), add:
 
 ```rust
 const STALL_WARN_SECS: u64 = 90;
@@ -326,7 +326,7 @@ Expected: no errors (warnings OK)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/interfaces/telegram/mod.rs
+git add src/gateway/interfaces/telegram/mod.rs
 git commit -m "telegram: add polling stall auto-restart with exponential backoff"
 ```
 
@@ -335,11 +335,11 @@ git commit -m "telegram: add polling stall auto-restart with exponential backoff
 ### Task 2: Remove Self-Management from OperationalGuidelinesLayer
 
 **Files:**
-- Modify: `core/src/thinker/layers/operational_guidelines.rs:46-53`
+- Modify: `src/thinker/layers/operational_guidelines.rs:46-53`
 
 - [ ] **Step 1: Remove the Self-Management section**
 
-In `core/src/thinker/layers/operational_guidelines.rs`, delete lines 46-53 (the `### Self-Management` section):
+In `src/thinker/layers/operational_guidelines.rs`, delete lines 46-53 (the `### Self-Management` section):
 
 ```rust
 // DELETE these lines:
@@ -363,7 +363,7 @@ Expected: PASS (the existing tests don't assert on Self-Management content)
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/thinker/layers/operational_guidelines.rs
+git add src/thinker/layers/operational_guidelines.rs
 git commit -m "thinker: remove self-management from OperationalGuidelinesLayer (moved to /self skill)"
 ```
 
@@ -413,14 +413,14 @@ git push
 ### Task 4: Skills Directory Separation (Discovery + Priority)
 
 **Files:**
-- Modify: `core/src/skill/mod.rs:296-320` (`guess_source()` function)
-- Modify: `core/src/extension/mod.rs:270-276`
+- Modify: `src/skill/mod.rs:296-320` (`guess_source()` function)
+- Modify: `src/extension/mod.rs:270-276`
 
 The key insight: `SkillRegistry::register()` keeps the **first** entry at equal priority (`existing.priority() >= manifest.priority() => reject`). So we need official skills to have **lower** priority than user skills. The cleanest approach: make `guess_source()` return `SkillSource::Bundled` (priority 1) for `skills-official/` paths, vs `SkillSource::Global` (priority 2) for `skills/`. This way user skills always override official ones.
 
 - [ ] **Step 1: Update `guess_source()` to recognize `skills-official/`**
 
-In `core/src/skill/mod.rs`, modify the `guess_source()` function (lines 301-320):
+In `src/skill/mod.rs`, modify the `guess_source()` function (lines 301-320):
 
 ```rust
 fn guess_source(path: &Path) -> SkillSource {
@@ -450,7 +450,7 @@ fn guess_source(path: &Path) -> SkillSource {
 
 - [ ] **Step 2: Add `skills-official/` to the SkillSystem scan dirs**
 
-In `core/src/extension/mod.rs`, modify lines 270-276:
+In `src/extension/mod.rs`, modify lines 270-276:
 
 ```rust
 // Before:
@@ -480,7 +480,7 @@ No need for `discover_skill_official_dirs()` — we just hardcode the known path
 
 - [ ] **Step 3: Update test for `guess_source`**
 
-In `core/src/skill/mod.rs`, update the test section:
+In `src/skill/mod.rs`, update the test section:
 
 ```rust
 #[test]
@@ -499,7 +499,7 @@ Expected: all pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/skill/mod.rs core/src/extension/mod.rs
+git add src/skill/mod.rs src/extension/mod.rs
 git commit -m "skills: add skills-official/ directory with Bundled priority"
 ```
 
@@ -508,11 +508,11 @@ git commit -m "skills: add skills-official/ directory with Bundled priority"
 ### Task 5: Official Skills Auto-Update on Startup
 
 **Files:**
-- Create: `core/src/skills/updater.rs`
-- Modify: `core/src/skills/mod.rs`
-- Modify: `core/src/bin/aleph-server/commands/start/mod.rs`
+- Create: `src/skills/updater.rs`
+- Modify: `src/skills/mod.rs`
+- Modify: `src/bin/aleph-server/commands/start/mod.rs`
 
-- [ ] **Step 1: Create `core/src/skills/updater.rs`**
+- [ ] **Step 1: Create `src/skills/updater.rs`**
 
 ```rust
 //! Official skills repository auto-updater.
@@ -700,9 +700,9 @@ pub async fn migrate_skills_directory(aleph_home: &Path) {
 }
 ```
 
-- [ ] **Step 3: Register module in `core/src/skills/mod.rs`**
+- [ ] **Step 3: Register module in `src/skills/mod.rs`**
 
-Add near the top of `core/src/skills/mod.rs`:
+Add near the top of `src/skills/mod.rs`:
 
 ```rust
 pub mod updater;
@@ -710,7 +710,7 @@ pub mod updater;
 
 - [ ] **Step 4: Call migration + updater on startup**
 
-In `core/src/bin/aleph-server/commands/start/mod.rs`, in the `initialize_extension_manager` function body, **before** the `alephcore::extension::ExtensionManager::with_defaults().await` call (line 174), add:
+In `src/bin/aleph-server/commands/start/mod.rs`, in the `initialize_extension_manager` function body, **before** the `alephcore::extension::ExtensionManager::with_defaults().await` call (line 174), add:
 
 ```rust
 // Migrate old single-dir layout and update official skills
@@ -729,7 +729,7 @@ Expected: no errors
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/skills/updater.rs core/src/skills/mod.rs core/src/bin/aleph-server/commands/start/mod.rs
+git add src/skills/updater.rs src/skills/mod.rs src/bin/aleph-server/commands/start/mod.rs
 git commit -m "skills: add official skills repo auto-update on startup"
 ```
 

@@ -16,18 +16,18 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `core/src/gateway/channel.rs` | Modify | Add `conversation_id` to `react()` signature |
-| `core/src/gateway/channel_registry.rs` | Modify | Add `react()` wrapper method |
-| `core/src/gateway/interfaces/telegram/mod.rs` | Modify | Reactions, async media, topics, stickers, stall detection, pairing |
-| `core/src/gateway/interfaces/telegram/config.rs` | Modify | Pairing code storage, runtime allowlist mutation |
-| `core/src/gateway/interfaces/slack/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/nostr/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/discord/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/matrix/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/signal/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/mattermost/mod.rs` | Modify | Update `react()` signature |
-| `core/src/gateway/interfaces/feishu/mod.rs` | Modify | Update `react()` signature (if exists) |
-| `core/src/gateway/reply_emitter.rs` | Modify | Reaction lifecycle, smart chunking, typing persistence, intermediate typewriter |
+| `src/gateway/channel.rs` | Modify | Add `conversation_id` to `react()` signature |
+| `src/gateway/channel_registry.rs` | Modify | Add `react()` wrapper method |
+| `src/gateway/interfaces/telegram/mod.rs` | Modify | Reactions, async media, topics, stickers, stall detection, pairing |
+| `src/gateway/interfaces/telegram/config.rs` | Modify | Pairing code storage, runtime allowlist mutation |
+| `src/gateway/interfaces/slack/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/nostr/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/discord/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/matrix/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/signal/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/mattermost/mod.rs` | Modify | Update `react()` signature |
+| `src/gateway/interfaces/feishu/mod.rs` | Modify | Update `react()` signature (if exists) |
+| `src/gateway/reply_emitter.rs` | Modify | Reaction lifecycle, smart chunking, typing persistence, intermediate typewriter |
 
 ---
 
@@ -36,20 +36,20 @@
 ### Task 1: Update `react()` signature across Channel trait and all implementations
 
 **Files:**
-- Modify: `core/src/gateway/channel.rs:489-497`
-- Modify: `core/src/gateway/channel_registry.rs` (add `react()` method)
-- Modify: `core/src/gateway/interfaces/slack/mod.rs:223`
-- Modify: `core/src/gateway/interfaces/nostr/mod.rs:219`
-- Modify: `core/src/gateway/interfaces/discord/mod.rs:481`
-- Modify: `core/src/gateway/interfaces/matrix/mod.rs:243`
-- Modify: `core/src/gateway/interfaces/signal/mod.rs:190`
-- Modify: `core/src/gateway/interfaces/mattermost/mod.rs:288`
+- Modify: `src/gateway/channel.rs:489-497`
+- Modify: `src/gateway/channel_registry.rs` (add `react()` method)
+- Modify: `src/gateway/interfaces/slack/mod.rs:223`
+- Modify: `src/gateway/interfaces/nostr/mod.rs:219`
+- Modify: `src/gateway/interfaces/discord/mod.rs:481`
+- Modify: `src/gateway/interfaces/matrix/mod.rs:243`
+- Modify: `src/gateway/interfaces/signal/mod.rs:190`
+- Modify: `src/gateway/interfaces/mattermost/mod.rs:288`
 - Modify: Any other Channel impl with `react()` override (check feishu)
 - Note: `imessage/message_ops.rs:87` has `react(params: ReactParams)` — this is the **`MessageOperations` trait** (tool-side), NOT `Channel::react()`. No change needed for iMessage.
 
 - [ ] **Step 1: Update Channel trait `react()` signature**
 
-In `core/src/gateway/channel.rs`, change the `react()` method:
+In `src/gateway/channel.rs`, change the `react()` method:
 
 ```rust
 // FROM:
@@ -84,7 +84,7 @@ Apply the same pattern to: Nostr, Discord, Matrix, Signal, Mattermost, and any o
 
 - [ ] **Step 3: Add `react()` to `ChannelRegistry`**
 
-In `core/src/gateway/channel_registry.rs`, after the `edit()` method (~line 262), add:
+In `src/gateway/channel_registry.rs`, after the `edit()` method (~line 262), add:
 
 ```rust
 /// React to a message in a specific channel
@@ -121,8 +121,8 @@ git add -A && git commit -m "gateway: add conversation_id to react() signature, 
 ### Task 2: Implement Telegram `react()` in Channel trait
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:106-122` (capabilities)
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs` (add `react()` impl in `impl Channel`)
+- Modify: `src/gateway/interfaces/telegram/mod.rs:106-122` (capabilities)
+- Modify: `src/gateway/interfaces/telegram/mod.rs` (add `react()` impl in `impl Channel`)
 
 - [ ] **Step 1: Enable reactions capability**
 
@@ -197,12 +197,12 @@ git add -A && git commit -m "telegram: implement react() with best-effort emoji 
 ### Task 3: Add reaction lifecycle to ReplyEmitter
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
-- Modify: `core/src/gateway/inbound_context.rs` (ReplyRoute needs inbound message_id)
+- Modify: `src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/inbound_context.rs` (ReplyRoute needs inbound message_id)
 
 - [ ] **Step 1: Extend ReplyRoute with inbound_message_id**
 
-In `core/src/gateway/inbound_context.rs`, add a field to `ReplyRoute`:
+In `src/gateway/inbound_context.rs`, add a field to `ReplyRoute`:
 
 ```rust
 pub struct ReplyRoute {
@@ -285,9 +285,9 @@ git add -A && git commit -m "reply_emitter: add processing status reactions (�
 ### Task 4: Async multimodal media passthrough
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:125-200` (convert_message)
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:203-291` (extract_attachments)
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:412-426` (message handler)
+- Modify: `src/gateway/interfaces/telegram/mod.rs:125-200` (convert_message)
+- Modify: `src/gateway/interfaces/telegram/mod.rs:203-291` (extract_attachments)
+- Modify: `src/gateway/interfaces/telegram/mod.rs:412-426` (message handler)
 
 - [ ] **Step 1: Make `extract_attachments()` async and accept `&Bot`**
 
@@ -466,7 +466,7 @@ git add -A && git commit -m "telegram: async media passthrough with file URL res
 ### Task 5: Smart text chunking
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs:307-351` (split_message, find_split_point)
+- Modify: `src/gateway/reply_emitter.rs:307-351` (split_message, find_split_point)
 
 - [ ] **Step 1: Write test for code block splitting**
 
@@ -586,7 +586,7 @@ git add -A && git commit -m "reply_emitter: code block and HTML entity aware tex
 ### Task 6: Forum topic session isolation
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 - [ ] **Step 1: Add `parse_conversation_id()` helper**
 
@@ -704,7 +704,7 @@ git add -A && git commit -m "telegram: forum topic session isolation via convers
 ### Task 7: Outbound sticker sending
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs:650-692` (send_attachment)
+- Modify: `src/gateway/interfaces/telegram/mod.rs:650-692` (send_attachment)
 
 - [ ] **Step 1: Add sticker case to `send_attachment()`**
 
@@ -760,12 +760,12 @@ git add -A && git commit -m "telegram: sticker sending and topic-aware attachmen
 ### Task 8: Typewriter mode polish
 
 **Files:**
-- Modify: `core/src/gateway/channel_registry.rs` (add `send_typing()` wrapper)
-- Modify: `core/src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/channel_registry.rs` (add `send_typing()` wrapper)
+- Modify: `src/gateway/reply_emitter.rs`
 
 - [ ] **Step 1: Add `send_typing()` to ChannelRegistry**
 
-In `core/src/gateway/channel_registry.rs`, after `react()` (added in Task 1):
+In `src/gateway/channel_registry.rs`, after `react()` (added in Task 1):
 
 ```rust
 /// Send typing indicator through a specific channel
@@ -905,7 +905,7 @@ git add -A && git commit -m "reply_emitter: persistent typing indicator, interme
 ### Task 9: Network resilience — stall detection and error classification
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs` (dispatcher task)
+- Modify: `src/gateway/interfaces/telegram/mod.rs` (dispatcher task)
 
 - [ ] **Step 1: Add stall detection atomic to dispatcher**
 
@@ -1094,8 +1094,8 @@ git add -A && git commit -m "telegram: stall detection watchdog and API error cl
 ### Task 10: Pairing flow
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/config.rs`
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/config.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 - [ ] **Step 1: Add pairing code storage to TelegramChannel**
 
@@ -1227,7 +1227,7 @@ Note: The `pairing_codes`, `pairing_prompt_times`, and `config` need to be clone
 
 - [ ] **Step 5: Implement config persistence on successful pairing**
 
-After adding user to runtime allowlist, persist the change. The config save mechanism is in `core/src/config/save.rs` (atomic write via temp + rename).
+After adding user to runtime allowlist, persist the change. The config save mechanism is in `src/config/save.rs` (atomic write via temp + rename).
 
 In the pairing success branch, after `config_mut.runtime_allowed_users.push(user_id)`:
 ```rust
@@ -1275,7 +1275,7 @@ git add -A && git commit -m "telegram: pairing flow with config persistence"
 
 Search for how tools like `telegram_send` or `message_send` are defined and registered. Follow the same pattern.
 
-Run: `grep -r "tool_name.*telegram\|register.*tool" core/src/builtin_tools/ --include="*.rs" -l`
+Run: `grep -r "tool_name.*telegram\|register.*tool" src/builtin_tools/ --include="*.rs" -l`
 
 - [ ] **Step 2: Define `telegram_pairing_generate` tool**
 

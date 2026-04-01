@@ -145,24 +145,23 @@ No feature flags are needed for production builds.
 
 ```
 Aleph/
-├── core/                        # Rust Core (alephcore crate)
-│   └── src/
-│       ├── gateway/             # WebSocket control plane
-│       │   ├── handlers/        # 58+ RPC method handlers
-│       │   ├── interfaces/      # 15+ channel interfaces
-│       │   └── security/        # Auth, pairing, device management
-│       ├── agent_loop/          # Observe-Think-Act-Feedback loop
-│       ├── thinker/             # LLM interaction layer
-│       ├── dispatcher/          # Task orchestration (DAG scheduling)
-│       ├── executor/            # Tool execution engine
-│       ├── builtin_tools/       # 30+ built-in tools
-│       ├── memory/              # LanceDB storage (vectors + FTS)
-│       ├── resilience/          # State management (SQLite)
-│       ├── extension/           # WASM + Node.js plugin system
-│       ├── providers/           # AI provider integrations
-│       ├── domain/              # DDD domain model
-│       ├── mcp/                 # MCP protocol client
-│       └── exec/                # Shell execution + security
+├── src/                         # Rust Core (alephcore crate)
+│   ├── gateway/                 # WebSocket control plane
+│   │   ├── handlers/            # 58+ RPC method handlers
+│   │   ├── interfaces/          # 15+ channel interfaces
+│   │   └── security/            # Auth, pairing, device management
+│   ├── agent_loop/              # Observe-Think-Act-Feedback loop
+│   ├── thinker/                 # LLM interaction layer
+│   ├── dispatcher/              # Task orchestration (DAG scheduling)
+│   ├── executor/                # Tool execution engine
+│   ├── builtin_tools/           # 30+ built-in tools
+│   ├── memory/                  # LanceDB storage (vectors + FTS)
+│   ├── resilience/              # State management (SQLite)
+│   ├── extension/               # WASM + Node.js plugin system
+│   ├── providers/               # AI provider integrations
+│   ├── domain/                  # DDD domain model
+│   ├── mcp/                     # MCP protocol client
+│   └── exec/                    # Shell execution + security
 ├── crates/
 │   ├── desktop/                 # DesktopCapability native impl
 │   └── logging/                 # Logging infrastructure

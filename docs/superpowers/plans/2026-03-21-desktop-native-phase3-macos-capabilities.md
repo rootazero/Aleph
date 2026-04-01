@@ -34,8 +34,8 @@
 | `crates/desktop-macos/src/lib.rs` | Store and return MacOSAutomation, MacOSSystem, MacOSPim |
 | `crates/desktop-macos/Cargo.toml` | Add `dirs` dependency (for SwiftBridge) |
 | `apps/macos-bridge/Sources/AlephBridge/main.swift` | Extract commands to separate files, keep only root + helpers |
-| `core/src/builtin_tools/pim/mod.rs` | Add `platform` field, prefer platform.pim() over bridge client |
-| `core/src/executor/builtin_registry/builder.rs` | Pass platform to PimTool |
+| `src/builtin_tools/pim/mod.rs` | Add `platform` field, prefer platform.pim() over bridge client |
+| `src/executor/builtin_registry/builder.rs` | Pass platform to PimTool |
 
 ---
 
@@ -1106,14 +1106,14 @@ git commit -m "desktop-macos: implement PimCapability via SwiftBridge"
 ## Task 5: Rewire PimTool to Use DesktopPlatform
 
 **Files:**
-- Modify: `core/src/builtin_tools/pim/mod.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
+- Modify: `src/builtin_tools/pim/mod.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
 
 Follow the same pattern used for DesktopTool in Phase 2: add `platform` field, prefer `platform.pim()` over the legacy `DesktopBridgeClient`.
 
 - [ ] **Step 1: Add platform field to PimTool**
 
-In `core/src/builtin_tools/pim/mod.rs`, modify the struct:
+In `src/builtin_tools/pim/mod.rs`, modify the struct:
 
 ```rust
 pub struct PimTool {
@@ -1170,7 +1170,7 @@ if let Some(output) = self.call_via_platform(&args).await {
 
 - [ ] **Step 4: Update builder to pass platform**
 
-In `core/src/executor/builtin_registry/builder.rs`, change:
+In `src/executor/builtin_registry/builder.rs`, change:
 ```rust
 let pim_tool = PimTool::new();
 ```
@@ -1188,7 +1188,7 @@ Expected: compiles, existing PIM tests pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/builtin_tools/pim/mod.rs core/src/executor/builtin_registry/builder.rs
+git add src/builtin_tools/pim/mod.rs src/executor/builtin_registry/builder.rs
 git commit -m "core: rewire PimTool to dispatch via DesktopPlatform.pim()"
 ```
 

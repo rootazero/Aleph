@@ -17,52 +17,52 @@
 ### New Files
 | File | Purpose |
 |------|---------|
-| `core/src/providers/protocols/openai_common/mod.rs` | Re-exports for shared OpenAI utilities |
-| `core/src/providers/protocols/openai_common/tools.rs` | Tool sanitize/desanitize, tool definition formatting |
-| `core/src/providers/protocols/openai_common/sse.rs` | SSE line buffering, `sse_line_stream()` helper |
-| `core/src/providers/protocols/openai_chat.rs` | Renamed from `openai.rs`, refactored to use `stream_deltas()` |
-| `core/src/providers/delta.rs` | `ProviderDelta` enum, `DeltaCollector`, `IndexIdTracker`, `DeltaSink` trait, `response_to_delta_stream()` |
+| `src/providers/protocols/openai_common/mod.rs` | Re-exports for shared OpenAI utilities |
+| `src/providers/protocols/openai_common/tools.rs` | Tool sanitize/desanitize, tool definition formatting |
+| `src/providers/protocols/openai_common/sse.rs` | SSE line buffering, `sse_line_stream()` helper |
+| `src/providers/protocols/openai_chat.rs` | Renamed from `openai.rs`, refactored to use `stream_deltas()` |
+| `src/providers/delta.rs` | `ProviderDelta` enum, `DeltaCollector`, `IndexIdTracker`, `DeltaSink` trait, `response_to_delta_stream()` |
 
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/providers/adapter.rs` | Remove `parse_response()`, `parse_stream()`, capability flags; add `stream_deltas()`; remove `is_streaming` from `build_request()` |
-| `core/src/providers/http_provider.rs` | Use `stream_deltas()` + `DeltaCollector`, add `stream_raw()` |
-| `core/src/providers/mod.rs` | Re-export `delta` module |
-| `core/src/providers/protocols/mod.rs` | Export `openai_common`, `openai_chat` |
-| `core/src/providers/protocols/registry.rs` | Update factory registrations |
-| `core/src/providers/protocols/openai_responses.rs` | Add `ResponsesVariant`, merge Codex logic, implement `stream_deltas()`, add new API features |
-| `core/src/providers/protocols/anthropic.rs` | Beta headers, prompt caching, service tier, full SSE via `stream_deltas()` |
-| `core/src/providers/protocols/gemini.rs` | Implement `stream_deltas()` (mechanical, map existing SSE) |
-| `core/src/providers/protocols/configurable.rs` | Implement `stream_deltas()` (delegate or fake-stream) |
-| `core/src/providers/responses/types.rs` | Merge codex types; add `previous_response_id`, `context_management`, `TextConfig`, `TextFormat` |
-| `core/src/providers/responses/shared.rs` | Remove SSE parsing functions, keep message/tool conversion |
-| `core/src/providers/anthropic/types.rs` | Add `CacheControl`, `service_tier` to `MessagesRequest` |
-| `core/src/agent_loop/loop_core.rs` | `LoopProvider::stream()`, Think step delta consumption, `DeltaSink` |
-| `core/src/agent_loop/provider_bridge.rs` | Implement `stream()` for `AiProviderBridge` |
-| `core/src/agent_loop/factory.rs` | Pass `DeltaSink` to `AgentLoop` |
-| `core/src/agent_loop/integration_probe.rs` | Update `ProbeProvider` for stream interface |
+| `src/providers/adapter.rs` | Remove `parse_response()`, `parse_stream()`, capability flags; add `stream_deltas()`; remove `is_streaming` from `build_request()` |
+| `src/providers/http_provider.rs` | Use `stream_deltas()` + `DeltaCollector`, add `stream_raw()` |
+| `src/providers/mod.rs` | Re-export `delta` module |
+| `src/providers/protocols/mod.rs` | Export `openai_common`, `openai_chat` |
+| `src/providers/protocols/registry.rs` | Update factory registrations |
+| `src/providers/protocols/openai_responses.rs` | Add `ResponsesVariant`, merge Codex logic, implement `stream_deltas()`, add new API features |
+| `src/providers/protocols/anthropic.rs` | Beta headers, prompt caching, service tier, full SSE via `stream_deltas()` |
+| `src/providers/protocols/gemini.rs` | Implement `stream_deltas()` (mechanical, map existing SSE) |
+| `src/providers/protocols/configurable.rs` | Implement `stream_deltas()` (delegate or fake-stream) |
+| `src/providers/responses/types.rs` | Merge codex types; add `previous_response_id`, `context_management`, `TextConfig`, `TextFormat` |
+| `src/providers/responses/shared.rs` | Remove SSE parsing functions, keep message/tool conversion |
+| `src/providers/anthropic/types.rs` | Add `CacheControl`, `service_tier` to `MessagesRequest` |
+| `src/agent_loop/loop_core.rs` | `LoopProvider::stream()`, Think step delta consumption, `DeltaSink` |
+| `src/agent_loop/provider_bridge.rs` | Implement `stream()` for `AiProviderBridge` |
+| `src/agent_loop/factory.rs` | Pass `DeltaSink` to `AgentLoop` |
+| `src/agent_loop/integration_probe.rs` | Update `ProbeProvider` for stream interface |
 
 ### Deleted Files
 | File | Reason |
 |------|--------|
-| `core/src/providers/protocols/codex.rs` | Merged into `openai_responses.rs` |
-| `core/src/providers/codex/types.rs` | Merged into `responses/types.rs` |
-| `core/src/providers/protocols/openai.rs` | Renamed to `openai_chat.rs` |
+| `src/providers/protocols/codex.rs` | Merged into `openai_responses.rs` |
+| `src/providers/codex/types.rs` | Merged into `responses/types.rs` |
+| `src/providers/protocols/openai.rs` | Renamed to `openai_chat.rs` |
 
 ---
 
 ## Task 1: ProviderDelta + DeltaCollector Foundation
 
 **Files:**
-- Create: `core/src/providers/delta.rs`
-- Modify: `core/src/providers/mod.rs` — add `pub mod delta;` and re-exports
+- Create: `src/providers/delta.rs`
+- Modify: `src/providers/mod.rs` — add `pub mod delta;` and re-exports
 
 This task adds all new types without breaking any existing code.
 
 - [ ] **Step 1: Write tests for DeltaCollector**
 
-In `core/src/providers/delta.rs`, write tests at the bottom:
+In `src/providers/delta.rs`, write tests at the bottom:
 
 ```rust
 #[cfg(test)]
@@ -190,7 +190,7 @@ Expected: Compilation error — module `delta` doesn't exist yet.
 
 - [ ] **Step 3: Implement ProviderDelta, DeltaCollector, IndexIdTracker, DeltaSink, response_to_delta_stream**
 
-Create `core/src/providers/delta.rs` with the full implementation per spec Section 1 + Section 5 test helper + Section 8 I4/I5 fixes. Key implementation details:
+Create `src/providers/delta.rs` with the full implementation per spec Section 1 + Section 5 test helper + Section 8 I4/I5 fixes. Key implementation details:
 
 ```rust
 //! Streaming delta types for provider protocol output.
@@ -269,7 +269,7 @@ Expected: No errors (new module, no existing code changed).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/providers/delta.rs core/src/providers/mod.rs
+git add src/providers/delta.rs src/providers/mod.rs
 git commit -m "provider: add ProviderDelta, DeltaCollector, IndexIdTracker, DeltaSink foundation"
 ```
 
@@ -278,11 +278,11 @@ git commit -m "provider: add ProviderDelta, DeltaCollector, IndexIdTracker, Delt
 ## Task 2: Extract openai_common Module
 
 **Files:**
-- Create: `core/src/providers/protocols/openai_common/mod.rs`
-- Create: `core/src/providers/protocols/openai_common/tools.rs`
-- Create: `core/src/providers/protocols/openai_common/sse.rs`
-- Modify: `core/src/providers/protocols/mod.rs` — add `pub mod openai_common;`
-- Modify: `core/src/providers/protocols/openai.rs` — change tool functions to import from `openai_common`
+- Create: `src/providers/protocols/openai_common/mod.rs`
+- Create: `src/providers/protocols/openai_common/tools.rs`
+- Create: `src/providers/protocols/openai_common/sse.rs`
+- Modify: `src/providers/protocols/mod.rs` — add `pub mod openai_common;`
+- Modify: `src/providers/protocols/openai.rs` — change tool functions to import from `openai_common`
 
 Extract shared logic WITHOUT changing any behavior. After this task, existing tests must still pass.
 
@@ -379,10 +379,10 @@ Expected: All existing tests pass (no behavior change).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/providers/protocols/openai_common/
-git add core/src/providers/protocols/mod.rs
-git add core/src/providers/protocols/openai.rs
-git add core/src/providers/responses/shared.rs
+git add src/providers/protocols/openai_common/
+git add src/providers/protocols/mod.rs
+git add src/providers/protocols/openai.rs
+git add src/providers/responses/shared.rs
 git commit -m "provider: extract openai_common module (tools, sse)"
 ```
 
@@ -391,8 +391,8 @@ git commit -m "provider: extract openai_common module (tools, sse)"
 ## Task 3: Upgrade Responses API Types
 
 **Files:**
-- Modify: `core/src/providers/responses/types.rs` — add new fields & types, merge codex types
-- Modify: `core/src/providers/anthropic/types.rs` — add `CacheControl`, `service_tier`
+- Modify: `src/providers/responses/types.rs` — add new fields & types, merge codex types
+- Modify: `src/providers/anthropic/types.rs` — add `CacheControl`, `service_tier`
 
 No adapter logic changes — just type definitions.
 
@@ -468,8 +468,8 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/responses/types.rs core/src/providers/anthropic/types.rs
-git add core/src/providers/protocols/openai_responses.rs core/src/providers/protocols/codex.rs
+git add src/providers/responses/types.rs src/providers/anthropic/types.rs
+git add src/providers/protocols/openai_responses.rs src/providers/protocols/codex.rs
 git commit -m "provider: add Responses API and Anthropic type upgrades"
 ```
 
@@ -478,7 +478,7 @@ git commit -m "provider: add Responses API and Anthropic type upgrades"
 ## Task 4: ProtocolAdapter Trait Migration
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs` — add `stream_deltas()` with default impl, deprecate old methods
+- Modify: `src/providers/adapter.rs` — add `stream_deltas()` with default impl, deprecate old methods
 - Modify: All protocol adapters — add `stream_deltas()` implementations
 
 This is the critical step. Strategy: add `stream_deltas()` as a new method with a **default implementation** that calls `parse_response()` (bridging). Then each adapter implements the real version. Once all done, remove old methods.
@@ -531,7 +531,7 @@ Remove the `is_streaming` parameter from:
 - `configurable.rs` — multiple call sites
 - All 5 protocol adapter `impl ProtocolAdapter` blocks
 
-Search: `grep -n "is_streaming" core/src/providers/` to find all sites.
+Search: `grep -n "is_streaming" src/providers/` to find all sites.
 
 - [ ] **Step 3: Compile check**
 
@@ -546,9 +546,9 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/adapter.rs core/src/providers/delta.rs
-git add core/src/providers/http_provider.rs
-git add core/src/providers/protocols/
+git add src/providers/adapter.rs src/providers/delta.rs
+git add src/providers/http_provider.rs
+git add src/providers/protocols/
 git commit -m "provider: add stream_deltas() to ProtocolAdapter with default bridge"
 ```
 
@@ -557,9 +557,9 @@ git commit -m "provider: add stream_deltas() to ProtocolAdapter with default bri
 ## Task 5: OpenAI Responses stream_deltas() + Codex Merge
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai_responses.rs` — add `ResponsesVariant`, implement `stream_deltas()`, absorb Codex
-- Modify: `core/src/providers/protocols/registry.rs` — register Codex as Responses variant
-- Delete: `core/src/providers/protocols/codex.rs` (after merge)
+- Modify: `src/providers/protocols/openai_responses.rs` — add `ResponsesVariant`, implement `stream_deltas()`, absorb Codex
+- Modify: `src/providers/protocols/registry.rs` — register Codex as Responses variant
+- Delete: `src/providers/protocols/codex.rs` (after merge)
 
 - [ ] **Step 1: Write test for Responses stream_deltas()**
 
@@ -638,8 +638,8 @@ Expected: All tests pass (Codex tests moved or adapted).
 - [ ] **Step 9: Commit**
 
 ```bash
-git add -A core/src/providers/protocols/
-git add core/src/providers/responses/
+git add -A src/providers/protocols/
+git add src/providers/responses/
 git commit -m "provider: Responses API stream_deltas() + merge Codex via ResponsesVariant"
 ```
 
@@ -648,14 +648,14 @@ git commit -m "provider: Responses API stream_deltas() + merge Codex via Respons
 ## Task 6: Rename openai.rs → openai_chat.rs + stream_deltas()
 
 **Files:**
-- Rename: `core/src/providers/protocols/openai.rs` → `core/src/providers/protocols/openai_chat.rs`
-- Modify: `core/src/providers/protocols/mod.rs` — update module declaration
+- Rename: `src/providers/protocols/openai.rs` → `src/providers/protocols/openai_chat.rs`
+- Modify: `src/providers/protocols/mod.rs` — update module declaration
 - Modify: All files importing from `protocols::openai` — update paths
 
 - [ ] **Step 1: Git rename**
 
 ```bash
-git mv core/src/providers/protocols/openai.rs core/src/providers/protocols/openai_chat.rs
+git mv src/providers/protocols/openai.rs src/providers/protocols/openai_chat.rs
 ```
 
 - [ ] **Step 2: Update module declaration in `protocols/mod.rs`**
@@ -664,7 +664,7 @@ Change `pub mod openai;` to `pub mod openai_chat;`. Update any `use` paths.
 
 - [ ] **Step 3: Update all imports**
 
-Search: `grep -rn "protocols::openai" core/src/` and update to `protocols::openai_chat`.
+Search: `grep -rn "protocols::openai" src/` and update to `protocols::openai_chat`.
 Also update `responses/shared.rs` which imports `openai::sanitize_tool_name_pub` (now from `openai_common::tools`).
 
 - [ ] **Step 4: Implement `stream_deltas()` for `OpenAiChatProtocol`**
@@ -684,7 +684,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A core/src/providers/
+git add -A src/providers/
 git commit -m "provider: rename openai.rs to openai_chat.rs, implement stream_deltas()"
 ```
 
@@ -693,7 +693,7 @@ git commit -m "provider: rename openai.rs to openai_chat.rs, implement stream_de
 ## Task 7: Anthropic Protocol Upgrade + stream_deltas()
 
 **Files:**
-- Modify: `core/src/providers/protocols/anthropic.rs` — beta headers, prompt caching, full SSE parsing
+- Modify: `src/providers/protocols/anthropic.rs` — beta headers, prompt caching, full SSE parsing
 
 - [ ] **Step 1: Write tests for Anthropic SSE → ProviderDelta mapping**
 
@@ -747,7 +747,7 @@ Expected: All Anthropic tests pass (old + new).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/providers/protocols/anthropic.rs core/src/providers/anthropic/types.rs
+git add src/providers/protocols/anthropic.rs src/providers/anthropic/types.rs
 git commit -m "provider: Anthropic upgrade — beta headers, prompt caching, full SSE stream_deltas()"
 ```
 
@@ -756,8 +756,8 @@ git commit -m "provider: Anthropic upgrade — beta headers, prompt caching, ful
 ## Task 8: Gemini + Configurable Protocol Migration
 
 **Files:**
-- Modify: `core/src/providers/protocols/gemini.rs` — implement `stream_deltas()`
-- Modify: `core/src/providers/protocols/configurable.rs` — implement `stream_deltas()`
+- Modify: `src/providers/protocols/gemini.rs` — implement `stream_deltas()`
+- Modify: `src/providers/protocols/configurable.rs` — implement `stream_deltas()`
 
 Mechanical migration — map existing SSE parsing to ProviderDelta.
 
@@ -785,7 +785,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/protocols/gemini.rs core/src/providers/protocols/configurable.rs
+git add src/providers/protocols/gemini.rs src/providers/protocols/configurable.rs
 git commit -m "provider: Gemini and Configurable stream_deltas() migration"
 ```
 
@@ -794,8 +794,8 @@ git commit -m "provider: Gemini and Configurable stream_deltas() migration"
 ## Task 9: HttpProvider Stream Adaptation
 
 **Files:**
-- Modify: `core/src/providers/http_provider.rs` — use `stream_deltas()` + `DeltaCollector`, add `stream_raw()`
-- Modify: `core/src/providers/mod.rs` — add `as_http_provider()` to AiProvider
+- Modify: `src/providers/http_provider.rs` — use `stream_deltas()` + `DeltaCollector`, add `stream_raw()`
+- Modify: `src/providers/mod.rs` — add `as_http_provider()` to AiProvider
 
 **IMPORTANT**: This task MUST run before Task 10 (removing old methods). HttpProvider currently calls `parse_response()` — if we remove `parse_response()` from the trait first, HttpProvider won't compile.
 
@@ -878,7 +878,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/http_provider.rs core/src/providers/mod.rs
+git add src/providers/http_provider.rs src/providers/mod.rs
 git commit -m "provider: HttpProvider uses stream_deltas() + DeltaCollector, adds stream_raw()"
 ```
 
@@ -887,7 +887,7 @@ git commit -m "provider: HttpProvider uses stream_deltas() + DeltaCollector, add
 ## Task 10: Remove Old ProtocolAdapter Methods
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs` — remove `parse_response()`, `parse_stream()`, old capability flags
+- Modify: `src/providers/adapter.rs` — remove `parse_response()`, `parse_stream()`, old capability flags
 - Modify: All protocol adapters — remove old method implementations
 
 Now that all adapters have `stream_deltas()` AND HttpProvider no longer calls `parse_response()`, safely remove the deprecated methods.
@@ -940,7 +940,7 @@ Expected: All tests pass. Some old tests in `shared.rs` that tested `parse_sse_b
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A core/src/providers/
+git add -A src/providers/
 git commit -m "provider: remove parse_response(), parse_stream(), old capability flags"
 ```
 
@@ -949,9 +949,9 @@ git commit -m "provider: remove parse_response(), parse_stream(), old capability
 ## Task 11: LoopProvider + AgentLoop + Bridge Adaptation
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs` — `LoopProvider::stream()`, Think step, `DeltaSink`
-- Modify: `core/src/agent_loop/provider_bridge.rs` — implement `stream()`
-- Modify: `core/src/agent_loop/factory.rs` — pass `DeltaSink`
+- Modify: `src/agent_loop/loop_core.rs` — `LoopProvider::stream()`, Think step, `DeltaSink`
+- Modify: `src/agent_loop/provider_bridge.rs` — implement `stream()`
+- Modify: `src/agent_loop/factory.rs` — pass `DeltaSink`
 
 **NOTE on constructor blast radius**: `AgentLoop::new()` is called in 12+ test sites plus `factory.rs` and `subagent_tool.rs`. The `delta_sink` field MUST NOT be a required constructor parameter. Instead, add it as a private field defaulting to `Box::new(NoopSink)` inside the existing `new()` body. Only `with_delta_sink()` builder exposes it. This way zero existing call sites need updating.
 
@@ -1071,7 +1071,7 @@ Expected: All tests pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add core/src/agent_loop/
+git add src/agent_loop/
 git commit -m "agent_loop: LoopProvider::stream(), Think step delta consumption, DeltaSink pre-wire"
 ```
 
@@ -1080,9 +1080,9 @@ git commit -m "agent_loop: LoopProvider::stream(), Think step delta consumption,
 ## Task 12: Final Cleanup + Delete Dead Code
 
 **Files:**
-- Delete: `core/src/providers/codex/types.rs` (if not already deleted in Task 5)
-- Delete: `core/src/providers/codex/mod.rs`
-- Modify: `core/src/providers/mod.rs` — remove `pub mod codex` if types were only used there
+- Delete: `src/providers/codex/types.rs` (if not already deleted in Task 5)
+- Delete: `src/providers/codex/mod.rs`
+- Modify: `src/providers/mod.rs` — remove `pub mod codex` if types were only used there
 - Clean up any remaining dead imports, unused functions
 
 - [ ] **Step 1: Search for dead code**
@@ -1092,7 +1092,7 @@ Address each warning.
 
 - [ ] **Step 2: Remove codex submodule if still present**
 
-Check if `core/src/providers/codex/` still has files used elsewhere (e.g., `codex/auth.rs` for OAuth, `codex/security.rs` for PoW). These should **NOT** be deleted — they're still needed for the Codex variant's auth flow. Only delete `codex/types.rs` (merged into `responses/types.rs`).
+Check if `src/providers/codex/` still has files used elsewhere (e.g., `codex/auth.rs` for OAuth, `codex/security.rs` for PoW). These should **NOT** be deleted — they're still needed for the Codex variant's auth flow. Only delete `codex/types.rs` (merged into `responses/types.rs`).
 
 - [ ] **Step 3: Run clippy**
 
@@ -1107,7 +1107,7 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A core/src/providers/
+git add -A src/providers/
 git commit -m "provider: final cleanup — remove dead code, fix warnings"
 ```
 

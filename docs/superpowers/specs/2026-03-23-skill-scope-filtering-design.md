@@ -77,7 +77,7 @@ The `skill_instructions: Option<String>` field in `PromptConfig` is **preserved*
 
 ## Changes
 
-### 1. `core/src/domain/skill.rs` — SkillManifest
+### 1. `src/domain/skill.rs` — SkillManifest
 
 Add `bound_tool: Option<String>` field:
 
@@ -99,11 +99,11 @@ impl SkillManifest {
 }
 ```
 
-### 2. `core/src/skill/manifest.rs` — Frontmatter Parsing
+### 2. `src/skill/manifest.rs` — Frontmatter Parsing
 
 Parse `bound-tool` from YAML frontmatter into `SkillManifest.bound_tool`.
 
-### 3. `core/src/skill/snapshot.rs` — SkillSnapshot
+### 3. `src/skill/snapshot.rs` — SkillSnapshot
 
 Add `eligible_manifests: Vec<SkillManifest>`:
 
@@ -120,7 +120,7 @@ pub struct SkillSnapshot {
 
 In `build()`, collect eligible + model-visible manifests (cloned) into `eligible_manifests`.
 
-### 4. `core/src/thinker/prompt_builder/mod.rs` — PromptConfig
+### 4. `src/thinker/prompt_builder/mod.rs` — PromptConfig
 
 Add `eligible_skills: Option<Vec<SkillManifest>>`:
 
@@ -131,7 +131,7 @@ pub struct PromptConfig {
 }
 ```
 
-### 5. `core/src/thinker/layers/skill_instructions.rs` — SkillInstructionsLayer
+### 5. `src/thinker/layers/skill_instructions.rs` — SkillInstructionsLayer
 
 Rewrite `inject()`:
 

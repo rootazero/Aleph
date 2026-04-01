@@ -529,7 +529,7 @@ pub enum TeamEventType {
 ## New Module Structure
 
 ```
-core/src/teams/
+src/teams/
 ├── mod.rs                  // re-exports
 ├── types.rs                // Team, TeamMember (existing, enhanced)
 ├── store.rs                // SqliteTeamStore (existing, enhanced)

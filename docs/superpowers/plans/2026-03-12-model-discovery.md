@@ -16,15 +16,15 @@
 
 | Action | File | Responsibility |
 |--------|------|---------------|
-| Modify | `core/src/providers/adapter.rs` | Add `DiscoveredModel` struct + `list_models()` default method to `ProtocolAdapter` |
-| New | `core/src/providers/model_registry.rs` | `ModelRegistry` cache service: TTL cache, preset loading, aggregation |
+| Modify | `src/providers/adapter.rs` | Add `DiscoveredModel` struct + `list_models()` default method to `ProtocolAdapter` |
+| New | `src/providers/model_registry.rs` | `ModelRegistry` cache service: TTL cache, preset loading, aggregation |
 | New | `shared/config/model-presets.toml` | Preset model lists per protocol (Anthropic, OpenAI fallback, Gemini fallback) |
-| Modify | `core/src/providers/protocols/openai.rs` | Implement `list_models()` via `GET /v1/models` |
-| Modify | `core/src/providers/protocols/gemini.rs` | Implement `list_models()` via `GET /v1beta/models` |
-| Modify | `core/src/providers/ollama.rs` | Add `list_models()` method via `GET /api/tags` |
-| Modify | `core/src/providers/mod.rs` | Re-export `model_registry` module |
-| Modify | `core/src/gateway/handlers/models.rs` | Rewrite RPC handlers to use `ModelRegistry`; add `models.refresh`, `models.set_default`, `models.set_model` |
-| Modify | `core/src/gateway/handlers/mod.rs` | Register new RPC methods |
+| Modify | `src/providers/protocols/openai.rs` | Implement `list_models()` via `GET /v1/models` |
+| Modify | `src/providers/protocols/gemini.rs` | Implement `list_models()` via `GET /v1beta/models` |
+| Modify | `src/providers/ollama.rs` | Add `list_models()` method via `GET /api/tags` |
+| Modify | `src/providers/mod.rs` | Re-export `model_registry` module |
+| Modify | `src/gateway/handlers/models.rs` | Rewrite RPC handlers to use `ModelRegistry`; add `models.refresh`, `models.set_default`, `models.set_model` |
+| Modify | `src/gateway/handlers/mod.rs` | Register new RPC methods |
 
 ---
 
@@ -40,7 +40,7 @@
 ### Task 1: Add `DiscoveredModel` and `list_models()` to ProtocolAdapter
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs`
+- Modify: `src/providers/adapter.rs`
 
 - [ ] **Step 1: Write the test for `DiscoveredModel` serialization**
 
@@ -120,7 +120,7 @@ Expected: SUCCESS — default method means no existing impl needs changes
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/adapter.rs
+git add src/providers/adapter.rs
 git commit -m "model-discovery: add DiscoveredModel and list_models() to ProtocolAdapter"
 ```
 
@@ -176,12 +176,12 @@ git commit -m "model-discovery: add model preset TOML file"
 ### Task 3: Create `ModelRegistry` with preset loading and cache
 
 **Files:**
-- Create: `core/src/providers/model_registry.rs`
-- Modify: `core/src/providers/mod.rs`
+- Create: `src/providers/model_registry.rs`
+- Modify: `src/providers/mod.rs`
 
 - [ ] **Step 1: Write tests for `ModelRegistry`**
 
-Create `core/src/providers/model_registry.rs` with test module first:
+Create `src/providers/model_registry.rs` with test module first:
 
 ```rust
 //! Model registry with caching and preset fallback
@@ -531,7 +531,7 @@ models = [
 
 - [ ] **Step 2: Add module to `mod.rs`**
 
-In `core/src/providers/mod.rs`, add after `pub mod presets;` (line 70):
+In `src/providers/mod.rs`, add after `pub mod presets;` (line 70):
 
 ```rust
 pub mod model_registry;
@@ -551,7 +551,7 @@ Expected: ALL PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/model_registry.rs core/src/providers/mod.rs
+git add src/providers/model_registry.rs src/providers/mod.rs
 git commit -m "model-discovery: add ModelRegistry with cache and preset fallback"
 ```
 
@@ -562,7 +562,7 @@ git commit -m "model-discovery: add ModelRegistry with cache and preset fallback
 ### Task 4: Implement `list_models()` for OpenAI protocol
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai.rs`
+- Modify: `src/providers/protocols/openai.rs`
 
 - [ ] **Step 1: Add the `list_models` implementation**
 
@@ -639,7 +639,7 @@ Expected: SUCCESS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/openai.rs
+git add src/providers/protocols/openai.rs
 git commit -m "model-discovery: implement list_models for OpenAI protocol"
 ```
 
@@ -648,7 +648,7 @@ git commit -m "model-discovery: implement list_models for OpenAI protocol"
 ### Task 5: Implement `list_models()` for Gemini protocol
 
 **Files:**
-- Modify: `core/src/providers/protocols/gemini.rs`
+- Modify: `src/providers/protocols/gemini.rs`
 
 - [ ] **Step 1: Add the `list_models` implementation**
 
@@ -722,7 +722,7 @@ Expected: SUCCESS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/gemini.rs
+git add src/providers/protocols/gemini.rs
 git commit -m "model-discovery: implement list_models for Gemini protocol"
 ```
 
@@ -731,7 +731,7 @@ git commit -m "model-discovery: implement list_models for Gemini protocol"
 ### Task 6: Add `list_models()` to `OllamaProvider`
 
 **Files:**
-- Modify: `core/src/providers/ollama.rs`
+- Modify: `src/providers/ollama.rs`
 
 - [ ] **Step 1: Add Ollama tags response types and `list_models` method**
 
@@ -804,7 +804,7 @@ Expected: SUCCESS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/ollama.rs
+git add src/providers/ollama.rs
 git commit -m "model-discovery: add list_models to OllamaProvider"
 ```
 
@@ -815,7 +815,7 @@ git commit -m "model-discovery: add list_models to OllamaProvider"
 ### Task 7: Create global `ModelRegistry` singleton
 
 **Files:**
-- Modify: `core/src/providers/model_registry.rs`
+- Modify: `src/providers/model_registry.rs`
 
 - [ ] **Step 1: Add the global singleton**
 
@@ -833,7 +833,7 @@ pub static MODEL_REGISTRY: Lazy<ModelRegistry> = Lazy::new(|| {
 });
 ```
 
-Note: `include_str!` path is relative to the source file (`core/src/providers/model_registry.rs`), so `../../../shared/config/model-presets.toml` resolves to the project root's `shared/config/` directory. This ensures presets are always available regardless of working directory at runtime.
+Note: `include_str!` path is relative to the source file (`src/providers/model_registry.rs`), so `../../../shared/config/model-presets.toml` resolves to the project root's `shared/config/` directory. This ensures presets are always available regardless of working directory at runtime.
 
 - [ ] **Step 2: Run compile check**
 
@@ -843,7 +843,7 @@ Expected: SUCCESS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/model_registry.rs
+git add src/providers/model_registry.rs
 git commit -m "model-discovery: add MODEL_REGISTRY global singleton"
 ```
 
@@ -852,7 +852,7 @@ git commit -m "model-discovery: add MODEL_REGISTRY global singleton"
 ### Task 8: Rewrite RPC handlers to use `ModelRegistry`
 
 **Files:**
-- Modify: `core/src/gateway/handlers/models.rs`
+- Modify: `src/gateway/handlers/models.rs`
 
 - [ ] **Step 1: Update `ModelInfo` struct**
 
@@ -1367,7 +1367,7 @@ Expected: ALL PASS
 - [ ] **Step 9: Commit**
 
 ```bash
-git add core/src/gateway/handlers/models.rs
+git add src/gateway/handlers/models.rs
 git commit -m "model-discovery: rewrite RPC handlers to use ModelRegistry"
 ```
 
@@ -1376,7 +1376,7 @@ git commit -m "model-discovery: rewrite RPC handlers to use ModelRegistry"
 ### Task 9: Register new RPC methods in handler registry
 
 **Files:**
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
 - [ ] **Step 1: Register the new methods**
 
@@ -1405,7 +1405,7 @@ Expected: ALL PASS (pre-existing failures in `markdown_skill::loader` are known)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/mod.rs
 git commit -m "model-discovery: register models.refresh and new RPC methods"
 ```
 

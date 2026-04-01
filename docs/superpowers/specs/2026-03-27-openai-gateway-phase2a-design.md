@@ -22,7 +22,7 @@ Phase 1 delivered dual-mode `/v1/chat/completions` and `/v1/models`. Phase 2A ex
 ## Module Structure
 
 ```
-core/src/gateway/openai_api/
+src/gateway/openai_api/
 ├── (Phase 1 — unchanged)
 │   ├── mod.rs, auth.rs, models.rs, stream.rs
 │   └── completions/{mod.rs, agent.rs}

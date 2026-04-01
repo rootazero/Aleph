@@ -212,16 +212,16 @@ Bilingual fallback based on user's message language.
 
 | File | Change |
 |------|--------|
-| `core/src/builtin_tools/generation/video_generate.rs` | **New** — AlephTool impl |
-| `core/src/builtin_tools/generation/audio_generate.rs` | **New** — AlephTool impl |
-| `core/src/builtin_tools/generation/speech_generate.rs` | **Modify** — fix `Arc<RwLock<>>` wrapping + add registration |
-| `core/src/builtin_tools/generation/mod.rs` | **Modify** — export new modules |
-| `core/src/executor/builtin_registry/builder.rs` | **Modify** — unified registration + command registration |
-| `core/src/executor/builtin_registry/registry.rs` | **Modify** — route to AlephTool::call_json |
-| `core/src/executor/builtin_registry/executors.rs` | **Delete or empty** — remove legacy handlers |
-| `core/src/gateway/execution_engine/slash_command.rs` | **Modify** — add fast path arg mapping |
-| `core/src/agent_loop/prompt_builder.rs` | **Modify** — add efficiency awareness to BASE_BEHAVIOR |
-| `core/src/gateway/execution_engine/run_loop.rs` | **Modify** — hit_limit safety net |
+| `src/builtin_tools/generation/video_generate.rs` | **New** — AlephTool impl |
+| `src/builtin_tools/generation/audio_generate.rs` | **New** — AlephTool impl |
+| `src/builtin_tools/generation/speech_generate.rs` | **Modify** — fix `Arc<RwLock<>>` wrapping + add registration |
+| `src/builtin_tools/generation/mod.rs` | **Modify** — export new modules |
+| `src/executor/builtin_registry/builder.rs` | **Modify** — unified registration + command registration |
+| `src/executor/builtin_registry/registry.rs` | **Modify** — route to AlephTool::call_json |
+| `src/executor/builtin_registry/executors.rs` | **Delete or empty** — remove legacy handlers |
+| `src/gateway/execution_engine/slash_command.rs` | **Modify** — add fast path arg mapping |
+| `src/agent_loop/prompt_builder.rs` | **Modify** — add efficiency awareness to BASE_BEHAVIOR |
+| `src/gateway/execution_engine/run_loop.rs` | **Modify** — hit_limit safety net |
 
 ## Implementation Priority
 

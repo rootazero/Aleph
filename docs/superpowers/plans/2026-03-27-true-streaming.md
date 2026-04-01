@@ -15,12 +15,12 @@
 ### Task 0: Dead Code Cleanup (prerequisite)
 
 **Files:**
-- Modify: `core/src/gateway/event_emitter/impls.rs` (lines 40-124)
-- Modify: `core/src/gateway/event_emitter/tests.rs` (lines 87-155)
+- Modify: `src/gateway/event_emitter/impls.rs` (lines 40-124)
+- Modify: `src/gateway/event_emitter/tests.rs` (lines 87-155)
 
 - [ ] **Step 1: Remove dead throttle code from GatewayEventEmitter**
 
-In `core/src/gateway/event_emitter/impls.rs`, remove:
+In `src/gateway/event_emitter/impls.rs`, remove:
 - The comment "Throttling state for response chunks (typewriter mode)" (line 31)
 - `delta_buffer` and `last_delta_at` fields (lines 32-33)
 - `DELTA_THROTTLE_MS` constant (line 42)
@@ -44,7 +44,7 @@ Update `new()` and `with_output_mode()` to remove `delta_buffer` and `last_delta
 
 - [ ] **Step 2: Remove dead throttle tests**
 
-In `core/src/gateway/event_emitter/tests.rs`, remove these 3 tests that reference `emit_response_chunk_throttled` or `DELTA_THROTTLE_MS`:
+In `src/gateway/event_emitter/tests.rs`, remove these 3 tests that reference `emit_response_chunk_throttled` or `DELTA_THROTTLE_MS`:
 - `test_throttled_response_chunk_buffering` (lines 87-123)
 - `test_throttled_response_chunk_final_always_sends` (lines 125-146)
 - `test_throttle_constant` (lines 148-155)
@@ -62,7 +62,7 @@ Expected: All remaining tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/event_emitter/impls.rs core/src/gateway/event_emitter/tests.rs
+git add src/gateway/event_emitter/impls.rs src/gateway/event_emitter/tests.rs
 git commit -m "gateway: remove dead emit_response_chunk_throttled code"
 ```
 
@@ -71,14 +71,14 @@ git commit -m "gateway: remove dead emit_response_chunk_throttled code"
 ### Task 1: Protocol — Add delta + full_text to ResponseChunk
 
 **Files:**
-- Modify: `core/src/gateway/event_emitter/types.rs` (lines 92-103, StreamEvent::ResponseChunk)
-- Modify: `core/src/gateway/event_emitter/mod.rs` (lines 90-110, emit_response_chunk trait method)
-- Modify: `core/src/gateway/event_emitter/impls.rs` (all 4 implementors + Instant mode)
-- Modify: `core/src/gateway/event_emitter/tests.rs` (update assertions)
+- Modify: `src/gateway/event_emitter/types.rs` (lines 92-103, StreamEvent::ResponseChunk)
+- Modify: `src/gateway/event_emitter/mod.rs` (lines 90-110, emit_response_chunk trait method)
+- Modify: `src/gateway/event_emitter/impls.rs` (all 4 implementors + Instant mode)
+- Modify: `src/gateway/event_emitter/tests.rs` (update assertions)
 
 - [ ] **Step 1: Add fields to StreamEvent::ResponseChunk**
 
-In `core/src/gateway/event_emitter/types.rs`, update the `ResponseChunk` variant (lines 92-103):
+In `src/gateway/event_emitter/types.rs`, update the `ResponseChunk` variant (lines 92-103):
 
 ```rust
 /// Response text chunk (streaming output)
@@ -102,7 +102,7 @@ ResponseChunk {
 
 - [ ] **Step 2: Update emit_response_chunk trait method signature**
 
-In `core/src/gateway/event_emitter/mod.rs`, update `emit_response_chunk()` (lines 90-110):
+In `src/gateway/event_emitter/mod.rs`, update `emit_response_chunk()` (lines 90-110):
 
 ```rust
 /// Emit response text chunk
@@ -133,7 +133,7 @@ async fn emit_response_chunk(
 
 - [ ] **Step 3: Update Instant mode in GatewayEventEmitter::emit()**
 
-In `core/src/gateway/event_emitter/impls.rs`, update the `emit()` method's Instant mode handling. The key changes:
+In `src/gateway/event_emitter/impls.rs`, update the `emit()` method's Instant mode handling. The key changes:
 
 In the `StreamEvent::ResponseChunk` destructure (around line 132), add `delta` and `full_text`:
 ```rust
@@ -194,9 +194,9 @@ For the RunComplete flush (around line 209), same pattern — construct with all
 - [ ] **Step 4: Fix all compilation errors from new fields**
 
 Search for all `StreamEvent::ResponseChunk { .. }` pattern matches across the codebase and add the new `delta` and `full_text` fields. Key locations:
-- `core/src/gateway/streaming_sink.rs` — test matches (lines 174, 182, 238, 246, 274, 295)
-- `core/src/gateway/event_emitter/tests.rs` — test matches
-- Any other files found via: `grep -rn "ResponseChunk" core/src/`
+- `src/gateway/streaming_sink.rs` — test matches (lines 174, 182, 238, 246, 274, 295)
+- `src/gateway/event_emitter/tests.rs` — test matches
+- Any other files found via: `grep -rn "ResponseChunk" src/`
 
 For test pattern matches, add `delta, full_text, ..` to the destructure or `..` wildcard.
 
@@ -213,7 +213,7 @@ Expected: All tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/event_emitter/ core/src/gateway/streaming_sink.rs
+git add src/gateway/event_emitter/ src/gateway/streaming_sink.rs
 git commit -m "gateway: add delta + full_text fields to ResponseChunk protocol"
 ```
 
@@ -222,11 +222,11 @@ git commit -m "gateway: add delta + full_text fields to ResponseChunk protocol"
 ### Task 2: Backend — Semantic Chunking in StreamingDeltaSink
 
 **Files:**
-- Modify: `core/src/gateway/streaming_sink.rs` (full rewrite of flush logic)
+- Modify: `src/gateway/streaming_sink.rs` (full rewrite of flush logic)
 
 - [ ] **Step 1: Write tests for semantic boundary detection**
 
-Add to the `tests` module in `core/src/gateway/streaming_sink.rs`:
+Add to the `tests` module in `src/gateway/streaming_sink.rs`:
 
 ```rust
 #[test]
@@ -264,7 +264,7 @@ Expected: FAIL (functions not defined)
 
 - [ ] **Step 3: Implement boundary detection functions**
 
-Add to `core/src/gateway/streaming_sink.rs`, above the `StreamingDeltaSink` struct:
+Add to `src/gateway/streaming_sink.rs`, above the `StreamingDeltaSink` struct:
 
 ```rust
 /// Hard flush timeout (ms) — force flush if no semantic boundary found
@@ -475,7 +475,7 @@ Expected: All tests pass
 - [ ] **Step 10: Commit**
 
 ```bash
-git add core/src/gateway/streaming_sink.rs
+git add src/gateway/streaming_sink.rs
 git commit -m "gateway: semantic chunking in StreamingDeltaSink with accumulated text"
 ```
 
@@ -484,11 +484,11 @@ git commit -m "gateway: semantic chunking in StreamingDeltaSink with accumulated
 ### Task 3: Fix All Callers of emit_response_chunk
 
 **Files:**
-- Modify: `core/src/gateway/handlers/agent.rs:242` — the only external caller
+- Modify: `src/gateway/handlers/agent.rs:242` — the only external caller
 
 - [ ] **Step 1: Update handlers/agent.rs**
 
-The only caller outside event_emitter and streaming_sink is in `core/src/gateway/handlers/agent.rs` at line 242. This is a one-shot message replay (non-streaming), so `delta == full_text`:
+The only caller outside event_emitter and streaming_sink is in `src/gateway/handlers/agent.rs` at line 242. This is a one-shot message replay (non-streaming), so `delta == full_text`:
 
 ```rust
 // Old (line 242):
@@ -498,7 +498,7 @@ The only caller outside event_emitter and streaming_sink is in `core/src/gateway
 ```
 
 Verify no other callers exist:
-Run: `grep -rn "emit_response_chunk\b" core/src/ --include="*.rs" | grep -v event_emitter | grep -v streaming_sink | grep -v tests.rs`
+Run: `grep -rn "emit_response_chunk\b" src/ --include="*.rs" | grep -v event_emitter | grep -v streaming_sink | grep -v tests.rs`
 Expected: Only `handlers/agent.rs:242`
 
 - [ ] **Step 2: Verify compilation**
@@ -514,7 +514,7 @@ Expected: All tests pass (ignore pre-existing `markdown_skill::loader` failures)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/handlers/agent.rs
+git add src/gateway/handlers/agent.rs
 git commit -m "gateway: update emit_response_chunk caller in agent handler"
 ```
 

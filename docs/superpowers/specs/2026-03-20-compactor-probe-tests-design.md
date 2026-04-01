@@ -23,7 +23,7 @@ Two-layer probe test architecture:
 ### Layer 1: In-Process Probe
 
 ```
-core/tests/session_compactor_probe/
+tests/session_compactor_probe/
 ├── harness.rs          // CompactorProbeHarness
 ├── mock_llm.rs         // MockLlmProvider (reused from session_probe pattern)
 ├── tool_compaction.rs  // Scenario 1: ToolCompactor trigger and compression
@@ -136,7 +136,7 @@ Assertions:
 ### Layer 2: End-to-End Probe
 
 ```
-core/tests/compactor_e2e_probe/
+tests/compactor_e2e_probe/
 ├── harness.rs           // CompactorE2eHarness: spawn aleph + WebSocket
 ├── multi_turn.rs        // Scenario A: multi-turn → summary generation
 ├── compression_depth.rs // Scenario B: long conversation → depth upgrade
@@ -233,7 +233,7 @@ End-to-end tests capture `aleph` child process stderr and verify:
 
 ## Observability: CompactorMetrics
 
-Added to `core/src/memory/session_compactor/mod.rs`:
+Added to `src/memory/session_compactor/mod.rs`:
 
 ```rust
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -281,28 +281,28 @@ All tracing uses `target: "session_compactor"` for precise filtering.
 
 | File | Change |
 |------|--------|
-| `core/src/memory/session_compactor/mod.rs` | Add `CompactorMetrics`, wire into SessionCompactor, increment at key paths |
-| `core/src/memory/session_compactor/tool_compactor.rs` | Add tracing at compact_if_needed entry/exit |
-| `core/src/memory/mod.rs` | Re-export `CompactorMetrics` |
+| `src/memory/session_compactor/mod.rs` | Add `CompactorMetrics`, wire into SessionCompactor, increment at key paths |
+| `src/memory/session_compactor/tool_compactor.rs` | Add tracing at compact_if_needed entry/exit |
+| `src/memory/mod.rs` | Re-export `CompactorMetrics` |
 
 ## New Files
 
 | File | Purpose |
 |------|---------|
-| `core/tests/session_compactor_probe/harness.rs` | In-process probe harness |
-| `core/tests/session_compactor_probe/mock_llm.rs` | MockLlmProvider |
-| `core/tests/session_compactor_probe/tool_compaction.rs` | Scenario 1 |
-| `core/tests/session_compactor_probe/summary_gen.rs` | Scenario 2 |
-| `core/tests/session_compactor_probe/depth_upgrade.rs` | Scenario 3 |
-| `core/tests/session_compactor_probe/history_assembly.rs` | Scenario 4 |
-| `core/tests/session_compactor_probe/session_search.rs` | Scenario 5 |
-| `core/tests/session_compactor_probe/fallback_chain.rs` | Scenario 6 |
-| `core/tests/session_compactor_probe/prompt_layer.rs` | Scenario 7 |
-| `core/tests/compactor_e2e_probe/harness.rs` | E2E probe harness |
-| `core/tests/compactor_e2e_probe/multi_turn.rs` | Scenario A |
-| `core/tests/compactor_e2e_probe/compression_depth.rs` | Scenario B |
-| `core/tests/compactor_e2e_probe/session_recall.rs` | Scenario C |
-| `core/tests/compactor_e2e_probe/mod.rs` | Module entry |
+| `tests/session_compactor_probe/harness.rs` | In-process probe harness |
+| `tests/session_compactor_probe/mock_llm.rs` | MockLlmProvider |
+| `tests/session_compactor_probe/tool_compaction.rs` | Scenario 1 |
+| `tests/session_compactor_probe/summary_gen.rs` | Scenario 2 |
+| `tests/session_compactor_probe/depth_upgrade.rs` | Scenario 3 |
+| `tests/session_compactor_probe/history_assembly.rs` | Scenario 4 |
+| `tests/session_compactor_probe/session_search.rs` | Scenario 5 |
+| `tests/session_compactor_probe/fallback_chain.rs` | Scenario 6 |
+| `tests/session_compactor_probe/prompt_layer.rs` | Scenario 7 |
+| `tests/compactor_e2e_probe/harness.rs` | E2E probe harness |
+| `tests/compactor_e2e_probe/multi_turn.rs` | Scenario A |
+| `tests/compactor_e2e_probe/compression_depth.rs` | Scenario B |
+| `tests/compactor_e2e_probe/session_recall.rs` | Scenario C |
+| `tests/compactor_e2e_probe/mod.rs` | Module entry |
 
 ## Running
 

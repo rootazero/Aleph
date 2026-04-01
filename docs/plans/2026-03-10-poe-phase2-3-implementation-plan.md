@@ -15,9 +15,9 @@
 ## Task 1: Decomposition Detector (P-stage heuristic)
 
 **Files:**
-- Create: `core/src/poe/decomposition/mod.rs`
-- Create: `core/src/poe/decomposition/detector.rs`
-- Modify: `core/src/poe/mod.rs`
+- Create: `src/poe/decomposition/mod.rs`
+- Create: `src/poe/decomposition/detector.rs`
+- Modify: `src/poe/mod.rs`
 
 Implement `DecompositionDetector` that analyzes a SuccessManifest to determine if it should be split:
 
@@ -49,8 +49,8 @@ Tests (6): simple task proceeds, complex multi-dir decomposes, compound objectiv
 ## Task 2: Sub-Manifest Generator (LLM-assisted decomposition)
 
 **Files:**
-- Create: `core/src/poe/decomposition/generator.rs`
-- Modify: `core/src/poe/decomposition/mod.rs`
+- Create: `src/poe/decomposition/generator.rs`
+- Modify: `src/poe/decomposition/mod.rs`
 
 ```rust
 pub struct SubManifestGenerator;
@@ -79,8 +79,8 @@ Tests (4): generates valid sub-manifests, inherits parent task_id prefix, respec
 ## Task 3: Recursive PoeManager (sub-task orchestration)
 
 **Files:**
-- Modify: `core/src/poe/manager.rs` (add `execute_recursive` method)
-- Modify: `core/src/poe/types.rs` (add NeedsDecomposition to WorkerState)
+- Modify: `src/poe/manager.rs` (add `execute_recursive` method)
+- Modify: `src/poe/types.rs` (add NeedsDecomposition to WorkerState)
 
 Add `execute_recursive` to PoeManager that:
 1. Calls `DecompositionDetector::analyze()` before execution (P-stage)
@@ -115,7 +115,7 @@ Tests (5): simple task runs normally, P-stage decomposition triggers, max_depth 
 ## Task 4: E-stage Decomposition Trigger
 
 **Files:**
-- Modify: `core/src/poe/manager.rs` (add decomposition detection in E-stage)
+- Modify: `src/poe/manager.rs` (add decomposition detection in E-stage)
 
 In the execute loop, after stuck detection but before retry, check if decomposition is warranted:
 - distance_score hasn't improved over 2 attempts AND
@@ -137,9 +137,9 @@ Tests (3): triggers on mixed pass/fail pattern, doesn't trigger on uniform failu
 ## Task 5: Memory Decay Core Types
 
 **Files:**
-- Create: `core/src/poe/memory_decay/mod.rs`
-- Create: `core/src/poe/memory_decay/decay.rs`
-- Modify: `core/src/poe/mod.rs`
+- Create: `src/poe/memory_decay/mod.rs`
+- Create: `src/poe/memory_decay/decay.rs`
+- Modify: `src/poe/mod.rs`
 
 ```rust
 /// Decay-aware experience wrapper
@@ -190,8 +190,8 @@ Tests (8): performance factor calculations, drift factor, time decay (half-life)
 ## Task 6: Reuse Tracker
 
 **Files:**
-- Create: `core/src/poe/memory_decay/reuse_tracker.rs`
-- Modify: `core/src/poe/memory_decay/mod.rs`
+- Create: `src/poe/memory_decay/reuse_tracker.rs`
+- Modify: `src/poe/memory_decay/mod.rs`
 
 Track when experiences are reused and whether the reuse led to success or failure:
 
@@ -221,8 +221,8 @@ Tests (5): record and retrieve, success rate calculation, window limiting, empty
 ## Task 7: Decay-Aware Experience Retrieval
 
 **Files:**
-- Create: `core/src/poe/memory_decay/filtered_store.rs`
-- Modify: `core/src/poe/memory_decay/mod.rs`
+- Create: `src/poe/memory_decay/filtered_store.rs`
+- Modify: `src/poe/memory_decay/mod.rs`
 
 Wraps ExperienceStore with decay filtering:
 
@@ -251,9 +251,9 @@ Tests (4): low-weight experiences filtered, high-weight preserved, weight affect
 ## Task 8: ExecutionEnvironment Trait (Phase 3 Foundation)
 
 **Files:**
-- Create: `core/src/poe/execution_env/mod.rs`
-- Create: `core/src/poe/execution_env/host.rs`
-- Modify: `core/src/poe/mod.rs`
+- Create: `src/poe/execution_env/mod.rs`
+- Create: `src/poe/execution_env/host.rs`
+- Modify: `src/poe/mod.rs`
 
 ```rust
 /// Abstraction over command execution environment.
@@ -292,9 +292,9 @@ Tests (3): HostEnvironment executes successfully, timeout works, captures exit c
 ## Task 9: ValidatorRole Enum (Phase 3 Foundation)
 
 **Files:**
-- Modify: `core/src/poe/types.rs` (add ValidatorRole)
-- Modify: `core/src/poe/validation/composite.rs` (accept role parameter)
-- Modify: `core/src/poe/mod.rs`
+- Modify: `src/poe/types.rs` (add ValidatorRole)
+- Modify: `src/poe/validation/composite.rs` (accept role parameter)
+- Modify: `src/poe/mod.rs`
 
 ```rust
 /// Role of a validator in the evaluation pipeline.
@@ -317,7 +317,7 @@ Tests (2): default role is NormalCritic, with_role sets correctly.
 ## Task 10: Integration Tests + Final Verification
 
 **Files:**
-- Create: `core/tests/poe_phase2_integration.rs`
+- Create: `tests/poe_phase2_integration.rs`
 
 End-to-end tests:
 1. DecompositionDetector correctly identifies complex manifests

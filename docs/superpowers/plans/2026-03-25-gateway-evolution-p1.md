@@ -16,17 +16,17 @@
 
 | Action | File | Responsibility |
 |--------|------|---------------|
-| Create | `core/src/gateway/idempotency.rs` | IdempotencyGuard struct, CacheEntry enum, try_acquire/complete/prune |
-| Modify | `core/src/gateway/mod.rs` | Add `pub mod idempotency;` |
-| Modify | `core/src/gateway/server/mod.rs` | Add `idempotency_guard` field to GatewaySharedState |
-| Modify | `core/src/gateway/server/handler.rs` | Insert idempotency check before lane dispatch |
+| Create | `src/gateway/idempotency.rs` | IdempotencyGuard struct, CacheEntry enum, try_acquire/complete/prune |
+| Modify | `src/gateway/mod.rs` | Add `pub mod idempotency;` |
+| Modify | `src/gateway/server/mod.rs` | Add `idempotency_guard` field to GatewaySharedState |
+| Modify | `src/gateway/server/handler.rs` | Insert idempotency check before lane dispatch |
 
 ---
 
 ### Task 1: Create IdempotencyGuard with tests
 
 **Files:**
-- Create: `core/src/gateway/idempotency.rs`
+- Create: `src/gateway/idempotency.rs`
 
 - [ ] **Step 1: Write the failing test skeleton**
 
@@ -389,7 +389,7 @@ Expected: All 8 tests PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/gateway/idempotency.rs
+git add src/gateway/idempotency.rs
 git commit -m "gateway: add IdempotencyGuard with lock-free in-flight tracking"
 ```
 
@@ -398,12 +398,12 @@ git commit -m "gateway: add IdempotencyGuard with lock-free in-flight tracking"
 ### Task 2: Register module and add to GatewaySharedState
 
 **Files:**
-- Modify: `core/src/gateway/mod.rs` — add `pub mod idempotency;`
-- Modify: `core/src/gateway/server/mod.rs` — add field to GatewaySharedState
+- Modify: `src/gateway/mod.rs` — add `pub mod idempotency;`
+- Modify: `src/gateway/server/mod.rs` — add field to GatewaySharedState
 
 - [ ] **Step 1: Add module declaration**
 
-In `core/src/gateway/mod.rs`, after `pub mod lane;` (line 75), add:
+In `src/gateway/mod.rs`, after `pub mod lane;` (line 75), add:
 
 ```rust
 pub mod idempotency;
@@ -411,7 +411,7 @@ pub mod idempotency;
 
 - [ ] **Step 2: Add field to GatewaySharedState**
 
-In `core/src/gateway/server/mod.rs`, in `GatewaySharedState` struct (around line 83-97), add after `lane_manager`:
+In `src/gateway/server/mod.rs`, in `GatewaySharedState` struct (around line 83-97), add after `lane_manager`:
 
 ```rust
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
@@ -419,7 +419,7 @@ In `core/src/gateway/server/mod.rs`, in `GatewaySharedState` struct (around line
 
 - [ ] **Step 3: Add field to GatewayServer struct**
 
-In `core/src/gateway/server/mod.rs`, in the `GatewayServer` struct (around line 138-166), add a field:
+In `src/gateway/server/mod.rs`, in the `GatewayServer` struct (around line 138-166), add a field:
 
 ```rust
     pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
@@ -443,7 +443,7 @@ Also in `build_router()` (around line 272-286), where `GatewaySharedState` is co
 
 - [ ] **Step 5: Add to ConnectionContext in handler.rs**
 
-In `core/src/gateway/server/handler.rs`, add to `ConnectionContext` struct (around line 33-45):
+In `src/gateway/server/handler.rs`, add to `ConnectionContext` struct (around line 33-45):
 
 ```rust
     idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
@@ -457,7 +457,7 @@ And in `ws_upgrade_handler` where `ConnectionContext` is constructed (around lin
 
 - [ ] **Step 6: Add background prune task**
 
-In `core/src/gateway/server/mod.rs`, in `spawn_background_tasks()` (around line 316), add after the rate limiter prune task:
+In `src/gateway/server/mod.rs`, in `spawn_background_tasks()` (around line 316), add after the rate limiter prune task:
 
 ```rust
         // Background: prune stale idempotency entries every 60s
@@ -482,7 +482,7 @@ Expected: Compiles without errors
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/gateway/mod.rs core/src/gateway/server/mod.rs core/src/gateway/server/handler.rs
+git add src/gateway/mod.rs src/gateway/server/mod.rs src/gateway/server/handler.rs
 git commit -m "gateway: wire IdempotencyGuard into GatewaySharedState and background tasks"
 ```
 
@@ -491,12 +491,12 @@ git commit -m "gateway: wire IdempotencyGuard into GatewaySharedState and backgr
 ### Task 3: Integrate idempotency check into handler dispatch
 
 **Files:**
-- Modify: `core/src/gateway/server/handler.rs` — add check before lane dispatch
-- Modify: `core/src/gateway/lane.rs` — add `needs_idempotency()` helper
+- Modify: `src/gateway/server/handler.rs` — add check before lane dispatch
+- Modify: `src/gateway/lane.rs` — add `needs_idempotency()` helper
 
 - [ ] **Step 1: Add `needs_idempotency()` helper to Lane**
 
-In `core/src/gateway/lane.rs`, add method to `Lane` impl (after `for_method()`):
+In `src/gateway/lane.rs`, add method to `Lane` impl (after `for_method()`):
 
 ```rust
     /// Whether this lane's methods should be idempotency-guarded.
@@ -527,7 +527,7 @@ Expected: All tests PASS
 
 - [ ] **Step 4: Add idempotency check to handler dispatch**
 
-In `core/src/gateway/server/handler.rs`, find the section where lane dispatch happens (around line 311-328). The current code:
+In `src/gateway/server/handler.rs`, find the section where lane dispatch happens (around line 311-328). The current code:
 
 ```rust
                                     } else {
@@ -662,7 +662,7 @@ Expected: All existing tests still pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/gateway/server/handler.rs core/src/gateway/lane.rs
+git add src/gateway/server/handler.rs src/gateway/lane.rs
 git commit -m "gateway: integrate IdempotencyGuard into RPC handler dispatch pipeline"
 ```
 

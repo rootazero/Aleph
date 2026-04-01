@@ -29,15 +29,15 @@
 
 | Action | File | Responsibility |
 |--------|------|---------------|
-| Modify | `core/src/gateway/execution_engine/run_loop.rs` | Use call_with_fallback() when fallbacks configured |
-| Modify | `core/src/thinker/mod.rs` | Wire fallbacks from config into MultiProviderRegistry |
-| Create | `core/src/providers/oauth_refresh.rs` | OAuth token auto-refresh logic |
-| Modify | `core/src/providers/auth_profiles/credentials.rs` | Add client_secret + token_endpoint to OAuthCredential |
-| Modify | `core/src/providers/auth_profile_registry.rs` | Call refresh before use |
-| Modify | `core/src/providers/mod.rs` | Export new module |
-| Create | `core/src/providers/model_discovery.rs` | ModelDiscovery trait + OllamaDiscovery impl |
-| Modify | `core/src/providers/ollama.rs` | Expose /api/tags as ModelDiscovery |
-| Modify | `core/src/gateway/handlers/providers/handlers.rs` | Merge discovered models into models.list |
+| Modify | `src/gateway/execution_engine/run_loop.rs` | Use call_with_fallback() when fallbacks configured |
+| Modify | `src/thinker/mod.rs` | Wire fallbacks from config into MultiProviderRegistry |
+| Create | `src/providers/oauth_refresh.rs` | OAuth token auto-refresh logic |
+| Modify | `src/providers/auth_profiles/credentials.rs` | Add client_secret + token_endpoint to OAuthCredential |
+| Modify | `src/providers/auth_profile_registry.rs` | Call refresh before use |
+| Modify | `src/providers/mod.rs` | Export new module |
+| Create | `src/providers/model_discovery.rs` | ModelDiscovery trait + OllamaDiscovery impl |
+| Modify | `src/providers/ollama.rs` | Expose /api/tags as ModelDiscovery |
+| Modify | `src/gateway/handlers/providers/handlers.rs` | Merge discovered models into models.list |
 
 ---
 
@@ -46,12 +46,12 @@
 The FailoverProvider and call_with_fallback() already exist. We need to connect them to the execution path.
 
 **Files:**
-- Modify: `core/src/thinker/mod.rs` — ensure fallbacks are populated from config
-- Modify: `core/src/bin/aleph-server/commands/start/` — read fallback config and call set_fallbacks()
+- Modify: `src/thinker/mod.rs` — ensure fallbacks are populated from config
+- Modify: `src/bin/aleph-server/commands/start/` — read fallback config and call set_fallbacks()
 
 - [ ] **Step 1: Read current MultiProviderRegistry to understand wiring**
 
-Read `core/src/thinker/mod.rs` lines 160-270 to see MultiProviderRegistry and its set_fallbacks() method. Read `core/src/bin/aleph-server/commands/start/mod.rs` to see where MultiProviderRegistry is set up.
+Read `src/thinker/mod.rs` lines 160-270 to see MultiProviderRegistry and its set_fallbacks() method. Read `src/bin/aleph-server/commands/start/mod.rs` to see where MultiProviderRegistry is set up.
 
 - [ ] **Step 2: Wire fallbacks from config at server startup**
 
@@ -71,13 +71,13 @@ If `fallback_providers` doesn't exist in the config type, add it:
 
 - [ ] **Step 3: Use call_with_fallback() in the execution path**
 
-In `core/src/agent_loop/provider_bridge.rs` or where the provider is called, check if fallbacks are available and use `call_with_fallback()`:
+In `src/agent_loop/provider_bridge.rs` or where the provider is called, check if fallbacks are available and use `call_with_fallback()`:
 
-Read `core/src/thinker/fallback.rs` to understand the existing function signature, then find the call site in `provider_bridge.rs` where `self.provider.process(payload)` is called and wrap it:
+Read `src/thinker/fallback.rs` to understand the existing function signature, then find the call site in `provider_bridge.rs` where `self.provider.process(payload)` is called and wrap it:
 
 The simplest approach: make `AiProviderBridge` aware of the registry (not just a single provider), so it can attempt fallbacks. However, since `call_with_fallback()` already exists in `thinker/fallback.rs`, the cleanest integration is at the ExecutionEngine level where the registry is available.
 
-Read `core/src/gateway/execution_engine/run_loop.rs` to find exactly where the provider is selected (line ~64: `let provider = self.provider_registry.default_provider()`).
+Read `src/gateway/execution_engine/run_loop.rs` to find exactly where the provider is selected (line ~64: `let provider = self.provider_registry.default_provider()`).
 
 The integration point: instead of calling `default_provider()` once, use `call_with_fallback()` when the registry has fallbacks. But since the agent loop calls the provider many times (think → act cycles), the fallback should be per-call, not per-session. The existing `call_with_fallback()` does exactly this.
 
@@ -99,10 +99,10 @@ git commit -m "provider: wire FailoverProvider fallback chain to production exec
 ### Task 2: Add OAuth token auto-refresh
 
 **Files:**
-- Modify: `core/src/providers/auth_profiles/credentials.rs` — add fields
-- Create: `core/src/providers/oauth_refresh.rs` — refresh logic
-- Modify: `core/src/providers/mod.rs` — export module
-- Modify: `core/src/providers/auth_profile_registry.rs` — call refresh before use
+- Modify: `src/providers/auth_profiles/credentials.rs` — add fields
+- Create: `src/providers/oauth_refresh.rs` — refresh logic
+- Modify: `src/providers/mod.rs` — export module
+- Modify: `src/providers/auth_profile_registry.rs` — call refresh before use
 
 - [ ] **Step 1: Add client_secret and token_endpoint to OAuthCredential**
 
@@ -281,7 +281,7 @@ mod tests {
 
 - [ ] **Step 3: Export module in providers/mod.rs**
 
-Add `pub mod oauth_refresh;` to `core/src/providers/mod.rs`.
+Add `pub mod oauth_refresh;` to `src/providers/mod.rs`.
 
 - [ ] **Step 4: Integrate into AuthProfileProviderRegistry**
 
@@ -318,7 +318,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/
+git add src/providers/
 git commit -m "provider: add OAuth token auto-refresh with Google endpoint auto-detection"
 ```
 
@@ -327,10 +327,10 @@ git commit -m "provider: add OAuth token auto-refresh with Google endpoint auto-
 ### Task 3: Add ModelDiscovery trait and Ollama implementation
 
 **Files:**
-- Create: `core/src/providers/model_discovery.rs` — trait + cache
-- Modify: `core/src/providers/ollama.rs` — implement ModelDiscovery
-- Modify: `core/src/providers/mod.rs` — export
-- Modify: `core/src/gateway/handlers/providers/handlers.rs` — merge into models.list
+- Create: `src/providers/model_discovery.rs` — trait + cache
+- Modify: `src/providers/ollama.rs` — implement ModelDiscovery
+- Modify: `src/providers/mod.rs` — export
+- Modify: `src/gateway/handlers/providers/handlers.rs` — merge into models.list
 
 - [ ] **Step 1: Create model_discovery.rs**
 
@@ -448,7 +448,7 @@ mod tests {
 
 - [ ] **Step 2: Implement ModelDiscovery for OllamaProvider**
 
-In `core/src/providers/ollama.rs`, add the implementation. The `TagsResponse` struct already exists in tests — move it to non-test code and implement the trait:
+In `src/providers/ollama.rs`, add the implementation. The `TagsResponse` struct already exists in tests — move it to non-test code and implement the trait:
 
 ```rust
 use crate::providers::model_discovery::{ModelDiscovery, DiscoveredModel};
@@ -497,7 +497,7 @@ Add `pub mod model_discovery;`
 
 - [ ] **Step 4: Extend models.list handler to include discovered models**
 
-In `core/src/gateway/handlers/providers/handlers.rs`, in `handle_list()`, after the static provider listing, check for Ollama providers and add discovered models:
+In `src/gateway/handlers/providers/handlers.rs`, in `handle_list()`, after the static provider listing, check for Ollama providers and add discovered models:
 
 This is optional for the initial implementation — the static list already shows configured models. Discovered models can be surfaced via a new `models.discover` RPC handler instead.
 
@@ -545,7 +545,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/
+git add src/providers/
 git commit -m "provider: add ModelDiscovery trait with Ollama implementation and cached wrapper"
 ```
 

@@ -16,17 +16,17 @@
 
 | Action | File | Responsibility |
 |--------|------|----------------|
-| Create | `core/src/generation/providers/url_normalize.rs` | `ResolvedUrl`, `resolve_base_url()`, `needs_auto_complete()` |
-| Modify | `core/src/config/types/generation/config.rs` | Add 4 typed provider maps + merge logic |
-| Modify | `core/src/config/types/generation/provider.rs` | Make `capabilities` optional (derived from section) |
-| Modify | `core/src/generation/providers/factory.rs` | Accept `GenerationType`, pass to provider constructors |
-| Modify | `core/src/generation/providers/openai_tts.rs` | Use `ResolvedUrl` for `speech_url()` + `stt_url()` |
-| Modify | `core/src/generation/providers/openai_image.rs` | Use `ResolvedUrl` for `generations_url()` + `edits_url()` |
-| Modify | `core/src/generation/providers/openai_compat/builder.rs` | Replace `normalize_endpoint()` with shared `resolve_base_url()` |
-| Modify | `core/src/generation/providers/mod.rs` | Add `pub mod url_normalize` |
-| Modify | `core/src/bin/aleph-server/commands/start/builder/agent_init.rs` | Iterate 4 typed maps instead of single `providers` |
-| Modify | `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` | STT config from speech_providers |
-| Modify | `core/src/gateway/handlers/generation_providers.rs` | RPC handlers use typed maps |
+| Create | `src/generation/providers/url_normalize.rs` | `ResolvedUrl`, `resolve_base_url()`, `needs_auto_complete()` |
+| Modify | `src/config/types/generation/config.rs` | Add 4 typed provider maps + merge logic |
+| Modify | `src/config/types/generation/provider.rs` | Make `capabilities` optional (derived from section) |
+| Modify | `src/generation/providers/factory.rs` | Accept `GenerationType`, pass to provider constructors |
+| Modify | `src/generation/providers/openai_tts.rs` | Use `ResolvedUrl` for `speech_url()` + `stt_url()` |
+| Modify | `src/generation/providers/openai_image.rs` | Use `ResolvedUrl` for `generations_url()` + `edits_url()` |
+| Modify | `src/generation/providers/openai_compat/builder.rs` | Replace `normalize_endpoint()` with shared `resolve_base_url()` |
+| Modify | `src/generation/providers/mod.rs` | Add `pub mod url_normalize` |
+| Modify | `src/bin/aleph-server/commands/start/builder/agent_init.rs` | Iterate 4 typed maps instead of single `providers` |
+| Modify | `src/bin/aleph-server/commands/start/builder/subsystems.rs` | STT config from speech_providers |
+| Modify | `src/gateway/handlers/generation_providers.rs` | RPC handlers use typed maps |
 | Modify | `interfaces/webchat/src/api/generation_providers.rs` | API calls include generation_type |
 | Modify | `interfaces/webchat/src/views/settings/generation_providers.rs` | Tab-based UI reads from typed maps |
 
@@ -35,10 +35,10 @@
 ### Task 1: Create shared URL normalization module
 
 **Files:**
-- Create: `core/src/generation/providers/url_normalize.rs`
-- Modify: `core/src/generation/providers/mod.rs`
+- Create: `src/generation/providers/url_normalize.rs`
+- Modify: `src/generation/providers/mod.rs`
 
-- [ ] **Step 1: Create `core/src/generation/providers/url_normalize.rs`**
+- [ ] **Step 1: Create `src/generation/providers/url_normalize.rs`**
 
 ```rust
 //! Shared URL normalization for generation providers.
@@ -212,7 +212,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Add `pub mod url_normalize;` to `core/src/generation/providers/mod.rs`**
+- [ ] **Step 2: Add `pub mod url_normalize;` to `src/generation/providers/mod.rs`**
 
 - [ ] **Step 3: Run tests**
 
@@ -222,7 +222,7 @@ Expected: All 14 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/generation/providers/url_normalize.rs core/src/generation/providers/mod.rs
+git add src/generation/providers/url_normalize.rs src/generation/providers/mod.rs
 git commit -m "generation: add shared URL normalization with ResolvedUrl"
 ```
 
@@ -231,12 +231,12 @@ git commit -m "generation: add shared URL normalization with ResolvedUrl"
 ### Task 2: Add 4 typed provider maps to GenerationConfig
 
 **Files:**
-- Modify: `core/src/config/types/generation/config.rs`
-- Modify: `core/src/config/types/generation/provider.rs`
+- Modify: `src/config/types/generation/config.rs`
+- Modify: `src/config/types/generation/provider.rs`
 
 - [ ] **Step 1: Read both files completely before modifying**
 
-Read `core/src/config/types/generation/config.rs` and `core/src/config/types/generation/provider.rs`.
+Read `src/config/types/generation/config.rs` and `src/config/types/generation/provider.rs`.
 
 - [ ] **Step 2: Add 4 typed maps to `GenerationConfig`**
 
@@ -325,7 +325,7 @@ Expected: Success (existing code still uses `providers` which still exists).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/config/types/generation/
+git add src/config/types/generation/
 git commit -m "config: add 4 typed provider maps to GenerationConfig"
 ```
 
@@ -334,10 +334,10 @@ git commit -m "config: add 4 typed provider maps to GenerationConfig"
 ### Task 3: Adapt provider factory to accept GenerationType
 
 **Files:**
-- Modify: `core/src/generation/providers/factory.rs`
-- Modify: `core/src/generation/providers/openai_tts.rs`
-- Modify: `core/src/generation/providers/openai_image.rs`
-- Modify: `core/src/generation/providers/openai_compat/builder.rs`
+- Modify: `src/generation/providers/factory.rs`
+- Modify: `src/generation/providers/openai_tts.rs`
+- Modify: `src/generation/providers/openai_image.rs`
+- Modify: `src/generation/providers/openai_compat/builder.rs`
 
 - [ ] **Step 1: Read all 4 files**
 
@@ -409,8 +409,8 @@ let endpoint = resolved.primary_endpoint(
 - [ ] **Step 6: Update all `create_provider()` call sites**
 
 Search for `create_provider(name, ` and add the `gen_type` parameter. Key call sites:
-- `core/src/bin/aleph-server/commands/start/builder/agent_init.rs` — startup registration
-- `core/src/gateway/handlers/generation_providers.rs` — test connection handler
+- `src/bin/aleph-server/commands/start/builder/agent_init.rs` — startup registration
+- `src/gateway/handlers/generation_providers.rs` — test connection handler
 
 For the startup registration (agent_init.rs), use the `gen_type` from `merged_providers()` (Task 4).
 For test connection handler, derive `gen_type` from the provider's first capability.
@@ -423,7 +423,7 @@ Then: `cargo test -p alephcore --lib generation`
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/generation/providers/ core/src/bin/aleph-server/ core/src/gateway/handlers/
+git add src/generation/providers/ src/bin/aleph-server/ src/gateway/handlers/
 git commit -m "generation: use ResolvedUrl in all provider constructors, delete old normalize_endpoint"
 ```
 
@@ -432,8 +432,8 @@ git commit -m "generation: use ResolvedUrl in all provider constructors, delete 
 ### Task 4: Adapt startup registration to use merged_providers()
 
 **Files:**
-- Modify: `core/src/bin/aleph-server/commands/start/builder/agent_init.rs`
-- Modify: `core/src/bin/aleph-server/commands/start/builder/subsystems.rs`
+- Modify: `src/bin/aleph-server/commands/start/builder/agent_init.rs`
+- Modify: `src/bin/aleph-server/commands/start/builder/subsystems.rs`
 
 - [ ] **Step 1: Read both files**
 
@@ -498,7 +498,7 @@ Run: `cargo check --bin aleph-server`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/bin/aleph-server/
+git add src/bin/aleph-server/
 git commit -m "startup: use merged_providers() for registration and STT config"
 ```
 
@@ -507,7 +507,7 @@ git commit -m "startup: use merged_providers() for registration and STT config"
 ### Task 5: Adapt RPC handlers for typed provider maps
 
 **Files:**
-- Modify: `core/src/gateway/handlers/generation_providers.rs`
+- Modify: `src/gateway/handlers/generation_providers.rs`
 
 - [ ] **Step 1: Read the full file**
 
@@ -550,7 +550,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/gateway/handlers/generation_providers.rs
+git add src/gateway/handlers/generation_providers.rs
 git commit -m "handlers: adapt generation provider RPC to typed maps"
 ```
 
@@ -596,7 +596,7 @@ git commit -m "panel: adapt generation provider UI to typed categories"
 ### Task 7: Clean up dead code and migrate user config
 
 **Files:**
-- Modify: `core/src/config/types/generation/config.rs`
+- Modify: `src/config/types/generation/config.rs`
 - Modify: `~/.aleph/config.toml` (user config)
 
 - [ ] **Step 1: Remove dead helper functions**
@@ -605,7 +605,7 @@ In `config.rs`, the old `get_providers_for_type()` that iterates `self.providers
 
 - [ ] **Step 2: Remove `extract_base_url()` from `main.rs` and webchat**
 
-The `extract_base_url()` function in `core/src/bin/aleph-server/main.rs` and `interfaces/webchat/src/views/settings/generation_providers.rs` is superseded by `resolve_base_url()`. Delete it if no longer used, or keep if Panel still needs it for display purposes.
+The `extract_base_url()` function in `src/bin/aleph-server/main.rs` and `interfaces/webchat/src/views/settings/generation_providers.rs` is superseded by `resolve_base_url()`. Delete it if no longer used, or keep if Panel still needs it for display purposes.
 
 - [ ] **Step 3: Migrate user config**
 

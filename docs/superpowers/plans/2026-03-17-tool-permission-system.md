@@ -17,13 +17,13 @@
 ### Task 1: Create ToolPermissionsConfig struct
 
 **Files:**
-- Create: `core/src/config/types/policies/tool_permissions.rs`
-- Modify: `core/src/config/types/policies/mod.rs`
+- Create: `src/config/types/policies/tool_permissions.rs`
+- Modify: `src/config/types/policies/mod.rs`
 
 - [ ] **Step 1: Create tool_permissions.rs with ToolPermissionsConfig**
 
 ```rust
-// core/src/config/types/policies/tool_permissions.rs
+// src/config/types/policies/tool_permissions.rs
 //! Tool execution permission configuration.
 //!
 //! Defines per-tool Allow/Ask/Deny permissions used by both
@@ -210,7 +210,7 @@ mod tests {
 
 - [ ] **Step 2: Wire into policies/mod.rs**
 
-In `core/src/config/types/policies/mod.rs`:
+In `src/config/types/policies/mod.rs`:
 - Add `pub mod tool_permissions;` after the existing `pub mod tool_safety;` line
 - Add `pub use tool_permissions::ToolPermissionsConfig;` after the existing `pub use tool_safety::ToolSafetyPolicy;` line
 - Add field to `PoliciesConfig` struct:
@@ -229,7 +229,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```
-git add core/src/config/types/policies/tool_permissions.rs core/src/config/types/policies/mod.rs
+git add src/config/types/policies/tool_permissions.rs src/config/types/policies/mod.rs
 git commit -m "config: add ToolPermissionsConfig with merge logic"
 ```
 
@@ -238,13 +238,13 @@ git commit -m "config: add ToolPermissionsConfig with merge logic"
 ### Task 2: Add PermissionAction traits needed by SafetyGuard
 
 **Files:**
-- Modify: `core/src/extension/types/agents.rs`
+- Modify: `src/extension/types/agents.rs`
 
 `PermissionAction` needs `Copy`, `PartialEq`, `Eq`, and `JsonSchema` for use in `ToolPermissionsConfig` and `SafetyGuard`. Check if it already has them; add what's missing.
 
 - [ ] **Step 1: Check current derives on PermissionAction**
 
-Read `core/src/extension/types/agents.rs:42-46`. Currently:
+Read `src/extension/types/agents.rs:42-46`. Currently:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,7 +270,7 @@ Expected: Compiles with no new errors
 - [ ] **Step 4: Commit (if changes were needed)**
 
 ```
-git add core/src/extension/types/agents.rs
+git add src/extension/types/agents.rs
 git commit -m "types: add JsonSchema derive to PermissionAction"
 ```
 
@@ -279,7 +279,7 @@ git commit -m "types: add JsonSchema derive to PermissionAction"
 ### Task 3: Add tool_permissions to AgentDefinition
 
 **Files:**
-- Modify: `core/src/config/types/agents_def.rs`
+- Modify: `src/config/types/agents_def.rs`
 
 - [ ] **Step 1: Add field to AgentDefinition**
 
@@ -300,7 +300,7 @@ Expected: Compiles (existing Default derive handles Option::None)
 - [ ] **Step 3: Commit**
 
 ```
-git add core/src/config/types/agents_def.rs
+git add src/config/types/agents_def.rs
 git commit -m "config: add tool_permissions field to AgentDefinition"
 ```
 
@@ -309,7 +309,7 @@ git commit -m "config: add tool_permissions field to AgentDefinition"
 ### Task 4: Refactor SafetyGuard to use ToolPermissionsConfig
 
 **Files:**
-- Modify: `core/src/agent_loop/safety.rs`
+- Modify: `src/agent_loop/safety.rs`
 
 - [ ] **Step 1: Add PolicyDenied variant and update struct**
 
@@ -632,7 +632,7 @@ Expected: All tests pass
 - [ ] **Step 3: Commit**
 
 ```
-git add core/src/agent_loop/safety.rs
+git add src/agent_loop/safety.rs
 git commit -m "safety: refactor SafetyGuard to use ToolPermissionsConfig"
 ```
 
@@ -641,7 +641,7 @@ git commit -m "safety: refactor SafetyGuard to use ToolPermissionsConfig"
 ### Task 5: Handle PolicyDenied in agent loop
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs`
+- Modify: `src/agent_loop/loop_core.rs`
 
 - [ ] **Step 1: Add PolicyDenied arm to the safety check match**
 
@@ -674,7 +674,7 @@ Expected: Compiles
 - [ ] **Step 3: Commit**
 
 ```
-git add core/src/agent_loop/loop_core.rs
+git add src/agent_loop/loop_core.rs
 git commit -m "agent_loop: handle PolicyDenied in think-act loop"
 ```
 
@@ -683,13 +683,13 @@ git commit -m "agent_loop: handle PolicyDenied in think-act loop"
 ### Task 6: Wire SafetyGuard::from_permissions into ExecutionEngine
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs`
-- Modify: `core/src/gateway/execution_engine/engine.rs`
-- Modify: `core/src/gateway/agent_instance.rs`
+- Modify: `src/gateway/execution_engine/run_loop.rs`
+- Modify: `src/gateway/execution_engine/engine.rs`
+- Modify: `src/gateway/agent_instance.rs`
 
 - [ ] **Step 1: Add tool_permissions() to AgentInstance**
 
-In `core/src/gateway/agent_instance.rs`, add a method to `AgentInstance` that returns the agent's `ToolPermissionsConfig`. The agent instance already has access to agent config. We need to pass the agent's definition's tool_permissions through `AgentInstanceConfig`.
+In `src/gateway/agent_instance.rs`, add a method to `AgentInstance` that returns the agent's `ToolPermissionsConfig`. The agent instance already has access to agent config. We need to pass the agent's definition's tool_permissions through `AgentInstanceConfig`.
 
 Add to `AgentInstanceConfig`:
 
@@ -712,7 +712,7 @@ Add method to `AgentInstance`:
 
 - [ ] **Step 2: Add global_tool_permissions to ExecutionEngine**
 
-In `core/src/gateway/execution_engine/engine.rs`, add field to `ExecutionEngine`:
+In `src/gateway/execution_engine/engine.rs`, add field to `ExecutionEngine`:
 
 ```rust
     /// Global tool permissions from policies config
@@ -735,7 +735,7 @@ Initialize in `new()` as `global_tool_permissions: Default::default()`.
 
 - [ ] **Step 3: Update run_loop.rs to use from_permissions**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, change line 78:
+In `src/gateway/execution_engine/run_loop.rs`, change line 78:
 
 ```rust
 // Before:
@@ -751,9 +751,9 @@ let safety = SafetyGuard::from_permissions(
 
 - [ ] **Step 4: Wire global_tool_permissions at server startup**
 
-Find where `ExecutionEngine` is constructed in the server startup code (likely in `core/src/bin/aleph/commands/start/`). Pass `config.policies.tool_permissions.clone()` via the builder.
+Find where `ExecutionEngine` is constructed in the server startup code (likely in `src/bin/aleph/commands/start/`). Pass `config.policies.tool_permissions.clone()` via the builder.
 
-Search for `ExecutionEngine::new` in `core/src/bin/aleph/commands/start/` to find the exact location.
+Search for `ExecutionEngine::new` in `src/bin/aleph/commands/start/` to find the exact location.
 
 - [ ] **Step 5: Wire tool_permissions into AgentInstanceConfig at agent creation**
 
@@ -767,7 +767,7 @@ Expected: Compiles
 - [ ] **Step 7: Commit**
 
 ```
-git add core/src/gateway/execution_engine/run_loop.rs core/src/gateway/execution_engine/engine.rs core/src/gateway/agent_instance.rs
+git add src/gateway/execution_engine/run_loop.rs src/gateway/execution_engine/engine.rs src/gateway/agent_instance.rs
 git commit -m "gateway: wire SafetyGuard::from_permissions into agent loop"
 ```
 
@@ -778,12 +778,12 @@ git commit -m "gateway: wire SafetyGuard::from_permissions into agent loop"
 ### Task 7: Global tool permissions RPC handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/config.rs`
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs`
+- Modify: `src/gateway/handlers/config.rs`
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs`
 
 - [ ] **Step 1: Add handler functions**
 
-Add to `core/src/gateway/handlers/config.rs`:
+Add to `src/gateway/handlers/config.rs`:
 
 ```rust
 /// Handle config.get_tool_permissions
@@ -850,7 +850,7 @@ pub async fn handle_update_tool_permissions(
 
 - [ ] **Step 2: Register handlers**
 
-In `core/src/bin/aleph/commands/start/builder/handlers.rs`, find the config handler section and add:
+In `src/bin/aleph/commands/start/builder/handlers.rs`, find the config handler section and add:
 
 ```rust
     register_handler!(server, "config.get_tool_permissions", config_handlers::handle_get_tool_permissions, config);
@@ -865,7 +865,7 @@ Expected: Compiles
 - [ ] **Step 4: Commit**
 
 ```
-git add core/src/gateway/handlers/config.rs core/src/bin/aleph/commands/start/builder/handlers.rs
+git add src/gateway/handlers/config.rs src/bin/aleph/commands/start/builder/handlers.rs
 git commit -m "handlers: add config.get/update_tool_permissions RPC"
 ```
 
@@ -874,12 +874,12 @@ git commit -m "handlers: add config.get/update_tool_permissions RPC"
 ### Task 8: Agent tool permissions RPC handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/agent_config.rs`
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs`
+- Modify: `src/gateway/handlers/agent_config.rs`
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs`
 
 - [ ] **Step 1: Add handler functions**
 
-Add to `core/src/gateway/handlers/agent_config.rs`:
+Add to `src/gateway/handlers/agent_config.rs`:
 
 ```rust
 /// Handle agent_config.get_tool_permissions
@@ -1010,7 +1010,7 @@ Expected: Compiles
 - [ ] **Step 4: Commit**
 
 ```
-git add core/src/gateway/handlers/agent_config.rs core/src/bin/aleph/commands/start/builder/handlers.rs
+git add src/gateway/handlers/agent_config.rs src/bin/aleph/commands/start/builder/handlers.rs
 git commit -m "handlers: add agent_config.get/update_tool_permissions RPC"
 ```
 
@@ -1176,7 +1176,7 @@ Expected: UI shows shell greyed out, cannot change.
 Stage the earlier `safety.rs` default_guard change and `rerank_config.rs` VAULT_KEY fix:
 
 ```
-git add core/src/agent_loop/safety.rs core/src/gateway/handlers/rerank_config.rs
+git add src/agent_loop/safety.rs src/gateway/handlers/rerank_config.rs
 git commit -m "fix: default SafetyGuard to all-allow, fix rerank VAULT_KEY test"
 ```
 

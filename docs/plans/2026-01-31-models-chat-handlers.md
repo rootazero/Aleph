@@ -13,12 +13,12 @@
 ## Task 1: Create models.rs Handler Module
 
 **Files:**
-- Create: `core/src/gateway/handlers/models.rs`
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Create: `src/gateway/handlers/models.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
 **Step 1: Write the failing test**
 
-Add to `core/src/gateway/handlers/models.rs`:
+Add to `src/gateway/handlers/models.rs`:
 
 ```rust
 #[cfg(test)]
@@ -67,7 +67,7 @@ Expected: FAIL with "cannot find module `models`"
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/gateway/handlers/models.rs`:
+Create `src/gateway/handlers/models.rs`:
 
 ```rust
 //! Models RPC Handlers
@@ -394,7 +394,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/models.rs
+git add src/gateway/handlers/models.rs
 git commit -m "feat(gateway): add models.rs handler module
 
 Add RPC handlers for model discovery:
@@ -410,11 +410,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 2: Register models.* Handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
 **Step 1: Write the failing test**
 
-Add to existing tests in `core/src/gateway/handlers/mod.rs`:
+Add to existing tests in `src/gateway/handlers/mod.rs`:
 
 ```rust
 #[test]
@@ -433,7 +433,7 @@ Expected: FAIL with "assertion failed: registry.has_method(\"models.list\")"
 
 **Step 3: Write minimal implementation**
 
-Update `core/src/gateway/handlers/mod.rs`:
+Update `src/gateway/handlers/mod.rs`:
 
 1. Add module declaration:
 ```rust
@@ -465,7 +465,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/mod.rs
 git commit -m "feat(gateway): register models.* RPC handlers
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
@@ -476,11 +476,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 3: Create chat.rs Handler Module
 
 **Files:**
-- Create: `core/src/gateway/handlers/chat.rs`
+- Create: `src/gateway/handlers/chat.rs`
 
 **Step 1: Write the failing test**
 
-Add to `core/src/gateway/handlers/chat.rs`:
+Add to `src/gateway/handlers/chat.rs`:
 
 ```rust
 #[cfg(test)]
@@ -532,7 +532,7 @@ Expected: FAIL with "cannot find module `chat`"
 
 **Step 3: Write minimal implementation**
 
-Create `core/src/gateway/handlers/chat.rs`:
+Create `src/gateway/handlers/chat.rs`:
 
 ```rust
 //! Chat RPC Handlers
@@ -948,7 +948,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/chat.rs
+git add src/gateway/handlers/chat.rs
 git commit -m "feat(gateway): add chat.rs handler module
 
 Add high-level chat control handlers:
@@ -965,11 +965,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 4: Register chat.* Handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
 **Step 1: Write the failing test**
 
-Add to existing tests in `core/src/gateway/handlers/mod.rs`:
+Add to existing tests in `src/gateway/handlers/mod.rs`:
 
 ```rust
 #[test]
@@ -989,7 +989,7 @@ Expected: FAIL with "assertion failed"
 
 **Step 3: Write minimal implementation**
 
-Update `core/src/gateway/handlers/mod.rs`:
+Update `src/gateway/handlers/mod.rs`:
 
 1. Add module declaration:
 ```rust
@@ -1040,7 +1040,7 @@ Expected: PASS
 **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/mod.rs
 git commit -m "feat(gateway): register chat.* RPC handlers
 
 Register placeholder handlers for chat.* methods.
@@ -1054,11 +1054,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 5: Add Integration Tests
 
 **Files:**
-- Create: `core/tests/models_chat_handlers_test.rs`
+- Create: `tests/models_chat_handlers_test.rs`
 
 **Step 1: Write the test file**
 
-Create `core/tests/models_chat_handlers_test.rs`:
+Create `tests/models_chat_handlers_test.rs`:
 
 ```rust
 //! Integration tests for models.* and chat.* RPC handlers
@@ -1289,7 +1289,7 @@ Expected: PASS (all tests should pass)
 **Step 3: Commit**
 
 ```bash
-git add core/tests/models_chat_handlers_test.rs
+git add tests/models_chat_handlers_test.rs
 git commit -m "test(gateway): add integration tests for models/chat handlers
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
@@ -1300,11 +1300,11 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
 ## Task 6: Update Handler Registry Documentation
 
 **Files:**
-- Modify: `core/src/gateway/handlers/mod.rs` (update module doc)
+- Modify: `src/gateway/handlers/mod.rs` (update module doc)
 
 **Step 1: Update documentation**
 
-Update the module documentation at the top of `core/src/gateway/handlers/mod.rs`:
+Update the module documentation at the top of `src/gateway/handlers/mod.rs`:
 
 ```rust
 //! Request Handlers
@@ -1344,7 +1344,7 @@ Update the module documentation at the top of `core/src/gateway/handlers/mod.rs`
 **Step 2: Commit**
 
 ```bash
-git add core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/mod.rs
 git commit -m "docs(gateway): update handler registry documentation
 
 Add models and chat to handler domain list.

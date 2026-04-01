@@ -15,8 +15,8 @@
 ### Task 1: Create tools_visibility.rs with grouping logic + catalog handler
 
 **Files:**
-- Create: `core/src/gateway/handlers/tools_visibility.rs`
-- Modify: `core/src/gateway/handlers/mod.rs` — add `pub mod tools_visibility;`
+- Create: `src/gateway/handlers/tools_visibility.rs`
+- Modify: `src/gateway/handlers/mod.rs` — add `pub mod tools_visibility;`
 
 - [ ] **Step 1: Create tools_visibility.rs with types and grouping logic**
 
@@ -203,14 +203,14 @@ pub async fn handle_effective_stub(request: JsonRpcRequest) -> JsonRpcResponse {
 ```
 
 IMPORTANT: Verify exact import paths:
-- `crate::agents::AgentDef` — may be `crate::agents::types::AgentDef`, check `core/src/agents/mod.rs` for re-exports
-- `crate::dispatcher::types::conflict::ToolSource` — confirmed at `core/src/dispatcher/types/conflict.rs:98`
-- `crate::dispatcher::{ToolRegistry, UnifiedTool}` — confirmed re-exports from `core/src/dispatcher/mod.rs`
+- `crate::agents::AgentDef` — may be `crate::agents::types::AgentDef`, check `src/agents/mod.rs` for re-exports
+- `crate::dispatcher::types::conflict::ToolSource` — confirmed at `src/dispatcher/types/conflict.rs:98`
+- `crate::dispatcher::{ToolRegistry, UnifiedTool}` — confirmed re-exports from `src/dispatcher/mod.rs`
 - `super::super::protocol::{JsonRpcRequest, JsonRpcResponse}` — check actual path from handlers directory
 
 - [ ] **Step 2: Add module declaration**
 
-In `core/src/gateway/handlers/mod.rs`, add:
+In `src/gateway/handlers/mod.rs`, add:
 ```rust
 pub mod tools_visibility;
 ```
@@ -307,7 +307,7 @@ gateway: add tools.catalog and tools.effective handlers with grouping
 ### Task 2: Wire handlers at startup
 
 **Files:**
-- Modify: `core/src/bin/aleph-server/commands/start/builder/agent_init.rs`
+- Modify: `src/bin/aleph-server/commands/start/builder/agent_init.rs`
 
 - [ ] **Step 1: Wire tools.catalog and tools.effective**
 

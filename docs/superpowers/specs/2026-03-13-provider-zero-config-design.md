@@ -45,7 +45,7 @@ Combines connection test + model discovery in a single call. Used by both wizard
 }
 ```
 
-Note: `models` items are `DiscoveredModel` from `core/src/providers/adapter.rs`. The `name` field is `Option<String>` — frontend must fall back to `id` when `name` is `None`.
+Note: `models` items are `DiscoveredModel` from `src/providers/adapter.rs`. The `name` field is `Option<String>` — frontend must fall back to `id` when `name` is `None`.
 ```
 
 **Building the temporary `ProviderConfig`:** The probe request carries only `protocol`, `api_key`, and `base_url`. The handler builds a `ProviderConfig` using `ProviderConfig::test_config(protocol)` as the base (sets sensible defaults for `model`, `timeout_seconds`, etc.), then overrides `api_key` and `base_url` from request params. The `model` field is irrelevant for probing — it's only needed for chat requests, not for listing models or ping tests.
@@ -196,8 +196,8 @@ apps/panel/src/components/
 
 | File | Action | Description |
 |------|--------|-------------|
-| `core/src/gateway/handlers/providers.rs` | Modify | Add `handle_probe`, `handle_needs_setup` |
-| `core/src/gateway/handlers/mod.rs` | Modify | Register new RPC methods |
+| `src/gateway/handlers/providers.rs` | Modify | Add `handle_probe`, `handle_needs_setup` |
+| `src/gateway/handlers/mod.rs` | Modify | Register new RPC methods |
 
 ### Shared UI Logic (New/Modified)
 

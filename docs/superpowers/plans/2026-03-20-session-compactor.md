@@ -4,7 +4,7 @@
 
 **Goal:** Add intra-session context management to prevent token overflow in long conversations, using dual-layer compression (deterministic tool compaction + async LLM summarization).
 
-**Architecture:** New `session_compactor` module under `core/src/memory/` with four components: ToolCompactor (sync, in-loop), SummaryEngine (async, post-loop), ContextWindow (history assembly), and Fallback (deterministic degradation). Integrates via existing ExecutionEngine builder pattern and optional injection into AgentLoop.
+**Architecture:** New `session_compactor` module under `src/memory/` with four components: ToolCompactor (sync, in-loop), SummaryEngine (async, post-loop), ContextWindow (history assembly), and Fallback (deterministic degradation). Integrates via existing ExecutionEngine builder pattern and optional injection into AgentLoop.
 
 **Tech Stack:** Rust, LanceDB (existing MemoryBackend), existing AiProvider trait for LLM calls.
 
@@ -18,38 +18,38 @@
 
 | File | Responsibility |
 |------|---------------|
-| `core/src/memory/session_compactor/mod.rs` | SessionCompactor struct, config, orchestration (prepare_history + post_turn_compress) |
-| `core/src/memory/session_compactor/tool_compactor.rs` | Deterministic tool result compression by tool type |
-| `core/src/memory/session_compactor/summary_engine.rs` | LLM summary generation with depth-aware prompts |
-| `core/src/memory/session_compactor/context_window.rs` | Token estimation, message partitioning, eviction logic |
-| `core/src/memory/session_compactor/fallback.rs` | Three-level fallback chain (Normal → Aggressive → Deterministic) |
+| `src/memory/session_compactor/mod.rs` | SessionCompactor struct, config, orchestration (prepare_history + post_turn_compress) |
+| `src/memory/session_compactor/tool_compactor.rs` | Deterministic tool result compression by tool type |
+| `src/memory/session_compactor/summary_engine.rs` | LLM summary generation with depth-aware prompts |
+| `src/memory/session_compactor/context_window.rs` | Token estimation, message partitioning, eviction logic |
+| `src/memory/session_compactor/fallback.rs` | Three-level fallback chain (Normal → Aggressive → Deterministic) |
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `core/src/memory/context/enums.rs` | Add `MemoryScope::SessionLocal`, `FactSource::SessionCompressed` |
-| `core/src/memory/mod.rs` | Add `pub mod session_compactor` declaration + re-exports |
-| `core/src/memory/store/types.rs` | Handle `SessionLocal` in `SearchFilter::to_lance_filter()` |
-| `core/src/agent_loop/loop_core.rs` | Add optional `tool_compactor` field, call before `provider.call()` |
-| `core/src/gateway/execution_engine/engine.rs` | Add `session_compactor` field, builder method, wire in execute() |
-| `core/src/gateway/execution_engine/run_loop.rs` | Use `SessionCompactor::prepare_history()` when available |
-| `core/src/builtin_tools/memory_search.rs` | Add `scope` parameter to args, construct SessionLocal filter |
-| `core/src/thinker/layers/` | New `session_context_guide.rs` PromptLayer |
+| `src/memory/context/enums.rs` | Add `MemoryScope::SessionLocal`, `FactSource::SessionCompressed` |
+| `src/memory/mod.rs` | Add `pub mod session_compactor` declaration + re-exports |
+| `src/memory/store/types.rs` | Handle `SessionLocal` in `SearchFilter::to_lance_filter()` |
+| `src/agent_loop/loop_core.rs` | Add optional `tool_compactor` field, call before `provider.call()` |
+| `src/gateway/execution_engine/engine.rs` | Add `session_compactor` field, builder method, wire in execute() |
+| `src/gateway/execution_engine/run_loop.rs` | Use `SessionCompactor::prepare_history()` when available |
+| `src/builtin_tools/memory_search.rs` | Add `scope` parameter to args, construct SessionLocal filter |
+| `src/thinker/layers/` | New `session_context_guide.rs` PromptLayer |
 
 ---
 
 ## Task 1: Add Enum Values and Config Types
 
 **Files:**
-- Modify: `core/src/memory/context/enums.rs:136-146` (FactSource), `core/src/memory/context/enums.rs:360-370` (MemoryScope)
-- Modify: `core/src/memory/store/types.rs:197-267` (to_lance_filter)
-- Modify: `core/src/memory/mod.rs:1-66` (module declaration)
-- Create: `core/src/memory/session_compactor/mod.rs`
+- Modify: `src/memory/context/enums.rs:136-146` (FactSource), `src/memory/context/enums.rs:360-370` (MemoryScope)
+- Modify: `src/memory/store/types.rs:197-267` (to_lance_filter)
+- Modify: `src/memory/mod.rs:1-66` (module declaration)
+- Create: `src/memory/session_compactor/mod.rs`
 
 - [ ] **Step 1: Add `SessionLocal` to `MemoryScope` enum**
 
-In `core/src/memory/context/enums.rs`, add `SessionLocal` variant to `MemoryScope` (after line 370):
+In `src/memory/context/enums.rs`, add `SessionLocal` variant to `MemoryScope` (after line 370):
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -64,7 +64,7 @@ pub enum MemoryScope {
 
 - [ ] **Step 2: Add `SessionCompressed` to `FactSource` enum**
 
-In `core/src/memory/context/enums.rs`, add `SessionCompressed` variant to `FactSource` (after line 146):
+In `src/memory/context/enums.rs`, add `SessionCompressed` variant to `FactSource` (after line 146):
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -80,11 +80,11 @@ pub enum FactSource {
 
 - [ ] **Step 3: Update `SearchFilter::to_lance_filter()` for SessionLocal**
 
-In `core/src/memory/store/types.rs`, find the scope handling in `to_lance_filter()` (around line 246) and ensure `SessionLocal` serializes correctly in the DataFusion SQL filter. The existing scope match should already handle it via serde serialization, but verify the string representation matches LanceDB storage.
+In `src/memory/store/types.rs`, find the scope handling in `to_lance_filter()` (around line 246) and ensure `SessionLocal` serializes correctly in the DataFusion SQL filter. The existing scope match should already handle it via serde serialization, but verify the string representation matches LanceDB storage.
 
 - [ ] **Step 4: Create `SessionCompactorConfig` and module skeleton**
 
-Create `core/src/memory/session_compactor/mod.rs`:
+Create `src/memory/session_compactor/mod.rs`:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -128,7 +128,7 @@ impl Default for SessionCompactorConfig {
 
 - [ ] **Step 5: Add module declaration to `memory/mod.rs`**
 
-In `core/src/memory/mod.rs`, add `pub mod session_compactor;` with the other module declarations. Add re-exports for `SessionCompactorConfig`.
+In `src/memory/mod.rs`, add `pub mod session_compactor;` with the other module declarations. Add re-exports for `SessionCompactorConfig`.
 
 - [ ] **Step 6: Verify compilation**
 
@@ -138,7 +138,7 @@ Expected: Compiles with no errors. New enum values may produce "unused" warnings
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/memory/context/enums.rs core/src/memory/store/types.rs core/src/memory/mod.rs core/src/memory/session_compactor/
+git add src/memory/context/enums.rs src/memory/store/types.rs src/memory/mod.rs src/memory/session_compactor/
 git commit -m "session_compactor: add SessionLocal scope, SessionCompressed source, and config types"
 ```
 
@@ -147,11 +147,11 @@ git commit -m "session_compactor: add SessionLocal scope, SessionCompressed sour
 ## Task 2: Token Estimation and Context Window
 
 **Files:**
-- Create: `core/src/memory/session_compactor/context_window.rs`
+- Create: `src/memory/session_compactor/context_window.rs`
 
 - [ ] **Step 1: Write tests for token estimation and message partitioning**
 
-Create `core/src/memory/session_compactor/context_window.rs` with tests:
+Create `src/memory/session_compactor/context_window.rs` with tests:
 
 ```rust
 use crate::providers::message::UnifiedMessage;
@@ -236,7 +236,7 @@ mod tests {
 }
 ```
 
-Note: `UnifiedMessage::tool_result()` constructor — check exact signature in `core/src/providers/message.rs:61-75`. Adapt constructor args to match. `UnifiedMessage::is_assistant()` may need to be added or use pattern matching.
+Note: `UnifiedMessage::tool_result()` constructor — check exact signature in `src/providers/message.rs:61-75`. Adapt constructor args to match. `UnifiedMessage::is_assistant()` may need to be added or use pattern matching.
 
 - [ ] **Step 2: Run tests to verify they pass**
 
@@ -246,7 +246,7 @@ Expected: All tests pass. If `UnifiedMessage` API doesn't match, adapt the test 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/context_window.rs
+git add src/memory/session_compactor/context_window.rs
 git commit -m "session_compactor: add token estimation and message partitioning"
 ```
 
@@ -255,11 +255,11 @@ git commit -m "session_compactor: add token estimation and message partitioning"
 ## Task 3: Deterministic Fallback
 
 **Files:**
-- Create: `core/src/memory/session_compactor/fallback.rs`
+- Create: `src/memory/session_compactor/fallback.rs`
 
 - [ ] **Step 1: Write tests for deterministic truncation**
 
-Create `core/src/memory/session_compactor/fallback.rs`:
+Create `src/memory/session_compactor/fallback.rs`:
 
 ```rust
 /// Extract the first sentence from text content.
@@ -381,7 +381,7 @@ Expected: All tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/fallback.rs
+git add src/memory/session_compactor/fallback.rs
 git commit -m "session_compactor: add deterministic fallback with three-level target tokens"
 ```
 
@@ -390,12 +390,12 @@ git commit -m "session_compactor: add deterministic fallback with three-level ta
 ## Task 4: ToolCompactor
 
 **Files:**
-- Create: `core/src/memory/session_compactor/tool_compactor.rs`
-- Reference: `core/src/providers/message.rs:15-27` (UnifiedMessage enum)
+- Create: `src/memory/session_compactor/tool_compactor.rs`
+- Reference: `src/providers/message.rs:15-27` (UnifiedMessage enum)
 
 - [ ] **Step 1: Write tests for tool result compression**
 
-Create `core/src/memory/session_compactor/tool_compactor.rs`:
+Create `src/memory/session_compactor/tool_compactor.rs`:
 
 ```rust
 use crate::providers::message::UnifiedMessage;
@@ -562,7 +562,7 @@ mod tests {
 }
 ```
 
-Note: `UnifiedMessage::is_tool_result()`, `tool_result_info()`, and `replace_tool_result_content()` may not exist yet. These helper methods need to be added to `UnifiedMessage` in `core/src/providers/message.rs`. Add them as part of this task:
+Note: `UnifiedMessage::is_tool_result()`, `tool_result_info()`, and `replace_tool_result_content()` may not exist yet. These helper methods need to be added to `UnifiedMessage` in `src/providers/message.rs`. Add them as part of this task:
 
 ```rust
 impl UnifiedMessage {
@@ -605,7 +605,7 @@ impl UnifiedMessage {
 
 - [ ] **Step 2: Add helper methods to UnifiedMessage**
 
-In `core/src/providers/message.rs`, add the helper methods listed above (`is_tool_result`, `is_assistant`, `tool_result_info`, `replace_tool_result_content`, `text_content`). Check if any of these already exist — only add what's missing.
+In `src/providers/message.rs`, add the helper methods listed above (`is_tool_result`, `is_assistant`, `tool_result_info`, `replace_tool_result_content`, `text_content`). Check if any of these already exist — only add what's missing.
 
 - [ ] **Step 3: Run tests**
 
@@ -615,7 +615,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/tool_compactor.rs core/src/providers/message.rs
+git add src/memory/session_compactor/tool_compactor.rs src/providers/message.rs
 git commit -m "session_compactor: add ToolCompactor with per-type deterministic compression"
 ```
 
@@ -624,13 +624,13 @@ git commit -m "session_compactor: add ToolCompactor with per-type deterministic 
 ## Task 5: Summary Engine (Depth-Aware Prompts)
 
 **Files:**
-- Create: `core/src/memory/session_compactor/summary_engine.rs`
-- Reference: `core/src/memory/context/enums.rs` (FactSource, MemoryScope)
-- Reference: `core/src/memory/context/fact.rs:35-104` (MemoryFact)
+- Create: `src/memory/session_compactor/summary_engine.rs`
+- Reference: `src/memory/context/enums.rs` (FactSource, MemoryScope)
+- Reference: `src/memory/context/fact.rs:35-104` (MemoryFact)
 
 - [ ] **Step 1: Write prompt construction and chunking logic with tests**
 
-Create `core/src/memory/session_compactor/summary_engine.rs`:
+Create `src/memory/session_compactor/summary_engine.rs`:
 
 ```rust
 use crate::memory::{MemoryFact, FactType, FactSource, MemoryScope, MemoryTier, MemoryLayer};
@@ -824,7 +824,7 @@ Note: `MemoryFact::with_id()`, `with_fact_source()`, `with_layer()`, `with_path(
 
 - [ ] **Step 2: Add any missing builder methods to MemoryFact**
 
-In `core/src/memory/context/fact.rs`, add missing builder methods following the existing pattern (e.g., `with_tier` at line 261):
+In `src/memory/context/fact.rs`, add missing builder methods following the existing pattern (e.g., `with_tier` at line 261):
 
 ```rust
 pub fn with_id(mut self, id: String) -> Self { self.id = id; self }
@@ -845,7 +845,7 @@ Expected: All tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/summary_engine.rs core/src/memory/context/fact.rs
+git add src/memory/session_compactor/summary_engine.rs src/memory/context/fact.rs
 git commit -m "session_compactor: add SummaryEngine with depth-aware prompts and fact construction"
 ```
 
@@ -854,13 +854,13 @@ git commit -m "session_compactor: add SummaryEngine with depth-aware prompts and
 ## Task 6: SessionCompactor Orchestrator
 
 **Files:**
-- Modify: `core/src/memory/session_compactor/mod.rs`
-- Reference: `core/src/memory/store/` (MemoryBackend)
-- Reference: `core/src/providers/message.rs` (UnifiedMessage)
+- Modify: `src/memory/session_compactor/mod.rs`
+- Reference: `src/memory/store/` (MemoryBackend)
+- Reference: `src/providers/message.rs` (UnifiedMessage)
 
 - [ ] **Step 1: Implement SessionCompactor with prepare_history and post_turn_compress**
 
-Expand `core/src/memory/session_compactor/mod.rs` with the main orchestrator:
+Expand `src/memory/session_compactor/mod.rs` with the main orchestrator:
 
 ```rust
 use std::sync::Arc;
@@ -1093,7 +1093,7 @@ impl SessionCompactor {
 }
 ```
 
-Note: Some MemoryBackend methods (`search_facts_by_filter`, `insert_fact`, `invalidate_fact`) need to be verified against the actual API. Check `core/src/memory/store/` for exact method signatures and adapt. Also `SearchFilter::new()`, `with_fact_source()`, `with_valid_only()`, `with_path_prefix()` — verify against `types.rs` builders and add missing ones.
+Note: Some MemoryBackend methods (`search_facts_by_filter`, `insert_fact`, `invalidate_fact`) need to be verified against the actual API. Check `src/memory/store/` for exact method signatures and adapt. Also `SearchFilter::new()`, `with_fact_source()`, `with_valid_only()`, `with_path_prefix()` — verify against `types.rs` builders and add missing ones.
 
 - [ ] **Step 2: Verify compilation**
 
@@ -1103,7 +1103,7 @@ Expected: Compiles. Some methods may need signature adjustments based on actual 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/mod.rs
+git add src/memory/session_compactor/mod.rs
 git commit -m "session_compactor: add SessionCompactor orchestrator with prepare_history and post_turn_compress"
 ```
 
@@ -1112,11 +1112,11 @@ git commit -m "session_compactor: add SessionCompactor orchestrator with prepare
 ## Task 7: AgentLoop Integration (ToolCompactor Injection)
 
 **Files:**
-- Modify: `core/src/agent_loop/loop_core.rs:97-103` (AgentLoop struct), `core/src/agent_loop/loop_core.rs:176-190` (main loop)
+- Modify: `src/agent_loop/loop_core.rs:97-103` (AgentLoop struct), `src/agent_loop/loop_core.rs:176-190` (main loop)
 
 - [ ] **Step 1: Add optional tool_compactor to AgentLoop**
 
-In `core/src/agent_loop/loop_core.rs`, add a field to `AgentLoop`:
+In `src/agent_loop/loop_core.rs`, add a field to `AgentLoop`:
 
 ```rust
 pub struct AgentLoop<P: LoopProvider> {
@@ -1171,7 +1171,7 @@ Expected: Compiles. The new field is `Option`, so existing call sites pass `None
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/agent_loop/loop_core.rs
+git add src/agent_loop/loop_core.rs
 git commit -m "agent_loop: inject optional ToolCompactor config for in-loop context compression"
 ```
 
@@ -1180,8 +1180,8 @@ git commit -m "agent_loop: inject optional ToolCompactor config for in-loop cont
 ## Task 8: ExecutionEngine Integration
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/engine.rs:29-50` (struct), `core/src/gateway/execution_engine/engine.rs:83-89` (builders), `core/src/gateway/execution_engine/engine.rs:128-424` (execute)
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:30-36` (run_agent_loop), `core/src/gateway/execution_engine/run_loop.rs:188-215` (build_loop_history)
+- Modify: `src/gateway/execution_engine/engine.rs:29-50` (struct), `src/gateway/execution_engine/engine.rs:83-89` (builders), `src/gateway/execution_engine/engine.rs:128-424` (execute)
+- Modify: `src/gateway/execution_engine/run_loop.rs:30-36` (run_agent_loop), `src/gateway/execution_engine/run_loop.rs:188-215` (build_loop_history)
 
 - [ ] **Step 1: Add session_compactor field to ExecutionEngine**
 
@@ -1267,7 +1267,7 @@ Expected: Compiles. SessionCompactor is optional — existing code paths unchang
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/engine.rs core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/engine.rs src/gateway/execution_engine/run_loop.rs
 git commit -m "execution_engine: wire SessionCompactor into prepare_history and post_turn_compress"
 ```
 
@@ -1276,13 +1276,13 @@ git commit -m "execution_engine: wire SessionCompactor into prepare_history and 
 ## Task 9: System Prompt Layer
 
 **Files:**
-- Create: `core/src/thinker/layers/session_context_guide.rs`
-- Modify: `core/src/thinker/layers/mod.rs` (add module declaration)
-- Reference: `core/src/thinker/prompt_layer.rs:144-174` (PromptLayer trait)
+- Create: `src/thinker/layers/session_context_guide.rs`
+- Modify: `src/thinker/layers/mod.rs` (add module declaration)
+- Reference: `src/thinker/prompt_layer.rs:144-174` (PromptLayer trait)
 
 - [ ] **Step 1: Create SessionContextGuideLayer**
 
-Create `core/src/thinker/layers/session_context_guide.rs`:
+Create `src/thinker/layers/session_context_guide.rs`:
 
 ```rust
 use super::super::prompt_layer::{AssemblyPath, LayerStability, PromptLayer, LayerInput};
@@ -1318,11 +1318,11 @@ impl PromptLayer for SessionContextGuideLayer {
 }
 ```
 
-Note: `LayerInput` struct may need a new `has_session_summaries: bool` field. Check `core/src/thinker/prompt_layer.rs` for `LayerInput` definition and add the field. Set it to `true` in the prompt building code when `prepare_history` returned summaries.
+Note: `LayerInput` struct may need a new `has_session_summaries: bool` field. Check `src/thinker/prompt_layer.rs` for `LayerInput` definition and add the field. Set it to `true` in the prompt building code when `prepare_history` returned summaries.
 
 - [ ] **Step 2: Add `has_session_summaries` to LayerInput**
 
-In `core/src/thinker/prompt_layer.rs`, add to `LayerInput`:
+In `src/thinker/prompt_layer.rs`, add to `LayerInput`:
 
 ```rust
 pub has_session_summaries: bool,  // Set by ExecutionEngine when session summaries exist
@@ -1332,7 +1332,7 @@ Default to `false` in the LayerInput construction.
 
 - [ ] **Step 3: Register layer in mod.rs**
 
-In `core/src/thinker/layers/mod.rs`, add `pub mod session_context_guide;` and register it in the layer stack where other layers are collected.
+In `src/thinker/layers/mod.rs`, add `pub mod session_context_guide;` and register it in the layer stack where other layers are collected.
 
 - [ ] **Step 4: Verify compilation**
 
@@ -1342,7 +1342,7 @@ Expected: Compiles.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/thinker/layers/session_context_guide.rs core/src/thinker/layers/mod.rs core/src/thinker/prompt_layer.rs
+git add src/thinker/layers/session_context_guide.rs src/thinker/layers/mod.rs src/thinker/prompt_layer.rs
 git commit -m "thinker: add SessionContextGuideLayer for compressed summary usage guidance"
 ```
 
@@ -1351,11 +1351,11 @@ git commit -m "thinker: add SessionContextGuideLayer for compressed summary usag
 ## Task 10: Extend memory_search with Scope Parameter
 
 **Files:**
-- Modify: `core/src/builtin_tools/memory_search.rs:23-40` (MemorySearchArgs), `core/src/builtin_tools/memory_search.rs:189-192` (call_impl)
+- Modify: `src/builtin_tools/memory_search.rs:23-40` (MemorySearchArgs), `src/builtin_tools/memory_search.rs:189-192` (call_impl)
 
 - [ ] **Step 1: Add `scope` field to MemorySearchArgs**
 
-In `core/src/builtin_tools/memory_search.rs`, add to `MemorySearchArgs`:
+In `src/builtin_tools/memory_search.rs`, add to `MemorySearchArgs`:
 
 ```rust
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -1422,7 +1422,7 @@ Expected: Compiles.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/builtin_tools/memory_search.rs
+git add src/builtin_tools/memory_search.rs
 git commit -m "memory_search: add scope parameter for current_session search"
 ```
 
@@ -1431,8 +1431,8 @@ git commit -m "memory_search: add scope parameter for current_session search"
 ## Task 11: Wire LLM Provider into SummaryEngine
 
 **Files:**
-- Modify: `core/src/memory/session_compactor/mod.rs` (SessionCompactor struct)
-- Reference: `core/src/providers/adapter.rs` or similar (AiProvider trait)
+- Modify: `src/memory/session_compactor/mod.rs` (SessionCompactor struct)
+- Reference: `src/providers/adapter.rs` or similar (AiProvider trait)
 
 - [ ] **Step 1: Add AiProvider to SessionCompactor**
 
@@ -1520,7 +1520,7 @@ Expected: Compiles.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/memory/session_compactor/mod.rs core/src/gateway/execution_engine/engine.rs
+git add src/memory/session_compactor/mod.rs src/gateway/execution_engine/engine.rs
 git commit -m "session_compactor: wire LLM provider with three-level fallback for summary generation"
 ```
 
@@ -1529,12 +1529,12 @@ git commit -m "session_compactor: wire LLM provider with three-level fallback fo
 ## Task 12: Server Startup Wiring
 
 **Files:**
-- Modify: `core/src/bin/aleph/server_init.rs` or wherever ExecutionEngine is constructed
-- Reference: `core/src/bin/aleph/commands/start/` (server startup)
+- Modify: `src/bin/aleph/server_init.rs` or wherever ExecutionEngine is constructed
+- Reference: `src/bin/aleph/commands/start/` (server startup)
 
 - [ ] **Step 1: Find server startup code**
 
-Check `core/src/bin/aleph/server_init.rs` and `core/src/bin/aleph/commands/start/builder/subsystems.rs` for where `ExecutionEngine` is constructed and `with_compression_service()` is called. Add `with_session_compactor()` in the same location:
+Check `src/bin/aleph/server_init.rs` and `src/bin/aleph/commands/start/builder/subsystems.rs` for where `ExecutionEngine` is constructed and `with_compression_service()` is called. Add `with_session_compactor()` in the same location:
 
 ```rust
 // After existing compression_service wiring:
@@ -1563,7 +1563,7 @@ Expected: Compiles.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/bin/aleph/ core/src/config/
+git add src/bin/aleph/ src/config/
 git commit -m "server: wire SessionCompactor into server startup with config"
 ```
 
@@ -1572,7 +1572,7 @@ git commit -m "server: wire SessionCompactor into server startup with config"
 ## Task 13: Integration Test
 
 **Files:**
-- Create: `core/tests/session_compactor_integration.rs` or add to existing test module
+- Create: `tests/session_compactor_integration.rs` or add to existing test module
 
 - [ ] **Step 1: Write integration test for full compression cycle**
 
@@ -1624,7 +1624,7 @@ Expected: All tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/tests/
+git add tests/
 git commit -m "session_compactor: add integration tests for full compression cycle"
 ```
 

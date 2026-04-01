@@ -215,14 +215,14 @@ plugin-cli: add `aleph plugin init` scaffolding command with nodejs/wasm/static 
 Validate a plugin directory without loading it.
 
 **Files:**
-- Create: `core/src/extension/validation.rs`
-- Modify: `core/src/extension/mod.rs` (add `pub mod validation;`)
+- Create: `src/extension/validation.rs`
+- Modify: `src/extension/mod.rs` (add `pub mod validation;`)
 - Create: `apps/cli/src/commands/plugin_validate.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
-// In core/src/extension/validation.rs
+// In src/extension/validation.rs
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,7 +663,7 @@ export type PluginHookEvent =
   | 'session_start'
   | 'session_end';
 
-// ... more types matching core/src/extension/registry/types.rs
+// ... more types matching src/extension/registry/types.rs
 ```
 
 **Step 5: Commit**
@@ -709,7 +709,7 @@ Write `docs/guides/plugin-sdk-reference.md`.
 **Files:**
 - Create: `docs/guides/plugin-sdk-reference.md`
 
-**Content:** API reference for `AlephPluginApi` covering all 9 registration types, lifecycle methods, and type signatures. Generated from the TypeScript types in Task 7 + Rust types in `core/src/extension/registry/types.rs`.
+**Content:** API reference for `AlephPluginApi` covering all 9 registration types, lifecycle methods, and type signatures. Generated from the TypeScript types in Task 7 + Rust types in `src/extension/registry/types.rs`.
 
 **Step 5: Commit**
 
@@ -828,7 +828,7 @@ plugin: finalize P4 plugin ecosystem tooling
 
 ### Files NOT to Modify
 
-- `core/src/extension/mod.rs` — only add `pub mod validation;`
-- `core/src/extension/manifest/` — already handles all formats
-- `core/src/extension/runtime/` — WASM and Node.js runtimes are complete
-- `core/src/extension/registry/` — 9 registration types already defined
+- `src/extension/mod.rs` — only add `pub mod validation;`
+- `src/extension/manifest/` — already handles all formats
+- `src/extension/runtime/` — WASM and Node.js runtimes are complete
+- `src/extension/registry/` — 9 registration types already defined

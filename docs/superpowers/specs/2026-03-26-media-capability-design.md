@@ -55,8 +55,8 @@ Default impls return NotImplemented. DesktopPlatform gets `fn media()`.
 | Create | `crates/desktop/src/media_types.rs` |
 | Create | `crates/desktop/src/traits/media.rs` |
 | Create | `crates/desktop-macos/src/media.rs` |
-| Create | `core/src/builtin_tools/media_tool.rs` |
+| Create | `src/builtin_tools/media_tool.rs` |
 | Modify | `crates/desktop/src/traits/mod.rs`, `lib.rs`, `platform.rs` |
 | Modify | `crates/desktop-macos/src/lib.rs`, `Cargo.toml` |
 | Modify | `crates/desktop-linux/src/lib.rs`, `crates/desktop-windows/src/lib.rs` |
-| Modify | `core/src/builtin_tools/mod.rs`, `core/src/executor/builtin_registry/builder.rs`, `registry.rs` |
+| Modify | `src/builtin_tools/mod.rs`, `src/executor/builtin_registry/builder.rs`, `registry.rs` |

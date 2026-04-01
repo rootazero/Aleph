@@ -27,8 +27,8 @@ Panel UI tests are out of scope. Coverage relies on Core-layer RPC probe verific
 ## File Structure
 
 ```
-core/tests/acp_probe.rs                  // Entry point (mod declarations)
-core/tests/acp_probe/
+tests/acp_probe.rs                  // Entry point (mod declarations)
+tests/acp_probe/
 ├── harness.rs                           // Test harness (Builder pattern)
 ├── mock_harness.rs                      // MockAcpHarness (trait-level mock)
 ├── mock_scripts/
@@ -83,7 +83,7 @@ Behavior control:
 | `mock_env_echo.sh` | Env var passing | Echo `$TEST_VAR` |
 | `mock_cwd_echo.sh` | Cwd verification | Echo `$PWD` |
 
-All scripts `chmod +x` and located in `core/tests/acp_probe/mock_scripts/`.
+All scripts `chmod +x` and located in `tests/acp_probe/mock_scripts/`.
 
 ## Part 2: P1 — Config & Presets (7 tests, pure data)
 

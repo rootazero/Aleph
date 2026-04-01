@@ -20,7 +20,7 @@ Reference: OpenClaw recently shipped full `/v1/models`, `/v1/embeddings`, `/v1/c
 ## Module Structure
 
 ```
-core/src/gateway/openai_api/
+src/gateway/openai_api/
 ├── mod.rs                  # Public re-exports
 ├── router.rs               # axum Router construction (replaces old routes.rs)
 ├── state.rs                # OpenAiApiState with injected dependencies

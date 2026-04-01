@@ -15,10 +15,10 @@
 ## Task 1: Create ToolContext struct
 
 **Files:**
-- Create: `core/src/tools/context.rs`
-- Modify: `core/src/tools/mod.rs:34-48` (add module declaration and re-export)
+- Create: `src/tools/context.rs`
+- Modify: `src/tools/mod.rs:34-48` (add module declaration and re-export)
 
-- [ ] **Step 1: Create `core/src/tools/context.rs`**
+- [ ] **Step 1: Create `src/tools/context.rs`**
 
 ```rust
 //! Tool execution context — workspace-scoped paths for tool output.
@@ -79,7 +79,7 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
 }
 ```
 
-- [ ] **Step 2: Add module declaration to `core/src/tools/mod.rs`**
+- [ ] **Step 2: Add module declaration to `src/tools/mod.rs`**
 
 Add after line 37 (`mod types;`):
 
@@ -101,7 +101,7 @@ Expected: compiles without errors
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/tools/context.rs core/src/tools/mod.rs
+git add src/tools/context.rs src/tools/mod.rs
 git commit -m "tools: add ToolContext struct for workspace-scoped output paths"
 ```
 
@@ -110,14 +110,14 @@ git commit -m "tools: add ToolContext struct for workspace-scoped output paths"
 ## Task 2: Add tool_context_handle to BuiltinToolRegistry and ToolRegistry trait
 
 **Files:**
-- Modify: `core/src/executor/single_step.rs:85-133` (ToolRegistry trait — add default method)
-- Modify: `core/src/executor/builtin_registry/registry.rs:27-117` (struct field + trait impl)
-- Modify: `core/src/executor/builtin_registry/config.rs:16-59` (BuiltinToolConfig field)
-- Modify: `core/src/executor/builtin_registry/builder.rs:336-394` (wire handle in constructor)
+- Modify: `src/executor/single_step.rs:85-133` (ToolRegistry trait — add default method)
+- Modify: `src/executor/builtin_registry/registry.rs:27-117` (struct field + trait impl)
+- Modify: `src/executor/builtin_registry/config.rs:16-59` (BuiltinToolConfig field)
+- Modify: `src/executor/builtin_registry/builder.rs:336-394` (wire handle in constructor)
 
 - [ ] **Step 1: Add `tool_context_handle()` to `ToolRegistry` trait**
 
-In `core/src/executor/single_step.rs`, add after the `tool_policy_handle()` method (after line ~132):
+In `src/executor/single_step.rs`, add after the `tool_policy_handle()` method (after line ~132):
 
 ```rust
     /// Get the shared tool context handle for workspace-scoped output paths.
@@ -131,7 +131,7 @@ In `core/src/executor/single_step.rs`, add after the `tool_policy_handle()` meth
 
 - [ ] **Step 2: Add field to `BuiltinToolRegistry` struct**
 
-In `core/src/executor/builtin_registry/registry.rs`, add after the `tool_policy_handle` field (after line ~102):
+In `src/executor/builtin_registry/registry.rs`, add after the `tool_policy_handle` field (after line ~102):
 
 ```rust
     /// Tool context handle for workspace-scoped output paths
@@ -150,7 +150,7 @@ In the `impl ToolRegistry for BuiltinToolRegistry` block (after the `tool_policy
 
 - [ ] **Step 4: Add field to `BuiltinToolConfig`**
 
-In `core/src/executor/builtin_registry/config.rs`, add after the `cron_service` field:
+In `src/executor/builtin_registry/config.rs`, add after the `cron_service` field:
 
 ```rust
     pub tool_context: Option<crate::tools::ToolContextHandle>,
@@ -158,7 +158,7 @@ In `core/src/executor/builtin_registry/config.rs`, add after the `cron_service` 
 
 - [ ] **Step 5: Wire handle in `with_config()` builder**
 
-In `core/src/executor/builtin_registry/builder.rs`, in the struct initialization block (around line ~336-394), add the `tool_context_handle` field:
+In `src/executor/builtin_registry/builder.rs`, in the struct initialization block (around line ~336-394), add the `tool_context_handle` field:
 
 ```rust
             tool_context_handle: config.tool_context.clone(),
@@ -172,7 +172,7 @@ Expected: compiles without errors
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/executor/single_step.rs core/src/executor/builtin_registry/
+git add src/executor/single_step.rs src/executor/builtin_registry/
 git commit -m "executor: add tool_context_handle to BuiltinToolRegistry"
 ```
 
@@ -181,15 +181,15 @@ git commit -m "executor: add tool_context_handle to BuiltinToolRegistry"
 ## Task 3: Wire ExecutionEngine to write ToolContext handle
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/engine.rs:233-238` (write handle in run_agent_loop)
-- Modify: `core/src/gateway/execution_engine/slash_command.rs:72-93` (write handle in fast path)
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs:273-288` (pass handle during BuiltinToolConfig construction)
+- Modify: `src/gateway/execution_engine/engine.rs:233-238` (write handle in run_agent_loop)
+- Modify: `src/gateway/execution_engine/slash_command.rs:72-93` (write handle in fast path)
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs:273-288` (pass handle during BuiltinToolConfig construction)
 
 Note: `SimpleExecutionEngine` (`simple.rs`) has NO ToolRegistry — no changes needed there.
 
 - [ ] **Step 1: Add ToolContext write in `run_agent_loop()`**
 
-In `core/src/gateway/execution_engine/engine.rs`, after the session context handle write block (after line ~238), add:
+In `src/gateway/execution_engine/engine.rs`, after the session context handle write block (after line ~238), add:
 
 ```rust
 // Write workspace-scoped output paths to tool context handle
@@ -209,7 +209,7 @@ if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
 
 - [ ] **Step 2: Add ToolContext write in slash command fast path**
 
-In `core/src/gateway/execution_engine/slash_command.rs`, at the beginning of `execute_slash_command_fast_path()` (after line ~79, before the `match mode_type`), add:
+In `src/gateway/execution_engine/slash_command.rs`, at the beginning of `execute_slash_command_fast_path()` (after line ~79, before the `match mode_type`), add:
 
 ```rust
 // Write workspace-scoped output paths (same as run_agent_loop)
@@ -226,7 +226,7 @@ Note: rename `_agent` to `agent` in the function signature since it's now used.
 
 - [ ] **Step 3: Pass tool_context handle when building BuiltinToolConfig**
 
-In `core/src/bin/aleph/commands/start/builder/agent_init.rs` line 273-288, where `BuiltinToolConfig` is constructed, add before `..Default::default()`:
+In `src/bin/aleph/commands/start/builder/agent_init.rs` line 273-288, where `BuiltinToolConfig` is constructed, add before `..Default::default()`:
 
 ```rust
 tool_context: Some(alephcore::tools::new_tool_context_handle()),
@@ -240,7 +240,7 @@ Expected: compiles without errors
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/ core/src/bin/aleph/commands/start/
+git add src/gateway/execution_engine/ src/bin/aleph/commands/start/
 git commit -m "gateway: wire ToolContext handle in execution engine and fast path"
 ```
 
@@ -249,13 +249,13 @@ git commit -m "gateway: wire ToolContext handle in execution engine and fast pat
 ## Task 4: Migrate file_ops to use ToolContext
 
 **Files:**
-- Modify: `core/src/builtin_tools/file_ops/path_utils.rs:107-111` (production: replace get_output_dir)
-- Modify: `core/src/builtin_tools/file_ops/mod.rs:180,225` (tests: replace get_output_dir)
-- Modify: `core/src/executor/builtin_registry/registry.rs` (pass handle in file_ops match arm)
+- Modify: `src/builtin_tools/file_ops/path_utils.rs:107-111` (production: replace get_output_dir)
+- Modify: `src/builtin_tools/file_ops/mod.rs:180,225` (tests: replace get_output_dir)
+- Modify: `src/executor/builtin_registry/registry.rs` (pass handle in file_ops match arm)
 
 - [ ] **Step 1: Add tool_context_handle to FileOpsTool**
 
-In `core/src/builtin_tools/file_ops/tool.rs`, add a field:
+In `src/builtin_tools/file_ops/tool.rs`, add a field:
 
 ```rust
 pub struct FileOpsTool {
@@ -278,7 +278,7 @@ pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> S
 
 - [ ] **Step 2: Update `check_and_resolve_path()` in path_utils.rs**
 
-In `core/src/builtin_tools/file_ops/path_utils.rs`, the function `check_and_resolve_path()` at line 108 calls `get_output_dir()` as fallback when no working directory is set. Change the function signature to accept an optional output_dir:
+In `src/builtin_tools/file_ops/path_utils.rs`, the function `check_and_resolve_path()` at line 108 calls `get_output_dir()` as fallback when no working directory is set. Change the function signature to accept an optional output_dir:
 
 ```rust
 pub fn check_and_resolve_path(
@@ -321,7 +321,7 @@ Update all callers of `check_path()` inside `call_impl()` to use `check_path_res
 
 - [ ] **Step 4: Wire handle in BuiltinToolRegistry**
 
-In `core/src/executor/builtin_registry/builder.rs`, when constructing `FileOpsTool`, pass the tool_context handle:
+In `src/executor/builtin_registry/builder.rs`, when constructing `FileOpsTool`, pass the tool_context handle:
 
 ```rust
 let file_ops_tool = if let Some(ref tc) = config.tool_context {
@@ -343,7 +343,7 @@ Expected: compiles and tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/builtin_tools/file_ops/ core/src/executor/builtin_registry/
+git add src/builtin_tools/file_ops/ src/executor/builtin_registry/
 git commit -m "file_ops: use ToolContext for workspace-scoped output paths"
 ```
 
@@ -352,14 +352,14 @@ git commit -m "file_ops: use ToolContext for workspace-scoped output paths"
 ## Task 5: Migrate pdf_generate to use ToolContext
 
 **Files:**
-- Modify: `core/src/builtin_tools/pdf_generate/mod.rs:41,85-102` (replace get_output_dir)
-- Modify: `core/src/executor/builtin_registry/builder.rs` (wire handle)
+- Modify: `src/builtin_tools/pdf_generate/mod.rs:41,85-102` (replace get_output_dir)
+- Modify: `src/executor/builtin_registry/builder.rs` (wire handle)
 
 Note: `PdfGenerateTool` already has a `default_output_dir: Option<PathBuf>` field (line 41). We replace this with a `tool_context_handle` instead — the handle subsumes its purpose.
 
 - [ ] **Step 1: Replace `default_output_dir` field with `tool_context_handle`**
 
-In `core/src/builtin_tools/pdf_generate/mod.rs`, change the existing field:
+In `src/builtin_tools/pdf_generate/mod.rs`, change the existing field:
 
 ```rust
 // Old:
@@ -396,7 +396,7 @@ Expected: compiles without errors
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/pdf_generate/ core/src/executor/builtin_registry/
+git add src/builtin_tools/pdf_generate/ src/executor/builtin_registry/
 git commit -m "pdf_generate: use ToolContext for workspace-scoped output paths"
 ```
 
@@ -405,13 +405,13 @@ git commit -m "pdf_generate: use ToolContext for workspace-scoped output paths"
 ## Task 6: Migrate tool_output to use ToolContext
 
 **Files:**
-- Modify: `core/src/tool_output/truncation.rs:238-260` (replace get_tool_output_dir)
-- Modify: `core/src/tool_output/cleanup.rs:68` (enumerate workspace dirs)
-- Modify: `core/src/config/agent_resolver.rs:661` (promote default_workspace_root visibility)
+- Modify: `src/tool_output/truncation.rs:238-260` (replace get_tool_output_dir)
+- Modify: `src/tool_output/cleanup.rs:68` (enumerate workspace dirs)
+- Modify: `src/config/agent_resolver.rs:661` (promote default_workspace_root visibility)
 
 - [ ] **Step 1: Promote `default_workspace_root()` to `pub(crate)`**
 
-In `core/src/config/agent_resolver.rs` line 661, change:
+In `src/config/agent_resolver.rs` line 661, change:
 ```rust
 fn default_workspace_root() -> PathBuf {
 ```
@@ -477,7 +477,7 @@ Expected: compiles without errors
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/tool_output/ core/src/config/agent_resolver.rs
+git add src/tool_output/ src/config/agent_resolver.rs
 git commit -m "tool_output: use workspace-scoped .tool_output directories"
 ```
 
@@ -486,13 +486,13 @@ git commit -m "tool_output: use workspace-scoped .tool_output directories"
 ## Task 7: Update GenerationConfig
 
 **Files:**
-- Modify: `core/src/config/types/generation/config.rs:57-86,197-209` (output_dir → Option, add resolve method)
-- Modify: `core/src/config/types/generation/mod.rs:138-146` (update test)
-- Modify: `core/src/gateway/handlers/generation_config.rs:19,38,100` (DTO conversion)
+- Modify: `src/config/types/generation/config.rs:57-86,197-209` (output_dir → Option, add resolve method)
+- Modify: `src/config/types/generation/mod.rs:138-146` (update test)
+- Modify: `src/gateway/handlers/generation_config.rs:19,38,100` (DTO conversion)
 
 - [ ] **Step 1: Change `output_dir` field to `Option<PathBuf>`**
 
-In `core/src/config/types/generation/config.rs` line 59:
+In `src/config/types/generation/config.rs` line 59:
 
 ```rust
 // Old:
@@ -537,7 +537,7 @@ Delete the `default_output_dir()` function (lines 81-86).
 
 - [ ] **Step 4: Update the DTO handler**
 
-In `core/src/gateway/handlers/generation_config.rs`:
+In `src/gateway/handlers/generation_config.rs`:
 
 Line 19: `pub output_dir: String` → `pub output_dir: Option<String>`
 
@@ -553,7 +553,7 @@ generation.output_dir = dto.output_dir.as_ref().map(|s| std::path::PathBuf::from
 
 - [ ] **Step 5: Update test**
 
-In `core/src/config/types/generation/mod.rs` lines 138-146, update `test_generation_config_output_dir_expansion()`:
+In `src/config/types/generation/mod.rs` lines 138-146, update `test_generation_config_output_dir_expansion()`:
 
 ```rust
 #[test]
@@ -576,7 +576,7 @@ Expected: compiles and tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/config/types/generation/ core/src/gateway/handlers/generation_config.rs
+git add src/config/types/generation/ src/gateway/handlers/generation_config.rs
 git commit -m "generation: make output_dir optional, resolve from ToolContext"
 ```
 
@@ -593,7 +593,7 @@ If providers start writing files in the future, they should read the output dir 
 ## Task 8: Delete obsolete functions from paths.rs
 
 **Files:**
-- Modify: `core/src/utils/paths.rs:132-147,344-381,417-427` (delete 5 functions)
+- Modify: `src/utils/paths.rs:132-147,344-381,417-427` (delete 5 functions)
 
 - [ ] **Step 1: Verify no remaining callers**
 
@@ -604,7 +604,7 @@ cargo check -p alephcore 2>&1 | head -50
 
 If there are compile errors from callers of deleted functions, fix them first.
 
-- [ ] **Step 2: Delete the 5 functions from `core/src/utils/paths.rs`**
+- [ ] **Step 2: Delete the 5 functions from `src/utils/paths.rs`**
 
 Delete these functions:
 - `get_output_dir()` (lines 132-142)
@@ -623,7 +623,7 @@ Expected: compiles and tests pass (pre-existing test failures in `markdown_skill
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/utils/paths.rs
+git add src/utils/paths.rs
 git commit -m "paths: delete obsolete global output directory functions"
 ```
 

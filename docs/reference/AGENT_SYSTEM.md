@@ -36,7 +36,7 @@ The Agent System implements the **Think → Act** loop, the heart of Aleph's int
 
 ## Agent Loop
 
-**Location**: `core/src/agent_loop/`
+**Location**: `src/agent_loop/`
 
 ### Core Structure
 
@@ -114,7 +114,7 @@ pub enum LoopEvent {
 
 ## Thinker
 
-**Location**: `core/src/thinker/`
+**Location**: `src/thinker/`
 
 The Thinker is responsible for LLM interactions and decision making.
 
@@ -195,7 +195,7 @@ Event: StreamChunk { content, block_type }
 
 ## Channel Capability Awareness
 
-**Location**: `core/src/thinker/` (interaction.rs, security_context.rs, context.rs)
+**Location**: `src/thinker/` (interaction.rs, security_context.rs, context.rs)
 
 Aleph's Thinker uses a two-layer context system to adapt AI behavior based on the current environment.
 
@@ -302,7 +302,7 @@ For background/scheduled tasks, two additional decision types:
 
 ## Embodiment Engine
 
-**Location**: `core/src/thinker/soul.rs`, `core/src/thinker/identity.rs`
+**Location**: `src/thinker/soul.rs`, `src/thinker/identity.rs`
 
 The Embodiment Engine gives the AI a consistent identity and personality through layered soul definitions.
 
@@ -386,7 +386,7 @@ I am Aleph, your AI programming partner.
 
 ## Chain-of-Thought Transparency
 
-**Location**: `core/src/agent_loop/thinking.rs`
+**Location**: `src/agent_loop/thinking.rs`
 
 CoT Transparency parses LLM reasoning into structured, understandable steps.
 
@@ -457,7 +457,7 @@ For real-time CoT visibility, the Gateway emits:
 
 ## Dispatcher
 
-**Location**: `core/src/dispatcher/`
+**Location**: `src/dispatcher/`
 
 The Dispatcher orchestrates complex multi-step tasks using DAG-based scheduling.
 
@@ -543,7 +543,7 @@ pub struct SmartFilter {
 
 ## Guards
 
-**Location**: `core/src/agent_loop/guards.rs`
+**Location**: `src/agent_loop/guards.rs`
 
 Safety checks before each loop iteration.
 
@@ -572,7 +572,7 @@ pub enum GuardResult {
 
 ## Callback System
 
-**Location**: `core/src/agent_loop/callback.rs`
+**Location**: `src/agent_loop/callback.rs`
 
 ```rust
 #[async_trait]
@@ -609,7 +609,7 @@ impl LoopCallback for CliCallback {
 
 ## Sub-Agent Delegation
 
-**Location**: `core/src/agents/sub_agents/`
+**Location**: `src/agents/sub_agents/`
 
 Main agent can spawn sub-agents for specialized tasks:
 

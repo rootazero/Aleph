@@ -11,7 +11,7 @@ Aleph 插件系统实现了 **单向兼容 + 超集** 策略：
 - Aleph 独有能力（WASM runtime、channels、providers、services）通过 `[aleph]` 扩展字段承载
 - 格式原则：**写 TOML，读 TOML+JSON**
 
-**核心文件位置：** `core/src/extension/`
+**核心文件位置：** `src/extension/`
 
 ---
 
@@ -140,7 +140,7 @@ stop_handler = "stopCollector"
 - 同名冲突：内置优先，插件按注册顺序（first-come wins for short name）
 - 跨 marketplace 同名：`name@marketplace` 区分
 
-**实现：** `ComponentId` struct（`core/src/extension/component_id.rs`）
+**实现：** `ComponentId` struct（`src/extension/component_id.rs`）
 
 ---
 

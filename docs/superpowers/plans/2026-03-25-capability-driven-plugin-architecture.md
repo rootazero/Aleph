@@ -17,59 +17,59 @@
 ### New Files
 | File | Responsibility |
 |------|---------------|
-| `core/src/extension/capability.rs` | `CapabilityDeclaration` enum, `CapabilitySource`, `SourceFormat`, type aliases |
-| `core/src/extension/manifest/adapter.rs` | `ManifestAdapter` trait, `AdapterOutput`, `AdapterRegistry` |
-| `core/src/extension/manifest/parsers.rs` | Shared component parsers (skills/commands/agents/hooks/mcp dirs) |
-| `core/src/extension/manifest/adapters/mod.rs` | Re-exports for adapter implementations |
-| `core/src/extension/manifest/adapters/codex.rs` | Codex CLI manifest adapter |
-| `core/src/extension/manifest/adapters/cursor.rs` | Cursor IDE manifest adapter |
-| `core/src/extension/manifest/adapters/auto_discover.rs` | Auto-discover fallback adapter |
-| `core/src/extension/registrar/mod.rs` | `CapabilityRegistrar` trait, re-exports |
-| `core/src/extension/registrar/api.rs` | `CapabilityApi` — unified write surface for PluginRegistry |
-| `core/src/extension/registrar/mcp_registrar.rs` | MCP collect-then-batch probe and register |
-| `core/src/extension/registrar/wasm_registrar.rs` | WASM host function for capability registration |
+| `src/extension/capability.rs` | `CapabilityDeclaration` enum, `CapabilitySource`, `SourceFormat`, type aliases |
+| `src/extension/manifest/adapter.rs` | `ManifestAdapter` trait, `AdapterOutput`, `AdapterRegistry` |
+| `src/extension/manifest/parsers.rs` | Shared component parsers (skills/commands/agents/hooks/mcp dirs) |
+| `src/extension/manifest/adapters/mod.rs` | Re-exports for adapter implementations |
+| `src/extension/manifest/adapters/codex.rs` | Codex CLI manifest adapter |
+| `src/extension/manifest/adapters/cursor.rs` | Cursor IDE manifest adapter |
+| `src/extension/manifest/adapters/auto_discover.rs` | Auto-discover fallback adapter |
+| `src/extension/registrar/mod.rs` | `CapabilityRegistrar` trait, re-exports |
+| `src/extension/registrar/api.rs` | `CapabilityApi` — unified write surface for PluginRegistry |
+| `src/extension/registrar/mcp_registrar.rs` | MCP collect-then-batch probe and register |
+| `src/extension/registrar/wasm_registrar.rs` | WASM host function for capability registration |
 
 ### Files to Delete
 | File/Directory | Lines |
 |---------------|-------|
-| `core/src/extension/manifest/aleph_plugin_toml/` (6 files) | 1,279 |
-| `core/src/extension/manifest/aleph_plugin.rs` | 636 |
-| `core/src/extension/manifest/package_json.rs` | 474 |
-| `core/src/extension/runtime/nodejs/` (3 files) | 1,026 |
-| `core/src/extension/runtime/mod.rs` | 812 |
-| `core/src/extension/content_loader/` (6 files) | 1,125 |
-| `core/src/extension/plugin_loader.rs` | 778 (replaced by `loader.rs`) |
+| `src/extension/manifest/aleph_plugin_toml/` (6 files) | 1,279 |
+| `src/extension/manifest/aleph_plugin.rs` | 636 |
+| `src/extension/manifest/package_json.rs` | 474 |
+| `src/extension/runtime/nodejs/` (3 files) | 1,026 |
+| `src/extension/runtime/mod.rs` | 812 |
+| `src/extension/content_loader/` (6 files) | 1,125 |
+| `src/extension/plugin_loader.rs` | 778 (replaced by `loader.rs`) |
 
 ### Files to Modify
 | File | Change |
 |------|--------|
-| `core/src/extension/mod.rs` | Remove old module refs, add new ones, simplify ExtensionManager |
-| `core/src/extension/registry/types.rs` | Add `SkillRegistration`, `AgentRegistration` |
-| `core/src/extension/registry/plugin_registry/mod.rs` → `plugin_registry.rs` | Promote to file, add skill/agent storage |
-| `core/src/extension/manifest/mod.rs` | Rewrite as AdapterRegistry entry point |
-| `core/src/extension/manifest/types.rs` | Remove `aleph_plugin_toml` imports, update `PluginPermission` with new variants |
-| `core/src/extension/manifest/cc_plugin_toml.rs` | Refactor to implement `ManifestAdapter` trait |
-| `core/src/extension/manifest/cc_plugin_json.rs` | Refactor to implement `ManifestAdapter` trait |
-| `core/src/extension/types/plugins.rs` | Remove `NodeJs` from `PluginKind` |
-| `core/src/extension/runtime/wasm/mod.rs` | Add `host_fn_register` integration |
-| `core/src/extension/sync_api.rs` | Delegate skills/commands/agents to PluginRegistry |
-| `core/src/extension/skill_ops.rs` | Delegate to PluginRegistry |
+| `src/extension/mod.rs` | Remove old module refs, add new ones, simplify ExtensionManager |
+| `src/extension/registry/types.rs` | Add `SkillRegistration`, `AgentRegistration` |
+| `src/extension/registry/plugin_registry/mod.rs` → `plugin_registry.rs` | Promote to file, add skill/agent storage |
+| `src/extension/manifest/mod.rs` | Rewrite as AdapterRegistry entry point |
+| `src/extension/manifest/types.rs` | Remove `aleph_plugin_toml` imports, update `PluginPermission` with new variants |
+| `src/extension/manifest/cc_plugin_toml.rs` | Refactor to implement `ManifestAdapter` trait |
+| `src/extension/manifest/cc_plugin_json.rs` | Refactor to implement `ManifestAdapter` trait |
+| `src/extension/types/plugins.rs` | Remove `NodeJs` from `PluginKind` |
+| `src/extension/runtime/wasm/mod.rs` | Add `host_fn_register` integration |
+| `src/extension/sync_api.rs` | Delegate skills/commands/agents to PluginRegistry |
+| `src/extension/skill_ops.rs` | Delegate to PluginRegistry |
 
 ---
 
 ## Task 1: Foundation — CapabilityDeclaration & Registry Extensions
 
 **Files:**
-- Create: `core/src/extension/capability.rs`
-- Modify: `core/src/extension/registry/types.rs`
-- Modify: `core/src/extension/registry/plugin_registry/mod.rs`
-- Modify: `core/src/extension/manifest/types.rs` (update `PluginPermission`)
-- Modify: `core/src/extension/mod.rs` (add `pub mod capability;`)
+- Create: `src/extension/capability.rs`
+- Modify: `src/extension/registry/types.rs`
+- Modify: `src/extension/registry/plugin_registry/mod.rs`
+- Modify: `src/extension/manifest/types.rs` (update `PluginPermission`)
+- Modify: `src/extension/mod.rs` (add `pub mod capability;`)
 - Test: inline `#[cfg(test)]` modules
 
 - [ ] **Step 0: Update `PluginPermission` enum with new variants**
 
-In `core/src/extension/manifest/types.rs`, update the `PluginPermission` enum to add dedicated variants for capability-tier gating:
+In `src/extension/manifest/types.rs`, update the `PluginPermission` enum to add dedicated variants for capability-tier gating:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -101,7 +101,7 @@ Update the `Display` impl to handle the new variants. Note: `FilesystemRead`/`Fi
 
 - [ ] **Step 1: Add `SkillRegistration` and `AgentRegistration` to registry types**
 
-Add to `core/src/extension/registry/types.rs` after the P3 section:
+Add to `src/extension/registry/types.rs` after the P3 section:
 
 ```rust
 // ============================================================================
@@ -145,7 +145,7 @@ pub struct AgentRegistration {
 
 - [ ] **Step 2: Add skills/agents storage to PluginRegistry**
 
-In `core/src/extension/registry/plugin_registry/mod.rs`, add fields and methods:
+In `src/extension/registry/plugin_registry/mod.rs`, add fields and methods:
 
 ```rust
 // In struct PluginRegistry:
@@ -201,7 +201,7 @@ Update `stats()` to include `skills` and `agents` counts.
 
 - [ ] **Step 3: Create `capability.rs`**
 
-Create `core/src/extension/capability.rs`:
+Create `src/extension/capability.rs`:
 
 ```rust
 //! Capability Declaration Model
@@ -346,7 +346,7 @@ mod tests {
 
 - [ ] **Step 4: Wire `capability` module into `mod.rs`**
 
-Add `pub mod capability;` to `core/src/extension/mod.rs` after line 35, and add re-export:
+Add `pub mod capability;` to `src/extension/mod.rs` after line 35, and add re-export:
 ```rust
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
 ```
@@ -359,7 +359,7 @@ Expected: Compiles with no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/capability.rs core/src/extension/registry/ core/src/extension/mod.rs
+git add src/extension/capability.rs src/extension/registry/ src/extension/mod.rs
 git commit -m "extension: add CapabilityDeclaration model and SkillRegistration/AgentRegistration to PluginRegistry"
 ```
 
@@ -368,9 +368,9 @@ git commit -m "extension: add CapabilityDeclaration model and SkillRegistration/
 ## Task 2: CapabilityApi — Unified Registration Surface
 
 **Files:**
-- Create: `core/src/extension/registrar/mod.rs`
-- Create: `core/src/extension/registrar/api.rs`
-- Modify: `core/src/extension/mod.rs` (add `pub mod registrar;`)
+- Create: `src/extension/registrar/mod.rs`
+- Create: `src/extension/registrar/api.rs`
+- Modify: `src/extension/mod.rs` (add `pub mod registrar;`)
 - Test: inline `#[cfg(test)]` in `api.rs`
 
 - [ ] **Step 1: Create `registrar/mod.rs`**
@@ -504,7 +504,7 @@ pub struct McpRegistrar { pub plugin_id: String }
 
 - [ ] **Step 4: Wire `registrar` module into `mod.rs`**
 
-Add `pub mod registrar;` to `core/src/extension/mod.rs` and `pub use registrar::CapabilityApi;`.
+Add `pub mod registrar;` to `src/extension/mod.rs` and `pub use registrar::CapabilityApi;`.
 
 - [ ] **Step 5: Run `cargo check -p alephcore` and `cargo test -p alephcore --lib capability`**
 
@@ -514,7 +514,7 @@ Expected: Compiles and tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/extension/registrar/
+git add src/extension/registrar/
 git commit -m "extension: add CapabilityApi with tiered permission checking and hot reload"
 ```
 
@@ -523,8 +523,8 @@ git commit -m "extension: add CapabilityApi with tiered permission checking and 
 ## Task 3: ManifestAdapter Trait & AdapterRegistry
 
 **Files:**
-- Create: `core/src/extension/manifest/adapter.rs`
-- Create: `core/src/extension/manifest/adapters/mod.rs`
+- Create: `src/extension/manifest/adapter.rs`
+- Create: `src/extension/manifest/adapters/mod.rs`
 - Test: inline `#[cfg(test)]` in `adapter.rs`
 
 - [ ] **Step 1: Create `manifest/adapter.rs`**
@@ -627,7 +627,7 @@ Expected: Compiles (adapter stubs are empty but valid).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/extension/manifest/adapter.rs core/src/extension/manifest/adapters/
+git add src/extension/manifest/adapter.rs src/extension/manifest/adapters/
 git commit -m "extension: add ManifestAdapter trait and AdapterRegistry"
 ```
 
@@ -636,10 +636,10 @@ git commit -m "extension: add ManifestAdapter trait and AdapterRegistry"
 ## Task 4: Shared Parsers & CC Adapter Refactor
 
 **Files:**
-- Create: `core/src/extension/manifest/parsers.rs`
-- Modify: `core/src/extension/manifest/cc_plugin_toml.rs` (add `ManifestAdapter` impl)
-- Modify: `core/src/extension/manifest/cc_plugin_json.rs` (add `ManifestAdapter` impl)
-- Modify: `core/src/extension/manifest/adapter.rs` (register CC adapters in `with_defaults`)
+- Create: `src/extension/manifest/parsers.rs`
+- Modify: `src/extension/manifest/cc_plugin_toml.rs` (add `ManifestAdapter` impl)
+- Modify: `src/extension/manifest/cc_plugin_json.rs` (add `ManifestAdapter` impl)
+- Modify: `src/extension/manifest/adapter.rs` (register CC adapters in `with_defaults`)
 
 This is the largest task — it extracts parsing logic from `content_loader/` into shared parsers, and wraps the existing CC parsers with the `ManifestAdapter` trait.
 
@@ -719,7 +719,7 @@ Expected: All existing tests pass. The adapter is additive — old code still wo
 - [ ] **Step 9: Commit**
 
 ```bash
-git add core/src/extension/manifest/
+git add src/extension/manifest/
 git commit -m "extension: add shared parsers and ClaudeCode ManifestAdapter impls"
 ```
 
@@ -728,10 +728,10 @@ git commit -m "extension: add shared parsers and ClaudeCode ManifestAdapter impl
 ## Task 5: Codex, Cursor & AutoDiscover Adapters
 
 **Files:**
-- Create: `core/src/extension/manifest/adapters/codex.rs`
-- Create: `core/src/extension/manifest/adapters/cursor.rs`
-- Create: `core/src/extension/manifest/adapters/auto_discover.rs`
-- Modify: `core/src/extension/manifest/adapter.rs` (register in `with_defaults`)
+- Create: `src/extension/manifest/adapters/codex.rs`
+- Create: `src/extension/manifest/adapters/cursor.rs`
+- Create: `src/extension/manifest/adapters/auto_discover.rs`
+- Modify: `src/extension/manifest/adapter.rs` (register in `with_defaults`)
 
 - [ ] **Step 1: Create `adapters/codex.rs`**
 
@@ -855,7 +855,7 @@ Expected: All tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/extension/manifest/
+git add src/extension/manifest/
 git commit -m "extension: add Codex, Cursor, and AutoDiscover manifest adapters"
 ```
 
@@ -864,7 +864,7 @@ git commit -m "extension: add Codex, Cursor, and AutoDiscover manifest adapters"
 ## Task 6: MCP Registrar (collect-then-batch)
 
 **Files:**
-- Modify: `core/src/extension/registrar/mcp_registrar.rs`
+- Modify: `src/extension/registrar/mcp_registrar.rs`
 - Test: inline `#[cfg(test)]`
 
 - [ ] **Step 1: Implement `McpRegistrar`**
@@ -912,7 +912,7 @@ Test that batch registration writes to the correct registry collections.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/extension/registrar/mcp_registrar.rs
+git add src/extension/registrar/mcp_registrar.rs
 git commit -m "extension: implement McpRegistrar collect-then-batch pattern"
 ```
 
@@ -921,8 +921,8 @@ git commit -m "extension: implement McpRegistrar collect-then-batch pattern"
 ## Task 7: WASM Registrar Host Function
 
 **Files:**
-- Modify: `core/src/extension/registrar/wasm_registrar.rs`
-- Modify: `core/src/extension/runtime/wasm/mod.rs` (wire host function)
+- Modify: `src/extension/registrar/wasm_registrar.rs`
+- Modify: `src/extension/runtime/wasm/mod.rs` (wire host function)
 - Test: inline `#[cfg(test)]`
 
 - [ ] **Step 1: Implement `wasm_registrar.rs`**
@@ -955,7 +955,7 @@ pub fn host_fn_register(
 
 - [ ] **Step 2: Wire into WASM runtime**
 
-In `core/src/extension/runtime/wasm/mod.rs`, add the `aleph_register` host function to the Extism plugin initialization alongside existing `log`, `now_millis`, etc.
+In `src/extension/runtime/wasm/mod.rs`, add the `aleph_register` host function to the Extism plugin initialization alongside existing `log`, `now_millis`, etc.
 
 - [ ] **Step 3: Add tests**
 
@@ -964,7 +964,7 @@ Test that `host_fn_register` correctly deserializes and writes to registry.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/extension/registrar/wasm_registrar.rs core/src/extension/runtime/wasm/
+git add src/extension/registrar/wasm_registrar.rs src/extension/runtime/wasm/
 git commit -m "extension: add WASM host function for capability registration"
 ```
 
@@ -973,25 +973,25 @@ git commit -m "extension: add WASM host function for capability registration"
 ## Task 8: Delete Deprecated Code
 
 **Files to delete:**
-- `core/src/extension/manifest/aleph_plugin_toml/` (entire directory)
-- `core/src/extension/manifest/aleph_plugin.rs`
-- `core/src/extension/manifest/package_json.rs`
-- `core/src/extension/runtime/nodejs/` (entire directory)
-- `core/src/extension/runtime/mod.rs`
-- `core/src/extension/content_loader/` (entire directory)
+- `src/extension/manifest/aleph_plugin_toml/` (entire directory)
+- `src/extension/manifest/aleph_plugin.rs`
+- `src/extension/manifest/package_json.rs`
+- `src/extension/runtime/nodejs/` (entire directory)
+- `src/extension/runtime/mod.rs`
+- `src/extension/content_loader/` (entire directory)
 
 **Files to modify:**
-- `core/src/extension/mod.rs` (remove old module declarations)
-- `core/src/extension/manifest/mod.rs` (remove old parser imports and fallback chain)
-- `core/src/extension/manifest/types.rs` (remove `aleph_plugin_toml` imports)
-- `core/src/extension/types/plugins.rs` (remove `NodeJs` from `PluginKind`)
+- `src/extension/mod.rs` (remove old module declarations)
+- `src/extension/manifest/mod.rs` (remove old parser imports and fallback chain)
+- `src/extension/manifest/types.rs` (remove `aleph_plugin_toml` imports)
+- `src/extension/types/plugins.rs` (remove `NodeJs` from `PluginKind`)
 
 This task is large but mechanical. Do it in sub-steps.
 
 - [ ] **Step 1: Remove Node.js runtime**
 
 ```bash
-rm -rf core/src/extension/runtime/nodejs/
+rm -rf src/extension/runtime/nodejs/
 ```
 
 Remove `pub mod nodejs;` from `runtime/mod.rs`. Remove all `NodeJs` references from `plugin_loader.rs` and `types/plugins.rs`.
@@ -1009,10 +1009,10 @@ git commit -m "extension: remove deprecated Node.js IPC runtime (~1,026 lines)"
 - [ ] **Step 4: Remove legacy manifest formats and old auto_discover**
 
 ```bash
-rm -rf core/src/extension/manifest/aleph_plugin_toml/
-rm core/src/extension/manifest/aleph_plugin.rs
-rm core/src/extension/manifest/package_json.rs
-rm core/src/extension/manifest/auto_discover.rs
+rm -rf src/extension/manifest/aleph_plugin_toml/
+rm src/extension/manifest/aleph_plugin.rs
+rm src/extension/manifest/package_json.rs
+rm src/extension/manifest/auto_discover.rs
 ```
 
 Update `manifest/mod.rs` to remove their imports and fallback chain entries. Update `manifest/types.rs` to remove `use super::aleph_plugin_toml::*` imports. The old `auto_discover.rs` is replaced by `adapters/auto_discover.rs` (created in Task 5).
@@ -1032,10 +1032,10 @@ git commit -m "extension: remove deprecated manifest formats (aleph_plugin_toml,
 **IMPORTANT**: This step MUST be done after Task 11 (ExtensionManager simplification) is complete, since ExtensionManager currently uses ContentLoader. If executing tasks in order, this step should be done as part of Task 11 cleanup or after Task 11 commits.
 
 ```bash
-rm -rf core/src/extension/content_loader/
+rm -rf src/extension/content_loader/
 ```
 
-Remove `mod content_loader;` and `pub use content_loader::*;` from `core/src/extension/mod.rs`. Fix all compilation errors — callers of `ContentLoader` methods should now use `AdapterRegistry` or `parsers.rs` directly.
+Remove `mod content_loader;` and `pub use content_loader::*;` from `src/extension/mod.rs`. Fix all compilation errors — callers of `ContentLoader` methods should now use `AdapterRegistry` or `parsers.rs` directly.
 
 - [ ] **Step 8: Run `cargo check -p alephcore` and fix compilation errors**
 
@@ -1066,13 +1066,13 @@ git commit -m "extension: clean up runtime dispatcher (~812 lines removed)"
 ## Task 9: Rewrite `plugin_loader.rs` → `loader.rs`
 
 **Files:**
-- Rename: `core/src/extension/plugin_loader.rs` → `core/src/extension/loader.rs`
-- Modify: `core/src/extension/mod.rs` (update module declaration)
+- Rename: `src/extension/plugin_loader.rs` → `src/extension/loader.rs`
+- Modify: `src/extension/mod.rs` (update module declaration)
 
 - [ ] **Step 1: Rename and strip Node.js code**
 
 ```bash
-mv core/src/extension/plugin_loader.rs core/src/extension/loader.rs
+mv src/extension/plugin_loader.rs src/extension/loader.rs
 ```
 
 Remove all Node.js-related fields, methods, and imports from `loader.rs`. The file should only contain WASM and MCP loading logic (~400 lines).
@@ -1094,7 +1094,7 @@ git commit -m "extension: rename plugin_loader → loader, remove Node.js code (
 ## Task 10: Rewrite `manifest/mod.rs` as AdapterRegistry Entry
 
 **Files:**
-- Modify: `core/src/extension/manifest/mod.rs` (rewrite from 738 → ~100 lines)
+- Modify: `src/extension/manifest/mod.rs` (rewrite from 738 → ~100 lines)
 
 - [ ] **Step 1: Rewrite `manifest/mod.rs`**
 
@@ -1120,13 +1120,13 @@ git commit -m "extension: rewrite manifest/mod.rs as AdapterRegistry entry point
 ## Task 11: ExtensionManager Simplification
 
 **Files:**
-- Modify: `core/src/extension/mod.rs` (simplify ExtensionManager struct and load flow)
-- Modify: `core/src/extension/sync_api.rs` (delegate to PluginRegistry)
-- Modify: `core/src/extension/skill_ops.rs` (delegate to PluginRegistry)
+- Modify: `src/extension/mod.rs` (simplify ExtensionManager struct and load flow)
+- Modify: `src/extension/sync_api.rs` (delegate to PluginRegistry)
+- Modify: `src/extension/skill_ops.rs` (delegate to PluginRegistry)
 
 - [ ] **Step 0: Add `PluginRecord::from_adapter_output` constructor**
 
-Add to `core/src/extension/types/plugins.rs`:
+Add to `src/extension/types/plugins.rs`:
 
 ```rust
 impl PluginRecord {
@@ -1221,8 +1221,8 @@ git commit -m "extension: simplify ExtensionManager — skills/commands/agents m
 ## Task 12: Hot Reload RPC + Integration Test
 
 **Files:**
-- Modify: `core/src/extension/mod.rs` (add `reload_plugin` method)
-- Modify: `core/src/gateway/handlers/plugins/handlers.rs` (add `plugin.reload` RPC)
+- Modify: `src/extension/mod.rs` (add `reload_plugin` method)
+- Modify: `src/gateway/handlers/plugins/handlers.rs` (add `plugin.reload` RPC)
 
 - [ ] **Step 1: Add `reload_plugin` to ExtensionManager**
 
@@ -1253,7 +1253,7 @@ pub async fn reload_plugin(&self, plugin_id: &str) -> Result<()> {
 
 In `gateway/handlers/plugins/handlers.rs`, add a `handle_reload` function that calls `extension_manager.reload_plugin(id)`.
 
-Then in `core/src/gateway/handlers/mod.rs`, register the new handler alongside other `plugin.*` handlers:
+Then in `src/gateway/handlers/mod.rs`, register the new handler alongside other `plugin.*` handlers:
 ```rust
 registry.register("plugin.reload", handle_plugin_reload);
 ```
@@ -1286,16 +1286,16 @@ Fix any warnings.
 
 - [ ] **Step 3: Verify module structure matches spec**
 
-Run `find core/src/extension/ -name "*.rs" | sort` and compare against the spec's module tree.
+Run `find src/extension/ -name "*.rs" | sort` and compare against the spec's module tree.
 
 - [ ] **Step 4: Verify line count reduction**
 
-Run `find core/src/extension/ -name "*.rs" -exec wc -l {} + | tail -1`
+Run `find src/extension/ -name "*.rs" -exec wc -l {} + | tail -1`
 Expected: Total should be ~17,500-18,500 (down from ~22,300).
 
 - [ ] **Step 5: Update architecture doc comment in `mod.rs`**
 
-Update the ASCII art diagram at the top of `core/src/extension/mod.rs` to reflect the new architecture:
+Update the ASCII art diagram at the top of `src/extension/mod.rs` to reflect the new architecture:
 
 ```text
 //! ┌─────────────────────────────────────────────────────────────────────────┐

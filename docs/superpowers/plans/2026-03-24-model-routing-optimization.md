@@ -17,18 +17,18 @@
 ## Task 1: Delete Dead Dispatcher Modules
 
 **Files:**
-- Delete: `core/src/dispatcher/model_router/` (entire directory, ~22,712 lines)
-- Delete: `core/src/dispatcher/engine/` (entire directory, ~1,385 lines)
-- Delete: `core/src/dispatcher/scheduler/` (entire directory)
-- Delete: `core/src/dispatcher/planner/` (entire directory)
-- Delete: `core/src/dispatcher/executor/` (entire directory, ~2,822 lines)
-- Delete: `core/src/dispatcher/agent_types/` (entire directory)
-- Delete: `core/src/dispatcher/monitor/` (entire directory)
-- Delete: `core/src/dispatcher/callback.rs`
-- Delete: `core/src/dispatcher/analyzer.rs`
-- Delete: `core/src/dispatcher/context.rs` (file, not directory)
-- Retain: `core/src/dispatcher/tool_index/` (actively used by thinker/prompt_builder)
-- Modify: `core/src/dispatcher/mod.rs`
+- Delete: `src/dispatcher/model_router/` (entire directory, ~22,712 lines)
+- Delete: `src/dispatcher/engine/` (entire directory, ~1,385 lines)
+- Delete: `src/dispatcher/scheduler/` (entire directory)
+- Delete: `src/dispatcher/planner/` (entire directory)
+- Delete: `src/dispatcher/executor/` (entire directory, ~2,822 lines)
+- Delete: `src/dispatcher/agent_types/` (entire directory)
+- Delete: `src/dispatcher/monitor/` (entire directory)
+- Delete: `src/dispatcher/callback.rs`
+- Delete: `src/dispatcher/analyzer.rs`
+- Delete: `src/dispatcher/context.rs` (file, not directory)
+- Retain: `src/dispatcher/tool_index/` (actively used by thinker/prompt_builder)
+- Modify: `src/dispatcher/mod.rs`
 
 **Note:** `tool_index/` is RETAINED — it's actively used by `thinker/prompt_layer.rs`, `thinker/prompt_builder/`, `thinker/layers/tools.rs` for `HydrationResult` and `HydratedToolsLayer`.
 
@@ -36,19 +36,19 @@
 
 ```bash
 cd /Users/zouguojun/Workspace/Aleph
-rm -rf core/src/dispatcher/model_router
-rm -rf core/src/dispatcher/engine
-rm -rf core/src/dispatcher/scheduler
-rm -rf core/src/dispatcher/planner
-rm -rf core/src/dispatcher/executor
-rm -rf core/src/dispatcher/agent_types
-rm -rf core/src/dispatcher/monitor
-rm -f core/src/dispatcher/callback.rs
-rm -f core/src/dispatcher/analyzer.rs
-rm -f core/src/dispatcher/context.rs
+rm -rf src/dispatcher/model_router
+rm -rf src/dispatcher/engine
+rm -rf src/dispatcher/scheduler
+rm -rf src/dispatcher/planner
+rm -rf src/dispatcher/executor
+rm -rf src/dispatcher/agent_types
+rm -rf src/dispatcher/monitor
+rm -f src/dispatcher/callback.rs
+rm -f src/dispatcher/analyzer.rs
+rm -f src/dispatcher/context.rs
 ```
 
-- [ ] **Step 2: Rewrite `core/src/dispatcher/mod.rs`**
+- [ ] **Step 2: Rewrite `src/dispatcher/mod.rs`**
 
 Replace the entire file. Keep tool_index and risk, remove everything else:
 
@@ -143,7 +143,7 @@ Remove dead sub-module declarations and imports:
 - Delete: `pub use model_profile::ModelProfileConfigToml; pub use model_routing::ModelRoutingConfigToml;`
 - Delete: `use crate::dispatcher::model_router::{ModelProfile, ModelRoutingRules};`
 - Delete: `use crate::dispatcher::{DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_TASK_RETRIES, REQUIRE_CONFIRMATION};`
-- Delete files: `core/src/config/types/agent/ab_testing.rs`, `ensemble.rs`, `health.rs`, `metrics.rs`, `model_profile.rs`, `model_routing.rs`, `prompt_analysis.rs`, `semantic_cache.rs`
+- Delete files: `src/config/types/agent/ab_testing.rs`, `ensemble.rs`, `health.rs`, `metrics.rs`, `model_profile.rs`, `model_routing.rs`, `prompt_analysis.rs`, `semantic_cache.rs`
 
 - [ ] **Step 5: Fix `config/types/dispatcher/mod.rs`**
 
@@ -151,7 +151,7 @@ Remove dead sub-modules:
 - Remove: `mod backoff; mod budget; mod retry;`
 - Remove: `pub use budget::*; pub use retry::*;`
 - Keep: `mod core; pub use core::*;`
-- Delete files: `core/src/config/types/dispatcher/backoff.rs`, `budget.rs`, `retry.rs`
+- Delete files: `src/config/types/dispatcher/backoff.rs`, `budget.rs`, `retry.rs`
 - Remove tests that reference deleted types
 
 - [ ] **Step 6: Fix `config/types/routing.rs`**
@@ -163,7 +163,7 @@ Remove `TaskIntent` dependency. This file is used by `gateway/handlers/routing_r
 
 - [ ] **Step 7: Fix `lib.rs` re-exports**
 
-Remove re-exports of deleted types from `core/src/lib.rs`. Search for lines re-exporting types from `dispatcher::engine`, `dispatcher::model_router`, `dispatcher::agent_types`, `dispatcher::callback`, `dispatcher::executor`, `dispatcher::planner`, `dispatcher::scheduler`, `dispatcher::monitor`, `dispatcher::analyzer`, `dispatcher::context`. Remove those lines.
+Remove re-exports of deleted types from `src/lib.rs`. Search for lines re-exporting types from `dispatcher::engine`, `dispatcher::model_router`, `dispatcher::agent_types`, `dispatcher::callback`, `dispatcher::executor`, `dispatcher::planner`, `dispatcher::scheduler`, `dispatcher::monitor`, `dispatcher::analyzer`, `dispatcher::context`. Remove those lines.
 
 Keep the `tool_index` re-exports (they're still valid).
 
@@ -181,7 +181,7 @@ Expected: All tests pass (minus pre-existing `markdown_skill::loader` failures)
 - [ ] **Step 10: Commit**
 
 ```bash
-git add -A core/src/dispatcher/ core/src/config/types/ core/src/lib.rs
+git add -A src/dispatcher/ src/config/types/ src/lib.rs
 git commit -m "refactor: delete ~30K lines of dead dispatcher code
 
 Remove model_router/, engine/, scheduler/, planner/, executor/,
@@ -197,7 +197,7 @@ tool_index (used by prompt builder), loom tests."
 ## Task 2: Add `is_transient()` to AlephError
 
 **Files:**
-- Modify: `core/src/error.rs`
+- Modify: `src/error.rs`
 
 - [ ] **Step 1: Add `is_transient` method**
 
@@ -256,7 +256,7 @@ Expected: 2 tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/error.rs
+git add src/error.rs
 git commit -m "feat: add is_transient() to AlephError for provider fallback"
 ```
 
@@ -265,7 +265,7 @@ git commit -m "feat: add is_transient() to AlephError for provider fallback"
 ## Task 3: Add ToolChoice to RequestPayload
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs`
+- Modify: `src/providers/adapter.rs`
 
 - [ ] **Step 1: Add ToolChoice enum**
 
@@ -355,7 +355,7 @@ Expected: Clean compile, 2 tests pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/adapter.rs
+git add src/providers/adapter.rs
 git commit -m "feat: add ToolChoice enum and protocol capabilities to adapter"
 ```
 
@@ -364,7 +364,7 @@ git commit -m "feat: add ToolChoice enum and protocol capabilities to adapter"
 ## Task 4: Wire ToolChoice into OpenAI Protocol
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai.rs`
+- Modify: `src/providers/protocols/openai.rs`
 
 - [ ] **Step 1: Add tool_choice serialization**
 
@@ -415,7 +415,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/providers/protocols/openai.rs
+git add src/providers/protocols/openai.rs
 git commit -m "feat: add tool_choice support and fix argument parsing in OpenAI protocol"
 ```
 
@@ -424,7 +424,7 @@ git commit -m "feat: add tool_choice support and fix argument parsing in OpenAI 
 ## Task 5: Wire ToolChoice into Anthropic Protocol
 
 **Files:**
-- Modify: `core/src/providers/protocols/anthropic.rs`
+- Modify: `src/providers/protocols/anthropic.rs`
 
 - [ ] **Step 1: Add tool_choice serialization**
 
@@ -456,7 +456,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/anthropic.rs
+git add src/providers/protocols/anthropic.rs
 git commit -m "feat: add tool_choice support in Anthropic protocol"
 ```
 
@@ -465,7 +465,7 @@ git commit -m "feat: add tool_choice support in Anthropic protocol"
 ## Task 6: Wire ToolChoice into Gemini Protocol + Fix Tool Call IDs
 
 **Files:**
-- Modify: `core/src/providers/protocols/gemini.rs`
+- Modify: `src/providers/protocols/gemini.rs`
 
 - [ ] **Step 1: Add tool_choice serialization**
 
@@ -527,7 +527,7 @@ Run: `cargo check -p alephcore && cargo test -p alephcore --lib gemini`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/providers/protocols/gemini.rs
+git add src/providers/protocols/gemini.rs
 git commit -m "feat: add tool_choice support and hash-based IDs in Gemini protocol"
 ```
 
@@ -536,7 +536,7 @@ git commit -m "feat: add tool_choice support and hash-based IDs in Gemini protoc
 ## Task 7: Wire ToolChoice into Codex Protocol
 
 **Files:**
-- Modify: `core/src/providers/protocols/codex.rs`
+- Modify: `src/providers/protocols/codex.rs`
 
 - [ ] **Step 1: Replace hardcoded tool_choice**
 
@@ -563,7 +563,7 @@ Run: `cargo check -p alephcore`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/codex.rs
+git add src/providers/protocols/codex.rs
 git commit -m "feat: add tool_choice support in Codex protocol"
 ```
 
@@ -572,20 +572,20 @@ git commit -m "feat: add tool_choice support in Codex protocol"
 ## Task 8: Build MultiProviderRegistry
 
 **Files:**
-- Modify: `core/src/thinker/mod.rs`
-- Modify: `core/src/providers/presets.rs` (add `resolve_provider_from_model`)
-- Modify: `core/src/providers/mod.rs` (re-export the function)
+- Modify: `src/thinker/mod.rs`
+- Modify: `src/providers/presets.rs` (add `resolve_provider_from_model`)
+- Modify: `src/providers/mod.rs` (re-export the function)
 
 - [ ] **Step 1: Add `list_providers` to ProviderRegistry trait**
 
-In `core/src/thinker/mod.rs`, add to the `ProviderRegistry` trait (after line 72):
+In `src/thinker/mod.rs`, add to the `ProviderRegistry` trait (after line 72):
 
 ```rust
     /// List all registered provider names
     fn list_providers(&self) -> Vec<String> { vec![] }
 ```
 
-- [ ] **Step 2: Add `resolve_provider_from_model` to `core/src/providers/presets.rs`**
+- [ ] **Step 2: Add `resolve_provider_from_model` to `src/providers/presets.rs`**
 
 At the end of the file (before any `#[cfg(test)]` block), add:
 
@@ -608,7 +608,7 @@ pub fn resolve_provider_from_model(model: &str) -> Option<String> {
 }
 ```
 
-- [ ] **Step 3: Re-export from `core/src/providers/mod.rs`**
+- [ ] **Step 3: Re-export from `src/providers/mod.rs`**
 
 Add to the existing re-exports:
 
@@ -616,7 +616,7 @@ Add to the existing re-exports:
 pub use presets::resolve_provider_from_model;
 ```
 
-- [ ] **Step 4: Add MultiProviderRegistry to `core/src/thinker/mod.rs`**
+- [ ] **Step 4: Add MultiProviderRegistry to `src/thinker/mod.rs`**
 
 After the existing `SwappableProviderRegistry` tests (end of file), add:
 
@@ -814,7 +814,7 @@ Expected: 9 tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/thinker/mod.rs core/src/providers/presets.rs core/src/providers/mod.rs
+git add src/thinker/mod.rs src/providers/presets.rs src/providers/mod.rs
 git commit -m "feat: add MultiProviderRegistry with model-key routing"
 ```
 
@@ -823,10 +823,10 @@ git commit -m "feat: add MultiProviderRegistry with model-key routing"
 ## Task 9: Build Fallback Module
 
 **Files:**
-- Create: `core/src/thinker/fallback.rs`
-- Modify: `core/src/thinker/mod.rs` (add `pub mod fallback;`)
+- Create: `src/thinker/fallback.rs`
+- Modify: `src/thinker/mod.rs` (add `pub mod fallback;`)
 
-- [ ] **Step 1: Create `core/src/thinker/fallback.rs`**
+- [ ] **Step 1: Create `src/thinker/fallback.rs`**
 
 ```rust
 //! Provider fallback: try primary, fall back on transient errors.
@@ -981,7 +981,7 @@ mod tests {
 
 - [ ] **Step 2: Register the module**
 
-In `core/src/thinker/mod.rs`, add after existing module declarations:
+In `src/thinker/mod.rs`, add after existing module declarations:
 
 ```rust
 pub mod fallback;
@@ -995,7 +995,7 @@ Expected: 4 tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/thinker/fallback.rs core/src/thinker/mod.rs
+git add src/thinker/fallback.rs src/thinker/mod.rs
 git commit -m "feat: add provider fallback module with transient error retry"
 ```
 
@@ -1021,7 +1021,7 @@ Fix any warnings.
 - [ ] **Step 4: Verify deletion stats**
 
 ```bash
-git diff --stat HEAD~10 -- core/src/dispatcher/ core/src/config/types/ | tail -5
+git diff --stat HEAD~10 -- src/dispatcher/ src/config/types/ | tail -5
 ```
 
 Expected: Large net deletion (~30K lines removed)

@@ -25,7 +25,7 @@ Current provider/model system has three gaps:
 
 ## Data Structures
 
-### ProviderHealth (new — `core/src/providers/health.rs`)
+### ProviderHealth (new — `src/providers/health.rs`)
 
 ```rust
 pub enum ProviderHealth {
@@ -48,7 +48,7 @@ impl ProviderHealth {
 }
 ```
 
-### ProviderError (new — `core/src/providers/health.rs`)
+### ProviderError (new — `src/providers/health.rs`)
 
 ```rust
 pub enum ProviderError {
@@ -277,25 +277,25 @@ Normal responses show nothing extra.
 ## Files Changed
 
 ### New files
-- `core/src/providers/health.rs` — ProviderHealth + ProviderError enums + state machine logic
-- `core/src/providers/health_test.rs` — health state transitions + cooldown tests
-- `core/src/providers/registry_test.rs` — resolve_with_fallback chain tests
+- `src/providers/health.rs` — ProviderHealth + ProviderError enums + state machine logic
+- `src/providers/health_test.rs` — health state transitions + cooldown tests
+- `src/providers/registry_test.rs` — resolve_with_fallback chain tests
 
 ### Removed files
-- `core/src/thinker/fallback.rs` — replaced by resolve_with_fallback() + report_outcome() in registry
+- `src/thinker/fallback.rs` — replaced by resolve_with_fallback() + report_outcome() in registry
 
 ### Modified files
-- `core/src/providers/mod.rs` — re-export health module
-- `core/src/providers/registry.rs` — MultiProviderRegistry + health HashMap + resolve_with_fallback() + report_outcome()
-- `core/src/providers/types.rs` — RequestPayload adds model field + ResolvedModel + ModelInfo structs
-- `core/src/providers/protocols/openai.rs` — payload.model > config.models[0]
-- `core/src/providers/protocols/anthropic.rs` — same
-- `core/src/providers/protocols/gemini.rs` — URL path model from payload
-- `core/src/providers/protocols/responses.rs` — same as openai
-- `core/src/providers/http_provider.rs` — HTTP error → ProviderError classification
-- `core/src/thinker/run_loop.rs` — resolve_with_fallback + report_outcome
-- `core/src/thinker/mod.rs` — ProviderRegistry trait new method signatures
-- `core/src/thinker/stream_types.rs` — stream event includes ModelInfo
+- `src/providers/mod.rs` — re-export health module
+- `src/providers/registry.rs` — MultiProviderRegistry + health HashMap + resolve_with_fallback() + report_outcome()
+- `src/providers/types.rs` — RequestPayload adds model field + ResolvedModel + ModelInfo structs
+- `src/providers/protocols/openai.rs` — payload.model > config.models[0]
+- `src/providers/protocols/anthropic.rs` — same
+- `src/providers/protocols/gemini.rs` — URL path model from payload
+- `src/providers/protocols/responses.rs` — same as openai
+- `src/providers/http_provider.rs` — HTTP error → ProviderError classification
+- `src/thinker/run_loop.rs` — resolve_with_fallback + report_outcome
+- `src/thinker/mod.rs` — ProviderRegistry trait new method signatures
+- `src/thinker/stream_types.rs` — stream event includes ModelInfo
 - `interfaces/webchat/src/views/chat/` — parse ModelInfo, fallback indicator
 
 ## Out of Scope

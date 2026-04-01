@@ -167,7 +167,7 @@ must be stored via this tool, never written directly to config files.
 ## Hot Reload
 
 Reuses existing infrastructure:
-- `core/src/gateway/hot_reload.rs` — fswatch on `config.toml`, 500ms debounce, auto-reload to memory
+- `src/gateway/hot_reload.rs` — fswatch on `config.toml`, 500ms debounce, auto-reload to memory
 - If TOML parse fails on reload → reload rejected, in-memory config preserved, user restores from `.bak`
 - MCP config changes → LLM calls `mcp_manage` to trigger process restart
 - Vault changes → immediate (in-memory `SharedTokenManager`)

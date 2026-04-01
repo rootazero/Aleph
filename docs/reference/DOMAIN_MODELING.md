@@ -168,10 +168,10 @@ impl ValueObject for MyValue {}
 
 ### 步骤 3：添加 BDD 测试
 
-在 `core/tests/features/domain/` 或 `core/tests/specs/` 中添加行为规范：
+在 `tests/features/domain/` 或 `tests/specs/` 中添加行为规范：
 
 ```yaml
-# core/tests/specs/my_context/my_aggregate.spec.yaml
+# tests/specs/my_context/my_aggregate.spec.yaml
 scenarios:
   - name: "MyAggregate maintains identity"
     given:
@@ -188,11 +188,11 @@ scenarios:
 
 领域模型与 BDD 测试紧密集成：
 
-1. **Gherkin 测试** (`core/tests/features/domain/`)
+1. **Gherkin 测试** (`tests/features/domain/`)
    - 验证领域行为的确定性逻辑
    - 使用 cucumber-rs 运行
 
-2. **YAML Spec 测试** (`core/tests/specs/`)
+2. **YAML Spec 测试** (`tests/specs/`)
    - 验证 AI 相关的语义行为
    - 使用 LlmJudge 进行评估
 

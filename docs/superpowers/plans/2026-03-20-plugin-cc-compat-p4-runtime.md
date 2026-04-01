@@ -6,7 +6,7 @@
 
 **Architecture:** PluginLoader gains an MCP integration path: when loading an MCP-type plugin, it reads `.mcp.json` from the plugin directory and registers the servers with `McpManagerHandle`. Tool calls for MCP plugins route through `mcp.callTool` instead of custom IPC. The Node.js IPC runtime (`NodeJsRuntime`, `NodeProcess`, `plugin-host.js`) is deprecated and eventually removed.
 
-**Key insight:** Aleph already has a full MCP client at `core/src/mcp/` with transport abstraction, tool discovery, and lifecycle management. We reuse it entirely.
+**Key insight:** Aleph already has a full MCP client at `src/mcp/` with transport abstraction, tool discovery, and lifecycle management. We reuse it entirely.
 
 **Tech Stack:** Existing MCP system, existing PluginLoader, serde_json
 
@@ -17,24 +17,24 @@
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/extension/plugin_loader.rs` | Add MCP loading path for `runtime=mcp` plugins |
-| `core/src/extension/plugin_ops.rs` | Route MCP plugin tool calls through MCP client |
-| `core/src/extension/mod.rs` | Provide MCP handle to PluginLoader |
+| `src/extension/plugin_loader.rs` | Add MCP loading path for `runtime=mcp` plugins |
+| `src/extension/plugin_ops.rs` | Route MCP plugin tool calls through MCP client |
+| `src/extension/mod.rs` | Provide MCP handle to PluginLoader |
 
 ### Eventually Deprecated (P5)
 | File | Status |
 |------|--------|
-| `core/src/extension/runtime/nodejs/mod.rs` | Deprecated (keep for transition) |
-| `core/src/extension/runtime/nodejs/process.rs` | Deprecated |
-| `core/src/extension/runtime/nodejs/ipc.rs` | Deprecated |
-| `core/src/extension/runtime/nodejs/plugin-host.js` | Deprecated |
+| `src/extension/runtime/nodejs/mod.rs` | Deprecated (keep for transition) |
+| `src/extension/runtime/nodejs/process.rs` | Deprecated |
+| `src/extension/runtime/nodejs/ipc.rs` | Deprecated |
+| `src/extension/runtime/nodejs/plugin-host.js` | Deprecated |
 
 ---
 
 ## Task 1: Read .mcp.json from plugin directory
 
 **Files:**
-- Create or add to: `core/src/extension/manifest/` or `core/src/extension/marketplace/`
+- Create or add to: `src/extension/manifest/` or `src/extension/marketplace/`
 
 - [ ] **Step 1: Add .mcp.json parser**
 
@@ -77,7 +77,7 @@ Also handle `${CLAUDE_PLUGIN_ROOT}` and `${ALEPH_PLUGIN_ROOT}` variable substitu
 ## Task 2: PluginLoader MCP integration
 
 **Files:**
-- Modify: `core/src/extension/plugin_loader.rs`
+- Modify: `src/extension/plugin_loader.rs`
 
 - [ ] **Step 1: Add MCP loading path**
 
@@ -141,8 +141,8 @@ When unloading an MCP plugin, stop its MCP servers.
 ## Task 3: Route plugin tool calls through MCP
 
 **Files:**
-- Modify: `core/src/extension/plugin_ops.rs`
-- Possibly modify: `core/src/gateway/handlers/plugins/handlers.rs`
+- Modify: `src/extension/plugin_ops.rs`
+- Possibly modify: `src/gateway/handlers/plugins/handlers.rs`
 
 - [ ] **Step 1: Update call_plugin_tool**
 
@@ -241,4 +241,4 @@ cargo clippy -p alephcore -- -W clippy::all
 - **Implement `${CLAUDE_PLUGIN_DATA}` / `${ALEPH_PLUGIN_DATA}`** — data directory creation (minor, can add later)
 
 ### Complexity assessment:
-Task 2 (PluginLoader MCP integration) is the most complex — it requires understanding the MCP manager's API for starting servers. The implementer should read `core/src/mcp/manager/handle.rs` and `core/src/mcp/external/` to understand how external MCP servers are started.
+Task 2 (PluginLoader MCP integration) is the most complex — it requires understanding the MCP manager's API for starting servers. The implementer should read `src/mcp/manager/handle.rs` and `src/mcp/external/` to understand how external MCP servers are started.

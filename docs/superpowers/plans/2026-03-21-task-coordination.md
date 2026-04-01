@@ -4,7 +4,7 @@
 
 **Goal:** Add task DAG coordination, team management, and leader-worker prompt templates to Aleph's swarm module.
 
-**Architecture:** Extend `core/src/agents/swarm/` with a `tasks/` submodule containing data models, SQLite store, DAG queries, and template parser. Expose 8 new builtin tools (`task_create/update/list/wait`, `team_create/launch/list/disband`). Integrate with Event Bus for unlock notifications and Context Injector for prompt injection.
+**Architecture:** Extend `src/agents/swarm/` with a `tasks/` submodule containing data models, SQLite store, DAG queries, and template parser. Expose 8 new builtin tools (`task_create/update/list/wait`, `team_create/launch/list/disband`). Integrate with Event Bus for unlock notifications and Context Injector for prompt injection.
 
 **Tech Stack:** Rust, SQLite (rusqlite), tokio (select! for task_wait), serde/serde_json, schemars (JSON Schema for tool args)
 
@@ -18,48 +18,48 @@
 
 | File | Responsibility |
 |------|----------------|
-| `core/src/agents/swarm/tasks/mod.rs` | Data models (`CoordTask`, `CoordTaskStatus`, `Team`, etc.), `CoordTaskStore` trait, type aliases |
-| `core/src/agents/swarm/tasks/store.rs` | `SqliteCoordTaskStore` — all SQLite CRUD, migration, derived Blocked status |
-| `core/src/agents/swarm/tasks/dag.rs` | Cycle detection BFS, `get_newly_unblocked` query helper |
-| `core/src/agents/swarm/tasks/template.rs` | Template parser (Markdown + YAML frontmatter), variable substitution, key→TaskId resolution |
-| `core/src/builtin_tools/task_manage/mod.rs` | Module exports for task tools |
-| `core/src/builtin_tools/task_manage/create.rs` | `TaskCreateTool` |
-| `core/src/builtin_tools/task_manage/update.rs` | `TaskUpdateTool` (triggers DAG unlock + Event Bus) |
-| `core/src/builtin_tools/task_manage/list.rs` | `TaskListTool` |
-| `core/src/builtin_tools/task_manage/wait.rs` | `TaskWaitTool` (select! on Event Bus + timeout) |
-| `core/src/builtin_tools/team_manage/mod.rs` | Module exports for team tools |
-| `core/src/builtin_tools/team_manage/create.rs` | `TeamCreateTool` |
-| `core/src/builtin_tools/team_manage/launch.rs` | `TeamLaunchTool` (template → agents + tasks, rollback) |
-| `core/src/builtin_tools/team_manage/list.rs` | `TeamListTool` |
-| `core/src/builtin_tools/team_manage/disband.rs` | `TeamDisbandTool` |
+| `src/agents/swarm/tasks/mod.rs` | Data models (`CoordTask`, `CoordTaskStatus`, `Team`, etc.), `CoordTaskStore` trait, type aliases |
+| `src/agents/swarm/tasks/store.rs` | `SqliteCoordTaskStore` — all SQLite CRUD, migration, derived Blocked status |
+| `src/agents/swarm/tasks/dag.rs` | Cycle detection BFS, `get_newly_unblocked` query helper |
+| `src/agents/swarm/tasks/template.rs` | Template parser (Markdown + YAML frontmatter), variable substitution, key→TaskId resolution |
+| `src/builtin_tools/task_manage/mod.rs` | Module exports for task tools |
+| `src/builtin_tools/task_manage/create.rs` | `TaskCreateTool` |
+| `src/builtin_tools/task_manage/update.rs` | `TaskUpdateTool` (triggers DAG unlock + Event Bus) |
+| `src/builtin_tools/task_manage/list.rs` | `TaskListTool` |
+| `src/builtin_tools/task_manage/wait.rs` | `TaskWaitTool` (select! on Event Bus + timeout) |
+| `src/builtin_tools/team_manage/mod.rs` | Module exports for team tools |
+| `src/builtin_tools/team_manage/create.rs` | `TeamCreateTool` |
+| `src/builtin_tools/team_manage/launch.rs` | `TeamLaunchTool` (template → agents + tasks, rollback) |
+| `src/builtin_tools/team_manage/list.rs` | `TeamListTool` |
+| `src/builtin_tools/team_manage/disband.rs` | `TeamDisbandTool` |
 
 ### Modified files
 
 | File | Changes |
 |------|---------|
-| `core/src/agents/swarm/mod.rs` | Add `pub mod tasks;` |
-| `core/src/agents/swarm/events.rs` | +4 `ImportantEvent` variants |
-| `core/src/agents/swarm/coordinator.rs` | Add `CoordTaskStore` to `SwarmCoordinator`, pass to `ContextInjector` |
-| `core/src/agents/swarm/context_injector.rs` | Add `Option<Arc<dyn CoordTaskStore>>` field, `inject_task_context()` method |
-| `core/src/builtin_tools/mod.rs` | Add `pub mod task_manage; pub mod team_manage;` |
-| `core/src/executor/builtin_registry/config.rs` | Add `coord_task_store: Option<Arc<dyn CoordTaskStore>>` to `BuiltinToolConfig` |
-| `core/src/executor/builtin_registry/definitions.rs` | +8 entries in `BUILTIN_TOOL_DEFINITIONS`, +8 arms in `create_tool_boxed` |
-| `core/src/executor/builtin_registry/groups.rs` | +1 `ToolGroup` entry for `task_coordination` |
-| `core/src/executor/builtin_registry/builder.rs` | Instantiate 8 tools from config, register metadata |
-| `core/src/executor/builtin_registry/registry.rs` | +8 fields, +8 `execute_tool` match arms |
+| `src/agents/swarm/mod.rs` | Add `pub mod tasks;` |
+| `src/agents/swarm/events.rs` | +4 `ImportantEvent` variants |
+| `src/agents/swarm/coordinator.rs` | Add `CoordTaskStore` to `SwarmCoordinator`, pass to `ContextInjector` |
+| `src/agents/swarm/context_injector.rs` | Add `Option<Arc<dyn CoordTaskStore>>` field, `inject_task_context()` method |
+| `src/builtin_tools/mod.rs` | Add `pub mod task_manage; pub mod team_manage;` |
+| `src/executor/builtin_registry/config.rs` | Add `coord_task_store: Option<Arc<dyn CoordTaskStore>>` to `BuiltinToolConfig` |
+| `src/executor/builtin_registry/definitions.rs` | +8 entries in `BUILTIN_TOOL_DEFINITIONS`, +8 arms in `create_tool_boxed` |
+| `src/executor/builtin_registry/groups.rs` | +1 `ToolGroup` entry for `task_coordination` |
+| `src/executor/builtin_registry/builder.rs` | Instantiate 8 tools from config, register metadata |
+| `src/executor/builtin_registry/registry.rs` | +8 fields, +8 `execute_tool` match arms |
 
 ---
 
 ## Task 1: Data Models + CoordTaskStore Trait
 
 **Files:**
-- Create: `core/src/agents/swarm/tasks/mod.rs`
-- Modify: `core/src/agents/swarm/mod.rs`
+- Create: `src/agents/swarm/tasks/mod.rs`
+- Modify: `src/agents/swarm/mod.rs`
 
 - [ ] **Step 1: Create `tasks/mod.rs` with all data types**
 
 ```rust
-// core/src/agents/swarm/tasks/mod.rs
+// src/agents/swarm/tasks/mod.rs
 pub mod dag;
 pub mod store;
 pub mod template;
@@ -285,14 +285,14 @@ pub trait CoordTaskStore: Send + Sync {
 
 - [ ] **Step 2: Add `pub mod tasks;` to swarm/mod.rs**
 
-Add `pub mod tasks;` to `core/src/agents/swarm/mod.rs`.
+Add `pub mod tasks;` to `src/agents/swarm/mod.rs`.
 
 - [ ] **Step 3: Create stub files for store, dag, template**
 
 Create empty stub files so the module compiles:
-- `core/src/agents/swarm/tasks/store.rs` — `// TODO: SqliteCoordTaskStore`
-- `core/src/agents/swarm/tasks/dag.rs` — `// TODO: cycle detection`
-- `core/src/agents/swarm/tasks/template.rs` — `// TODO: template parser`
+- `src/agents/swarm/tasks/store.rs` — `// TODO: SqliteCoordTaskStore`
+- `src/agents/swarm/tasks/dag.rs` — `// TODO: cycle detection`
+- `src/agents/swarm/tasks/template.rs` — `// TODO: template parser`
 
 - [ ] **Step 4: Verify compilation**
 
@@ -302,7 +302,7 @@ Expected: Compiles (or only pre-existing warnings)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/agents/swarm/tasks/ core/src/agents/swarm/mod.rs
+git add src/agents/swarm/tasks/ src/agents/swarm/mod.rs
 git commit -m "swarm: add CoordTask data models and CoordTaskStore trait"
 ```
 
@@ -311,12 +311,12 @@ git commit -m "swarm: add CoordTask data models and CoordTaskStore trait"
 ## Task 2: SQLite Store Implementation
 
 **Files:**
-- Create: `core/src/agents/swarm/tasks/store.rs`
+- Create: `src/agents/swarm/tasks/store.rs`
 
 - [ ] **Step 1: Implement `SqliteCoordTaskStore` with migration**
 
 ```rust
-// core/src/agents/swarm/tasks/store.rs
+// src/agents/swarm/tasks/store.rs
 use std::sync::Arc;
 use rusqlite::Connection;
 use tokio::sync::Mutex;
@@ -442,7 +442,7 @@ Expected: All pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/agents/swarm/tasks/store.rs
+git add src/agents/swarm/tasks/store.rs
 git commit -m "swarm: implement SqliteCoordTaskStore with derived Blocked status"
 ```
 
@@ -451,12 +451,12 @@ git commit -m "swarm: implement SqliteCoordTaskStore with derived Blocked status
 ## Task 3: DAG Cycle Detection
 
 **Files:**
-- Create: `core/src/agents/swarm/tasks/dag.rs`
+- Create: `src/agents/swarm/tasks/dag.rs`
 
 - [ ] **Step 1: Implement BFS cycle detection**
 
 ```rust
-// core/src/agents/swarm/tasks/dag.rs
+// src/agents/swarm/tasks/dag.rs
 use std::collections::{HashSet, VecDeque};
 use super::CoordTaskStore;
 use crate::error::AlephError;
@@ -529,7 +529,7 @@ In `store.rs`, call `dag::check_no_cycle(self, &new_id, &task.blocked_by).await?
 
 ```bash
 cargo test -p alephcore --lib swarm::tasks 2>&1 | tail -20
-git add core/src/agents/swarm/tasks/dag.rs core/src/agents/swarm/tasks/store.rs
+git add src/agents/swarm/tasks/dag.rs src/agents/swarm/tasks/store.rs
 git commit -m "swarm: add DAG cycle detection for task dependencies"
 ```
 
@@ -538,7 +538,7 @@ git commit -m "swarm: add DAG cycle detection for task dependencies"
 ## Task 4: Event Bus Integration
 
 **Files:**
-- Modify: `core/src/agents/swarm/events.rs`
+- Modify: `src/agents/swarm/events.rs`
 
 - [ ] **Step 1: Add 4 new ImportantEvent variants**
 
@@ -575,7 +575,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30` — fix any match exhaustiveness
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/agents/swarm/events.rs core/src/agents/swarm/context_injector.rs core/src/agents/swarm/rules.rs
+git add src/agents/swarm/events.rs src/agents/swarm/context_injector.rs src/agents/swarm/rules.rs
 git commit -m "swarm: add task coordination events to ImportantEvent"
 ```
 
@@ -584,7 +584,7 @@ git commit -m "swarm: add task coordination events to ImportantEvent"
 ## Task 5: Template Parser
 
 **Files:**
-- Create: `core/src/agents/swarm/tasks/template.rs`
+- Create: `src/agents/swarm/tasks/template.rs`
 
 - [ ] **Step 1: Define template data structures**
 
@@ -666,7 +666,7 @@ pub fn find_template(name: &str) -> Result<String> {
 
 ```bash
 cargo test -p alephcore --lib swarm::tasks::template 2>&1 | tail -20
-git add core/src/agents/swarm/tasks/template.rs
+git add src/agents/swarm/tasks/template.rs
 git commit -m "swarm: add team template parser with key-based dependency resolution"
 ```
 
@@ -675,12 +675,12 @@ git commit -m "swarm: add team template parser with key-based dependency resolut
 ## Task 6: Task Builtin Tools (task_create, task_update, task_list, task_wait)
 
 **Files:**
-- Create: `core/src/builtin_tools/task_manage/mod.rs`
-- Create: `core/src/builtin_tools/task_manage/create.rs`
-- Create: `core/src/builtin_tools/task_manage/update.rs`
-- Create: `core/src/builtin_tools/task_manage/list.rs`
-- Create: `core/src/builtin_tools/task_manage/wait.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/task_manage/mod.rs`
+- Create: `src/builtin_tools/task_manage/create.rs`
+- Create: `src/builtin_tools/task_manage/update.rs`
+- Create: `src/builtin_tools/task_manage/list.rs`
+- Create: `src/builtin_tools/task_manage/wait.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Create `task_manage/mod.rs`**
 
@@ -696,7 +696,7 @@ pub use list::TaskListTool;
 pub use wait::TaskWaitTool;
 ```
 
-Add `pub mod task_manage;` to `core/src/builtin_tools/mod.rs`.
+Add `pub mod task_manage;` to `src/builtin_tools/mod.rs`.
 
 - [ ] **Step 2: Implement `TaskCreateTool`**
 
@@ -736,7 +736,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/builtin_tools/task_manage/ core/src/builtin_tools/mod.rs
+git add src/builtin_tools/task_manage/ src/builtin_tools/mod.rs
 git commit -m "tools: add task_create, task_update, task_list, task_wait builtin tools"
 ```
 
@@ -745,12 +745,12 @@ git commit -m "tools: add task_create, task_update, task_list, task_wait builtin
 ## Task 7: Team Builtin Tools (team_create, team_launch, team_list, team_disband)
 
 **Files:**
-- Create: `core/src/builtin_tools/team_manage/mod.rs`
-- Create: `core/src/builtin_tools/team_manage/create.rs`
-- Create: `core/src/builtin_tools/team_manage/launch.rs`
-- Create: `core/src/builtin_tools/team_manage/list.rs`
-- Create: `core/src/builtin_tools/team_manage/disband.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/team_manage/mod.rs`
+- Create: `src/builtin_tools/team_manage/create.rs`
+- Create: `src/builtin_tools/team_manage/launch.rs`
+- Create: `src/builtin_tools/team_manage/list.rs`
+- Create: `src/builtin_tools/team_manage/disband.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Create `team_manage/mod.rs`**
 
@@ -766,7 +766,7 @@ pub use list::TeamListTool;
 pub use disband::TeamDisbandTool;
 ```
 
-Add `pub mod team_manage;` to `core/src/builtin_tools/mod.rs`.
+Add `pub mod team_manage;` to `src/builtin_tools/mod.rs`.
 
 - [ ] **Step 2: Implement `TeamCreateTool`**
 
@@ -814,7 +814,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/builtin_tools/team_manage/ core/src/builtin_tools/mod.rs
+git add src/builtin_tools/team_manage/ src/builtin_tools/mod.rs
 git commit -m "tools: add team_create, team_launch, team_list, team_disband builtin tools"
 ```
 
@@ -823,11 +823,11 @@ git commit -m "tools: add team_create, team_launch, team_list, team_disband buil
 ## Task 8: Registry Integration
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/config.rs`
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
-- Modify: `core/src/executor/builtin_registry/groups.rs`
-- Modify: `core/src/executor/builtin_registry/builder.rs`
-- Modify: `core/src/executor/builtin_registry/registry.rs`
+- Modify: `src/executor/builtin_registry/config.rs`
+- Modify: `src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
+- Modify: `src/executor/builtin_registry/registry.rs`
 
 - [ ] **Step 1: Add `coord_task_store` to `BuiltinToolConfig`**
 
@@ -888,7 +888,7 @@ Expected: All pass including `test_all_builtin_tools_have_a_group`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/
+git add src/executor/builtin_registry/
 git commit -m "registry: wire 8 task coordination tools into builtin registry"
 ```
 
@@ -897,8 +897,8 @@ git commit -m "registry: wire 8 task coordination tools into builtin registry"
 ## Task 9: Context Injector Integration
 
 **Files:**
-- Modify: `core/src/agents/swarm/context_injector.rs`
-- Modify: `core/src/agents/swarm/coordinator.rs`
+- Modify: `src/agents/swarm/context_injector.rs`
+- Modify: `src/agents/swarm/coordinator.rs`
 
 - [ ] **Step 1: Add `CoordTaskStore` to `ContextInjector`**
 
@@ -975,7 +975,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/agents/swarm/context_injector.rs core/src/agents/swarm/coordinator.rs
+git add src/agents/swarm/context_injector.rs src/agents/swarm/coordinator.rs
 git commit -m "swarm: inject task coordination context into agent prompts"
 ```
 
@@ -984,7 +984,7 @@ git commit -m "swarm: inject task coordination context into agent prompts"
 ## Task 10: Server Startup Wiring
 
 **Files:**
-- Modify: `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` (or wherever SwarmCoordinator is initialized)
+- Modify: `src/bin/aleph-server/commands/start/builder/subsystems.rs` (or wherever SwarmCoordinator is initialized)
 
 - [ ] **Step 1: Find where SwarmCoordinator is created at startup**
 
@@ -1007,7 +1007,7 @@ Expected: Server starts without errors.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/bin/aleph-server/
+git add src/bin/aleph-server/
 git commit -m "server: wire SqliteCoordTaskStore into startup"
 ```
 

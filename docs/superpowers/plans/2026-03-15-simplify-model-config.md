@@ -17,12 +17,12 @@
 ### Task 1: Shared serde helper for models deserialization
 
 **Files:**
-- Create: `core/src/config/types/serde_helpers.rs`
-- Modify: `core/src/config/types/mod.rs` (add `pub mod serde_helpers;`)
+- Create: `src/config/types/serde_helpers.rs`
+- Modify: `src/config/types/mod.rs` (add `pub mod serde_helpers;`)
 
 - [ ] **Step 1: Create serde_helpers.rs**
 
-Create `core/src/config/types/serde_helpers.rs` with two deserializers used by all provider config types:
+Create `src/config/types/serde_helpers.rs` with two deserializers used by all provider config types:
 
 ```rust
 use serde::de;
@@ -120,12 +120,12 @@ where
 
 - [ ] **Step 2: Add module declaration**
 
-In `core/src/config/types/mod.rs`, add `pub mod serde_helpers;`.
+In `src/config/types/mod.rs`, add `pub mod serde_helpers;`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/config/types/serde_helpers.rs core/src/config/types/mod.rs
+git add src/config/types/serde_helpers.rs src/config/types/mod.rs
 git commit -m "config: add shared serde helpers for models deserialization"
 ```
 
@@ -134,14 +134,14 @@ git commit -m "config: add shared serde helpers for models deserialization"
 ### Task 2: ProviderConfig — model → models migration
 
 **Files:**
-- Modify: `core/src/config/types/provider.rs`
-- Modify: `core/src/config/tests/serialization.rs`
+- Modify: `src/config/types/provider.rs`
+- Modify: `src/config/tests/serialization.rs`
 
 Note: `ProviderConfig` does NOT have a `Default` impl. The `test_config()` helper manually constructs all fields.
 
 - [ ] **Step 1: Update ProviderConfig struct**
 
-In `core/src/config/types/provider.rs`, change:
+In `src/config/types/provider.rs`, change:
 ```rust
 // BEFORE (line 38)
 pub model: String,
@@ -177,7 +177,7 @@ pub fn test_config(model: &str) -> Self {
 
 - [ ] **Step 2: Update serialization tests**
 
-In `core/src/config/tests/serialization.rs`, update any test that references `.model` to use `.models` or `.default_model()`. Key locations:
+In `src/config/tests/serialization.rs`, update any test that references `.model` to use `.models` or `.default_model()`. Key locations:
 - Line 141: `ProviderConfig::test_config("gpt-4o")` — already uses helper, should work
 - Lines 207-229: TOML round-trip test — verify `models = ["gpt-4o"]` appears in output
 
@@ -215,7 +215,7 @@ Expected: All tests pass including new backward compat tests.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/config/types/provider.rs core/src/config/tests/serialization.rs
+git add src/config/types/provider.rs src/config/tests/serialization.rs
 git commit -m "config: migrate ProviderConfig model to models Vec with backward compat"
 ```
 
@@ -224,11 +224,11 @@ git commit -m "config: migrate ProviderConfig model to models Vec with backward 
 ### Task 3: EmbeddingProviderConfig — model → models migration
 
 **Files:**
-- Modify: `core/src/config/types/memory.rs`
+- Modify: `src/config/types/memory.rs`
 
 - [ ] **Step 1: Update EmbeddingProviderConfig struct**
 
-In `core/src/config/types/memory.rs` (around line 190-221), change:
+In `src/config/types/memory.rs` (around line 190-221), change:
 ```rust
 // BEFORE
 pub model: String,
@@ -258,7 +258,7 @@ Expected: Pass (fix any test that references `.model` on EmbeddingProviderConfig
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/config/types/memory.rs
+git add src/config/types/memory.rs
 git commit -m "config: migrate EmbeddingProviderConfig model to models Vec"
 ```
 
@@ -267,12 +267,12 @@ git commit -m "config: migrate EmbeddingProviderConfig model to models Vec"
 ### Task 4: RerankConfig — model → models migration
 
 **Files:**
-- Modify: `core/src/memory/rerank/provider.rs`
-- Modify: `core/src/memory/rerank/mod.rs` (test assertions)
+- Modify: `src/memory/rerank/provider.rs`
+- Modify: `src/memory/rerank/mod.rs` (test assertions)
 
 - [ ] **Step 1: Update RerankConfig struct**
 
-In `core/src/memory/rerank/provider.rs` (around line 58-114), change:
+In `src/memory/rerank/provider.rs` (around line 58-114), change:
 ```rust
 // BEFORE
 pub model: String,
@@ -286,7 +286,7 @@ Add `default_model()` method to `impl RerankConfig`.
 
 - [ ] **Step 2: Update rerank mod.rs test assertions**
 
-In `core/src/memory/rerank/mod.rs` (line 167), update test:
+In `src/memory/rerank/mod.rs` (line 167), update test:
 ```rust
 // BEFORE
 assert_eq!(config.model, ...);
@@ -302,7 +302,7 @@ Expected: Pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/memory/rerank/provider.rs core/src/memory/rerank/mod.rs
+git add src/memory/rerank/provider.rs src/memory/rerank/mod.rs
 git commit -m "config: migrate RerankConfig model to models Vec"
 ```
 
@@ -311,14 +311,14 @@ git commit -m "config: migrate RerankConfig model to models Vec"
 ### Task 5: GenerationProviderConfig — model → models migration
 
 **Files:**
-- Modify: `core/src/config/types/generation/provider.rs`
-- Modify: `core/src/config/types/generation/mod.rs` (tests)
+- Modify: `src/config/types/generation/provider.rs`
+- Modify: `src/config/types/generation/mod.rs` (tests)
 
 Note: `GenerationProviderConfig` has `model: Option<String>` (optional) AND a separate `models: HashMap<String, String>` field for model aliases. The `models` HashMap field needs to be renamed to `model_aliases` to free the name for the new `models: Vec<String>`.
 
 - [ ] **Step 1: Update GenerationProviderConfig struct**
 
-In `core/src/config/types/generation/provider.rs`:
+In `src/config/types/generation/provider.rs`:
 ```rust
 // BEFORE
 pub model: Option<String>,
@@ -342,7 +342,7 @@ impl GenerationProviderConfig {
 
 - [ ] **Step 2: Update generation/mod.rs tests**
 
-In `core/src/config/types/generation/mod.rs`, update test assertions from `.model` to `.default_model()` or `.models`.
+In `src/config/types/generation/mod.rs`, update test assertions from `.model` to `.default_model()` or `.models`.
 
 - [ ] **Step 3: Run tests**
 
@@ -352,7 +352,7 @@ Expected: Pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/config/types/generation/
+git add src/config/types/generation/
 git commit -m "config: migrate GenerationProviderConfig model to models Vec, rename models HashMap to model_aliases"
 ```
 
@@ -363,12 +363,12 @@ git commit -m "config: migrate GenerationProviderConfig model to models Vec, ren
 ### Task 6: Protocol implementations — .model → .default_model()
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai.rs` (lines 266, 333)
-- Modify: `core/src/providers/protocols/anthropic.rs` (lines 244, 261)
-- Modify: `core/src/providers/protocols/chatgpt.rs` (lines 176, 184)
-- Modify: `core/src/providers/protocols/gemini.rs` (lines 52, 57, 281)
-- Modify: `core/src/providers/protocols/template.rs` (line 60)
-- Modify: `core/src/providers/protocols/configurable.rs` (line 433, if applicable)
+- Modify: `src/providers/protocols/openai.rs` (lines 266, 333)
+- Modify: `src/providers/protocols/anthropic.rs` (lines 244, 261)
+- Modify: `src/providers/protocols/chatgpt.rs` (lines 176, 184)
+- Modify: `src/providers/protocols/gemini.rs` (lines 52, 57, 281)
+- Modify: `src/providers/protocols/template.rs` (line 60)
+- Modify: `src/providers/protocols/configurable.rs` (line 433, if applicable)
 
 - [ ] **Step 1: Update all protocol files**
 
@@ -392,7 +392,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/protocols/
+git add src/providers/protocols/
 git commit -m "providers: migrate protocol implementations from .model to .default_model()"
 ```
 
@@ -401,12 +401,12 @@ git commit -m "providers: migrate protocol implementations from .model to .defau
 ### Task 7: Provider implementations — .model → .default_model()
 
 **Files:**
-- Modify: `core/src/providers/http_provider.rs` (lines 47, 237)
-- Modify: `core/src/providers/ollama.rs` (lines 156, 183, 191, 607, 642, 647, 659)
-- Modify: `core/src/providers/openai/request.rs` (lines 98, 236)
-- Modify: `core/src/providers/profile_manager/mod.rs` (line 299)
-- Modify: `core/src/providers/auth_profile_registry.rs` (line 169)
-- Modify: `core/src/providers/mod.rs` (provider creation)
+- Modify: `src/providers/http_provider.rs` (lines 47, 237)
+- Modify: `src/providers/ollama.rs` (lines 156, 183, 191, 607, 642, 647, 659)
+- Modify: `src/providers/openai/request.rs` (lines 98, 236)
+- Modify: `src/providers/profile_manager/mod.rs` (line 299)
+- Modify: `src/providers/auth_profile_registry.rs` (line 169)
+- Modify: `src/providers/mod.rs` (provider creation)
 
 - [ ] **Step 1: Update all provider files**
 
@@ -428,7 +428,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/providers/
+git add src/providers/
 git commit -m "providers: migrate provider implementations from .model to .default_model()"
 ```
 
@@ -437,12 +437,12 @@ git commit -m "providers: migrate provider implementations from .model to .defau
 ### Task 8: Embedding & Reranking providers — .model → .default_model()
 
 **Files:**
-- Modify: `core/src/memory/embedding_provider.rs` (line 77)
-- Modify: `core/src/memory/rerank/jina.rs` (line 73)
-- Modify: `core/src/memory/rerank/siliconflow.rs` (line 73)
-- Modify: `core/src/memory/rerank/vllm.rs` (line 73)
-- Modify: `core/src/memory/rerank/pinecone.rs` (line 83)
-- Modify: `core/src/memory/rerank/voyage.rs` (line 73)
+- Modify: `src/memory/embedding_provider.rs` (line 77)
+- Modify: `src/memory/rerank/jina.rs` (line 73)
+- Modify: `src/memory/rerank/siliconflow.rs` (line 73)
+- Modify: `src/memory/rerank/vllm.rs` (line 73)
+- Modify: `src/memory/rerank/pinecone.rs` (line 83)
+- Modify: `src/memory/rerank/voyage.rs` (line 73)
 
 - [ ] **Step 1: Update all files**
 
@@ -456,7 +456,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/memory/
+git add src/memory/
 git commit -m "memory: migrate embedding and reranking providers from .model to .default_model()"
 ```
 
@@ -465,8 +465,8 @@ git commit -m "memory: migrate embedding and reranking providers from .model to 
 ### Task 9: Generation providers — .model → .default_model() and .models → .model_aliases
 
 **Files:**
-- Modify: `core/src/generation/providers/mod.rs` (lines 139, 144, 157, 173, 178, 183, 193, 207, 218, 241)
-- Modify: `core/src/dispatcher/analyzer.rs` (uses `config.models.keys()` on GenerationProviderConfig HashMap — must change to `config.model_aliases.keys()`)
+- Modify: `src/generation/providers/mod.rs` (lines 139, 144, 157, 173, 178, 183, 193, 207, 218, 241)
+- Modify: `src/dispatcher/analyzer.rs` (uses `config.models.keys()` on GenerationProviderConfig HashMap — must change to `config.model_aliases.keys()`)
 - Modify: any other generation provider files referencing `.model` or `.models` HashMap
 
 - [ ] **Step 1: Update generation provider files**
@@ -474,8 +474,8 @@ git commit -m "memory: migrate embedding and reranking providers from .model to 
 For `GenerationProviderConfig`, `default_model()` returns `Option<&str>`. Callers that previously did `config.model.clone()` (where model was `Option<String>`) should now use `config.default_model().map(|s| s.to_string())` or `config.default_model()`.
 
 **Critical**: Also update all references to the old `config.models` HashMap (now renamed to `config.model_aliases`):
-- `core/src/generation/providers/mod.rs` line 198: `for (alias, version) in &config.models` → `&config.model_aliases`
-- `core/src/dispatcher/analyzer.rs`: `provider_config.models.keys().cloned()` → `provider_config.model_aliases.keys().cloned()`
+- `src/generation/providers/mod.rs` line 198: `for (alias, version) in &config.models` → `&config.model_aliases`
+- `src/dispatcher/analyzer.rs`: `provider_config.models.keys().cloned()` → `provider_config.model_aliases.keys().cloned()`
 
 - [ ] **Step 2: Run tests**
 
@@ -485,7 +485,7 @@ Expected: Pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/generation/ core/src/dispatcher/
+git add src/generation/ src/dispatcher/
 git commit -m "generation: migrate from .model to .default_model() and .models to .model_aliases"
 ```
 
@@ -494,17 +494,17 @@ git commit -m "generation: migrate from .model to .default_model() and .models t
 ### Task 10: Gateway handlers and DTO types — .model → .models migration
 
 **Files:**
-- Modify: `core/src/gateway/handlers/providers/types.rs` (update `ProviderInfo.model` and `ProviderConfigJson.model` to `models: Vec<String>`)
-- Modify: `core/src/gateway/handlers/providers/handlers.rs` (line 362 and construction of ProviderInfo)
-- Modify: `core/src/gateway/handlers/providers/tests.rs` (test assertions)
-- Modify: `core/src/gateway/handlers/generation_providers.rs` (line 85)
-- Modify: `core/src/gateway/handlers/embedding_providers.rs` (lines 45-46, 522)
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs` (line 358)
-- Modify: `core/src/agents/thinking_adapter.rs` (lines 104, 154)
+- Modify: `src/gateway/handlers/providers/types.rs` (update `ProviderInfo.model` and `ProviderConfigJson.model` to `models: Vec<String>`)
+- Modify: `src/gateway/handlers/providers/handlers.rs` (line 362 and construction of ProviderInfo)
+- Modify: `src/gateway/handlers/providers/tests.rs` (test assertions)
+- Modify: `src/gateway/handlers/generation_providers.rs` (line 85)
+- Modify: `src/gateway/handlers/embedding_providers.rs` (lines 45-46, 522)
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs` (line 358)
+- Modify: `src/agents/thinking_adapter.rs` (lines 104, 154)
 
 - [ ] **Step 1: Update DTO types**
 
-In `core/src/gateway/handlers/providers/types.rs`:
+In `src/gateway/handlers/providers/types.rs`:
 ```rust
 // ProviderInfo: change model: String → models: Vec<String>
 // ProviderConfigJson: change model: String → models: Vec<String> (with same serde backward compat)
@@ -516,7 +516,7 @@ Where handlers construct `ProviderInfo`, use `models: config.models.clone()` ins
 
 In each file listed above, replace `.model` references on provider configs with `.default_model()` or `.models` as appropriate.
 
-Note: `core/src/gateway/agent_instance.rs` line 780 uses `.model` on `AgentInstanceConfig`, NOT `ProviderConfig` — do NOT change this.
+Note: `src/gateway/agent_instance.rs` line 780 uses `.model` on `AgentInstanceConfig`, NOT `ProviderConfig` — do NOT change this.
 
 - [ ] **Step 3: Use cargo check to find any remaining references**
 
@@ -544,25 +544,25 @@ All three tasks in this chunk MUST be done together in a single commit to avoid 
 ### Task 11: Delete all model discovery code (single atomic operation)
 
 **Files:**
-- Delete: `core/src/providers/model_registry.rs`
+- Delete: `src/providers/model_registry.rs`
 - Delete: `shared/config/model-presets.toml`
-- Delete: `core/src/gateway/handlers/models/` (entire directory)
-- Modify: `core/src/providers/mod.rs` (remove `pub mod model_registry;` AND `pub use model_registry::ModelRegistry;` re-export)
-- Modify: `core/src/providers/adapter.rs` (remove `list_models()` method + `DiscoveredModel` struct)
-- Modify: `core/src/providers/protocols/openai.rs` (remove `list_models()` override if any)
-- Modify: `core/src/providers/protocols/anthropic.rs` (remove `list_models()` override)
-- Modify: `core/src/providers/protocols/chatgpt.rs` (remove `list_models()` override)
-- Modify: `core/src/providers/protocols/gemini.rs` (remove `list_models()` override)
-- Modify: `core/src/providers/ollama.rs` (remove `list_models()` method)
-- Modify: `core/src/extension/provider_adapter.rs` (remove `list_models()` and `static_models()`)
-- Modify: `core/src/gateway/handlers/mod.rs` (remove `pub mod models;` and models handler registrations at lines 196-217)
-- Modify: `core/src/gateway/handlers/providers/handlers.rs` (remove `handle_probe()` at line 467)
-- Modify: `core/src/gateway/handlers/providers/types.rs` (remove `ProbeParams`, `ProbeResult`)
-- Modify: `core/src/gateway/handlers/providers/mod.rs` (remove probe re-exports)
-- Modify: `core/src/gateway/handlers/embedding_providers.rs` (remove `handle_probe()`, `EmbeddingProbeParams`, `EmbeddingProbeResult`, `handle_presets()`)
-- Modify: `core/src/bin/aleph/commands/start/builder/handlers.rs`:
+- Delete: `src/gateway/handlers/models/` (entire directory)
+- Modify: `src/providers/mod.rs` (remove `pub mod model_registry;` AND `pub use model_registry::ModelRegistry;` re-export)
+- Modify: `src/providers/adapter.rs` (remove `list_models()` method + `DiscoveredModel` struct)
+- Modify: `src/providers/protocols/openai.rs` (remove `list_models()` override if any)
+- Modify: `src/providers/protocols/anthropic.rs` (remove `list_models()` override)
+- Modify: `src/providers/protocols/chatgpt.rs` (remove `list_models()` override)
+- Modify: `src/providers/protocols/gemini.rs` (remove `list_models()` override)
+- Modify: `src/providers/ollama.rs` (remove `list_models()` method)
+- Modify: `src/extension/provider_adapter.rs` (remove `list_models()` and `static_models()`)
+- Modify: `src/gateway/handlers/mod.rs` (remove `pub mod models;` and models handler registrations at lines 196-217)
+- Modify: `src/gateway/handlers/providers/handlers.rs` (remove `handle_probe()` at line 467)
+- Modify: `src/gateway/handlers/providers/types.rs` (remove `ProbeParams`, `ProbeResult`)
+- Modify: `src/gateway/handlers/providers/mod.rs` (remove probe re-exports)
+- Modify: `src/gateway/handlers/embedding_providers.rs` (remove `handle_probe()`, `EmbeddingProbeParams`, `EmbeddingProbeResult`, `handle_presets()`)
+- Modify: `src/bin/aleph/commands/start/builder/handlers.rs`:
   - Delete `register_models_handlers` function (lines 435-479)
-  - Remove call to `register_models_handlers` (also check `core/src/bin/aleph/commands/start/mod.rs` line 452)
+  - Remove call to `register_models_handlers` (also check `src/bin/aleph/commands/start/mod.rs` line 452)
   - Remove import: `use alephcore::gateway::handlers::models as models_handlers;`
   - Remove `providers.probe` registration (line 556)
   - Remove `embedding_providers.probe` registration (line 605)
@@ -571,24 +571,24 @@ All three tasks in this chunk MUST be done together in a single commit to avoid 
 - [ ] **Step 1: Delete files and directories**
 
 ```bash
-rm core/src/providers/model_registry.rs
+rm src/providers/model_registry.rs
 rm shared/config/model-presets.toml
-rm -rf core/src/gateway/handlers/models/
+rm -rf src/gateway/handlers/models/
 ```
 
 - [ ] **Step 2: Remove module declarations and re-exports**
 
-In `core/src/providers/mod.rs`:
+In `src/providers/mod.rs`:
 - Remove `pub mod model_registry;` line
 - Remove `pub use model_registry::ModelRegistry;` re-export (if exists)
 
-In `core/src/gateway/handlers/mod.rs`:
+In `src/gateway/handlers/mod.rs`:
 - Remove `pub mod models;`
 - Remove the models handler registration block (lines 196-217 approximately)
 
 - [ ] **Step 3: Remove ProtocolAdapter::list_models() and DiscoveredModel**
 
-In `core/src/providers/adapter.rs`:
+In `src/providers/adapter.rs`:
 - Delete the `DiscoveredModel` struct (lines 303-314)
 - Delete the `list_models()` method from the `ProtocolAdapter` trait (lines 164-229)
 - Remove any imports only used by `list_models`
@@ -599,30 +599,30 @@ In each protocol file, remove `list_models()` overrides:
 - `gemini.rs`: Remove the full Gemini model listing implementation
 - `openai.rs`: Check for overrides
 
-In `core/src/providers/ollama.rs`: Remove `list_models()` method.
+In `src/providers/ollama.rs`: Remove `list_models()` method.
 
-In `core/src/extension/provider_adapter.rs`: Remove `list_models()` and `static_models()` methods.
+In `src/extension/provider_adapter.rs`: Remove `list_models()` and `static_models()` methods.
 
 - [ ] **Step 4: Remove probe handlers**
 
-In `core/src/gateway/handlers/providers/handlers.rs`: Delete `handle_probe()` function.
+In `src/gateway/handlers/providers/handlers.rs`: Delete `handle_probe()` function.
 
-In `core/src/gateway/handlers/providers/types.rs`: Delete `ProbeParams` and `ProbeResult`.
+In `src/gateway/handlers/providers/types.rs`: Delete `ProbeParams` and `ProbeResult`.
 
-In `core/src/gateway/handlers/providers/mod.rs`: Remove probe re-exports.
+In `src/gateway/handlers/providers/mod.rs`: Remove probe re-exports.
 
-In `core/src/gateway/handlers/embedding_providers.rs`: Delete `handle_probe()`, `EmbeddingProbeParams`, `EmbeddingProbeResult`, and `handle_presets()`.
+In `src/gateway/handlers/embedding_providers.rs`: Delete `handle_probe()`, `EmbeddingProbeParams`, `EmbeddingProbeResult`, and `handle_presets()`.
 
 - [ ] **Step 5: Remove handler registrations**
 
-In `core/src/bin/aleph/commands/start/builder/handlers.rs`:
+In `src/bin/aleph/commands/start/builder/handlers.rs`:
 - Delete `register_models_handlers` function (lines 435-479)
 - Remove `use alephcore::gateway::handlers::models as models_handlers;` import
 - Remove `providers.probe` registration (line 556)
 - Remove `embedding_providers.probe` registration (line 605)
 - Remove `embedding_providers.presets` registration (line 606)
 
-In `core/src/bin/aleph/commands/start/mod.rs`:
+In `src/bin/aleph/commands/start/mod.rs`:
 - Remove the call to `register_models_handlers` (line 452)
 
 - [ ] **Step 6: Clean up any remaining imports**
@@ -645,7 +645,7 @@ git add -A
 git commit -m "core: delete all model discovery infrastructure (ModelRegistry, probes, presets, list_models)"
 ```
 
-**Note**: The OpenAI-compatible `/v1/models` endpoint in `core/src/gateway/openai_api/routes.rs` is intentionally NOT deleted — it serves external tool integration, not internal model discovery.
+**Note**: The OpenAI-compatible `/v1/models` endpoint in `src/gateway/openai_api/routes.rs` is intentionally NOT deleted — it serves external tool integration, not internal model discovery.
 
 ---
 
@@ -880,7 +880,7 @@ Expected: No matches (or only in unrelated contexts like comments/docs).
 - [ ] **Step 5: Grep for remaining .model references on provider configs**
 
 ```bash
-rg "config\.model[^s_]|\.model\.clone|\.model\.to_" --type rust core/src/
+rg "config\.model[^s_]|\.model\.clone|\.model\.to_" --type rust src/
 ```
 Expected: No matches on provider config types (some may exist on unrelated structs like `AgentInstanceConfig` — verify each is not a provider config).
 

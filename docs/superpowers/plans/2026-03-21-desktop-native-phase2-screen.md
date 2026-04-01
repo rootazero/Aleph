@@ -28,9 +28,9 @@
 | `crates/desktop-macos/src/lib.rs` | Store `NativeScreen`, return from `screen()` |
 | `crates/desktop-linux/src/lib.rs` | Store `NativeScreen`, return from `screen()` |
 | `crates/desktop-windows/src/lib.rs` | Store `NativeScreen`, return from `screen()` |
-| `core/src/builtin_tools/desktop/mod.rs` | Add `platform` field, `with_platform()` builder |
-| `core/src/builtin_tools/desktop/native.rs` | Rewrite to dispatch via `platform.screen()` first |
-| `core/src/executor/builtin_registry/builder.rs` | Pass platform to DesktopTool, remove NativeDesktop |
+| `src/builtin_tools/desktop/mod.rs` | Add `platform` field, `with_platform()` builder |
+| `src/builtin_tools/desktop/native.rs` | Rewrite to dispatch via `platform.screen()` first |
+| `src/executor/builtin_registry/builder.rs` | Pass platform to DesktopTool, remove NativeDesktop |
 
 ---
 
@@ -320,8 +320,8 @@ git commit -m "desktop: wire NativeScreen into all platform crates"
 ## Task 3: Rewire DesktopTool to Use DesktopPlatform
 
 **Files:**
-- Modify: `core/src/builtin_tools/desktop/mod.rs`
-- Modify: `core/src/builtin_tools/desktop/native.rs`
+- Modify: `src/builtin_tools/desktop/mod.rs`
+- Modify: `src/builtin_tools/desktop/native.rs`
 
 This is the core integration task. The DesktopTool currently has a dual-path architecture:
 1. Try `self.native` (legacy `NativeDesktop` via `DesktopCapability` trait)
@@ -333,7 +333,7 @@ We change it to:
 
 - [ ] **Step 1: Add platform field to DesktopTool**
 
-In `core/src/builtin_tools/desktop/mod.rs`, modify the struct (around line 26):
+In `src/builtin_tools/desktop/mod.rs`, modify the struct (around line 26):
 
 ```rust
 pub struct DesktopTool {
@@ -396,7 +396,7 @@ Expected: compiles
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/desktop/mod.rs core/src/builtin_tools/desktop/native.rs
+git add src/builtin_tools/desktop/mod.rs src/builtin_tools/desktop/native.rs
 git commit -m "core: rewire DesktopTool to dispatch via DesktopPlatform.screen()"
 ```
 
@@ -405,7 +405,7 @@ git commit -m "core: rewire DesktopTool to dispatch via DesktopPlatform.screen()
 ## Task 4: Update Builder and Remove Legacy NativeDesktop
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/builder.rs`
+- Modify: `src/executor/builtin_registry/builder.rs`
 
 - [ ] **Step 1: Rewire builder to pass platform to DesktopTool**
 
@@ -435,7 +435,7 @@ Expected: compiles, all tests pass
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/builder.rs
+git add src/executor/builtin_registry/builder.rs
 git commit -m "core: remove legacy NativeDesktop, use DesktopPlatform for screen control"
 ```
 

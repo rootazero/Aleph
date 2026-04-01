@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-22
 **Status**: Approved
-**Scope**: `core/src/agent_loop/loop_core.rs`, `core/src/agent_loop/prompt_builder.rs`
+**Scope**: `src/agent_loop/loop_core.rs`, `src/agent_loop/prompt_builder.rs`
 
 ## Problem
 

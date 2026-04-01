@@ -49,7 +49,7 @@ This approach was chosen over Channel decoration (can't intercept StreamEvents) 
 ### VoiceState (per-channel)
 
 ```rust
-// core/src/gateway/voice/state.rs
+// src/gateway/voice/state.rs
 pub struct VoiceState {
     pub enabled: bool,              // Explicit toggle
     pub provider: Option<String>,   // TTS provider override, None = global default
@@ -84,7 +84,7 @@ No structural changes. TTS audio appended as `Attachment { mime_type: "audio/mp3
 
 ## Inbound Voice Middleware
 
-Location: `core/src/gateway/voice/inbound.rs`
+Location: `src/gateway/voice/inbound.rs`
 
 ### Processing Flow
 
@@ -114,7 +114,7 @@ InboundMessage arrives
 
 ## Outbound Voice: ReplyEmitter Voice Mode
 
-Location: Extend existing `core/src/gateway/reply_emitter.rs`
+Location: Extend existing `src/gateway/reply_emitter.rs`
 
 The `ReplyEmitter` already implements typewriter and instant modes for `StreamEvent::ResponseChunk` events. Voice mode is added as a third mode that:
 1. Receives `ResponseChunk` events (with `content`, `is_final`, `is_intermediate` fields)
@@ -162,7 +162,7 @@ Regardless of TTS success or failure, text content is always delivered. Voice is
 
 ## Tool: voice_mode_set
 
-Location: `core/src/builtin_tools/voice_tools/voice_mode_set.rs`
+Location: `src/builtin_tools/voice_tools/voice_mode_set.rs`
 
 ### Interface
 
@@ -188,7 +188,7 @@ Returns failure with explanation when Channel lacks audio capability or no TTS p
 
 ## Prompt Integration
 
-Location: `core/src/agent_loop/prompt_builder.rs`
+Location: `src/agent_loop/prompt_builder.rs`
 
 The `PromptBuilder` receives voice mode status via `InboundContext`, which already flows into `LayerInput.inbound` during prompt construction. When the inbound middleware processes a request, it sets `voice_mode_active: bool` on `InboundContext` (true if `VoiceState.enabled` OR `voice_reply_hint`). The `PromptBuilder` reads this flag to conditionally inject the voice prompt layer.
 
@@ -289,11 +289,11 @@ Verify the Default Speech Provider selector works correctly in `views/settings/g
 ### New Files
 
 ```
-core/src/gateway/voice/
+src/gateway/voice/
 ├── mod.rs              // Module entry, VoiceState definition
 └── inbound.rs          // InboundVoiceMiddleware
 
-core/src/builtin_tools/voice_tools/
+src/builtin_tools/voice_tools/
 ├── mod.rs              // Tool registration
 └── voice_mode_set.rs   // voice_mode_set tool
 ```

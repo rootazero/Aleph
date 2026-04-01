@@ -17,14 +17,14 @@
 Replace the dual hook enum system (HookEvent PascalCase + PluginHookEvent snake_case) with a single unified `HookEvent`.
 
 **Files:**
-- Modify: `core/src/extension/types/hooks.rs:40-80` (replace HookEvent enum)
-- Modify: `core/src/extension/registry/types.rs:65-96` (delete PluginHookEvent)
-- Modify: `core/src/extension/registry/plugin_registry/mod.rs` (HookRegistration uses new HookEvent)
-- Modify: `core/src/extension/hooks/mod.rs` (HookExecutor uses new HookEvent)
-- Modify: `core/src/extension/runtime/nodejs/mod.rs` (event string parsing)
-- Modify: `core/src/extension/mod.rs:89` (re-exports)
-- Modify: `core/src/extension/loader.rs:360-398` (hook loading event mapping)
-- Modify: `core/src/extension/manifest/aleph_plugin_toml.rs` (HookSection event type)
+- Modify: `src/extension/types/hooks.rs:40-80` (replace HookEvent enum)
+- Modify: `src/extension/registry/types.rs:65-96` (delete PluginHookEvent)
+- Modify: `src/extension/registry/plugin_registry/mod.rs` (HookRegistration uses new HookEvent)
+- Modify: `src/extension/hooks/mod.rs` (HookExecutor uses new HookEvent)
+- Modify: `src/extension/runtime/nodejs/mod.rs` (event string parsing)
+- Modify: `src/extension/mod.rs:89` (re-exports)
+- Modify: `src/extension/loader.rs:360-398` (hook loading event mapping)
+- Modify: `src/extension/manifest/aleph_plugin_toml.rs` (HookSection event type)
 
 **Step 1: Replace HookEvent enum in `types/hooks.rs`**
 
@@ -183,7 +183,7 @@ fn legacy_event_to_unified(event: &str) -> Option<HookEvent> {
 
 **Step 9: Update BDD test steps**
 
-In `core/tests/steps/extension_steps.rs`, update `parse_hook_event()` helper (line 45-62) to use unified `HookEvent` variants.
+In `tests/steps/extension_steps.rs`, update `parse_hook_event()` helper (line 45-62) to use unified `HookEvent` variants.
 
 **Step 10: Run tests**
 
@@ -205,8 +205,8 @@ git commit -m "extension: unify HookEvent enum, delete PluginHookEvent"
 Create the thin adapter that converts `.claude-plugin/plugin.json` → `PluginManifest`.
 
 **Files:**
-- Create: `core/src/extension/manifest/legacy_adapter.rs`
-- Modify: `core/src/extension/manifest/mod.rs` (add module, export)
+- Create: `src/extension/manifest/legacy_adapter.rs`
+- Modify: `src/extension/manifest/mod.rs` (add module, export)
 
 **Step 1: Create `legacy_adapter.rs`**
 
@@ -369,7 +369,7 @@ Expected: PASS
 **Step 4: Commit**
 
 ```bash
-git add core/src/extension/manifest/legacy_adapter.rs core/src/extension/manifest/mod.rs
+git add src/extension/manifest/legacy_adapter.rs src/extension/manifest/mod.rs
 git commit -m "extension: add LegacyAdapter for .claude-plugin/plugin.json conversion"
 ```
 
@@ -380,8 +380,8 @@ git commit -m "extension: add LegacyAdapter for .claude-plugin/plugin.json conve
 Wire the adapter into the plugin discovery pipeline so legacy plugins are auto-converted at scan time.
 
 **Files:**
-- Modify: `core/src/extension/discovery/scanner.rs` (add legacy fallback)
-- Modify: `core/src/extension/discovery/mod.rs` (if needed for imports)
+- Modify: `src/extension/discovery/scanner.rs` (add legacy fallback)
+- Modify: `src/extension/discovery/mod.rs` (if needed for imports)
 
 **Step 1: Update discovery scanner**
 
@@ -431,9 +431,9 @@ git commit -m "discovery: integrate LegacyAdapter into plugin scanning pipeline"
 Before deleting ComponentRegistry, redirect all skill/agent queries from ComponentRegistry to SkillSystem. This makes ComponentRegistry's skills/agents storage unused.
 
 **Files:**
-- Modify: `core/src/extension/mod.rs:285-320` (redirect skill/agent methods)
-- Modify: `core/src/extension/mod.rs:166` (make skill_system non-Option)
-- Modify: `core/src/extension/mod.rs:830-850` (primary/sub agent methods)
+- Modify: `src/extension/mod.rs:285-320` (redirect skill/agent methods)
+- Modify: `src/extension/mod.rs:166` (make skill_system non-Option)
+- Modify: `src/extension/mod.rs:830-850` (primary/sub agent methods)
 
 **Step 1: Make skill_system non-Option**
 
@@ -545,10 +545,10 @@ git commit -m "extension: redirect skill queries to SkillSystem"
 Replace all plugin-related queries that go through ComponentRegistry with PluginRegistry queries.
 
 **Files:**
-- Modify: `core/src/extension/mod.rs:778-821` (get_plugin_info)
-- Modify: `core/src/extension/mod.rs:824-826` (get_plugin)
-- Modify: `core/src/extension/mod.rs:764-771` (get_mcp_servers)
-- Modify: `core/src/gateway/handlers/plugins/handlers.rs` (remove hack)
+- Modify: `src/extension/mod.rs:778-821` (get_plugin_info)
+- Modify: `src/extension/mod.rs:824-826` (get_plugin)
+- Modify: `src/extension/mod.rs:764-771` (get_mcp_servers)
+- Modify: `src/gateway/handlers/plugins/handlers.rs` (remove hack)
 
 **Step 1: Rewrite `get_plugin_info()`**
 
@@ -646,17 +646,17 @@ git commit -m "extension: redirect plugin queries to PluginRegistry"
 Now that all queries bypass ComponentRegistry, delete it and clean up all references.
 
 **Files:**
-- Delete: `core/src/extension/registry/component_registry.rs`
-- Modify: `core/src/extension/registry/mod.rs` (remove module)
-- Modify: `core/src/extension/mod.rs` (remove `registry` field)
-- Modify: `core/src/extension/loader.rs` (remove ComponentRegistry parameter)
-- Modify: `core/src/extension/types/plugins.rs` (remove ExtensionPlugin if unused)
-- Modify: `core/src/lib.rs:187` (remove ComponentRegistry export)
+- Delete: `src/extension/registry/component_registry.rs`
+- Modify: `src/extension/registry/mod.rs` (remove module)
+- Modify: `src/extension/mod.rs` (remove `registry` field)
+- Modify: `src/extension/loader.rs` (remove ComponentRegistry parameter)
+- Modify: `src/extension/types/plugins.rs` (remove ExtensionPlugin if unused)
+- Modify: `src/lib.rs:187` (remove ComponentRegistry export)
 
 **Step 1: Delete `component_registry.rs`**
 
 ```bash
-rm core/src/extension/registry/component_registry.rs
+rm src/extension/registry/component_registry.rs
 ```
 
 **Step 2: Remove from `registry/mod.rs`**
@@ -700,8 +700,8 @@ Line 187: Remove `ComponentRegistry` from the export list.
 **Step 6: Fix all compilation errors**
 
 Search for remaining `ComponentRegistry` references and fix them:
-- `core/src/bin/aleph/commands/plugins.rs` (uses ComponentLoader)
-- `core/src/gateway/handlers/plugins/handlers.rs` (uses ComponentLoader)
+- `src/bin/aleph/commands/plugins.rs` (uses ComponentLoader)
+- `src/gateway/handlers/plugins/handlers.rs` (uses ComponentLoader)
 - Any test files
 
 **Step 7: Run tests**
@@ -724,16 +724,16 @@ git commit -m "extension: delete ComponentRegistry, unify to PluginRegistry"
 Delete the standalone `discovery/scanner.rs` (`DirectoryScanner`) and consolidate into the extension discovery system.
 
 **Files:**
-- Modify: `core/src/discovery/mod.rs` (remove scanner exports)
-- Modify: `core/src/discovery/scanner.rs` (keep if still used by DiscoveryManager, else delete)
-- Modify: `core/src/extension/mod.rs` (remove DirectoryScanner hack in get_plugin_info)
-- Modify: `core/src/discovery/paths.rs` (move Claude constants to legacy_adapter)
+- Modify: `src/discovery/mod.rs` (remove scanner exports)
+- Modify: `src/discovery/scanner.rs` (keep if still used by DiscoveryManager, else delete)
+- Modify: `src/extension/mod.rs` (remove DirectoryScanner hack in get_plugin_info)
+- Modify: `src/discovery/paths.rs` (move Claude constants to legacy_adapter)
 
 **Step 1: Check if DirectoryScanner is still used**
 
 After Task 5-6, `get_plugin_info()` no longer uses `DirectoryScanner`. Check if `DiscoveryManager` wraps `DirectoryScanner` — if yes, `DirectoryScanner` is still needed for the core discovery pipeline. Only remove the hack usage, not the scanner itself.
 
-The `DiscoveryManager` in `core/src/discovery/mod.rs` wraps `DirectoryScanner` (line 120). It's the core discovery mechanism. **Don't delete it.** Only remove the direct `DirectoryScanner::new()` hack in `get_plugin_info()`.
+The `DiscoveryManager` in `src/discovery/mod.rs` wraps `DirectoryScanner` (line 120). It's the core discovery mechanism. **Don't delete it.** Only remove the direct `DirectoryScanner::new()` hack in `get_plugin_info()`.
 
 **Step 2: Remove hack from `get_plugin_info()`**
 
@@ -770,15 +770,15 @@ git commit -m "discovery: clean up DirectoryScanner hack, consolidate constants"
 Rename to reflect its new, narrower responsibility: loading Markdown content (skills/agents) only.
 
 **Files:**
-- Rename: `core/src/extension/loader.rs` → `core/src/extension/content_loader.rs`
-- Modify: `core/src/extension/mod.rs` (module declaration)
-- Modify: `core/src/lib.rs` (export name)
+- Rename: `src/extension/loader.rs` → `src/extension/content_loader.rs`
+- Modify: `src/extension/mod.rs` (module declaration)
+- Modify: `src/lib.rs` (export name)
 - Modify: All files importing `ComponentLoader`
 
 **Step 1: Rename the file**
 
 ```bash
-mv core/src/extension/loader.rs core/src/extension/content_loader.rs
+mv src/extension/loader.rs src/extension/content_loader.rs
 ```
 
 **Step 2: Rename the struct**
@@ -797,8 +797,8 @@ In `lib.rs`: Replace `ComponentLoader` with `ContentLoader`.
 **Step 5: Update all importers**
 
 Search for `ComponentLoader` across the codebase and update:
-- `core/src/bin/aleph/commands/plugins.rs`
-- `core/src/gateway/handlers/plugins/handlers.rs`
+- `src/bin/aleph/commands/plugins.rs`
+- `src/gateway/handlers/plugins/handlers.rs`
 - Any test files
 
 **Step 6: Run tests**
@@ -821,8 +821,8 @@ git commit -m "extension: rename ComponentLoader to ContentLoader"
 Update the module-level documentation to reflect the new unified architecture.
 
 **Files:**
-- Modify: `core/src/extension/mod.rs:1-44` (architecture diagram)
-- Modify: `core/src/extension/registry/mod.rs:1-35` (module docs)
+- Modify: `src/extension/mod.rs:1-44` (architecture diagram)
+- Modify: `src/extension/registry/mod.rs:1-35` (module docs)
 
 **Step 1: Update architecture diagram**
 
@@ -873,7 +873,7 @@ git commit -m "docs: update extension system architecture documentation"
 Fix the enable/disable handlers to properly synchronize filesystem state with PluginRegistry.
 
 **Files:**
-- Modify: `core/src/gateway/handlers/plugins/handlers.rs:267-333`
+- Modify: `src/gateway/handlers/plugins/handlers.rs:267-333`
 
 **Step 1: Update `handle_enable()`**
 

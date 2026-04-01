@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-27
 **Status**: Approved
-**Scope**: `core/src/gateway/interfaces/telegram/`
+**Scope**: `src/gateway/interfaces/telegram/`
 
 ## Summary
 

@@ -17,11 +17,11 @@ Two-layer tool execution permission system: **Global** (Policies) sets the ceili
 
 ### PermissionAction
 
-Reuse existing `PermissionAction` enum (`core/src/extension/types/agents.rs`): `Allow` / `Ask` / `Deny`. Serializes to `"allow"` / `"ask"` / `"deny"`.
+Reuse existing `PermissionAction` enum (`src/extension/types/agents.rs`): `Allow` / `Ask` / `Deny`. Serializes to `"allow"` / `"ask"` / `"deny"`.
 
 ### ToolPermissionsConfig
 
-New config struct, defined in `core/src/config/types/policies/tool_permissions.rs`:
+New config struct, defined in `src/config/types/policies/tool_permissions.rs`:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -46,7 +46,7 @@ default = "allow"
 # file_delete = "ask"
 ```
 
-Add `tool_permissions` field to `PoliciesConfig` (`core/src/config/types/policies/mod.rs`):
+Add `tool_permissions` field to `PoliciesConfig` (`src/config/types/policies/mod.rs`):
 
 ```rust
 pub struct PoliciesConfig {
@@ -58,7 +58,7 @@ pub struct PoliciesConfig {
 
 ### Agent Config — agent definition
 
-New optional field on `AgentDefinition` (`core/src/config/types/agents_def.rs`):
+New optional field on `AgentDefinition` (`src/config/types/agents_def.rs`):
 
 ```rust
 pub struct AgentDefinition {
@@ -97,7 +97,7 @@ Where Allow > Ask > Deny, `min` takes the more restrictive:
 
 ## Relationship to Existing ToolSafetyPolicy
 
-`ToolSafetyPolicy` (`core/src/config/types/policies/tool_safety.rs`) infers safety levels from tool name keywords but is **never used by SafetyGuard** — `SafetyGuard::default_guard()` is hardcoded. `ToolPermissionsConfig` replaces `ToolSafetyPolicy` as the authoritative permission mechanism:
+`ToolSafetyPolicy` (`src/config/types/policies/tool_safety.rs`) infers safety levels from tool name keywords but is **never used by SafetyGuard** — `SafetyGuard::default_guard()` is hardcoded. `ToolPermissionsConfig` replaces `ToolSafetyPolicy` as the authoritative permission mechanism:
 
 - `ToolSafetyPolicy` remains for backward compatibility but is no longer on the execution path
 - `ToolPermissionsConfig` is the single source of truth for tool execution permissions
@@ -105,7 +105,7 @@ Where Allow > Ask > Deny, `min` takes the more restrictive:
 
 ## Relationship to PermissionManager
 
-`PermissionManager` (`core/src/permission/`) has a complete rule evaluation + EventBus confirmation system but is not used by the agent loop. This design deliberately keeps SafetyGuard as the agent loop's permission check because:
+`PermissionManager` (`src/permission/`) has a complete rule evaluation + EventBus confirmation system but is not used by the agent loop. This design deliberately keeps SafetyGuard as the agent loop's permission check because:
 
 1. **Simplicity**: SafetyGuard is synchronous, no EventBus dependency needed
 2. **Ask = Deny for now**: No interactive confirmation needed yet
@@ -304,13 +304,13 @@ Not counting toward `consecutive_errors` prevents permission denials from accide
 
 | What | Where |
 |------|-------|
-| `ToolPermissionsConfig` struct | `core/src/config/types/policies/tool_permissions.rs` (new) |
-| Global config field | `PoliciesConfig` in `core/src/config/types/policies/mod.rs` |
-| Agent config field | `AgentDefinition` in `core/src/config/types/agents_def.rs` |
-| SafetyGuard changes | `core/src/agent_loop/safety.rs` |
-| run_loop integration | `core/src/gateway/execution_engine/run_loop.rs` |
-| Global RPC handlers | `core/src/gateway/handlers/config.rs` |
-| Agent RPC handlers | `core/src/gateway/handlers/agent_config.rs` |
+| `ToolPermissionsConfig` struct | `src/config/types/policies/tool_permissions.rs` (new) |
+| Global config field | `PoliciesConfig` in `src/config/types/policies/mod.rs` |
+| Agent config field | `AgentDefinition` in `src/config/types/agents_def.rs` |
+| SafetyGuard changes | `src/agent_loop/safety.rs` |
+| run_loop integration | `src/gateway/execution_engine/run_loop.rs` |
+| Global RPC handlers | `src/gateway/handlers/config.rs` |
+| Agent RPC handlers | `src/gateway/handlers/agent_config.rs` |
 | Panel ToolsTab | `apps/panel/src/views/agents/tools.rs` |
 | Panel PoliciesView | `apps/panel/src/views/settings/policies.rs` |
 

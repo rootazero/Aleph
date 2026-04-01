@@ -13,12 +13,12 @@
 ### Task 1: VitalityScore Types and Computation
 
 **Files:**
-- Create: `core/src/skill_evolution/vitality.rs`
-- Modify: `core/src/skill_evolution/mod.rs` (add `pub mod vitality;`)
+- Create: `src/skill_evolution/vitality.rs`
+- Modify: `src/skill_evolution/mod.rs` (add `pub mod vitality;`)
 
 **Step 1: Write the failing tests**
 
-Create `core/src/skill_evolution/vitality.rs`:
+Create `src/skill_evolution/vitality.rs`:
 
 ```rust
 //! Vitality Score engine for continuous skill health assessment.
@@ -199,7 +199,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/mod.rs`, add after line 57 (`pub mod validation;`):
+In `src/skill_evolution/mod.rs`, add after line 57 (`pub mod validation;`):
 
 ```rust
 pub mod vitality;
@@ -213,7 +213,7 @@ Expected: PASS (5 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/vitality.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/vitality.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add VitalityScore engine with continuous health scoring"
 ```
 
@@ -222,7 +222,7 @@ git commit -m "evolution: add VitalityScore engine with continuous health scorin
 ### Task 2: Lifecycle Extension — Observation State
 
 **Files:**
-- Modify: `core/src/skill_evolution/lifecycle.rs`
+- Modify: `src/skill_evolution/lifecycle.rs`
 
 **Step 1: Write the failing tests**
 
@@ -303,7 +303,7 @@ Expected: PASS
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/lifecycle.rs
+git add src/skill_evolution/lifecycle.rs
 git commit -m "evolution: add Observation lifecycle state with ObservationReason"
 ```
 
@@ -312,12 +312,12 @@ git commit -m "evolution: add Observation lifecycle state with ObservationReason
 ### Task 3: Circuit Breaker (De-solidification Layer 1)
 
 **Files:**
-- Create: `core/src/skill_evolution/desolidification.rs`
-- Modify: `core/src/skill_evolution/mod.rs` (add `pub mod desolidification;`)
+- Create: `src/skill_evolution/desolidification.rs`
+- Modify: `src/skill_evolution/mod.rs` (add `pub mod desolidification;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/desolidification.rs`:
+Create `src/skill_evolution/desolidification.rs`:
 
 ```rust
 //! Auto-de-solidification with triple-tiered triggers.
@@ -605,7 +605,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/mod.rs`, add after the `pub mod vitality;` line:
+In `src/skill_evolution/mod.rs`, add after the `pub mod vitality;` line:
 
 ```rust
 pub mod desolidification;
@@ -619,7 +619,7 @@ Expected: PASS (10 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/desolidification.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/desolidification.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add triple-tiered de-solidification (circuit breaker + entropy canary + feedback)"
 ```
 
@@ -628,12 +628,12 @@ git commit -m "evolution: add triple-tiered de-solidification (circuit breaker +
 ### Task 4: Skill Graveyard
 
 **Files:**
-- Create: `core/src/skill_evolution/graveyard.rs`
-- Modify: `core/src/skill_evolution/mod.rs` (add `pub mod graveyard;`)
+- Create: `src/skill_evolution/graveyard.rs`
+- Modify: `src/skill_evolution/mod.rs` (add `pub mod graveyard;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/graveyard.rs`:
+Create `src/skill_evolution/graveyard.rs`:
 
 ```rust
 //! Skill Graveyard — archive for retired/demoted skills.
@@ -815,7 +815,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/mod.rs`, add after `pub mod desolidification;`:
+In `src/skill_evolution/mod.rs`, add after `pub mod desolidification;`:
 
 ```rust
 pub mod graveyard;
@@ -829,7 +829,7 @@ Expected: PASS (3 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/graveyard.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/graveyard.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add SkillGraveyard for failed pattern archival"
 ```
 
@@ -838,12 +838,12 @@ git commit -m "evolution: add SkillGraveyard for failed pattern archival"
 ### Task 5: L3 Sandbox — ShadowFs
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/shadow_fs.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs` (add `pub mod shadow_fs;`)
+- Create: `src/skill_evolution/validation/shadow_fs.rs`
+- Modify: `src/skill_evolution/validation/mod.rs` (add `pub mod shadow_fs;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/validation/shadow_fs.rs`:
+Create `src/skill_evolution/validation/shadow_fs.rs`:
 
 ```rust
 //! Shadow Filesystem — read from source, write to overlay.
@@ -1013,7 +1013,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/validation/mod.rs`, add:
+In `src/skill_evolution/validation/mod.rs`, add:
 
 ```rust
 pub mod shadow_fs;
@@ -1027,7 +1027,7 @@ Expected: PASS (4 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/shadow_fs.rs core/src/skill_evolution/validation/mod.rs
+git add src/skill_evolution/validation/shadow_fs.rs src/skill_evolution/validation/mod.rs
 git commit -m "evolution: add ShadowFs for sandbox read-source/write-overlay isolation"
 ```
 
@@ -1036,12 +1036,12 @@ git commit -m "evolution: add ShadowFs for sandbox read-source/write-overlay iso
 ### Task 6: L3 Sandbox — RestrictedToolset
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/restricted_tools.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs` (add `pub mod restricted_tools;`)
+- Create: `src/skill_evolution/validation/restricted_tools.rs`
+- Modify: `src/skill_evolution/validation/mod.rs` (add `pub mod restricted_tools;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/validation/restricted_tools.rs`:
+Create `src/skill_evolution/validation/restricted_tools.rs`:
 
 ```rust
 //! Restricted toolset — software-defined sandbox boundaries.
@@ -1236,7 +1236,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/validation/mod.rs`, add:
+In `src/skill_evolution/validation/mod.rs`, add:
 
 ```rust
 pub mod restricted_tools;
@@ -1250,7 +1250,7 @@ Expected: PASS (8 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/restricted_tools.rs core/src/skill_evolution/validation/mod.rs
+git add src/skill_evolution/validation/restricted_tools.rs src/skill_evolution/validation/mod.rs
 git commit -m "evolution: add RestrictedToolset for sandbox path and tool whitelist enforcement"
 ```
 
@@ -1259,12 +1259,12 @@ git commit -m "evolution: add RestrictedToolset for sandbox path and tool whitel
 ### Task 7: L3 Sandbox — SandboxExecutor
 
 **Files:**
-- Create: `core/src/skill_evolution/validation/sandbox_executor.rs`
-- Modify: `core/src/skill_evolution/validation/mod.rs` (add `pub mod sandbox_executor;`)
+- Create: `src/skill_evolution/validation/sandbox_executor.rs`
+- Modify: `src/skill_evolution/validation/mod.rs` (add `pub mod sandbox_executor;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/validation/sandbox_executor.rs`:
+Create `src/skill_evolution/validation/sandbox_executor.rs`:
 
 ```rust
 //! L3 Sandbox Executor — isolated execution environment for High-risk skill validation.
@@ -1473,7 +1473,7 @@ mod tests {
 
 **Step 2: Add module declaration and update mod.rs**
 
-In `core/src/skill_evolution/validation/mod.rs`, add:
+In `src/skill_evolution/validation/mod.rs`, add:
 
 ```rust
 pub mod sandbox_executor;
@@ -1487,7 +1487,7 @@ Expected: PASS (4 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/sandbox_executor.rs core/src/skill_evolution/validation/mod.rs
+git add src/skill_evolution/validation/sandbox_executor.rs src/skill_evolution/validation/mod.rs
 git commit -m "evolution: add L3 SandboxExecutor with ShadowFs + RestrictedToolset integration"
 ```
 
@@ -1496,7 +1496,7 @@ git commit -m "evolution: add L3 SandboxExecutor with ShadowFs + RestrictedTools
 ### Task 8: Wire L3 into TieredValidator
 
 **Files:**
-- Modify: `core/src/skill_evolution/validation/tiered_validator.rs`
+- Modify: `src/skill_evolution/validation/tiered_validator.rs`
 
 **Step 1: Write the failing test**
 
@@ -1555,7 +1555,7 @@ Expected: PASS (5 tests — including the new L3 test)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/validation/tiered_validator.rs
+git add src/skill_evolution/validation/tiered_validator.rs
 git commit -m "evolution: wire L3 Sandbox level into TieredValidator for high-risk skills"
 ```
 
@@ -1564,12 +1564,12 @@ git commit -m "evolution: wire L3 Sandbox level into TieredValidator for high-ri
 ### Task 9: KnowledgeConsolidator
 
 **Files:**
-- Create: `core/src/skill_evolution/consolidator.rs`
-- Modify: `core/src/skill_evolution/mod.rs` (add `pub mod consolidator;`)
+- Create: `src/skill_evolution/consolidator.rs`
+- Modify: `src/skill_evolution/mod.rs` (add `pub mod consolidator;`)
 
 **Step 1: Write the file with tests**
 
-Create `core/src/skill_evolution/consolidator.rs`:
+Create `src/skill_evolution/consolidator.rs`:
 
 ```rust
 //! KnowledgeConsolidator — semantic deduplication and skill merging.
@@ -1750,7 +1750,7 @@ mod tests {
 
 **Step 2: Add module declaration**
 
-In `core/src/skill_evolution/mod.rs`, add after `pub mod graveyard;`:
+In `src/skill_evolution/mod.rs`, add after `pub mod graveyard;`:
 
 ```rust
 pub mod consolidator;
@@ -1764,7 +1764,7 @@ Expected: PASS (5 tests)
 **Step 4: Commit**
 
 ```bash
-git add core/src/skill_evolution/consolidator.rs core/src/skill_evolution/mod.rs
+git add src/skill_evolution/consolidator.rs src/skill_evolution/mod.rs
 git commit -m "evolution: add KnowledgeConsolidator for semantic dedup and skill merging"
 ```
 

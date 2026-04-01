@@ -4,7 +4,7 @@
 
 **Goal:** Make `AgentInstanceConfig.model` actually route to the correct provider, add error-aware health tracking with automatic fallback, and surface fallback events to users.
 
-**Architecture:** Extend `MultiProviderRegistry` (in `core/src/thinker/mod.rs`) with per-provider `ProviderHealth` tracking and a `resolve_with_fallback()` method. Add `model: Option<String>` to `RequestPayload` so protocol adapters use the resolved model instead of `config.default_model()`. Replace the existing `thinker/fallback.rs` with the new health-aware mechanism. Surface fallback info via `ModelInfo` in stream events.
+**Architecture:** Extend `MultiProviderRegistry` (in `src/thinker/mod.rs`) with per-provider `ProviderHealth` tracking and a `resolve_with_fallback()` method. Add `model: Option<String>` to `RequestPayload` so protocol adapters use the resolved model instead of `config.default_model()`. Replace the existing `thinker/fallback.rs` with the new health-aware mechanism. Surface fallback info via `ModelInfo` in stream events.
 
 **Tech Stack:** Rust, tokio, serde, Leptos (Panel WASM)
 
@@ -16,19 +16,19 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `core/src/providers/health.rs` | Create | `ProviderHealth` enum, `ProviderError` enum, state machine logic |
-| `core/src/providers/adapter.rs` | Modify | Add `model: Option<String>` to `RequestPayload` |
-| `core/src/providers/protocols/openai_chat.rs` | Modify | Use `payload.model` over `config.default_model()` |
-| `core/src/providers/protocols/anthropic.rs` | Modify | Same |
-| `core/src/providers/protocols/gemini.rs` | Modify | Same (model in URL path) |
-| `core/src/providers/protocols/openai_responses.rs` | Modify | Same |
-| `core/src/providers/protocols/template.rs` | Modify | Same |
-| `core/src/providers/mod.rs` | Modify | Re-export health module |
-| `core/src/thinker/mod.rs` | Modify | Add health to `RegistryState`, `resolve_with_fallback()`, `report_outcome()` |
-| `core/src/thinker/streaming/events.rs` | Modify | Add `ModelInfo` to `AssistantStart` |
-| `core/src/gateway/execution_engine/run_loop.rs` | Modify | Use `resolve_with_fallback` instead of `default_provider()` |
-| `core/src/agent_loop/provider_bridge.rs` | Modify | Accept and pass `model` in `RequestPayload` |
-| `core/src/thinker/fallback.rs` | Remove | Replaced by registry-level health-aware fallback |
+| `src/providers/health.rs` | Create | `ProviderHealth` enum, `ProviderError` enum, state machine logic |
+| `src/providers/adapter.rs` | Modify | Add `model: Option<String>` to `RequestPayload` |
+| `src/providers/protocols/openai_chat.rs` | Modify | Use `payload.model` over `config.default_model()` |
+| `src/providers/protocols/anthropic.rs` | Modify | Same |
+| `src/providers/protocols/gemini.rs` | Modify | Same (model in URL path) |
+| `src/providers/protocols/openai_responses.rs` | Modify | Same |
+| `src/providers/protocols/template.rs` | Modify | Same |
+| `src/providers/mod.rs` | Modify | Re-export health module |
+| `src/thinker/mod.rs` | Modify | Add health to `RegistryState`, `resolve_with_fallback()`, `report_outcome()` |
+| `src/thinker/streaming/events.rs` | Modify | Add `ModelInfo` to `AssistantStart` |
+| `src/gateway/execution_engine/run_loop.rs` | Modify | Use `resolve_with_fallback` instead of `default_provider()` |
+| `src/agent_loop/provider_bridge.rs` | Modify | Accept and pass `model` in `RequestPayload` |
+| `src/thinker/fallback.rs` | Remove | Replaced by registry-level health-aware fallback |
 | `interfaces/webchat/src/views/chat/` | Modify | Parse `ModelInfo`, show fallback indicator |
 
 ---
@@ -36,13 +36,13 @@
 ### Task 1: ProviderHealth + ProviderError Types
 
 **Files:**
-- Create: `core/src/providers/health.rs`
-- Modify: `core/src/providers/mod.rs`
+- Create: `src/providers/health.rs`
+- Modify: `src/providers/mod.rs`
 
 - [ ] **Step 1: Create `health.rs` with ProviderHealth and ProviderError**
 
 ```rust
-// core/src/providers/health.rs
+// src/providers/health.rs
 //! Provider health tracking for error-aware fallback.
 
 use std::time::{Duration, Instant};
@@ -314,7 +314,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Add health module to `core/src/providers/mod.rs`**
+- [ ] **Step 2: Add health module to `src/providers/mod.rs`**
 
 Add after other `pub mod` declarations:
 ```rust
@@ -330,7 +330,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/health.rs core/src/providers/mod.rs
+git add src/providers/health.rs src/providers/mod.rs
 git commit -m "providers: add ProviderHealth and ProviderError types for fallback"
 ```
 
@@ -339,13 +339,13 @@ git commit -m "providers: add ProviderHealth and ProviderError types for fallbac
 ### Task 2: Add `model` Field to RequestPayload
 
 **Files:**
-- Modify: `core/src/providers/adapter.rs:36-74`
-- Modify: `core/src/thinker/fallback.rs:53-61` (the `try_provider` field copy)
-- Modify: `core/src/agent_loop/provider_bridge.rs:65-74`
+- Modify: `src/providers/adapter.rs:36-74`
+- Modify: `src/thinker/fallback.rs:53-61` (the `try_provider` field copy)
+- Modify: `src/agent_loop/provider_bridge.rs:65-74`
 
 - [ ] **Step 1: Add `model` field to `RequestPayload`**
 
-In `core/src/providers/adapter.rs`, add to struct (after line 50, before `}`):
+In `src/providers/adapter.rs`, add to struct (after line 50, before `}`):
 ```rust
     /// Model override — when set, protocol adapters use this instead of config.default_model()
     pub model: Option<String>,
@@ -366,7 +366,7 @@ Add builder method after `with_tool_choice` (after line 111):
 
 - [ ] **Step 2: Update `try_provider` in `thinker/fallback.rs`**
 
-In `core/src/thinker/fallback.rs:53-61`, the `try_provider` function manually constructs `RequestPayload` by copying fields. Add `model` to the copy:
+In `src/thinker/fallback.rs:53-61`, the `try_provider` function manually constructs `RequestPayload` by copying fields. Add `model` to the copy:
 
 ```rust
     provider.process(RequestPayload {
@@ -389,7 +389,7 @@ Expected: Clean build (no existing code passes `model`, so `Default` fills it wi
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/providers/adapter.rs core/src/thinker/fallback.rs
+git add src/providers/adapter.rs src/thinker/fallback.rs
 git commit -m "providers: add model field to RequestPayload"
 ```
 
@@ -398,17 +398,17 @@ git commit -m "providers: add model field to RequestPayload"
 ### Task 3: Protocol Adapters Use `payload.model`
 
 **Files:**
-- Modify: `core/src/providers/protocols/openai_chat.rs:244`
-- Modify: `core/src/providers/protocols/anthropic.rs:313`
-- Modify: `core/src/providers/protocols/gemini.rs:55-58`
-- Modify: `core/src/providers/protocols/openai_responses.rs:204`
-- Modify: `core/src/providers/protocols/template.rs:60`
+- Modify: `src/providers/protocols/openai_chat.rs:244`
+- Modify: `src/providers/protocols/anthropic.rs:313`
+- Modify: `src/providers/protocols/gemini.rs:55-58`
+- Modify: `src/providers/protocols/openai_responses.rs:204`
+- Modify: `src/providers/protocols/template.rs:60`
 
 The pattern for all adapters: `payload.model.as_deref().unwrap_or_else(|| config.default_model())`
 
 - [ ] **Step 1: Update OpenAI Chat adapter**
 
-In `core/src/providers/protocols/openai_chat.rs:244`, change:
+In `src/providers/protocols/openai_chat.rs:244`, change:
 ```rust
 // Before
 "model": config.default_model(),
@@ -418,7 +418,7 @@ In `core/src/providers/protocols/openai_chat.rs:244`, change:
 
 - [ ] **Step 2: Update Anthropic adapter**
 
-In `core/src/providers/protocols/anthropic.rs:313`, change:
+In `src/providers/protocols/anthropic.rs:313`, change:
 ```rust
 // Before
 model: config.default_model().to_string(),
@@ -436,7 +436,7 @@ model = %payload.model.as_deref().unwrap_or_else(|| config.default_model()),
 
 Gemini is special — model is in the URL path, not the body. The `build_endpoint` function at `gemini.rs:44` currently takes `config: &ProviderConfig`. It needs an additional model parameter.
 
-In `core/src/providers/protocols/gemini.rs`, change `build_endpoint`:
+In `src/providers/protocols/gemini.rs`, change `build_endpoint`:
 ```rust
 fn build_endpoint(config: &ProviderConfig, model_override: Option<&str>) -> String {
     let base_url = config.base_url.as_deref()
@@ -458,7 +458,7 @@ let endpoint = Self::build_endpoint(config, payload.model.as_deref());
 
 - [ ] **Step 4: Update OpenAI Responses adapter**
 
-In `core/src/providers/protocols/openai_responses.rs:204`, change:
+In `src/providers/protocols/openai_responses.rs:204`, change:
 ```rust
 // Before
 let request = Self::build_responses_request(payload, config.default_model(), &self.variant, config);
@@ -469,7 +469,7 @@ let request = Self::build_responses_request(payload, model, &self.variant, confi
 
 - [ ] **Step 5: Update template adapter**
 
-In `core/src/providers/protocols/template.rs:60`, change:
+In `src/providers/protocols/template.rs:60`, change:
 ```rust
 // Before
 "model": config.default_model(),
@@ -485,7 +485,7 @@ Expected: Clean build
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/providers/protocols/
+git add src/providers/protocols/
 git commit -m "protocols: use payload.model override in all adapters"
 ```
 
@@ -494,11 +494,11 @@ git commit -m "protocols: use payload.model override in all adapters"
 ### Task 4: Health-Aware `resolve_with_fallback` in MultiProviderRegistry
 
 **Files:**
-- Modify: `core/src/thinker/mod.rs:173-280` (MultiProviderRegistry)
+- Modify: `src/thinker/mod.rs:173-280` (MultiProviderRegistry)
 
 - [ ] **Step 1: Write tests for resolve_with_fallback**
 
-Add to the existing `multi_registry_tests` module in `core/src/thinker/mod.rs` (after line 282):
+Add to the existing `multi_registry_tests` module in `src/thinker/mod.rs` (after line 282):
 
 ```rust
     use crate::providers::health::{ProviderHealth, ProviderError, TransientError, PermanentError};
@@ -599,7 +599,7 @@ Expected: Compilation error — `resolve_with_fallback` and `report_outcome` don
 
 - [ ] **Step 3: Add health tracking to RegistryState**
 
-In `core/src/thinker/mod.rs`, modify `RegistryState` (line 173):
+In `src/thinker/mod.rs`, modify `RegistryState` (line 173):
 ```rust
 use crate::providers::health::{ProviderHealth, ProviderError, ResolvedModel};
 
@@ -753,7 +753,7 @@ Expected: All tests pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/thinker/mod.rs
+git add src/thinker/mod.rs
 git commit -m "thinker: add resolve_with_fallback and health tracking to MultiProviderRegistry"
 ```
 
@@ -762,12 +762,12 @@ git commit -m "thinker: add resolve_with_fallback and health tracking to MultiPr
 ### Task 5: Wire Into Execution Engine
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:64-69`
-- Modify: `core/src/agent_loop/provider_bridge.rs:65-74`
+- Modify: `src/gateway/execution_engine/run_loop.rs:64-69`
+- Modify: `src/agent_loop/provider_bridge.rs:65-74`
 
 - [ ] **Step 1: Update `run_loop.rs` to use resolve_with_fallback**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, replace lines 64-69:
+In `src/gateway/execution_engine/run_loop.rs`, replace lines 64-69:
 
 ```rust
 // Before:
@@ -804,7 +804,7 @@ Note: `self.as_multi_registry()` needs a helper method on `ExecutionEngine` to d
 
 **Alternative (simpler):** Add methods to `ProviderRegistry` trait:
 
-In `core/src/thinker/mod.rs`, extend the trait:
+In `src/thinker/mod.rs`, extend the trait:
 ```rust
 pub trait ProviderRegistry: Send + Sync {
     fn get(&self, model: &str) -> Option<Arc<dyn AiProvider>>;
@@ -850,7 +850,7 @@ let bridge = AiProviderBridge::new(provider)
 
 - [ ] **Step 2: Update `AiProviderBridge` to accept model override**
 
-In `core/src/agent_loop/provider_bridge.rs`, add a `model` field and builder:
+In `src/agent_loop/provider_bridge.rs`, add a `model` field and builder:
 
 ```rust
 pub struct AiProviderBridge {
@@ -910,7 +910,7 @@ Expected: Clean build, existing tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/thinker/mod.rs core/src/gateway/execution_engine/run_loop.rs core/src/agent_loop/provider_bridge.rs
+git add src/thinker/mod.rs src/gateway/execution_engine/run_loop.rs src/agent_loop/provider_bridge.rs
 git commit -m "engine: wire resolve_with_fallback into agent execution loop"
 ```
 
@@ -919,12 +919,12 @@ git commit -m "engine: wire resolve_with_fallback into agent execution loop"
 ### Task 6: ModelInfo in Stream Events
 
 **Files:**
-- Modify: `core/src/thinker/streaming/events.rs:10-14`
-- Modify: `core/src/gateway/execution_engine/run_loop.rs` (pass ModelInfo to stream)
+- Modify: `src/thinker/streaming/events.rs:10-14`
+- Modify: `src/gateway/execution_engine/run_loop.rs` (pass ModelInfo to stream)
 
 - [ ] **Step 1: Add `model_info` to `AssistantStart` event**
 
-In `core/src/thinker/streaming/events.rs`, modify `AssistantStart`:
+In `src/thinker/streaming/events.rs`, modify `AssistantStart`:
 
 ```rust
 use crate::providers::health::ModelInfo;
@@ -963,7 +963,7 @@ Pass `model_info` into whatever code emits `StreamEvent::AssistantStart`. The ex
 
 - [ ] **Step 3: Update any existing `AssistantStart` construction sites**
 
-Run: `grep -rn "AssistantStart" core/src/`
+Run: `grep -rn "AssistantStart" src/`
 
 Add `model_info: None` to all existing construction sites that don't have the resolved model info (so they compile without changes).
 
@@ -975,7 +975,7 @@ Expected: Clean build
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/thinker/streaming/events.rs core/src/gateway/execution_engine/
+git add src/thinker/streaming/events.rs src/gateway/execution_engine/
 git commit -m "streaming: add ModelInfo to AssistantStart event"
 ```
 
@@ -984,18 +984,18 @@ git commit -m "streaming: add ModelInfo to AssistantStart event"
 ### Task 7: Remove Old `fallback.rs`
 
 **Files:**
-- Remove: `core/src/thinker/fallback.rs`
-- Modify: `core/src/thinker/mod.rs:12` (remove `pub mod fallback;`)
+- Remove: `src/thinker/fallback.rs`
+- Modify: `src/thinker/mod.rs:12` (remove `pub mod fallback;`)
 
 - [ ] **Step 1: Check for callers**
 
-Run: `grep -rn "call_with_fallback\|thinker::fallback" core/src/`
+Run: `grep -rn "call_with_fallback\|thinker::fallback" src/`
 
 Verify no remaining callers exist (the TODO in run_loop.rs was never wired up).
 
 - [ ] **Step 2: Remove module declaration**
 
-In `core/src/thinker/mod.rs:12`, remove:
+In `src/thinker/mod.rs:12`, remove:
 ```rust
 pub mod fallback;
 ```
@@ -1003,7 +1003,7 @@ pub mod fallback;
 - [ ] **Step 3: Delete the file**
 
 ```bash
-rm core/src/thinker/fallback.rs
+rm src/thinker/fallback.rs
 ```
 
 - [ ] **Step 4: Verify compilation**
@@ -1014,7 +1014,7 @@ Expected: Clean build
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A core/src/thinker/fallback.rs core/src/thinker/mod.rs
+git add -A src/thinker/fallback.rs src/thinker/mod.rs
 git commit -m "thinker: remove old fallback.rs, replaced by registry-level health-aware fallback"
 ```
 
@@ -1075,7 +1075,7 @@ git commit -m "panel: show fallback indicator when model is degraded"
 
 - [ ] **Step 1: Write integration test for full fallback chain**
 
-Add to `core/src/thinker/mod.rs` tests (or a new test file):
+Add to `src/thinker/mod.rs` tests (or a new test file):
 
 ```rust
     #[test]
@@ -1111,7 +1111,7 @@ Expected: All tests pass
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/thinker/mod.rs
+git add src/thinker/mod.rs
 git commit -m "test: add integration test for full fallback chain"
 ```
 
@@ -1120,11 +1120,11 @@ git commit -m "test: add integration test for full fallback chain"
 ### Task 10: Wire `reset_health` into Provider RPC Handlers
 
 **Files:**
-- Modify: `core/src/gateway/handlers/providers/handlers.rs`
+- Modify: `src/gateway/handlers/providers/handlers.rs`
 
 - [ ] **Step 1: Find `handle_set_default` and `test_connection` handlers**
 
-These handlers already live in `core/src/gateway/handlers/providers/handlers.rs`. When a provider is set as default or test_connection succeeds, call `reset_health`.
+These handlers already live in `src/gateway/handlers/providers/handlers.rs`. When a provider is set as default or test_connection succeeds, call `reset_health`.
 
 - [ ] **Step 2: Add reset_health call after successful test_connection**
 
@@ -1151,6 +1151,6 @@ Expected: Clean build
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/providers/handlers.rs
+git add src/gateway/handlers/providers/handlers.rs
 git commit -m "gateway: reset provider health on test_connection and set_default"
 ```

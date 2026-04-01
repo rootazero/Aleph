@@ -15,11 +15,11 @@
 ### Task 1: Add `bound_tool` to SkillManifest
 
 **Files:**
-- Modify: `core/src/domain/skill.rs:363-384` (SkillManifest struct + impl)
+- Modify: `src/domain/skill.rs:363-384` (SkillManifest struct + impl)
 
 - [ ] **Step 1: Write failing test**
 
-Add to the existing `tests` module in `core/src/domain/skill.rs`:
+Add to the existing `tests` module in `src/domain/skill.rs`:
 
 ```rust
 #[test]
@@ -48,7 +48,7 @@ Expected: FAIL — `bound_tool()` and `set_bound_tool()` don't exist yet
 
 - [ ] **Step 3: Implement**
 
-In `core/src/domain/skill.rs`, add `bound_tool: Option<String>` field to `SkillManifest` struct (after `scope`):
+In `src/domain/skill.rs`, add `bound_tool: Option<String>` field to `SkillManifest` struct (after `scope`):
 
 ```rust
 /// Tool name this skill is bound to (for Tool scope filtering).
@@ -79,7 +79,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/domain/skill.rs
+git add src/domain/skill.rs
 git commit -m "skill: add bound_tool field to SkillManifest"
 ```
 
@@ -88,11 +88,11 @@ git commit -m "skill: add bound_tool field to SkillManifest"
 ### Task 2: Parse `bound-tool` from SKILL.md frontmatter
 
 **Files:**
-- Modify: `core/src/skill/manifest.rs:62-77` (RawFrontmatter) and `core/src/skill/manifest.rs:126-216` (parse_skill_content)
+- Modify: `src/skill/manifest.rs:62-77` (RawFrontmatter) and `src/skill/manifest.rs:126-216` (parse_skill_content)
 
 - [ ] **Step 1: Write failing test**
 
-Add to the existing `tests` module in `core/src/skill/manifest.rs`:
+Add to the existing `tests` module in `src/skill/manifest.rs`:
 
 ```rust
 #[test]
@@ -130,7 +130,7 @@ Expected: FAIL — `bound_tool` field not in `RawFrontmatter`, not set during pa
 
 - [ ] **Step 3: Implement**
 
-In `core/src/skill/manifest.rs`, add to `RawFrontmatter` struct:
+In `src/skill/manifest.rs`, add to `RawFrontmatter` struct:
 
 ```rust
 #[serde(default)]
@@ -154,7 +154,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/skill/manifest.rs
+git add src/skill/manifest.rs
 git commit -m "skill: parse bound-tool from SKILL.md frontmatter"
 ```
 
@@ -163,11 +163,11 @@ git commit -m "skill: parse bound-tool from SKILL.md frontmatter"
 ### Task 3: Add `eligible_manifests` to SkillSnapshot
 
 **Files:**
-- Modify: `core/src/skill/snapshot.rs:17-82` (SkillSnapshot struct + build())
+- Modify: `src/skill/snapshot.rs:17-82` (SkillSnapshot struct + build())
 
 - [ ] **Step 1: Write failing test**
 
-Add to the existing `tests` module in `core/src/skill/snapshot.rs`:
+Add to the existing `tests` module in `src/skill/snapshot.rs`:
 
 ```rust
 #[test]
@@ -208,7 +208,7 @@ Expected: FAIL — `eligible_manifests` field doesn't exist
 
 - [ ] **Step 3: Implement**
 
-In `core/src/skill/snapshot.rs`, add field to `SkillSnapshot`:
+In `src/skill/snapshot.rs`, add field to `SkillSnapshot`:
 
 ```rust
 /// Eligible + model-visible skill manifests for prompt injection.
@@ -245,7 +245,7 @@ Expected: All pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/skill/snapshot.rs
+git add src/skill/snapshot.rs
 git commit -m "skill: add eligible_manifests to SkillSnapshot"
 ```
 
@@ -254,11 +254,11 @@ git commit -m "skill: add eligible_manifests to SkillSnapshot"
 ### Task 4: Add `eligible_skills` to PromptConfig
 
 **Files:**
-- Modify: `core/src/thinker/prompt_builder/mod.rs:39-98` (PromptConfig struct + Default)
+- Modify: `src/thinker/prompt_builder/mod.rs:39-98` (PromptConfig struct + Default)
 
 - [ ] **Step 1: Add field**
 
-In `core/src/thinker/prompt_builder/mod.rs`, add to `PromptConfig` struct:
+In `src/thinker/prompt_builder/mod.rs`, add to `PromptConfig` struct:
 
 ```rust
 /// Eligible skills from SkillSystem v2 snapshot for scope-aware filtering.
@@ -276,7 +276,7 @@ Expected: OK (no breaking changes — new field is `None` by default, existing c
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/thinker/prompt_builder/mod.rs
+git add src/thinker/prompt_builder/mod.rs
 git commit -m "thinker: add eligible_skills field to PromptConfig"
 ```
 
@@ -285,11 +285,11 @@ git commit -m "thinker: add eligible_skills field to PromptConfig"
 ### Task 5: Rewrite SkillInstructionsLayer with scope filtering
 
 **Files:**
-- Modify: `core/src/thinker/layers/skill_instructions.rs` (full rewrite)
+- Modify: `src/thinker/layers/skill_instructions.rs` (full rewrite)
 
 - [ ] **Step 1: Write failing tests**
 
-Replace the existing test module in `core/src/thinker/layers/skill_instructions.rs` with:
+Replace the existing test module in `src/thinker/layers/skill_instructions.rs` with:
 
 ```rust
 #[cfg(test)]
@@ -484,7 +484,7 @@ Expected: Multiple failures — new fields don't exist in inject(), paths wrong,
 
 - [ ] **Step 3: Implement SkillInstructionsLayer**
 
-Rewrite `core/src/thinker/layers/skill_instructions.rs`:
+Rewrite `src/thinker/layers/skill_instructions.rs`:
 
 ```rust
 //! SkillInstructionsLayer — skill system v2 instructions with scope filtering (priority 1050)
@@ -580,7 +580,7 @@ Expected: All pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/thinker/layers/skill_instructions.rs
+git add src/thinker/layers/skill_instructions.rs
 git commit -m "thinker: rewrite SkillInstructionsLayer with scope filtering"
 ```
 
@@ -591,11 +591,11 @@ git commit -m "thinker: rewrite SkillInstructionsLayer with scope filtering"
 The production path uses `agent_loop::prompt_builder::PromptBuilder`, NOT the thinker's `PromptPipeline`. Skills must also be injected here.
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs:56-202` (PromptBuilder struct + build())
+- Modify: `src/agent_loop/prompt_builder.rs:56-202` (PromptBuilder struct + build())
 
 - [ ] **Step 1: Write failing test**
 
-Add to the existing `tests` module in `core/src/agent_loop/prompt_builder.rs`:
+Add to the existing `tests` module in `src/agent_loop/prompt_builder.rs`:
 
 ```rust
 #[test]
@@ -654,7 +654,7 @@ Expected: FAIL — `with_eligible_skills` doesn't exist
 
 - [ ] **Step 3: Implement**
 
-In `core/src/agent_loop/prompt_builder.rs`:
+In `src/agent_loop/prompt_builder.rs`:
 
 Add import at the top:
 ```rust
@@ -719,7 +719,7 @@ Expected: All pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "agent_loop: add scope-filtered skill injection to PromptBuilder"
 ```
 
@@ -728,17 +728,17 @@ git commit -m "agent_loop: add scope-filtered skill injection to PromptBuilder"
 ### Task 7: Wire upstream — populate eligible_skills from SkillSystem
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:114-121` (prompt_builder construction)
+- Modify: `src/gateway/execution_engine/run_loop.rs:114-121` (prompt_builder construction)
 
 - [ ] **Step 1: Read the file to understand context**
 
-Read `core/src/gateway/execution_engine/run_loop.rs` around lines 1-20 (imports) and 114-121 (prompt_builder construction).
+Read `src/gateway/execution_engine/run_loop.rs` around lines 1-20 (imports) and 114-121 (prompt_builder construction).
 
 **Key context:** `ExecutionEngine` does NOT have an `extension_manager` field. However, there is a global `ExtensionManager` accessible via `crate::gateway::handlers::plugins::get_extension_manager()` (a `OnceCell`-backed static initialized at gateway startup). This is the correct access path.
 
 - [ ] **Step 2: Implement wiring**
 
-In `core/src/gateway/execution_engine/run_loop.rs`, add import:
+In `src/gateway/execution_engine/run_loop.rs`, add import:
 
 ```rust
 use crate::gateway::handlers::plugins::get_extension_manager;
@@ -774,7 +774,7 @@ Expected: OK
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "gateway: wire SkillSystem eligible_manifests into prompt builder"
 ```
 
@@ -794,7 +794,7 @@ Expected: No new warnings
 
 - [ ] **Step 3: Verify dead code cleanup**
 
-Check if `build_skill_tool_description_v2` and `filter_skills_by_scope` in `core/src/extension/skill_tool.rs` still have `#[allow(dead_code)]` — they should remain untouched per spec (v1 path not modified).
+Check if `build_skill_tool_description_v2` and `filter_skills_by_scope` in `src/extension/skill_tool.rs` still have `#[allow(dead_code)]` — they should remain untouched per spec (v1 path not modified).
 
 - [ ] **Step 4: Final commit if any fixups**
 
@@ -808,7 +808,7 @@ git commit -m "skill: scope filtering cleanup and verification"
 ### Task 9: Update prompt pipeline test (compact mode)
 
 **Files:**
-- Modify: `core/src/thinker/prompt_pipeline.rs:390-424` (compact mode test)
+- Modify: `src/thinker/prompt_pipeline.rs:390-424` (compact mode test)
 
 The `compact_mode_excludes_heavy_layers` test checks that `skill_instructions` layer does NOT support Compact mode. The paths change should not break this. Verify.
 

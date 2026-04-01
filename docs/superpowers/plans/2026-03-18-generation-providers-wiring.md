@@ -17,12 +17,12 @@
 ### Task 1: Add `edit_url` field to GenerationProviderConfig
 
 **Files:**
-- Modify: `core/src/config/types/generation/provider.rs:38-87` (struct definition)
-- Modify: `core/src/config/types/generation/provider.rs:101-116` (Default impl)
+- Modify: `src/config/types/generation/provider.rs:38-87` (struct definition)
+- Modify: `src/config/types/generation/provider.rs:101-116` (Default impl)
 
 - [ ] **Step 1: Add `edit_url` field to struct**
 
-In `core/src/config/types/generation/provider.rs`, add after line 86 (`pub verified: bool`):
+In `src/config/types/generation/provider.rs`, add after line 86 (`pub verified: bool`):
 
 ```rust
     /// Optional explicit edit endpoint URL (for openai_compat providers with non-standard edit paths)
@@ -42,7 +42,7 @@ Expected: PASS (field is Option with serde default, so existing code using `..De
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/config/types/generation/provider.rs
+git add src/config/types/generation/provider.rs
 git commit -m "generation: add edit_url field to GenerationProviderConfig"
 ```
 
@@ -51,13 +51,13 @@ git commit -m "generation: add edit_url field to GenerationProviderConfig"
 ### Task 2: Add `edit_endpoint` to OpenAiCompatProvider struct + builder
 
 **Files:**
-- Modify: `core/src/generation/providers/openai_compat/provider.rs:39-54` (struct)
-- Modify: `core/src/generation/providers/openai_compat/builder.rs:32-47` (builder struct)
-- Modify: `core/src/generation/providers/openai_compat/builder.rs:127-181` (build method)
+- Modify: `src/generation/providers/openai_compat/provider.rs:39-54` (struct)
+- Modify: `src/generation/providers/openai_compat/builder.rs:32-47` (builder struct)
+- Modify: `src/generation/providers/openai_compat/builder.rs:127-181` (build method)
 
 - [ ] **Step 1: Add field to provider struct**
 
-In `core/src/generation/providers/openai_compat/provider.rs`, add after line 53 (`pub(crate) supported_types: Vec<GenerationType>`):
+In `src/generation/providers/openai_compat/provider.rs`, add after line 53 (`pub(crate) supported_types: Vec<GenerationType>`):
 
 ```rust
     /// Optional explicit edit endpoint URL
@@ -66,7 +66,7 @@ In `core/src/generation/providers/openai_compat/provider.rs`, add after line 53 
 
 - [ ] **Step 2: Add field + method to builder**
 
-In `core/src/generation/providers/openai_compat/builder.rs`, add to the builder struct (after line 46, `pub(crate) timeout_secs: u64`):
+In `src/generation/providers/openai_compat/builder.rs`, add to the builder struct (after line 46, `pub(crate) timeout_secs: u64`):
 
 ```rust
     /// Optional explicit edit endpoint URL
@@ -120,7 +120,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/generation/providers/openai_compat/provider.rs core/src/generation/providers/openai_compat/builder.rs
+git add src/generation/providers/openai_compat/provider.rs src/generation/providers/openai_compat/builder.rs
 git commit -m "generation: add edit_endpoint to openai_compat provider + remove /v1 normalization"
 ```
 
@@ -129,11 +129,11 @@ git commit -m "generation: add edit_endpoint to openai_compat provider + remove 
 ### Task 3: Change URL logic in helpers.rs
 
 **Files:**
-- Modify: `core/src/generation/providers/openai_compat/helpers.rs:10-19`
+- Modify: `src/generation/providers/openai_compat/helpers.rs:10-19`
 
 - [ ] **Step 1: Replace URL methods**
 
-In `core/src/generation/providers/openai_compat/helpers.rs`, replace lines 11-19:
+In `src/generation/providers/openai_compat/helpers.rs`, replace lines 11-19:
 
 ```rust
     /// Get the full URL for the generations endpoint
@@ -162,7 +162,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/generation/providers/openai_compat/helpers.rs
+git add src/generation/providers/openai_compat/helpers.rs
 git commit -m "generation: openai_compat uses base_url as full endpoint URL"
 ```
 
@@ -171,13 +171,13 @@ git commit -m "generation: openai_compat uses base_url as full endpoint URL"
 ### Task 4: Update existing tests for new URL semantics
 
 **Files:**
-- Modify: `core/src/generation/providers/openai_compat/mod.rs:315-660` (URL tests)
+- Modify: `src/generation/providers/openai_compat/mod.rs:315-660` (URL tests)
 
 The existing tests expect the old behavior where `base_url = "https://api.example.com"` produces `https://api.example.com/v1/images/generations`. Under the new semantics, `base_url` IS the full URL.
 
 - [ ] **Step 1: Update URL tests**
 
-In `core/src/generation/providers/openai_compat/mod.rs`, update these tests:
+In `src/generation/providers/openai_compat/mod.rs`, update these tests:
 
 `test_generations_url` (line 318): Change base_url to full URL, update assertion:
 ```rust
@@ -266,7 +266,7 @@ Expected: All URL tests PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/generation/providers/openai_compat/mod.rs
+git add src/generation/providers/openai_compat/mod.rs
 git commit -m "generation: update openai_compat tests for full-URL semantics"
 ```
 
@@ -275,11 +275,11 @@ git commit -m "generation: update openai_compat tests for full-URL semantics"
 ### Task 5: Wire `edit_url` through factory
 
 **Files:**
-- Modify: `core/src/generation/providers/mod.rs:147-169` (openai_compat branch in create_provider)
+- Modify: `src/generation/providers/mod.rs:147-169` (openai_compat branch in create_provider)
 
 - [ ] **Step 1: Pass edit_url in factory**
 
-In `core/src/generation/providers/mod.rs`, in the `"openai_compat"` match arm (around line 147), after `builder = builder.color(&config.color);` (line 161), add:
+In `src/generation/providers/mod.rs`, in the `"openai_compat"` match arm (around line 147), after `builder = builder.color(&config.color);` (line 161), add:
 
 ```rust
             if let Some(ref edit_url) = config.edit_url {
@@ -345,7 +345,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/generation/providers/mod.rs
+git add src/generation/providers/mod.rs
 git commit -m "generation: wire edit_url through factory, update tests for full-URL"
 ```
 
@@ -356,12 +356,12 @@ git commit -m "generation: wire edit_url through factory, update tests for full-
 ### Task 6: Add `shared_token_mgr` parameter to `register_agent_handlers`
 
 **Files:**
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs:87-100` (function signature)
-- Modify: `core/src/bin/aleph/commands/start/mod.rs:461-466` (call site)
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs:87-100` (function signature)
+- Modify: `src/bin/aleph/commands/start/mod.rs:461-466` (call site)
 
 - [ ] **Step 1: Extend function signature**
 
-In `core/src/bin/aleph/commands/start/builder/agent_init.rs`, add a parameter to `register_agent_handlers` (line 87-100):
+In `src/bin/aleph/commands/start/builder/agent_init.rs`, add a parameter to `register_agent_handlers` (line 87-100):
 
 After `daemon: bool,` (line 100), add:
 
@@ -371,7 +371,7 @@ After `daemon: bool,` (line 100), add:
 
 - [ ] **Step 2: Update call site in mod.rs**
 
-In `core/src/bin/aleph/commands/start/mod.rs` (line 461-466), add the vault parameter to the call (after `args.daemon`):
+In `src/bin/aleph/commands/start/mod.rs` (line 461-466), add the vault parameter to the call (after `args.daemon`):
 
 ```rust
     let agent_result = register_agent_handlers(
@@ -391,7 +391,7 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/bin/aleph/commands/start/builder/agent_init.rs core/src/bin/aleph/commands/start/mod.rs
+git add src/bin/aleph/commands/start/builder/agent_init.rs src/bin/aleph/commands/start/mod.rs
 git commit -m "generation: pass SharedTokenManager to register_agent_handlers"
 ```
 
@@ -400,7 +400,7 @@ git commit -m "generation: pass SharedTokenManager to register_agent_handlers"
 ### Task 7: Create generation registry at startup and inject into BuiltinToolConfig
 
 **Files:**
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs:101-197`
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs:101-197`
 
 - [ ] **Step 1: Add imports**
 
@@ -464,7 +464,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/bin/aleph/commands/start/builder/agent_init.rs
+git add src/bin/aleph/commands/start/builder/agent_init.rs
 git commit -m "generation: wire up generation provider registry at startup"
 ```
 
@@ -473,7 +473,7 @@ git commit -m "generation: wire up generation provider registry at startup"
 ### Task 8: Spawn hot-reload background task
 
 **Files:**
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs` (after generation registry creation)
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs` (after generation registry creation)
 
 - [ ] **Step 1: Add hot-reload task**
 
@@ -554,7 +554,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/bin/aleph/commands/start/builder/agent_init.rs
+git add src/bin/aleph/commands/start/builder/agent_init.rs
 git commit -m "generation: add hot-reload for generation provider registry"
 ```
 

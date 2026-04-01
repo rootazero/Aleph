@@ -11,7 +11,7 @@ Aleph's extension system allows third-party tools via:
 - **Node.js Plugins**: JavaScript/TypeScript extensions
 - **Manifest-driven**: Declarative plugin definitions
 
-**Location**: `core/src/extension/`
+**Location**: `src/extension/`
 
 ---
 
@@ -89,7 +89,7 @@ options = { type = "object", required = false }
 
 ## WASM Runtime
 
-**Location**: `core/src/extension/runtime/wasm/`
+**Location**: `src/extension/runtime/wasm/`
 
 Feature-gated: `plugin-wasm`
 
@@ -142,7 +142,7 @@ pub fn my_tool(input: String) -> FnResult<String> {
 
 ## Node.js Runtime
 
-**Location**: `core/src/extension/runtime/nodejs/`
+**Location**: `src/extension/runtime/nodejs/`
 
 ### Architecture
 
@@ -219,7 +219,7 @@ export function createServer(config: PluginServer): Server {
 
 ## Plugin Discovery
 
-**Location**: `core/src/extension/discovery/`
+**Location**: `src/extension/discovery/`
 
 ```rust
 pub struct PluginDiscovery {
@@ -254,7 +254,7 @@ impl PluginDiscovery {
 
 ## Plugin Registry
 
-**Location**: `core/src/extension/registry/`
+**Location**: `src/extension/registry/`
 
 ```rust
 pub struct PluginRegistry {
@@ -316,7 +316,7 @@ Plugin Ready
 
 ## Hot Reload
 
-**Location**: `core/src/extension/watcher.rs`
+**Location**: `src/extension/watcher.rs`
 
 ```rust
 pub struct PluginWatcher {
@@ -347,7 +347,7 @@ impl PluginWatcher {
 
 ## Skill Integration
 
-**Location**: `core/src/extension/skill_tool.rs`
+**Location**: `src/extension/skill_tool.rs`
 
 Skills (from `~/.claude/skills/`) are also loaded as extensions:
 

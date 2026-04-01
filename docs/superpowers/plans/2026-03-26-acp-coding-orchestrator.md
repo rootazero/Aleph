@@ -15,14 +15,14 @@
 ### Task 0: Bug Fix — Config Preset Modes
 
 **Files:**
-- Modify: `core/src/config/types/acp.rs:151-195` (preset factories)
-- Test: `core/src/config/types/acp.rs` (inline tests) + `core/tests/acp_probe/p1_config_and_presets.rs`
+- Modify: `src/config/types/acp.rs:151-195` (preset factories)
+- Test: `src/config/types/acp.rs` (inline tests) + `tests/acp_probe/p1_config_and_presets.rs`
 
 The root cause: all three preset factories set `mode: HarnessModeSerde::NativeAcp`, but Claude Code and Codex harness structs hard-code `HarnessMode::Oneshot`. Fix presets to set correct defaults.
 
 - [ ] **Step 1: Write failing test**
 
-In `core/src/config/types/acp.rs`, add at the bottom (or in existing test module):
+In `src/config/types/acp.rs`, add at the bottom (or in existing test module):
 
 ```rust
 #[cfg(test)]
@@ -50,7 +50,7 @@ Expected: FAIL — Claude Code and Codex presets currently set `NativeAcp`
 
 - [ ] **Step 3: Fix preset factories**
 
-In `core/src/config/types/acp.rs`, change `preset_claude_code()` line 162:
+In `src/config/types/acp.rs`, change `preset_claude_code()` line 162:
 ```rust
 // Before:
 mode: HarnessModeSerde::NativeAcp,
@@ -76,7 +76,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/config/types/acp.rs
+git add src/config/types/acp.rs
 git commit -m "acp: correct preset mode defaults — Claude Code and Codex should be Oneshot"
 ```
 
@@ -85,12 +85,12 @@ git commit -m "acp: correct preset mode defaults — Claude Code and Codex shoul
 ### Task 1: Config Layer — Rename `mode` to `default_mode` with Backward Compat
 
 **Files:**
-- Modify: `core/src/config/types/acp.rs:78-119` (AcpHarnessEntry)
+- Modify: `src/config/types/acp.rs:78-119` (AcpHarnessEntry)
 - Modify: All files referencing `entry.mode` (manager, handlers, panel)
 
 - [ ] **Step 1: Rename field with serde alias**
 
-In `core/src/config/types/acp.rs`, change the `mode` field in `AcpHarnessEntry`:
+In `src/config/types/acp.rs`, change the `mode` field in `AcpHarnessEntry`:
 
 ```rust
 // Before (line 92-93):
@@ -116,9 +116,9 @@ Update all three preset factories to use `default_mode:` instead of `mode:`.
 - [ ] **Step 2: Fix all compilation errors**
 
 Search for `.mode` on `AcpHarnessEntry` usages and replace with `.default_mode`. Key files:
-- `core/src/acp/manager.rs` — `build_harness()` may reference `entry.mode`
-- `core/src/acp/harnesses/custom.rs` — `CustomHarness` reads `entry.mode`
-- `core/src/gateway/handlers/acp_config.rs` — RPC handlers serialize/deserialize entries
+- `src/acp/manager.rs` — `build_harness()` may reference `entry.mode`
+- `src/acp/harnesses/custom.rs` — `CustomHarness` reads `entry.mode`
+- `src/gateway/handlers/acp_config.rs` — RPC handlers serialize/deserialize entries
 - `interfaces/webchat/src/views/settings/acp_harnesses.rs` — Panel reads mode
 
 Run: `cargo check -p alephcore` and fix each error.
@@ -130,10 +130,10 @@ Expected: All tests pass (serde alias preserves backward compat)
 
 - [ ] **Step 4: Commit**
 
-Ensure all affected files are staged, especially `core/src/gateway/handlers/acp_config.rs` which serializes/deserializes `AcpHarnessEntry`:
+Ensure all affected files are staged, especially `src/gateway/handlers/acp_config.rs` which serializes/deserializes `AcpHarnessEntry`:
 
 ```bash
-git add core/src/config/types/acp.rs core/src/acp/ core/src/gateway/handlers/acp_config.rs interfaces/webchat/
+git add src/config/types/acp.rs src/acp/ src/gateway/handlers/acp_config.rs interfaces/webchat/
 git commit -m "acp: rename mode to default_mode with serde backward compat"
 ```
 
@@ -142,16 +142,16 @@ git commit -m "acp: rename mode to default_mode with serde backward compat"
 ### Task 2: Harness Trait — Add `supported_modes()` and `default_mode` Field
 
 **Files:**
-- Modify: `core/src/acp/harness.rs:46-127`
-- Modify: `core/src/acp/harnesses/claude_code.rs`
-- Modify: `core/src/acp/harnesses/codex.rs`
-- Modify: `core/src/acp/harnesses/gemini.rs`
-- Modify: `core/src/acp/harnesses/custom.rs`
-- Modify: `core/src/acp/manager.rs:117-135` (build_harness)
+- Modify: `src/acp/harness.rs:46-127`
+- Modify: `src/acp/harnesses/claude_code.rs`
+- Modify: `src/acp/harnesses/codex.rs`
+- Modify: `src/acp/harnesses/gemini.rs`
+- Modify: `src/acp/harnesses/custom.rs`
+- Modify: `src/acp/manager.rs:117-135` (build_harness)
 
 - [ ] **Step 1: Add `supported_modes()` to trait**
 
-In `core/src/acp/harness.rs`, add to the `AcpHarness` trait after `mode()`:
+In `src/acp/harness.rs`, add to the `AcpHarness` trait after `mode()`:
 
 ```rust
     /// Modes this harness supports. Used by Manager for runtime validation.
@@ -162,7 +162,7 @@ In `core/src/acp/harness.rs`, add to the `AcpHarness` trait after `mode()`:
 
 - [ ] **Step 2: Add `default_mode` field to each harness struct**
 
-Update `ClaudeCodeHarness` in `core/src/acp/harnesses/claude_code.rs`:
+Update `ClaudeCodeHarness` in `src/acp/harnesses/claude_code.rs`:
 
 ```rust
 pub struct ClaudeCodeHarness {
@@ -195,7 +195,7 @@ For `CustomHarness`, read mode from its config entry and return `vec![mode]` for
 
 - [ ] **Step 3: Update `build_harness()` in manager**
 
-In `core/src/acp/manager.rs:117-135`, pass `default_mode` from config:
+In `src/acp/manager.rs:117-135`, pass `default_mode` from config:
 
 ```rust
 fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Box<dyn AcpHarness> {
@@ -226,7 +226,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/acp/
+git add src/acp/
 git commit -m "acp: add supported_modes and configurable default_mode to harnesses"
 ```
 
@@ -237,12 +237,12 @@ git commit -m "acp: add supported_modes and configurable default_mode to harness
 ### Task 3: Dual-Mode — Add Native ACP to Claude Code Harness
 
 **Files:**
-- Modify: `core/src/acp/harnesses/claude_code.rs`
-- Test: `core/tests/acp_probe/p5_tool_execution.rs` (add dual-mode test)
+- Modify: `src/acp/harnesses/claude_code.rs`
+- Test: `tests/acp_probe/p5_tool_execution.rs` (add dual-mode test)
 
 - [ ] **Step 1: Write failing test**
 
-In `core/tests/acp_probe/p5_tool_execution.rs`, add:
+In `tests/acp_probe/p5_tool_execution.rs`, add:
 
 ```rust
 #[tokio::test]
@@ -256,7 +256,7 @@ async fn test_claude_code_harness_supports_both_modes() {
 
 - [ ] **Step 2: Add `spawn_session` override for native ACP**
 
-In `core/src/acp/harnesses/claude_code.rs`, add the native ACP spawn config:
+In `src/acp/harnesses/claude_code.rs`, add the native ACP spawn config:
 
 ```rust
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
@@ -310,7 +310,7 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/acp/harnesses/claude_code.rs core/tests/acp_probe/
+git add src/acp/harnesses/claude_code.rs tests/acp_probe/
 git commit -m "acp: add native ACP mode to Claude Code harness"
 ```
 
@@ -319,7 +319,7 @@ git commit -m "acp: add native ACP mode to Claude Code harness"
 ### Task 4: Dual-Mode — Add Native ACP to Codex Harness
 
 **Files:**
-- Modify: `core/src/acp/harnesses/codex.rs`
+- Modify: `src/acp/harnesses/codex.rs`
 
 Same pattern as Task 3. Override `spawn_session` with `codex --acp` args. Add `supported_modes` returning both modes.
 
@@ -335,7 +335,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/acp/harnesses/codex.rs
+git add src/acp/harnesses/codex.rs
 git commit -m "acp: add native ACP mode to Codex harness"
 ```
 
@@ -344,7 +344,7 @@ git commit -m "acp: add native ACP mode to Codex harness"
 ### Task 5: Dual-Mode — Add Oneshot to Gemini Harness
 
 **Files:**
-- Modify: `core/src/acp/harnesses/gemini.rs`
+- Modify: `src/acp/harnesses/gemini.rs`
 
 - [ ] **Step 1: Add `execute_oneshot` to GeminiHarness**
 
@@ -398,7 +398,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/acp/harnesses/gemini.rs
+git add src/acp/harnesses/gemini.rs
 git commit -m "acp: add oneshot mode to Gemini harness"
 ```
 
@@ -407,8 +407,8 @@ git commit -m "acp: add oneshot mode to Gemini harness"
 ### Task 6: Session Pool — SessionKey and Extract-Use-Reinsert
 
 **Files:**
-- Modify: `core/src/acp/manager.rs`
-- Modify: `core/src/builtin_tools/acp_tools.rs` (AcpSwitchTool)
+- Modify: `src/acp/manager.rs`
+- Modify: `src/builtin_tools/acp_tools.rs` (AcpSwitchTool)
 
 This is the most complex task. Replace `HashMap<String, AcpSession>` with `HashMap<SessionKey, AcpSession>`.
 
@@ -416,7 +416,7 @@ This is the most complex task. Replace `HashMap<String, AcpSession>` with `HashM
 
 - [ ] **Step 1: Write failing test**
 
-Add to `core/src/acp/manager.rs` tests:
+Add to `src/acp/manager.rs` tests:
 
 ```rust
 #[test]
@@ -433,7 +433,7 @@ fn test_session_key_canonicalization() {
 
 - [ ] **Step 2: Define SessionKey**
 
-At the top of `core/src/acp/manager.rs`:
+At the top of `src/acp/manager.rs`:
 
 ```rust
 use std::path::PathBuf;
@@ -625,7 +625,7 @@ Apply similar pattern to `shutdown_all`.
 
 - [ ] **Step 6: Update `AcpSwitchTool` for new `ensure_session` and `cancel` signatures**
 
-In `core/src/builtin_tools/acp_tools.rs`, `AcpSwitchTool::call()` at line 260 calls `self.manager.ensure_session(&args.target, &cwd)` — this still works with the new signature (takes `harness_id` + `cwd` strings, internally creates `SessionKey`). No change needed for `ensure_session`.
+In `src/builtin_tools/acp_tools.rs`, `AcpSwitchTool::call()` at line 260 calls `self.manager.ensure_session(&args.target, &cwd)` — this still works with the new signature (takes `harness_id` + `cwd` strings, internally creates `SessionKey`). No change needed for `ensure_session`.
 
 However, verify that `harness_mode()` still returns the correct mode — after Task 2, it returns `self.default_mode` from config, which is correct.
 
@@ -637,7 +637,7 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/acp/manager.rs
+git add src/acp/manager.rs
 git commit -m "acp: SessionKey pool with extract-use-reinsert locking"
 ```
 
@@ -646,12 +646,12 @@ git commit -m "acp: SessionKey pool with extract-use-reinsert locking"
 ### Task 7: Streaming — AcpChunkCallback
 
 **Files:**
-- Modify: `core/src/acp/session.rs:171-220`
-- Create: `core/src/acp/callback.rs` (or add to `mod.rs`)
+- Modify: `src/acp/session.rs:171-220`
+- Create: `src/acp/callback.rs` (or add to `mod.rs`)
 
 - [ ] **Step 1: Define AcpChunkCallback type**
 
-Add directly to `core/src/acp/mod.rs` (no separate file needed — it's a single type alias):
+Add directly to `src/acp/mod.rs` (no separate file needed — it's a single type alias):
 
 ```rust
 use crate::sync_primitives::Arc;
@@ -665,7 +665,7 @@ This is automatically public since it's in `mod.rs`. Other modules import via `u
 
 - [ ] **Step 2: Update `session.prompt()` to accept callback**
 
-In `core/src/acp/session.rs`, change signature:
+In `src/acp/session.rs`, change signature:
 
 ```rust
     pub async fn prompt(
@@ -693,7 +693,7 @@ In the streaming chunk collection loop, add callback invocation:
 
 - [ ] **Step 3: Wire callback through manager.prompt()**
 
-In `core/src/acp/manager.rs`, update the `prompt()` method's NativeAcp branch:
+In `src/acp/manager.rs`, update the `prompt()` method's NativeAcp branch:
 - Remove the `let _on_chunk = on_chunk;` placeholder added in Task 6
 - Change `session.prompt(prompt_text, cwd, timeout)` to `session.prompt(prompt_text, cwd, timeout, on_chunk.as_ref())`
 
@@ -705,7 +705,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/acp/
+git add src/acp/
 git commit -m "acp: add AcpChunkCallback for streaming passthrough"
 ```
 
@@ -714,7 +714,7 @@ git commit -m "acp: add AcpChunkCallback for streaming passthrough"
 ### Task 8: Tool Layer — Extended Args and Mode Routing
 
 **Files:**
-- Modify: `core/src/builtin_tools/acp_tools.rs`
+- Modify: `src/builtin_tools/acp_tools.rs`
 
 - [ ] **Step 1: Extend AcpDelegateArgs**
 
@@ -799,7 +799,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/builtin_tools/acp_tools.rs
+git add src/builtin_tools/acp_tools.rs
 git commit -m "acp: extend tool args with mode and reuse_session parameters"
 ```
 
@@ -808,11 +808,11 @@ git commit -m "acp: extend tool args with mode and reuse_session parameters"
 ### Task 9: Orchestration Prompt
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs:29-59` (BASE_BEHAVIOR constant)
+- Modify: `src/agent_loop/prompt_builder.rs:29-59` (BASE_BEHAVIOR constant)
 
 - [ ] **Step 1: Add orchestration section to BASE_BEHAVIOR**
 
-Append to the `BASE_BEHAVIOR` constant in `core/src/agent_loop/prompt_builder.rs`:
+Append to the `BASE_BEHAVIOR` constant in `src/agent_loop/prompt_builder.rs`:
 
 ```rust
 // Add after the last line of BASE_BEHAVIOR (before the closing ";):
@@ -827,7 +827,7 @@ Append to the `BASE_BEHAVIOR` constant in `core/src/agent_loop/prompt_builder.rs
 
 - [ ] **Step 2: Write test**
 
-Add to tests in `core/src/agent_loop/prompt_builder.rs`:
+Add to tests in `src/agent_loop/prompt_builder.rs`:
 
 ```rust
     #[test]
@@ -846,7 +846,7 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "acp: add coding orchestration strategy to system prompt"
 ```
 
@@ -880,7 +880,7 @@ git commit -m "panel: show correct default_mode for ACP harnesses + add mode tog
 ### Task 11: Integration Test — Full Orchestration Flow
 
 **Files:**
-- Modify: `core/tests/acp_probe/p5_tool_execution.rs`
+- Modify: `tests/acp_probe/p5_tool_execution.rs`
 
 - [ ] **Step 1: Add test for mode override**
 
@@ -942,7 +942,7 @@ Expected: Tests that don't require real binaries pass. Tests requiring real CLIs
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/tests/acp_probe/
+git add tests/acp_probe/
 git commit -m "acp: add dual-mode, session pool, and orchestration integration tests"
 ```
 

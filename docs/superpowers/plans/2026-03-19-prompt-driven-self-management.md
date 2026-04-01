@@ -17,12 +17,12 @@
 ### Task 1: Create `vault_store` builtin tool
 
 **Files:**
-- Create: `core/src/builtin_tools/vault_store.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/vault_store.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Create the vault_store tool module**
 
-Create `core/src/builtin_tools/vault_store.rs`:
+Create `src/builtin_tools/vault_store.rs`:
 
 ```rust
 //! VaultStoreTool — manage encrypted secret vault
@@ -142,7 +142,7 @@ impl AlephTool for VaultStoreTool {
 
 - [ ] **Step 2: Add module and exports to mod.rs**
 
-In `core/src/builtin_tools/mod.rs`, add:
+In `src/builtin_tools/mod.rs`, add:
 - Module declaration: `pub mod vault_store;`
 - Export: `pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};`
 
@@ -154,7 +154,7 @@ Expected: compiles cleanly
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/builtin_tools/vault_store.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/vault_store.rs src/builtin_tools/mod.rs
 git commit -m "tools: add vault_store builtin tool for encrypted secret management"
 ```
 
@@ -163,12 +163,12 @@ git commit -m "tools: add vault_store builtin tool for encrypted secret manageme
 ### Task 2: Create `read_config_guide` builtin tool
 
 **Files:**
-- Create: `core/src/builtin_tools/config_guide.rs`
-- Modify: `core/src/builtin_tools/mod.rs`
+- Create: `src/builtin_tools/config_guide.rs`
+- Modify: `src/builtin_tools/mod.rs`
 
 - [ ] **Step 1: Create the config_guide tool module**
 
-Create `core/src/builtin_tools/config_guide.rs`:
+Create `src/builtin_tools/config_guide.rs`:
 
 ```rust
 //! ReadConfigGuideTool — progressive disclosure of configuration knowledge
@@ -289,7 +289,7 @@ impl AlephTool for ReadConfigGuideTool {
 
 - [ ] **Step 2: Add module and exports to mod.rs**
 
-In `core/src/builtin_tools/mod.rs`, add:
+In `src/builtin_tools/mod.rs`, add:
 - Module declaration: `pub mod config_guide;`
 - Export: `pub use config_guide::{GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool};`
 
@@ -301,7 +301,7 @@ Expected: compiles cleanly
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/builtin_tools/config_guide.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/config_guide.rs src/builtin_tools/mod.rs
 git commit -m "tools: add read_config_guide builtin tool for progressive config knowledge disclosure"
 ```
 
@@ -312,15 +312,15 @@ git commit -m "tools: add read_config_guide builtin tool for progressive config 
 ### Task 3: Register new tools in the executor
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/config.rs` — add `shared_token_manager` field
-- Modify: `core/src/executor/builtin_registry/builder.rs` — create tool instances
-- Modify: `core/src/executor/builtin_registry/registry.rs` — add execution routes
-- Modify: `core/src/executor/builtin_registry/definitions.rs` — add tool definitions
-- Modify: `core/src/bin/aleph/commands/start/builder/agent_init.rs` — pass SharedTokenManager
+- Modify: `src/executor/builtin_registry/config.rs` — add `shared_token_manager` field
+- Modify: `src/executor/builtin_registry/builder.rs` — create tool instances
+- Modify: `src/executor/builtin_registry/registry.rs` — add execution routes
+- Modify: `src/executor/builtin_registry/definitions.rs` — add tool definitions
+- Modify: `src/bin/aleph/commands/start/builder/agent_init.rs` — pass SharedTokenManager
 
 - [ ] **Step 1: Add `shared_token_manager` to BuiltinToolConfig**
 
-In `core/src/executor/builtin_registry/config.rs`, add field to `BuiltinToolConfig`:
+In `src/executor/builtin_registry/config.rs`, add field to `BuiltinToolConfig`:
 
 ```rust
 pub shared_token_manager: Option<Arc<SharedTokenManager>>,
@@ -330,7 +330,7 @@ Add the import for `SharedTokenManager` at the top of the file.
 
 - [ ] **Step 2: Create tool instances in builder.rs**
 
-In `core/src/executor/builtin_registry/builder.rs`, inside `with_config()`:
+In `src/executor/builtin_registry/builder.rs`, inside `with_config()`:
 
 ```rust
 // Config guide tool (no dependencies, always available)
@@ -351,7 +351,7 @@ pub(crate) vault_store_tool: Option<VaultStoreTool>,
 
 - [ ] **Step 3: Add execution routes in registry.rs**
 
-In `core/src/executor/builtin_registry/registry.rs`, inside `execute_tool()`, add match arms:
+In `src/executor/builtin_registry/registry.rs`, inside `execute_tool()`, add match arms:
 
 ```rust
 "read_config_guide" => {
@@ -368,7 +368,7 @@ In `core/src/executor/builtin_registry/registry.rs`, inside `execute_tool()`, ad
 
 - [ ] **Step 4: Add tool definitions AND create_tool_boxed entries in definitions.rs**
 
-In `core/src/executor/builtin_registry/definitions.rs`:
+In `src/executor/builtin_registry/definitions.rs`:
 
 Add to `BUILTIN_TOOL_DEFINITIONS`:
 
@@ -402,7 +402,7 @@ Add match arms to `create_tool_boxed()`:
 
 - [ ] **Step 5: Pass SharedTokenManager in agent_init.rs**
 
-In `core/src/bin/aleph/commands/start/builder/agent_init.rs`, find the `BuiltinToolConfig` construction (around line 268) and add:
+In `src/bin/aleph/commands/start/builder/agent_init.rs`, find the `BuiltinToolConfig` construction (around line 268) and add:
 
 ```rust
 shared_token_manager: Some(shared_token_mgr.clone()),
@@ -421,7 +421,7 @@ Expected: compiles cleanly
 - [ ] **Step 7: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/ core/src/bin/aleph/commands/start/builder/agent_init.rs
+git add src/executor/builtin_registry/ src/bin/aleph/commands/start/builder/agent_init.rs
 git commit -m "tools: wire up vault_store and read_config_guide in executor registry"
 ```
 
@@ -430,11 +430,11 @@ git commit -m "tools: wire up vault_store and read_config_guide in executor regi
 ### Task 4: Unregister removed tools
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/definitions.rs` — remove definitions
-- Modify: `core/src/executor/builtin_registry/builder.rs` — remove tool creation
-- Modify: `core/src/executor/builtin_registry/registry.rs` — remove execution routes
-- Modify: `core/src/tools/builtin.rs` — remove `with_config_read()`, `with_config_update()` methods
-- Modify: `core/src/builtin_tools/mod.rs` — remove exports (keep modules for now)
+- Modify: `src/executor/builtin_registry/definitions.rs` — remove definitions
+- Modify: `src/executor/builtin_registry/builder.rs` — remove tool creation
+- Modify: `src/executor/builtin_registry/registry.rs` — remove execution routes
+- Modify: `src/tools/builtin.rs` — remove `with_config_read()`, `with_config_update()` methods
+- Modify: `src/builtin_tools/mod.rs` — remove exports (keep modules for now)
 
 Tools to unregister: `config_read`, `config_update`, `soul_update`, `profile_update`, `read_skill`
 
@@ -505,7 +505,7 @@ git commit -m "tools: unregister config_read, config_update, soul_update, profil
 ### Task 5: Update OperationalGuidelinesLayer
 
 **Files:**
-- Modify: `core/src/thinker/layers/operational_guidelines.rs`
+- Modify: `src/thinker/layers/operational_guidelines.rs`
 
 - [ ] **Step 1: Update the prompt text**
 
@@ -567,7 +567,7 @@ Run: `cargo test -p alephcore --lib operational_guidelines`
 - [ ] **Step 3: Commit**
 
 ```bash
-git add core/src/thinker/layers/operational_guidelines.rs
+git add src/thinker/layers/operational_guidelines.rs
 git commit -m "prompt: update operational guidelines to enable LLM self-management"
 ```
 
@@ -593,11 +593,11 @@ Each guide follows the template from the spec. Content must be derived from curr
 - [ ] **Step 1: Read current config structures**
 
 Read these files to extract accurate field information:
-- `core/src/config/structs.rs` — all config sections
-- `core/src/config/types/` — type definitions for each section
-- `core/src/mcp/manager/config.rs` — MCP config format
-- `core/src/thinker/soul.rs` — SoulManifest structure
-- `core/src/config/agent_resolver.rs` — agent workspace layout
+- `src/config/structs.rs` — all config sections
+- `src/config/types/` — type definitions for each section
+- `src/mcp/manager/config.rs` — MCP config format
+- `src/thinker/soul.rs` — SoulManifest structure
+- `src/config/agent_resolver.rs` — agent workspace layout
 
 - [ ] **Step 2: Create `docs/guides/overview.md`**
 
@@ -653,7 +653,7 @@ git commit -m "docs: add configuration guide files for LLM self-management"
 ### Task 7: Deploy guides on server start
 
 **Files:**
-- Modify: `core/src/bin/aleph/commands/start/builder/` — find the startup initialization and add guide file deployment
+- Modify: `src/bin/aleph/commands/start/builder/` — find the startup initialization and add guide file deployment
 
 - [ ] **Step 1: Find the startup init point**
 
@@ -661,10 +661,10 @@ Look for where `~/.aleph/` subdirectories are created during first run (e.g., `~
 
 - [ ] **Step 2: Add guide deployment logic**
 
-At server startup, copy guides from the embedded location to `~/.aleph/guides/`. Embed guide files at compile time using `include_str!()` with paths relative to `core/Cargo.toml` (since this code lives in `alephcore` crate):
+At server startup, copy guides from the embedded location to `~/.aleph/guides/`. Embed guide files at compile time using `include_str!()` with paths relative to `Cargo.toml` (since this code lives in `alephcore` crate):
 
 ```rust
-// In core/src/config/guides.rs (new file)
+// In src/config/guides.rs (new file)
 use std::path::Path;
 
 const GUIDES: &[(&str, &str)] = &[
@@ -689,9 +689,9 @@ pub fn deploy_guides(aleph_dir: &Path) -> std::io::Result<()> {
 }
 ```
 
-Note: `include_str!()` paths are relative to the file's location. Since this file is at `core/src/config/guides.rs`, `../../docs/guides/` reaches the repo root's `docs/guides/`. Verify the path is correct by checking `core/Cargo.toml` position relative to `docs/`.
+Note: `include_str!()` paths are relative to the file's location. Since this file is at `src/config/guides.rs`, `../../docs/guides/` reaches the repo root's `docs/guides/`. Verify the path is correct by checking `Cargo.toml` position relative to `docs/`.
 
-Call `deploy_guides()` during server startup in the binary crate, before tool registry creation. Add `pub mod guides;` to `core/src/config/mod.rs`.
+Call `deploy_guides()` during server startup in the binary crate, before tool registry creation. Add `pub mod guides;` to `src/config/mod.rs`.
 
 - [ ] **Step 3: Verify compilation and startup**
 
@@ -700,7 +700,7 @@ Run: `cargo check --bin aleph`
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/bin/aleph/
+git add src/bin/aleph/
 git commit -m "startup: deploy config guide files to ~/.aleph/guides/ on server start"
 ```
 
@@ -752,11 +752,11 @@ Send "用 config_update 修改配置" — LLM should NOT have access to `config_
 ### Task 9: Clean up removed tool source files (optional, after validation)
 
 **Files:**
-- Delete: `core/src/builtin_tools/config_read.rs`
-- Delete: `core/src/builtin_tools/config_update.rs`
-- Delete: `core/src/builtin_tools/soul_update.rs`
-- Delete: `core/src/builtin_tools/profile_update.rs`
-- Modify: `core/src/builtin_tools/mod.rs` — remove `pub mod` declarations
+- Delete: `src/builtin_tools/config_read.rs`
+- Delete: `src/builtin_tools/config_update.rs`
+- Delete: `src/builtin_tools/soul_update.rs`
+- Delete: `src/builtin_tools/profile_update.rs`
+- Modify: `src/builtin_tools/mod.rs` — remove `pub mod` declarations
 
 - [ ] **Step 1: Remove source files**
 

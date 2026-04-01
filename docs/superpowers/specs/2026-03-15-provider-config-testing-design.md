@@ -53,7 +53,7 @@ For Layer 2, each test group starts its own server instance. For Layer 3 (Playwr
 
 ## Layer 1: Rust Logic Probes
 
-**Directory:** `core/tests/provider_config_probe/` (follow existing `session_probe/` module pattern)
+**Directory:** `tests/provider_config_probe/` (follow existing `session_probe/` module pattern)
 
 ### Scope
 
@@ -108,7 +108,7 @@ Test all four config types: `ProviderConfig`, `EmbeddingProviderConfig`, `Rerank
 
 ## Layer 2: RPC Integration Probes
 
-**Directory:** `core/tests/provider_rpc_probe/` (follow `session_probe/` pattern)
+**Directory:** `tests/provider_rpc_probe/` (follow `session_probe/` pattern)
 
 ### Test Harness
 
@@ -350,7 +350,7 @@ OPENAI_API_KEY=sk-... just test-real-api
 
 ### Dependencies
 
-**Rust (core/Cargo.toml dev-dependencies):**
+**Rust (Cargo.toml dev-dependencies):**
 - `tokio-tungstenite` — already present (v0.26), no action needed
 
 **Node (root package.json):**

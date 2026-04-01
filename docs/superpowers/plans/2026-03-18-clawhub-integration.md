@@ -4,7 +4,7 @@
 
 **Goal:** Enable Aleph to search, browse, install, and update skills from ClawHub (clawhub.ai) via LLM tools and Panel UI.
 
-**Architecture:** Thin HTTP client (`core/src/clawhub/`) shared by a single builtin tool (`clawhub` with action enum) and gateway RPC handlers. Skill parser extended to support `openclaw` metadata namespace.
+**Architecture:** Thin HTTP client (`src/clawhub/`) shared by a single builtin tool (`clawhub` with action enum) and gateway RPC handlers. Skill parser extended to support `openclaw` metadata namespace.
 
 **Tech Stack:** Rust, reqwest, serde, semver (new dep), zip/chrono/uuid (existing deps), Leptos (Panel WASM)
 
@@ -18,19 +18,19 @@
 
 | Action | Path | Responsibility |
 |--------|------|---------------|
-| **NEW** | `core/src/clawhub/mod.rs` | Module entry, re-exports |
-| **NEW** | `core/src/clawhub/client.rs` | HTTP client for ClawHub API |
-| **NEW** | `core/src/clawhub/types.rs` | Request/response types |
-| **NEW** | `core/src/builtin_tools/clawhub.rs` | Single builtin tool with action enum |
-| **NEW** | `core/src/gateway/handlers/clawhub.rs` | 4 RPC handlers for Panel |
-| **MOD** | `core/src/lib.rs:109` | Add `pub mod clawhub;` |
-| **MOD** | `core/src/builtin_tools/mod.rs:70,128` | Add module + re-exports |
-| **MOD** | `core/src/executor/builtin_registry/definitions.rs` | Register tool |
-| **MOD** | `core/src/executor/builtin_registry/groups.rs` | Add to tool group |
-| **MOD** | `core/src/executor/builtin_registry/registry.rs` | Tool field + execute match |
-| **MOD** | `core/src/gateway/handlers/mod.rs:84,268` | Add module + register handlers |
-| **MOD** | `core/src/tools/markdown_skill/spec.rs` | Add `OpenClawMetadata` (parser.rs needs no changes — `serde(default)` handles it) |
-| **MOD** | `core/Cargo.toml` | Add `semver` dependency (zip/chrono/uuid already present) |
+| **NEW** | `src/clawhub/mod.rs` | Module entry, re-exports |
+| **NEW** | `src/clawhub/client.rs` | HTTP client for ClawHub API |
+| **NEW** | `src/clawhub/types.rs` | Request/response types |
+| **NEW** | `src/builtin_tools/clawhub.rs` | Single builtin tool with action enum |
+| **NEW** | `src/gateway/handlers/clawhub.rs` | 4 RPC handlers for Panel |
+| **MOD** | `src/lib.rs:109` | Add `pub mod clawhub;` |
+| **MOD** | `src/builtin_tools/mod.rs:70,128` | Add module + re-exports |
+| **MOD** | `src/executor/builtin_registry/definitions.rs` | Register tool |
+| **MOD** | `src/executor/builtin_registry/groups.rs` | Add to tool group |
+| **MOD** | `src/executor/builtin_registry/registry.rs` | Tool field + execute match |
+| **MOD** | `src/gateway/handlers/mod.rs:84,268` | Add module + register handlers |
+| **MOD** | `src/tools/markdown_skill/spec.rs` | Add `OpenClawMetadata` (parser.rs needs no changes — `serde(default)` handles it) |
+| **MOD** | `Cargo.toml` | Add `semver` dependency (zip/chrono/uuid already present) |
 
 ---
 
@@ -39,11 +39,11 @@
 ### Task 1: ClawHub response types
 
 **Files:**
-- Create: `core/src/clawhub/types.rs`
-- Create: `core/src/clawhub/mod.rs`
-- Modify: `core/src/lib.rs:109`
+- Create: `src/clawhub/types.rs`
+- Create: `src/clawhub/mod.rs`
+- Modify: `src/lib.rs:109`
 
-- [ ] **Step 1: Create `core/src/clawhub/types.rs`**
+- [ ] **Step 1: Create `src/clawhub/types.rs`**
 
 ```rust
 //! ClawHub API types — request/response models for clawhub.ai REST API.
@@ -262,7 +262,7 @@ impl From<BrowseSkill> for SkillSearchResult {
 }
 ```
 
-- [ ] **Step 2: Create `core/src/clawhub/mod.rs`**
+- [ ] **Step 2: Create `src/clawhub/mod.rs`**
 
 ```rust
 //! ClawHub integration — HTTP client and types for clawhub.ai skill registry.
@@ -274,7 +274,7 @@ pub use client::ClawHubClient;
 pub use types::*;
 ```
 
-- [ ] **Step 3: Add `pub mod clawhub;` to `core/src/lib.rs`**
+- [ ] **Step 3: Add `pub mod clawhub;` to `src/lib.rs`**
 
 Insert after the `pub mod cron;` line (~line 109):
 
@@ -290,7 +290,7 @@ Expected: Warning about unused `client` module (not yet created), no errors.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/clawhub/ core/src/lib.rs
+git add src/clawhub/ src/lib.rs
 git commit -m "clawhub: add API response types and module structure"
 ```
 
@@ -299,10 +299,10 @@ git commit -m "clawhub: add API response types and module structure"
 ### Task 2: ClawHub HTTP client
 
 **Files:**
-- Create: `core/src/clawhub/client.rs`
-- Modify: `core/Cargo.toml` (add `semver` dependency)
+- Create: `src/clawhub/client.rs`
+- Modify: `Cargo.toml` (add `semver` dependency)
 
-- [ ] **Step 1: Add `semver` to `core/Cargo.toml`**
+- [ ] **Step 1: Add `semver` to `Cargo.toml`**
 
 In `[dependencies]` section, add:
 
@@ -310,9 +310,9 @@ In `[dependencies]` section, add:
 semver = "1"
 ```
 
-Note: `zip`, `chrono`, and `uuid` are already in `core/Cargo.toml`. Only `semver` needs to be added.
+Note: `zip`, `chrono`, and `uuid` are already in `Cargo.toml`. Only `semver` needs to be added.
 
-- [ ] **Step 2: Create `core/src/clawhub/client.rs`**
+- [ ] **Step 2: Create `src/clawhub/client.rs`**
 
 ```rust
 //! ClawHub HTTP client — thin wrapper around clawhub.ai public API.
@@ -597,7 +597,7 @@ Expected: All tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/clawhub/client.rs core/Cargo.toml
+git add src/clawhub/client.rs Cargo.toml
 git commit -m "clawhub: add HTTP client with search, browse, download, version compare"
 ```
 
@@ -608,9 +608,9 @@ git commit -m "clawhub: add HTTP client with search, browse, download, version c
 ### Task 3: ClawHub builtin tool (single tool with action enum)
 
 **Files:**
-- Create: `core/src/builtin_tools/clawhub.rs`
+- Create: `src/builtin_tools/clawhub.rs`
 
-- [ ] **Step 1: Create `core/src/builtin_tools/clawhub.rs`**
+- [ ] **Step 1: Create `src/builtin_tools/clawhub.rs`**
 
 ```rust
 //! ClawHub tool — search, install, and update skills from clawhub.ai.
@@ -1120,7 +1120,7 @@ pub fn base_url(&self) -> &str {
 }
 ```
 
-- [ ] **Step 2: Add module declaration to `core/src/builtin_tools/mod.rs`**
+- [ ] **Step 2: Add module declaration to `src/builtin_tools/mod.rs`**
 
 After the line `pub mod cron_manage;` (~line 70), add:
 
@@ -1142,7 +1142,7 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/builtin_tools/clawhub.rs core/src/builtin_tools/mod.rs
+git add src/builtin_tools/clawhub.rs src/builtin_tools/mod.rs
 git commit -m "clawhub: add builtin tool with search/browse/install/update actions"
 ```
 
@@ -1151,9 +1151,9 @@ git commit -m "clawhub: add builtin tool with search/browse/install/update actio
 ### Task 4: Register tool in executor
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/definitions.rs`
-- Modify: `core/src/executor/builtin_registry/groups.rs`
-- Modify: `core/src/executor/builtin_registry/registry.rs`
+- Modify: `src/executor/builtin_registry/definitions.rs`
+- Modify: `src/executor/builtin_registry/groups.rs`
+- Modify: `src/executor/builtin_registry/registry.rs`
 
 - [ ] **Step 1: Add to `definitions.rs` — BUILTIN_TOOL_DEFINITIONS array**
 
@@ -1217,7 +1217,7 @@ Expected: PASS
 - [ ] **Step 8: Commit**
 
 ```bash
-git add core/src/executor/builtin_registry/
+git add src/executor/builtin_registry/
 git commit -m "clawhub: register tool in executor builtin registry"
 ```
 
@@ -1228,10 +1228,10 @@ git commit -m "clawhub: register tool in executor builtin registry"
 ### Task 5: ClawHub RPC handlers for Panel
 
 **Files:**
-- Create: `core/src/gateway/handlers/clawhub.rs`
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Create: `src/gateway/handlers/clawhub.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
-- [ ] **Step 1: Create `core/src/gateway/handlers/clawhub.rs`**
+- [ ] **Step 1: Create `src/gateway/handlers/clawhub.rs`**
 
 ```rust
 //! ClawHub RPC Handlers
@@ -1452,7 +1452,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register in `core/src/gateway/handlers/mod.rs`**
+- [ ] **Step 2: Register in `src/gateway/handlers/mod.rs`**
 
 Add module declaration after `pub mod cron;` (~line 84):
 
@@ -1483,7 +1483,7 @@ Expected: All tests pass
 - [ ] **Step 5: Commit**
 
 ```bash
-git add core/src/gateway/handlers/clawhub.rs core/src/gateway/handlers/mod.rs
+git add src/gateway/handlers/clawhub.rs src/gateway/handlers/mod.rs
 git commit -m "clawhub: add gateway RPC handlers for Panel UI"
 ```
 
@@ -1494,7 +1494,7 @@ git commit -m "clawhub: add gateway RPC handlers for Panel UI"
 ### Task 6: Add OpenClaw metadata namespace to skill parser
 
 **Files:**
-- Modify: `core/src/tools/markdown_skill/spec.rs`
+- Modify: `src/tools/markdown_skill/spec.rs`
 
 - [ ] **Step 1: Add `OpenClawMetadata` struct to `spec.rs`**
 
@@ -1559,7 +1559,7 @@ Expected: Existing tests still pass (serde(default) ensures backward compatibili
 - [ ] **Step 4: Commit**
 
 ```bash
-git add core/src/tools/markdown_skill/spec.rs
+git add src/tools/markdown_skill/spec.rs
 git commit -m "clawhub: add OpenClaw metadata namespace to skill parser"
 ```
 

@@ -13,7 +13,7 @@ The Gateway is Aleph's control plane, providing:
 - Event distribution and streaming
 - Session management and persistence
 
-**Location**: `core/src/gateway/`
+**Location**: `src/gateway/`
 
 ---
 
@@ -187,7 +187,7 @@ Subscribe to events using glob patterns:
 
 ## Interfaces
 
-**Location**: `core/src/gateway/interfaces/`
+**Location**: `src/gateway/interfaces/`
 
 ### Interface Trait
 
@@ -243,7 +243,7 @@ pub trait Interface: Send + Sync {
 
 ## Session Routing
 
-**Location**: `core/src/routing/session_key.rs`
+**Location**: `src/routing/session_key.rs`
 
 ### Session Key Variants
 
@@ -270,7 +270,7 @@ pub enum DmScope {
 
 ## Session Manager
 
-**Location**: `core/src/gateway/session_manager.rs`
+**Location**: `src/gateway/session_manager.rs`
 
 ### Storage Schema
 
@@ -305,7 +305,7 @@ When session exceeds token threshold:
 
 ## Security
 
-**Location**: `core/src/gateway/security/`
+**Location**: `src/gateway/security/`
 
 ### Authentication Flow
 
@@ -360,7 +360,7 @@ Client Connect
 
 ## Hot Reload
 
-**Location**: `core/src/gateway/hot_reload.rs`
+**Location**: `src/gateway/hot_reload.rs`
 
 Configuration changes are detected via file watcher:
 
@@ -391,7 +391,7 @@ Configuration changes are detected via file watcher:
 
 ## HTTP Server
 
-**Location**: `core/src/gateway/http_server.rs`
+**Location**: `src/gateway/http_server.rs`
 
 Alongside WebSocket, Gateway serves:
 - Static files (WebChat UI)

@@ -51,7 +51,7 @@ Agent starts processing
 
 The standard `ReplyEmitter` buffers all `ResponseChunk` events and only sends/edits after `RunComplete` (post-hoc typewriter animation). For real-time streaming cards, we need a Feishu-specific `EventEmitter` that processes chunks as they arrive.
 
-**New file**: `core/src/gateway/interfaces/feishu/streaming.rs`
+**New file**: `src/gateway/interfaces/feishu/streaming.rs`
 
 Two structs:
 
@@ -242,15 +242,15 @@ pub typing_indicator: bool,  // default: true
 
 | File | Purpose |
 |------|---------|
-| `core/src/gateway/interfaces/feishu/streaming.rs` | FeishuStreamingCard + FeishuEventEmitter |
+| `src/gateway/interfaces/feishu/streaming.rs` | FeishuStreamingCard + FeishuEventEmitter |
 
 ## Modified Files
 
 | File | Changes |
 |------|---------|
-| `core/src/gateway/interfaces/feishu/types.rs` | Add config fields (streaming, render_mode, typing_indicator), ReactionResponse type, card payload types |
-| `core/src/gateway/interfaces/feishu/client.rs` | Add send_card(), add_reaction(), remove_reaction(), create_streaming_card(), update_streaming_card(), close_streaming_card() |
-| `core/src/gateway/interfaces/feishu/mod.rs` | Update send() for card/markdown logic; update capabilities (editing, typing_indicator, rich_text); update InteractionManifest (supports_streaming conditional on config.streaming) |
+| `src/gateway/interfaces/feishu/types.rs` | Add config fields (streaming, render_mode, typing_indicator), ReactionResponse type, card payload types |
+| `src/gateway/interfaces/feishu/client.rs` | Add send_card(), add_reaction(), remove_reaction(), create_streaming_card(), update_streaming_card(), close_streaming_card() |
+| `src/gateway/interfaces/feishu/mod.rs` | Update send() for card/markdown logic; update capabilities (editing, typing_indicator, rich_text); update InteractionManifest (supports_streaming conditional on config.streaming) |
 | `interfaces/webchat/src/views/settings/channels/definitions.rs` | Add streaming, render_mode, typing_indicator fields to FEISHU_FIELDS |
 | Integration site where ReplyEmitter is constructed | Use FeishuEventEmitter instead of ReplyEmitter when channel is feishu + streaming enabled |
 

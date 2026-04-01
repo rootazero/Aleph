@@ -44,7 +44,7 @@ Additionally, `paths.rs` uses `workspace` (singular) while `agent_resolver.rs` u
 
 ## ToolContext Design
 
-New struct in `core/src/tools/context.rs`:
+New struct in `src/tools/context.rs`:
 
 ```rust
 #[derive(Debug, Clone)]

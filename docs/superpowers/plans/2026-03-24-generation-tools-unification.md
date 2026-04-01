@@ -15,8 +15,8 @@
 ## Task 1: Create `video_generate.rs`
 
 **Files:**
-- Create: `core/src/builtin_tools/generation/video_generate.rs`
-- Reference: `core/src/builtin_tools/generation/image_generate.rs` (full pattern to follow)
+- Create: `src/builtin_tools/generation/video_generate.rs`
+- Reference: `src/builtin_tools/generation/image_generate.rs` (full pattern to follow)
 
 - [ ] **Step 1: Create `video_generate.rs` with Args, Output, Tool struct, and AlephTool impl**
 
@@ -215,7 +215,7 @@ Run: `cargo check -p alephcore 2>&1 | head -20`
 ## Task 2: Create `audio_generate.rs`
 
 **Files:**
-- Create: `core/src/builtin_tools/generation/audio_generate.rs`
+- Create: `src/builtin_tools/generation/audio_generate.rs`
 
 - [ ] **Step 1: Create `audio_generate.rs` following the same pattern as video_generate.rs**
 
@@ -375,8 +375,8 @@ impl AlephTool for AudioGenerateTool {
 ## Task 3: Fix `speech_generate.rs` — `Arc<RwLock<>>` wrapping
 
 **Files:**
-- Modify: `core/src/builtin_tools/generation/speech_generate.rs:72-86` (struct + constructor)
-- Modify: `core/src/builtin_tools/generation/speech_generate.rs:109-145` (lock acquisition in call_impl)
+- Modify: `src/builtin_tools/generation/speech_generate.rs:72-86` (struct + constructor)
+- Modify: `src/builtin_tools/generation/speech_generate.rs:109-145` (lock acquisition in call_impl)
 
 The existing `SpeechGenerateTool` uses `Arc<GenerationProviderRegistry>` (no RwLock). Must match `ImageGenerateTool`'s `Arc<RwLock<GenerationProviderRegistry>>` pattern since the builder stores `Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>`.
 
@@ -442,7 +442,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 ## Task 4: Update `mod.rs` — export new modules
 
 **Files:**
-- Modify: `core/src/builtin_tools/generation/mod.rs`
+- Modify: `src/builtin_tools/generation/mod.rs`
 
 - [ ] **Step 1: Add module declarations and pub exports**
 
@@ -465,8 +465,8 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 ## Task 5: Update `builder.rs` — unified tool registration
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/builder.rs:134-138` (tool creation)
-- Modify: `core/src/executor/builtin_registry/builder.rs:565-603` (metadata registration)
+- Modify: `src/executor/builtin_registry/builder.rs:134-138` (tool creation)
+- Modify: `src/executor/builtin_registry/builder.rs:565-603` (metadata registration)
 
 - [ ] **Step 1: Add tool fields and creation alongside image_generate_tool (after line 138)**
 
@@ -549,7 +549,7 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 ## Task 6: Update `registry.rs` — dispatch routing
 
 **Files:**
-- Modify: `core/src/executor/builtin_registry/registry.rs:290-291`
+- Modify: `src/executor/builtin_registry/registry.rs:290-291`
 
 - [ ] **Step 1: Replace legacy dispatch with AlephTool routing**
 
@@ -590,8 +590,8 @@ Run: `cargo check -p alephcore 2>&1 | head -30`
 ## Task 7: Delete `executors.rs` legacy code
 
 **Files:**
-- Modify or Delete: `core/src/executor/builtin_registry/executors.rs`
-- Modify: `core/src/executor/builtin_registry/mod.rs` (remove `mod executors;` if deleting)
+- Modify or Delete: `src/executor/builtin_registry/executors.rs`
+- Modify: `src/executor/builtin_registry/mod.rs` (remove `mod executors;` if deleting)
 
 - [ ] **Step 1: Check if executors.rs contains anything besides video/audio handlers**
 
@@ -610,14 +610,14 @@ Run: `cargo test -p alephcore --lib 2>&1 | tail -20`
 - [ ] **Step 4: Commit Layer 1**
 
 ```bash
-git add core/src/builtin_tools/generation/video_generate.rs \
-       core/src/builtin_tools/generation/audio_generate.rs \
-       core/src/builtin_tools/generation/speech_generate.rs \
-       core/src/builtin_tools/generation/mod.rs \
-       core/src/executor/builtin_registry/builder.rs \
-       core/src/executor/builtin_registry/registry.rs \
-       core/src/executor/builtin_registry/executors.rs \
-       core/src/executor/builtin_registry/mod.rs
+git add src/builtin_tools/generation/video_generate.rs \
+       src/builtin_tools/generation/audio_generate.rs \
+       src/builtin_tools/generation/speech_generate.rs \
+       src/builtin_tools/generation/mod.rs \
+       src/executor/builtin_registry/builder.rs \
+       src/executor/builtin_registry/registry.rs \
+       src/executor/builtin_registry/executors.rs \
+       src/executor/builtin_registry/mod.rs
 git commit -m "generation: unify video/audio/speech as AlephTools
 
 Upgrade video_generate and audio_generate from legacy handlers to proper
@@ -631,7 +631,7 @@ Delete legacy executors.rs handlers."
 ## Task 8: Add efficiency awareness to BASE_BEHAVIOR
 
 **Files:**
-- Modify: `core/src/agent_loop/prompt_builder.rs:29-55` (BASE_BEHAVIOR constant)
+- Modify: `src/agent_loop/prompt_builder.rs:29-55` (BASE_BEHAVIOR constant)
 
 - [ ] **Step 1: Append efficiency awareness section to BASE_BEHAVIOR**
 
@@ -650,7 +650,7 @@ Run: `cargo check -p alephcore 2>&1 | head -10`
 - [ ] **Step 3: Commit Layer 3 part 1**
 
 ```bash
-git add core/src/agent_loop/prompt_builder.rs
+git add src/agent_loop/prompt_builder.rs
 git commit -m "agent_loop: add efficiency awareness to BASE_BEHAVIOR
 
 Prompt the LLM to call matching tools immediately rather than spending
@@ -662,7 +662,7 @@ tokens exploring configuration. Prefer action over preparation."
 ## Task 9: Improve hit_limit fallback message
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/run_loop.rs:249-259`
+- Modify: `src/gateway/execution_engine/run_loop.rs:249-259`
 
 - [ ] **Step 1: Replace the generic fallback message with actionable guidance**
 
@@ -693,7 +693,7 @@ Run: `cargo check -p alephcore 2>&1 | head -10`
 - [ ] **Step 3: Commit Layer 3 part 2**
 
 ```bash
-git add core/src/gateway/execution_engine/run_loop.rs
+git add src/gateway/execution_engine/run_loop.rs
 git commit -m "run_loop: improve hit_limit fallback with actionable guidance
 
 Replace generic 'try simpler request' message with bilingual text that
@@ -705,8 +705,8 @@ directs users to fast-path slash commands (/video, /image, /audio)."
 ## Task 10: Add fast-path slash commands
 
 **Files:**
-- Modify: `core/src/gateway/execution_engine/slash_command.rs:255-322` (build_tool_arguments)
-- Modify: `core/src/executor/builtin_registry/builder.rs` (command shorthand mapping)
+- Modify: `src/gateway/execution_engine/slash_command.rs:255-322` (build_tool_arguments)
+- Modify: `src/executor/builtin_registry/builder.rs` (command shorthand mapping)
 
 - [ ] **Step 1: Add argument mapping for generation tools in `build_tool_arguments`**
 
@@ -753,7 +753,7 @@ Run: `cargo check -p alephcore 2>&1 | head -10`
 - [ ] **Step 4: Commit Layer 2**
 
 ```bash
-git add core/src/gateway/execution_engine/slash_command.rs
+git add src/gateway/execution_engine/slash_command.rs
 git commit -m "slash_command: add /video /image /audio /speech fast-path commands
 
 Map /video, /image, /audio, /speech as shorthand commands that resolve
@@ -772,7 +772,7 @@ the agent loop entirely for zero-token-cost generation."
 
 Search for `generate_video` or `generate_audio` in config files and code. The config field `default_video_provider` should still work (it references provider name, not tool name). But verify no tool-name references exist.
 
-Run: `grep -r "generate_video\|generate_audio" core/src/ --include="*.rs" | grep -v "test" | grep -v "target/"`
+Run: `grep -r "generate_video\|generate_audio" src/ --include="*.rs" | grep -v "test" | grep -v "target/"`
 
 If any references remain, update them to `video_generate` / `audio_generate`.
 

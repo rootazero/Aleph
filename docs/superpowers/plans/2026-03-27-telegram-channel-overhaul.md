@@ -13,9 +13,9 @@
 **Spec:** `docs/superpowers/specs/2026-03-27-telegram-channel-overhaul-design.md`
 
 **Key paths (all under WT):**
-- `core/src/gateway/interfaces/telegram/` — the target directory
-- `core/src/gateway/reply_emitter.rs` — streaming integration
-- `core/src/gateway/channel.rs` — Channel trait (read-only reference)
+- `src/gateway/interfaces/telegram/` — the target directory
+- `src/gateway/reply_emitter.rs` — streaming integration
+- `src/gateway/channel.rs` — Channel trait (read-only reference)
 
 **Test command:** `(cd $WT && cargo test -p alephcore --lib telegram)`
 **Check command:** `(cd $WT && cargo check -p alephcore)`
@@ -25,8 +25,8 @@
 ## Task 1: Extract `handlers.rs` — message/callback handler closures
 
 **Files:**
-- Create: `core/src/gateway/interfaces/telegram/handlers.rs`
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Create: `src/gateway/interfaces/telegram/handlers.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 This extracts `convert_message()`, `extract_attachments()`, and the pairing flow logic from the message_handler closure into a standalone module. The handler closures in `start()` will call these functions instead of inlining the logic.
 
@@ -91,7 +91,7 @@ Expected: All existing tests pass (convert_message/extract_attachments are async
 - [ ] **Step 5: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/handlers.rs core/src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract handlers.rs — convert_message + extract_attachments")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/handlers.rs src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract handlers.rs — convert_message + extract_attachments")
 ```
 
 ---
@@ -99,8 +99,8 @@ Expected: All existing tests pass (convert_message/extract_attachments are async
 ## Task 2: Extract `delivery.rs` — send logic, chunking, retry, attachments
 
 **Files:**
-- Create: `core/src/gateway/interfaces/telegram/delivery.rs`
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Create: `src/gateway/interfaces/telegram/delivery.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 This extracts `ErrorClass`, `classify_error()`, the `send()` chunking+retry loop, `send_typing()`, `react()`, `send_attachment()`, and `edit_message()` into `delivery.rs`.
 
@@ -190,7 +190,7 @@ Expected: All existing tests pass. `test_parse_conversation_id_*` tests move to 
 - [ ] **Step 5: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/delivery.rs core/src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract delivery.rs — send, retry, chunking, attachments")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/delivery.rs src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract delivery.rs — send, retry, chunking, attachments")
 ```
 
 ---
@@ -198,8 +198,8 @@ Expected: All existing tests pass. `test_parse_conversation_id_*` tests move to 
 ## Task 3: Extract `polling.rs` — polling lifecycle + watchdog
 
 **Files:**
-- Create: `core/src/gateway/interfaces/telegram/polling.rs`
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Create: `src/gateway/interfaces/telegram/polling.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 This extracts the polling loop from `start()` (lines 564-836) into a standalone async function.
 
@@ -263,7 +263,7 @@ Expected: Compiles and all tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/polling.rs core/src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract polling.rs — polling lifecycle + watchdog")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/polling.rs src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: extract polling.rs — polling lifecycle + watchdog")
 ```
 
 ---
@@ -271,7 +271,7 @@ Expected: Compiles and all tests pass
 ## Task 4: Verify mod.rs is now slim + cleanup
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 After Tasks 1-3, `mod.rs` should contain only:
 - Module declarations (`pub mod config/handlers/delivery/polling/...`)
@@ -282,7 +282,7 @@ After Tasks 1-3, `mod.rs` should contain only:
 
 - [ ] **Step 1: Audit mod.rs line count**
 
-Run: `wc -l /Users/zouguojun/Workspace/Aleph-telegram-overhaul/core/src/gateway/interfaces/telegram/mod.rs`
+Run: `wc -l /Users/zouguojun/Workspace/Aleph-telegram-overhaul/src/gateway/interfaces/telegram/mod.rs`
 Expected: Under 200 lines. If over, identify remaining code that should be in submodules.
 
 - [ ] **Step 2: Move tests to their respective modules**
@@ -297,7 +297,7 @@ Expected: All tests pass
 - [ ] **Step 4: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add -u core/src/gateway/interfaces/telegram/ && git commit -m "telegram: finalize module split — mod.rs is now delegation-only")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add -u src/gateway/interfaces/telegram/ && git commit -m "telegram: finalize module split — mod.rs is now delegation-only")
 ```
 
 ---
@@ -305,7 +305,7 @@ Expected: All tests pass
 ## Task 5: Upgrade message chunking — HTML-safe splitting
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/delivery.rs`
+- Modify: `src/gateway/interfaces/telegram/delivery.rs`
 
 Replace the simple `MessageFormatter::split()` call with HTML-aware chunking.
 
@@ -543,7 +543,7 @@ Expected: Compiles and all tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/delivery.rs && git commit -m "telegram: add HTML-safe message chunking with tag balancing")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/delivery.rs && git commit -m "telegram: add HTML-safe message chunking with tag balancing")
 ```
 
 ---
@@ -551,10 +551,10 @@ Expected: Compiles and all tests pass
 ## Task 6: Upgrade access control — DmPolicy/GroupPolicy + AccessController
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/config.rs`
-- Create: `core/src/gateway/interfaces/telegram/access.rs`
-- Modify: `core/src/gateway/interfaces/telegram/handlers.rs`
-- Modify: `core/src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/config.rs`
+- Create: `src/gateway/interfaces/telegram/access.rs`
+- Modify: `src/gateway/interfaces/telegram/handlers.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 - [ ] **Step 1: Add DmPolicy and GroupPolicy enums to config.rs**
 
@@ -829,7 +829,7 @@ Expected: Compiles and all tests pass
 - [ ] **Step 9: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/config.rs core/src/gateway/interfaces/telegram/access.rs core/src/gateway/interfaces/telegram/handlers.rs core/src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: add policy-based access control — DmPolicy/GroupPolicy + AccessController")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/config.rs src/gateway/interfaces/telegram/access.rs src/gateway/interfaces/telegram/handlers.rs src/gateway/interfaces/telegram/mod.rs && git commit -m "telegram: add policy-based access control — DmPolicy/GroupPolicy + AccessController")
 ```
 
 ---
@@ -837,8 +837,8 @@ Expected: Compiles and all tests pass
 ## Task 7: Upgrade network resilience — enhanced error classification
 
 **Files:**
-- Modify: `core/src/gateway/interfaces/telegram/delivery.rs`
-- Modify: `core/src/gateway/interfaces/telegram/polling.rs`
+- Modify: `src/gateway/interfaces/telegram/delivery.rs`
+- Modify: `src/gateway/interfaces/telegram/polling.rs`
 
 - [ ] **Step 1: Write tests for new error classification**
 
@@ -939,7 +939,7 @@ Expected: All tests pass
 - [ ] **Step 6: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/interfaces/telegram/delivery.rs core/src/gateway/interfaces/telegram/polling.rs && git commit -m "telegram: upgrade error classification — pre/post connect + precise 429 handling")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/interfaces/telegram/delivery.rs src/gateway/interfaces/telegram/polling.rs && git commit -m "telegram: upgrade error classification — pre/post connect + precise 429 handling")
 ```
 
 ---
@@ -947,8 +947,8 @@ Expected: All tests pass
 ## Task 8: Create `streaming.rs` — StreamingController (pure logic)
 
 **Files:**
-- Create: `core/src/gateway/streaming.rs` (in gateway/, NOT telegram/ — this is channel-agnostic)
-- Modify: `core/src/gateway/mod.rs` (add `pub mod streaming;`)
+- Create: `src/gateway/streaming.rs` (in gateway/, NOT telegram/ — this is channel-agnostic)
+- Modify: `src/gateway/mod.rs` (add `pub mod streaming;`)
 
 Note: StreamingController is pure logic with zero Telegram dependency. Placing it in `gateway/` avoids coupling the generic ReplyEmitter to a specific channel (P1 low coupling).
 
@@ -1050,7 +1050,7 @@ Expected: FAIL — StreamingController not defined
 - [ ] **Step 3: Implement StreamingController**
 
 ```rust
-// core/src/gateway/streaming.rs
+// src/gateway/streaming.rs
 use std::time::{Duration, Instant};
 use crate::gateway::channel::MessageId;
 
@@ -1161,7 +1161,7 @@ impl StreamingController {
 
 - [ ] **Step 4: Add module declaration, run tests**
 
-Add `pub mod streaming;` in `core/src/gateway/mod.rs`.
+Add `pub mod streaming;` in `src/gateway/mod.rs`.
 
 Run: `(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && cargo test -p alephcore --lib gateway::streaming)`
 Expected: All tests PASS
@@ -1169,7 +1169,7 @@ Expected: All tests PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/streaming.rs core/src/gateway/mod.rs && git commit -m "gateway: add StreamingController — pure logic real-time streaming state machine")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/streaming.rs src/gateway/mod.rs && git commit -m "gateway: add StreamingController — pure logic real-time streaming state machine")
 ```
 
 ---
@@ -1177,7 +1177,7 @@ Expected: All tests PASS
 ## Task 9: Integrate StreamingController into ReplyEmitter
 
 **Files:**
-- Modify: `core/src/gateway/reply_emitter.rs`
+- Modify: `src/gateway/reply_emitter.rs`
 
 This is the highest-impact change. Replace the typewriter edit loop with StreamingController-driven real-time streaming.
 
@@ -1293,7 +1293,7 @@ Expected: All tests pass (reply_emitter has no unit tests for typewriter, so rem
 - [ ] **Step 6: Commit**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add core/src/gateway/reply_emitter.rs && git commit -m "gateway: integrate real-time streaming into ReplyEmitter, remove typewriter mode")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add src/gateway/reply_emitter.rs && git commit -m "gateway: integrate real-time streaming into ReplyEmitter, remove typewriter mode")
 ```
 
 ---
@@ -1301,8 +1301,8 @@ Expected: All tests pass (reply_emitter has no unit tests for typewriter, so rem
 ## Task 10: Final cleanup + merge preparation
 
 **Files:**
-- All files in `core/src/gateway/interfaces/telegram/`
-- `core/src/gateway/reply_emitter.rs`
+- All files in `src/gateway/interfaces/telegram/`
+- `src/gateway/reply_emitter.rs`
 
 - [ ] **Step 1: Run clippy**
 
@@ -1316,18 +1316,18 @@ Expected: All tests pass
 
 - [ ] **Step 3: Verify mod.rs line count**
 
-Run: `wc -l /Users/zouguojun/Workspace/Aleph-telegram-overhaul/core/src/gateway/interfaces/telegram/*.rs`
+Run: `wc -l /Users/zouguojun/Workspace/Aleph-telegram-overhaul/src/gateway/interfaces/telegram/*.rs`
 Expected: mod.rs < 200 lines, each submodule < 400 lines
 
 - [ ] **Step 4: Verify no dead code**
 
-Run: `(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && grep -rn "TYPEWRITER_CHARS_PER_STEP\|send_typewriter" core/src/)`
+Run: `(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && grep -rn "TYPEWRITER_CHARS_PER_STEP\|send_typewriter" src/)`
 Expected: No matches (old typewriter code fully removed)
 
 - [ ] **Step 5: Commit any cleanup**
 
 ```bash
-(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add -u core/src/ && git commit -m "telegram: final cleanup — remove dead code, fix clippy warnings")
+(cd /Users/zouguojun/Workspace/Aleph-telegram-overhaul && git add -u src/ && git commit -m "telegram: final cleanup — remove dead code, fix clippy warnings")
 ```
 
 - [ ] **Step 6: Merge to main**

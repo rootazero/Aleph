@@ -31,8 +31,8 @@ Three layers of changes, all focused on WebChat streaming path.
 ### Layer 1: Backend — Semantic Chunking
 
 **Files:**
-- `core/src/gateway/streaming_sink.rs` — rewrite flush logic with semantic boundary detection
-- `core/src/gateway/event_emitter/impls.rs` — remove dead `emit_response_chunk_throttled()` and `DELTA_THROTTLE_MS` (cleanup)
+- `src/gateway/streaming_sink.rs` — rewrite flush logic with semantic boundary detection
+- `src/gateway/event_emitter/impls.rs` — remove dead `emit_response_chunk_throttled()` and `DELTA_THROTTLE_MS` (cleanup)
 
 **Current:** Fixed 100ms interval timer in StreamingDeltaSink.
 
@@ -69,15 +69,15 @@ Note: Single `\n` alone does **not** trigger immediate flush (too aggressive for
 ### Layer 2: Protocol — ResponseChunk Delta + Full Text
 
 **Files:**
-- `core/src/gateway/event_emitter/types.rs` — add `delta` and `full_text` fields to `StreamEvent::ResponseChunk`
-- `core/src/gateway/streaming_sink.rs` — maintain `accumulated` text, pass both fields; **reset `accumulated` on `Done(ToolUse)`** for intermediate boundaries
-- `core/src/gateway/event_emitter/mod.rs` — extend `emit_response_chunk()` trait method signature (adds `delta: &str`, `full_text: &str`)
-- `core/src/gateway/event_emitter/impls.rs` — update all 4 implementors:
+- `src/gateway/event_emitter/types.rs` — add `delta` and `full_text` fields to `StreamEvent::ResponseChunk`
+- `src/gateway/streaming_sink.rs` — maintain `accumulated` text, pass both fields; **reset `accumulated` on `Done(ToolUse)`** for intermediate boundaries
+- `src/gateway/event_emitter/mod.rs` — extend `emit_response_chunk()` trait method signature (adds `delta: &str`, `full_text: &str`)
+- `src/gateway/event_emitter/impls.rs` — update all 4 implementors:
   - `GatewayEventEmitter` — serialize new fields, update `Instant` mode buffering to use `delta`/`full_text`
   - `NoOpEventEmitter` — signature update (no-op body)
   - `CollectingEventEmitter` — store new fields in collected events
   - `DynEventEmitter` — delegate new params
-- `core/src/gateway/event_emitter/tests.rs` — update test assertions
+- `src/gateway/event_emitter/tests.rs` — update test assertions
 
 **StreamEvent::ResponseChunk new structure:**
 

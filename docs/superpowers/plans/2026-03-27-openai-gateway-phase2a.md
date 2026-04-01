@@ -15,7 +15,7 @@
 ### Task 1: Augment types.rs with Embedding, Responses, and tool_call_id types
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/types.rs`
+- Modify: `src/gateway/openai_api/types.rs`
 
 Add all new types needed by subsequent tasks, plus `tool_call_id` on `ChatMessage`.
 
@@ -150,10 +150,10 @@ gateway: add embedding, responses, and tool_call_id types
 ### Task 2: Implement /v1/embeddings endpoint
 
 **Files:**
-- Create: `core/src/gateway/openai_api/embeddings.rs`
-- Modify: `core/src/gateway/openai_api/state.rs` — add `embedding_provider` field
-- Modify: `core/src/gateway/openai_api/mod.rs` — add `pub mod embeddings`
-- Modify: `core/src/gateway/openai_api/router.rs` — add route
+- Create: `src/gateway/openai_api/embeddings.rs`
+- Modify: `src/gateway/openai_api/state.rs` — add `embedding_provider` field
+- Modify: `src/gateway/openai_api/mod.rs` — add `pub mod embeddings`
+- Modify: `src/gateway/openai_api/router.rs` — add route
 
 - [ ] **Step 1: Add embedding_provider to state.rs**
 
@@ -266,7 +266,7 @@ Add `embedding_provider` field to `GatewayServer` struct (similar to how `execut
 
 - [ ] **Step 5: Wire from startup**
 
-In `core/src/bin/aleph-server/commands/start/mod.rs`, after `agent_result` is built:
+In `src/bin/aleph-server/commands/start/mod.rs`, after `agent_result` is built:
 ```rust
 server.embedding_provider = agent_result.embedder.clone();
 ```
@@ -288,7 +288,7 @@ gateway: implement /v1/embeddings endpoint
 ### Task 3: Implement tool passthrough in completions
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/completions/passthrough.rs`
+- Modify: `src/gateway/openai_api/completions/passthrough.rs`
 
 This task adds tools/tool_choice forwarding, tool message support, and tool_calls in non-streaming responses.
 
@@ -437,8 +437,8 @@ gateway: add tool/tool_choice passthrough + tool message support
 ### Task 4: Implement Responses SSE formatter
 
 **Files:**
-- Create: `core/src/gateway/openai_api/responses/sse.rs`
-- Create: `core/src/gateway/openai_api/responses/mod.rs` (placeholder handler initially)
+- Create: `src/gateway/openai_api/responses/sse.rs`
+- Create: `src/gateway/openai_api/responses/mod.rs` (placeholder handler initially)
 
 - [ ] **Step 1: Create responses/sse.rs**
 
@@ -676,7 +676,7 @@ gateway: implement Responses SSE formatter with placeholder handler
 ### Task 5: Implement /v1/responses handler
 
 **Files:**
-- Modify: `core/src/gateway/openai_api/responses/mod.rs` (replace placeholder)
+- Modify: `src/gateway/openai_api/responses/mod.rs` (replace placeholder)
 
 - [ ] **Step 1: Implement full handler**
 
@@ -855,12 +855,12 @@ gateway: implement /v1/responses passthrough handler
 ### Task 6: Wire embedding_provider from startup + final verification
 
 **Files:**
-- Modify: `core/src/gateway/server/mod.rs` — add `embedding_provider` field
-- Modify: `core/src/bin/aleph-server/commands/start/mod.rs` — wire embedder
+- Modify: `src/gateway/server/mod.rs` — add `embedding_provider` field
+- Modify: `src/bin/aleph-server/commands/start/mod.rs` — wire embedder
 
 - [ ] **Step 1: Add field to GatewayServer**
 
-In `core/src/gateway/server/mod.rs`, add to `GatewayServer` struct:
+In `src/gateway/server/mod.rs`, add to `GatewayServer` struct:
 ```rust
 pub embedding_provider: Option<std::sync::Arc<dyn crate::memory::EmbeddingProvider>>,
 ```
@@ -874,7 +874,7 @@ embedding_provider: self.embedding_provider.clone(),
 
 - [ ] **Step 2: Wire from startup**
 
-In `core/src/bin/aleph-server/commands/start/mod.rs`, after the server creation and provider wiring block:
+In `src/bin/aleph-server/commands/start/mod.rs`, after the server creation and provider wiring block:
 ```rust
 server.embedding_provider = agent_result.embedder.clone();
 ```

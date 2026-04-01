@@ -4,7 +4,7 @@
 
 **Goal:** Replace `plugins-index.json` with a Claude Code-compatible marketplace system supporting GitHub repos and local paths, with `marketplace.toml`/`.json` catalog format.
 
-**Architecture:** New `core/src/extension/marketplace/` module with `MarketplaceManager` that handles marketplace CRUD, cache management (git clone/pull), and plugin search/install. Marketplace config stored in existing `~/.aleph/config.toml` under `[plugin_marketplaces]`. Built-in `aleph-official` marketplace always available.
+**Architecture:** New `src/extension/marketplace/` module with `MarketplaceManager` that handles marketplace CRUD, cache management (git clone/pull), and plugin search/install. Marketplace config stored in existing `~/.aleph/config.toml` under `[plugin_marketplaces]`. Built-in `aleph-official` marketplace always available.
 
 **Tech Stack:** Rust, serde, toml, git2 crate (already a dependency), existing Config system
 
@@ -19,21 +19,21 @@
 ### New Files
 | File | Responsibility |
 |------|---------------|
-| `core/src/extension/marketplace/mod.rs` | MarketplaceManager — orchestrate marketplace operations |
-| `core/src/extension/marketplace/types.rs` | MarketplaceConfig, MarketplaceManifest, PluginEntry, MarketplaceSource |
-| `core/src/extension/marketplace/manifest.rs` | Parse marketplace.toml and marketplace.json |
-| `core/src/extension/marketplace/github_source.rs` | Git clone/pull for GitHub marketplace repos |
-| `core/src/extension/marketplace/local_source.rs` | Read local marketplace directories |
-| `core/src/extension/marketplace/installer.rs` | Copy plugin from cache to install dir, register |
+| `src/extension/marketplace/mod.rs` | MarketplaceManager — orchestrate marketplace operations |
+| `src/extension/marketplace/types.rs` | MarketplaceConfig, MarketplaceManifest, PluginEntry, MarketplaceSource |
+| `src/extension/marketplace/manifest.rs` | Parse marketplace.toml and marketplace.json |
+| `src/extension/marketplace/github_source.rs` | Git clone/pull for GitHub marketplace repos |
+| `src/extension/marketplace/local_source.rs` | Read local marketplace directories |
+| `src/extension/marketplace/installer.rs` | Copy plugin from cache to install dir, register |
 
 ### Modified Files
 | File | Changes |
 |------|---------|
-| `core/src/extension/mod.rs` | Add `pub mod marketplace;` |
-| `core/src/config/structs.rs` | Add `plugin_marketplaces` field to Config |
-| `core/src/gateway/handlers/mod.rs` | Register `plugin.marketplace.*` RPC methods |
-| `core/src/gateway/handlers/plugins/handlers.rs` | Add marketplace RPC handlers |
-| `core/src/gateway/handlers/plugins/types.rs` | Add marketplace param/response types |
+| `src/extension/mod.rs` | Add `pub mod marketplace;` |
+| `src/config/structs.rs` | Add `plugin_marketplaces` field to Config |
+| `src/gateway/handlers/mod.rs` | Register `plugin.marketplace.*` RPC methods |
+| `src/gateway/handlers/plugins/handlers.rs` | Add marketplace RPC handlers |
+| `src/gateway/handlers/plugins/types.rs` | Add marketplace param/response types |
 | `apps/cli/src/main.rs` | Wire MarketplaceAction subcommands |
 
 ---
@@ -41,7 +41,7 @@
 ## Task 1: Marketplace types
 
 **Files:**
-- Create: `core/src/extension/marketplace/types.rs`
+- Create: `src/extension/marketplace/types.rs`
 
 - [ ] **Step 1: Define types**
 
@@ -152,7 +152,7 @@ git commit -m "marketplace: add core types (MarketplaceManifest, MarketplaceConf
 ## Task 2: Marketplace manifest parser
 
 **Files:**
-- Create: `core/src/extension/marketplace/manifest.rs`
+- Create: `src/extension/marketplace/manifest.rs`
 
 - [ ] **Step 1: Write tests**
 
@@ -266,7 +266,7 @@ pub fn parse_marketplace_manifest(dir: &Path) -> Result<MarketplaceManifest, Str
 ## Task 3: GitHub source
 
 **Files:**
-- Create: `core/src/extension/marketplace/github_source.rs`
+- Create: `src/extension/marketplace/github_source.rs`
 
 - [ ] **Step 1: Write implementation**
 
@@ -357,7 +357,7 @@ pub fn sync_github_marketplace(
 ## Task 4: Local source
 
 **Files:**
-- Create: `core/src/extension/marketplace/local_source.rs`
+- Create: `src/extension/marketplace/local_source.rs`
 
 - [ ] **Step 1: Write implementation**
 
@@ -399,7 +399,7 @@ let path = if source.starts_with("~/") {
 ## Task 5: MarketplaceManager
 
 **Files:**
-- Create: `core/src/extension/marketplace/mod.rs`
+- Create: `src/extension/marketplace/mod.rs`
 
 - [ ] **Step 1: Write the manager**
 
@@ -561,7 +561,7 @@ impl MarketplaceManager {
 ## Task 6: Plugin installer
 
 **Files:**
-- Create: `core/src/extension/marketplace/installer.rs`
+- Create: `src/extension/marketplace/installer.rs`
 
 - [ ] **Step 1: Write implementation**
 
@@ -637,7 +637,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 ## Task 7: Config integration
 
 **Files:**
-- Modify: `core/src/config/structs.rs`
+- Modify: `src/config/structs.rs`
 
 - [ ] **Step 1: Add `plugin_marketplaces` to Config struct**
 
@@ -676,9 +676,9 @@ This avoids the dependency issue. The MarketplaceManager can convert between the
 ## Task 8: Gateway RPC handlers for marketplace
 
 **Files:**
-- Modify: `core/src/gateway/handlers/plugins/handlers.rs`
-- Modify: `core/src/gateway/handlers/plugins/types.rs`
-- Modify: `core/src/gateway/handlers/mod.rs`
+- Modify: `src/gateway/handlers/plugins/handlers.rs`
+- Modify: `src/gateway/handlers/plugins/types.rs`
+- Modify: `src/gateway/handlers/mod.rs`
 
 - [ ] **Step 1: Add param types**
 
