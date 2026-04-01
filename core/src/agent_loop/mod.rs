@@ -19,6 +19,7 @@ pub mod truncation_recovery;
 pub mod tool_orchestrator;
 pub mod stop_hooks;
 pub mod streaming_bridge;
+pub mod tool_summary;
 
 #[cfg(test)]
 mod integration_probe;
