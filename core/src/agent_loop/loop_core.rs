@@ -527,6 +527,13 @@ impl<P: LoopProvider> AgentLoop<P> {
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
+        #[derive(Clone, Copy)]
+        enum ActiveProvider {
+            Primary,
+            Fallback,
+        }
+        let mut active_provider = ActiveProvider::Primary;
+
         // === THE LOOP ===
         while iterations < self.config.max_iterations {
             iterations += 1;
@@ -664,13 +671,79 @@ impl<P: LoopProvider> AgentLoop<P> {
                 budget_ratio,
             );
 
-            // Think: stream deltas with retry and cancellation
-            let delta_stream = super::retry::retry_async(
-                || self.provider.stream(&messages, &system_prompt, &tool_defs),
-                &self.cancel_token,
-                3,
-            )
-            .await?;
+            // Think: stream deltas with retry, 413 recovery, and fallback
+            let mut ptl_attempts: usize = 0;
+            let delta_stream = loop {
+                match super::retry::retry_async(
+                    || {
+                        let p: &dyn LoopProvider = match active_provider {
+                            ActiveProvider::Primary => &self.provider,
+                            ActiveProvider::Fallback => {
+                                self.fallback_provider.as_ref().unwrap().as_ref()
+                            }
+                        };
+                        p.stream(&messages, &system_prompt, &tool_defs)
+                    },
+                    &self.cancel_token,
+                    3,
+                )
+                .await
+                {
+                    Ok(stream) => break stream,
+                    Err(e) => {
+                        let verdict = super::retry::classify_exhausted_error(&e);
+                        match verdict {
+                            super::retry::RetryVerdict::CompactAndRetry { token_gap } => {
+                                ptl_attempts += 1;
+                                if ptl_attempts > MAX_PTL_RETRIES {
+                                    return Err(e);
+                                }
+                                let fresh_tail = {
+                                    let ctx = self
+                                        .context_budget
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    ctx.as_ref()
+                                        .map(|b| b.fresh_tail_count())
+                                        .unwrap_or(6)
+                                };
+                                tracing::warn!(
+                                    attempt = ptl_attempts,
+                                    ?token_gap,
+                                    "413 recovery: truncating messages"
+                                );
+                                emergency_truncate(
+                                    &mut messages,
+                                    token_gap,
+                                    fresh_tail,
+                                );
+                                continue;
+                            }
+                            super::retry::RetryVerdict::Fallback { reason }
+                                if self.fallback_provider.is_some()
+                                    && matches!(
+                                        active_provider,
+                                        ActiveProvider::Primary
+                                    ) =>
+                            {
+                                active_provider = ActiveProvider::Fallback;
+                                let label = self
+                                    .fallback_label
+                                    .as_deref()
+                                    .unwrap_or("fallback");
+                                tracing::warn!(
+                                    %reason,
+                                    fallback = label,
+                                    "Switching to fallback model"
+                                );
+                                callback.on_model_fallback(&reason, label);
+                                continue;
+                            }
+                            _ => return Err(e),
+                        }
+                    }
+                }
+            };
 
             // The bridge+executor are created every iteration (even for pure text turns)
             // because tools must start executing AS THEY STREAM — we cannot know whether
@@ -2802,5 +2875,152 @@ mod tests {
         let original_len = messages.len();
         emergency_truncate(&mut messages, None, 2);
         assert_eq!(messages.len(), original_len);
+    }
+
+    // =========================================================================
+    // 413 recovery + fallback integration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_413_recovery_retries_after_truncation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // 413 errors are classified as CompactAndRetry (not Retry), so
+        // retry_async returns them immediately on the first call.
+        // The recovery loop in the Think step truncates messages and retries.
+        // This provider fails with 413 on the first call, then succeeds.
+        struct Ptl413ThenOk {
+            call_count: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl LoopProvider for Ptl413ThenOk {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if count < 1 {
+                    Err(anyhow::anyhow!(
+                        "prompt is too long: 137500 tokens > 135000 maximum"
+                    ))
+                } else {
+                    let resp = ProviderResponse::text_only("recovered".to_string());
+                    Ok(crate::providers::delta::response_to_delta_stream(resp))
+                }
+            }
+        }
+
+        let provider = Ptl413ThenOk {
+            call_count: AtomicUsize::new(0),
+        };
+        let agent = AgentLoop::new(
+            provider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 5,
+                token_budget: 200_000,
+            },
+            CancellationToken::new(),
+        );
+
+        let mut history = Vec::new();
+        for i in 0..10 {
+            history.push(UnifiedMessage::user(&format!("question {i}")));
+            history.push(UnifiedMessage::assistant(&format!("answer {i}")));
+        }
+        history.push(UnifiedMessage::user("final question"));
+
+        let mut cb = TrackingCallback::default();
+        let result = agent
+            .run_with_history_messages(history, &mut cb)
+            .await
+            .unwrap();
+
+        assert_eq!(result.final_text.as_deref(), Some("recovered"));
+        assert!(!result.cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_model_switches_on_overload() {
+        struct OverloadedProvider;
+
+        #[async_trait]
+        impl LoopProvider for OverloadedProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                Err(anyhow::anyhow!("HTTP 529 overloaded"))
+            }
+        }
+
+        struct FallbackProvider;
+
+        #[async_trait]
+        impl LoopProvider for FallbackProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                let resp = ProviderResponse::text_only("fallback response".to_string());
+                Ok(crate::providers::delta::response_to_delta_stream(resp))
+            }
+        }
+
+        let agent = AgentLoop::new(
+            OverloadedProvider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig::default(),
+            CancellationToken::new(),
+        )
+        .with_fallback(Box::new(FallbackProvider), "test-fallback");
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("hello", &mut cb).await.unwrap();
+
+        assert_eq!(result.final_text.as_deref(), Some("fallback response"));
+        assert_eq!(cb.fallback_events.len(), 1);
+        assert_eq!(cb.fallback_events[0].1, "test-fallback");
+    }
+
+    #[tokio::test]
+    async fn test_fallback_not_available_propagates_error() {
+        struct OverloadedProvider;
+
+        #[async_trait]
+        impl LoopProvider for OverloadedProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                Err(anyhow::anyhow!("HTTP 529 overloaded"))
+            }
+        }
+
+        let agent = AgentLoop::new(
+            OverloadedProvider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig::default(),
+            CancellationToken::new(),
+        );
+
+        let mut cb = NoopCallback;
+        let result = agent.run("hello", &mut cb).await;
+        assert!(result.is_err());
     }
 }
