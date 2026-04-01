@@ -285,12 +285,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Register subagent tool
             {
                 use crate::agent_loop::subagent_tool::SubagentTool;
+                use crate::agents::AgentRegistry;
+                use crate::agent_loop::background_tracker::BackgroundAgentTracker;
                 let sub_provider = self.provider_registry.default_provider();
+                let agent_registry = Arc::new(AgentRegistry::with_builtins());
+                let background_tracker = Arc::new(BackgroundAgentTracker::new());
                 tool_registry.register(Box::new(SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
                     sub_safety_factory.clone(),
                     run_chain.clone(),
+                    agent_registry,
+                    background_tracker,
                 )));
             }
 
@@ -303,7 +309,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // Build prompt builder
             let mut prompt_builder = if resolved_soul.is_empty() {
-                PromptBuilder::new().with_default_behavior_sections()
+                PromptBuilder::new()
+                    .with_default_identity()
+                    .with_default_behavior_sections()
             } else {
                 PromptBuilder::new().with_soul(&resolved_soul).with_default_behavior_sections()
             };
