@@ -202,6 +202,13 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
+        // Sync FTS5: remove entries before deleting messages
+        conn.execute(
+            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
+            params![&key_str],
+        )
+        .ok();
+
         let deleted = conn
             .execute(
                 "DELETE FROM messages WHERE session_key = ?",
@@ -227,6 +234,13 @@ impl SessionManager {
             .conn
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        // Sync FTS5: remove entries before deleting messages
+        conn.execute(
+            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ?)",
+            params![&key_str],
+        )
+        .ok();
 
         // Delete messages first
         conn.execute(
@@ -333,6 +347,13 @@ impl SessionManager {
             .ok();
 
         if let Some(threshold) = threshold_id {
+            // Sync FTS5: remove entries before deleting messages
+            conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE session_key = ? AND id < ?)",
+                params![&key_str, threshold],
+            )
+            .ok();
+
             let deleted = conn
                 .execute(
                     "DELETE FROM messages WHERE session_key = ? AND id < ?",
@@ -649,6 +670,10 @@ impl SessionManager {
             return Ok(Vec::new());
         }
 
+        // Sanitize query: wrap in double-quotes to treat as literal phrase,
+        // preventing FTS5 syntax errors from malformed user input.
+        let sanitized_query = format!("\"{}\"", query.replace('"', ""));
+
         let mut stmt = conn
             .prepare(
                 "SELECT m.id, m.session_key, m.role, m.content, m.timestamp,
@@ -662,8 +687,9 @@ impl SessionManager {
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let results: Vec<SessionSearchResult> = stmt
-            .query_map(params![query, max_results as i64], |row| {
+        let results: Vec<SessionSearchResult> = match stmt.query_map(
+            params![&sanitized_query, max_results as i64],
+            |row| {
                 let metadata_json: Option<String> = row.get(6)?;
                 let topic = metadata_json
                     .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
@@ -678,10 +704,14 @@ impl SessionManager {
                     agent_id: row.get(5)?,
                     topic,
                 })
-            })
-            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-            .filter_map(|r| r.ok())
-            .collect();
+            },
+        ) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => {
+                // Graceful degradation: malformed FTS5 query returns empty results
+                return Ok(Vec::new());
+            }
+        };
 
         Ok(results)
     }

@@ -93,6 +93,21 @@ impl MemoryStore for LanceMemoryBackend {
         if facts.is_empty() {
             return Ok(());
         }
+        // Content injection scan on each fact
+        for fact in facts {
+            if let crate::memory::content_scanner::ScanVerdict::Rejected { reason, pattern } =
+                crate::memory::content_scanner::scan_content(&fact.content)
+            {
+                tracing::warn!(
+                    fact_id = %fact.id,
+                    pattern = pattern,
+                    "Batch insert: memory content rejected by scanner: {reason}"
+                );
+                return Err(AlephError::Validation(format!(
+                    "Memory content rejected in batch: {reason}"
+                )));
+            }
+        }
         let batch = facts_to_record_batch(facts)?;
         add_batch(&self.facts_table, batch).await
     }
