@@ -1,5 +1,6 @@
 //! PromptBuilder — assembles system prompt from sections.
 
+use super::sections::{self, SessionContext};
 use crate::domain::skill::{PromptScope, SkillManifest};
 use crate::skill::prompt::build_skills_prompt_xml;
 use crate::thinker::soul::SoulManifest;
@@ -23,63 +24,7 @@ pub struct ToolInfo {
 // =============================================================================
 
 const SECTION_SEPARATOR: &str = "\n\n---\n\n";
-
-const DEFAULT_IDENTITY: &str = "You are a helpful personal AI assistant.";
-
-const BASE_BEHAVIOR: &str = "\
-- ALWAYS use available tools to gather information and take actions. Do NOT answer from memory or guess when a tool can provide the answer.\n\
-- When the user asks you to do something and a matching tool exists, call it immediately rather than describing what you would do.\n\
-- Continue working until the user's request is fully resolved. Chain multiple tool calls if needed.\n\
-- **PERSISTENCE IS YOUR CORE TRAIT.** When a tool call fails:\n\
-  1. Analyze the error carefully.\n\
-  2. Retry with corrected parameters or a different approach.\n\
-  3. If that fails, try a completely different strategy to achieve the same goal.\n\
-  4. NEVER give up after just 1-2 attempts. You have many iterations available — use them.\n\
-  5. Only stop if you have genuinely exhausted all possible approaches AND explained what you tried.\n\
-- **NEVER end your turn with an apology about failures without having tried at least 3 different approaches.** The user trusts you to be tenacious.\n\
-- Provide concise summaries of actions taken and results obtained.\n\
-- **KEEP THE USER INFORMED.** When you need to execute multiple steps, briefly tell the user what you're about to do before each tool call. Use natural, conversational language — do NOT expose raw tool names, parameters, or JSON. For example: \"Let me check your calendar...\" or \"I'll search for that file now.\" This helps the user understand your progress and know you're still working.\n\
-- For web browsing: ALWAYS use browser_open/browser_snapshot/browser_click etc. to open URLs and interact with web pages. Do NOT use the desktop tool to launch a browser application. The browser_open tool runs a headless browser by default (fast, no visible window). Only use profile=\"user\" when the user explicitly asks to open a real/visible browser (e.g. mentions \"devtool\", \"Chrome\", \"open browser window\"). If a browser tool fails, wait briefly and retry — browser operations are inherently flaky and retrying usually works.\n\
-- NEVER use the system Python directly. Aleph has a shared virtual environment at `~/.aleph/.venv/`. Use it for all global tools, packages, and quick scripts: `source ~/.aleph/.venv/bin/activate && uv pip install <packages>`. If the venv does not exist, create it first: `uv venv ~/.aleph/.venv`. For standalone Python projects, create `.venv` inside the project directory under the workspace.\n\
-- **TASK COMPLETION PROTOCOL.** When your work involved tool calls, you MUST verify completion before stopping:\n\
-  1. Review the user's original request — is EVERY requirement addressed?\n\
-  2. Verify your results — did the tools succeed? Are the outputs correct?\n\
-  3. Output a completion check block:\n\
-     <completion-check>\n\
-     - Request: [one-line summary of what user asked]\n\
-     - Done: [what you accomplished]\n\
-     - Verified: [how you confirmed correctness]\n\
-     - Risks: [none / specific concerns]\n\
-     </completion-check>\n\
-  4. Output <task-complete/> to confirm you are done.\n\
-  If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.\n\
-- **EFFICIENCY: ACT BEFORE EXPLORING.** If the user's request maps directly to an available tool (image/video/audio generation, web search, file operations, etc.), call that tool IMMEDIATELY. Do not explore configuration, read guides, or verify setup first — trust that registered tools are ready to use.\n\
-- **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.\n\
-- **MEDIA DELIVERY.** When you find media (images, videos, audio) that the user wants to see or hear, use the `media_send` tool to deliver them directly in the chat. Do not just paste URLs — use the tool so media appears inline.\n\
-- **DEVTOOLS EFFICIENCY.** When using Chrome DevTools tools, prefer targeted CSS selectors (click, fill) over full-page snapshots (take_snapshot). Use evaluate_script with specific queries (e.g. `document.querySelector('.title').textContent`) rather than dumping entire page content (e.g. `document.body.innerText`).\n\
-- **CODE TASK ORCHESTRATION.** When the user requests coding work, you have professional coding CLI tools at your disposal (claude_code, codex, gemini_cli). Use them like a tech lead directing engineers:\n\
-  - Plan before code: For non-trivial tasks, first ask a tool to analyze and propose a plan. Review the plan, then proceed.\n\
-  - Review after code: After code is written, consider asking the same or a different tool to review it.\n\
-  - Parallel when independent: If tasks are independent (e.g., code + tests), dispatch multiple tools simultaneously.\n\
-  - Reuse sessions for continuity: When follow-up prompts need prior context, reuse the session so the tool retains conversation history.\n\
-  - Switch tools strategically: Different tools have different strengths. You may use one for planning and another for implementation.\n\
-  - Handle failures: If a tool fails (e.g., permission denied, timeout), fall back to bash/code_exec to complete the task yourself, try a different tool, or ask the user.\n\
-  - CLI tools run in non-interactive mode: they cannot ask for user confirmation. If a tool reports permission issues, use bash to do the work directly rather than retrying the same tool.\n\n\
-## Memory Protocol\n\n\
-### When to Save Memory\n\
-- User corrections and preferences → highest priority, prevents repeating mistakes.\n\
-- Environment facts (OS, tools, project conventions) → reduces future context gathering.\n\
-- Do NOT save: task progress, session outcomes, completed-work logs, or temporary TODO state.\n\n\
-### When to Search Sessions\n\
-- User references something from a past conversation.\n\
-- You suspect relevant cross-session context exists.\n\
-- Before asking user to repeat information they may have already told you.\n\
-- Use the session_search tool — sessions have verbatim transcripts.\n\n\
-### When to Extract Skills\n\
-- After completing a complex task (5+ tool calls).\n\
-- After fixing a tricky error with a non-obvious solution.\n\
-- After discovering a reusable workflow or pattern.\n\
-- Save via memory as a Lesson-type fact with clear, reusable steps.";
+const CACHE_BOUNDARY: &str = "\n\n<!-- CACHE_BOUNDARY -->\n\n";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
@@ -215,23 +160,35 @@ impl PromptBuilder {
 
     /// Assemble the full system prompt from all configured sections.
     ///
-    /// Sections are separated by `\n\n---\n\n` and each has a `# Header`.
-    /// Only non-empty/configured sections are included.
-    pub fn build(&self, tools: &[ToolInfo], memory_context: Option<&str>) -> String {
-        let mut sections: Vec<String> = Vec::new();
+    /// The prompt is split into **static** sections (cacheable across turns)
+    /// and **dynamic** sections (vary per request), separated by a cache
+    /// boundary marker.
+    pub fn build(
+        &self,
+        tools: &[ToolInfo],
+        memory_context: Option<&str>,
+        session: Option<&SessionContext>,
+    ) -> String {
+        // =================================================================
+        // Static sections (stable across turns — cacheable)
+        // =================================================================
+        let mut static_sections: Vec<String> = Vec::new();
 
-        // 0. Persona prefix — highest priority, overrides default identity
+        // 0. Persona prefix
         if let Some(persona) = &self.persona_prefix {
-            sections.push(format!("# Persona\n\n{}", persona));
+            static_sections.push(format!("# Persona\n\n{}", persona));
         }
 
         // 1. Identity
-        let identity = self.soul_identity.as_deref().unwrap_or(DEFAULT_IDENTITY);
-        sections.push(format!("# Identity\n\n{}", identity));
+        let identity = self
+            .soul_identity
+            .as_deref()
+            .unwrap_or(sections::DEFAULT_IDENTITY);
+        static_sections.push(format!("# Identity\n\n{}", identity));
 
         // 2. Communication Style
         if let Some(tone) = &self.soul_tone {
-            sections.push(format!("# Communication Style\n\n{}", tone));
+            static_sections.push(format!("# Communication Style\n\n{}", tone));
         }
 
         // 3. Directives
@@ -242,30 +199,52 @@ impl PromptBuilder {
                 .map(|d| format!("- {}", d))
                 .collect::<Vec<_>>()
                 .join("\n");
-            sections.push(format!("# Directives\n\n{}", bullets));
+            static_sections.push(format!("# Directives\n\n{}", bullets));
         }
 
-        // 3.5 Model Behavior — LLM-family-specific behavioral directives
+        // 4. Task Philosophy
+        static_sections.push(format!("# Task Execution\n\n{}", sections::TASK_PHILOSOPHY));
+
+        // 5. Risk Actions
+        static_sections.push(format!("# Risk Awareness\n\n{}", sections::RISK_ACTIONS));
+
+        // 6. Tool Grammar
+        static_sections.push(format!("# Tool Usage\n\n{}", sections::TOOL_GRAMMAR));
+
+        // 7. Output Style
+        static_sections.push(format!("# Output\n\n{}", sections::OUTPUT_STYLE));
+
+        // 8. Persistence
+        static_sections.push(format!("# Persistence\n\n{}", sections::PERSISTENCE));
+
+        // 9. Model Behavior
         if let Some(behavior) = &self.model_behavior {
-            sections.push(format!("# Model Behavior\n\n{}", behavior));
+            static_sections.push(format!("# Model Behavior\n\n{}", behavior));
         }
 
-        // 4. Tool Usage Rules
+        let static_part = static_sections.join(SECTION_SEPARATOR);
+
+        // =================================================================
+        // Dynamic sections (vary per request)
+        // =================================================================
+        let mut dynamic_sections: Vec<String> = Vec::new();
+
+        // 10. Tool Usage Rules
         if let Some(rules) = &self.capability_rules {
-            sections.push(format!("# Tool Usage Rules\n\n{}", rules));
+            dynamic_sections.push(format!("# Tool Usage Rules\n\n{}", rules));
         }
 
-        // 5. Available Tools
+        // 11. Available Tools
         if !tools.is_empty() {
             let tool_list: String = tools
                 .iter()
                 .map(|t| format!("- **{}**: {}", t.name, t.description))
                 .collect::<Vec<_>>()
                 .join("\n");
-            sections.push(format!("# Available Tools\n\n{}", tool_list));
+            dynamic_sections.push(format!("# Available Tools\n\n{}", tool_list));
         }
 
-        // 6. Available Skills (scope-filtered from SkillSystem v2)
+        // 12. Available Skills (scope-filtered from SkillSystem v2)
         if let Some(ref skills) = self.eligible_skills {
             let active_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
             let filtered: Vec<&SkillManifest> = skills
@@ -281,7 +260,7 @@ impl PromptBuilder {
 
             if !filtered.is_empty() {
                 let xml = build_skills_prompt_xml(&filtered);
-                sections.push(format!(
+                dynamic_sections.push(format!(
                     "# Available Skills\n\nYou can invoke skills using the `skill` tool. \
                      Skills provide specialized instructions for specific tasks.\n\
                      {}\n\n{}",
@@ -291,30 +270,48 @@ impl PromptBuilder {
             }
         }
 
-        // 7. Context from Memory
+        // 13. Session Guidance (conditional on active tools)
+        if let Some(guidance) = sections::render_session_guidance(tools) {
+            dynamic_sections.push(format!("# Session Guidance\n\n{}", guidance));
+        }
+
+        // 14. Environment
+        if let Some(ctx) = session {
+            dynamic_sections.push(format!(
+                "# Environment\n\n{}",
+                sections::render_environment(ctx)
+            ));
+        }
+
+        // 15. Context from Memory
         if let Some(ctx) = memory_context {
-            sections.push(format!("# Context from Memory\n\n{}", ctx));
+            dynamic_sections.push(format!("# Context from Memory\n\n{}", ctx));
         }
 
-        // 8. Additional Instructions
+        // 16. Additional Instructions
         if let Some(instructions) = &self.custom_instructions {
-            sections.push(format!("# Additional Instructions\n\n{}", instructions));
+            dynamic_sections.push(format!("# Additional Instructions\n\n{}", instructions));
         }
 
-        // 9. Discovered Skills (from async prefetch)
+        // 17. Discovered Skills (from async prefetch)
         let skill_section = self
             .skill_info_section
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         if let Some(ref section) = skill_section {
-            sections.push(section.clone());
+            dynamic_sections.push(section.clone());
         }
 
-        // 10. Behavior
-        sections.push(format!("# Behavior\n\n{}", BASE_BEHAVIOR));
-
-        sections.join(SECTION_SEPARATOR)
+        // =================================================================
+        // Assemble
+        // =================================================================
+        if dynamic_sections.is_empty() {
+            static_part
+        } else {
+            let dynamic_part = dynamic_sections.join(SECTION_SEPARATOR);
+            format!("{}{}{}", static_part, CACHE_BOUNDARY, dynamic_part)
+        }
     }
 }
 
@@ -338,7 +335,7 @@ mod tests {
         let prompt = PromptBuilder::new()
             .with_soul_identity("I am Aleph, your personal AI.")
             .with_soul_tone("Speak concisely and warmly.")
-            .build(&[], None);
+            .build(&[], None, None);
 
         assert!(prompt.contains("I am Aleph, your personal AI."));
         assert!(prompt.contains("Speak concisely and warmly."));
@@ -350,7 +347,7 @@ mod tests {
     fn test_build_includes_tool_rules() {
         let prompt = PromptBuilder::new()
             .with_capability_rules("Always confirm before destructive actions.")
-            .build(&[], None);
+            .build(&[], None, None);
 
         assert!(prompt.contains("# Tool Usage Rules"));
         assert!(prompt.contains("Always confirm before destructive actions."));
@@ -359,7 +356,7 @@ mod tests {
     #[test]
     fn test_build_includes_memory_context() {
         let prompt =
-            PromptBuilder::new().build(&[], Some("User prefers dark mode and short replies."));
+            PromptBuilder::new().build(&[], Some("User prefers dark mode and short replies."), None);
 
         assert!(prompt.contains("# Context from Memory"));
         assert!(prompt.contains("User prefers dark mode and short replies."));
@@ -380,7 +377,7 @@ mod tests {
             },
         ];
 
-        let prompt = PromptBuilder::new().build(&tools, None);
+        let prompt = PromptBuilder::new().build(&tools, None, None);
 
         assert!(prompt.contains("# Available Tools"));
         assert!(prompt.contains("- **web_search**: Search the web for information."));
@@ -389,12 +386,12 @@ mod tests {
 
     #[test]
     fn test_build_empty_is_valid() {
-        let prompt = PromptBuilder::new().build(&[], None);
+        let prompt = PromptBuilder::new().build(&[], None, None);
 
         assert!(!prompt.is_empty());
-        assert!(prompt.contains("assistant"));
+        assert!(prompt.contains("helpful personal AI assistant"));
         assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Behavior"));
+        assert!(prompt.contains("# Task Execution"));
     }
 
     #[test]
@@ -408,7 +405,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
 
         assert!(prompt.contains("I am Aleph, a personal AI companion."));
         assert!(prompt.contains("warm and concise"));
@@ -425,7 +422,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
 
         assert!(prompt.contains("Always explain reasoning"));
         assert!(prompt.contains("Be precise"));
@@ -439,7 +436,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
 
         assert!(prompt.contains("# Additional Instructions"));
         assert!(prompt.contains("Remember the user prefers dark mode."));
@@ -448,19 +445,19 @@ mod tests {
     #[test]
     fn test_from_soul_empty() {
         let soul = SoulManifest::default();
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None);
+        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
 
         // Should still produce a valid prompt with defaults
         assert!(!prompt.is_empty());
         assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Behavior"));
+        assert!(prompt.contains("# Task Execution"));
     }
 
     #[test]
     fn test_custom_instructions() {
         let prompt = PromptBuilder::new()
             .with_custom_instructions("Reply only in haiku format.")
-            .build(&[], None);
+            .build(&[], None, None);
 
         assert!(prompt.contains("# Additional Instructions"));
         assert!(prompt.contains("Reply only in haiku format."));
@@ -510,7 +507,7 @@ mod tests {
             parameters_schema: None,
         }];
 
-        let prompt = builder.build(&tools, None);
+        let prompt = builder.build(&tools, None, None);
 
         assert!(prompt.contains("# Available Skills"));
         assert!(prompt.contains("Git Commit"));
@@ -520,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_build_no_skills_no_section() {
-        let prompt = PromptBuilder::new().build(&[], None);
+        let prompt = PromptBuilder::new().build(&[], None, None);
         assert!(!prompt.contains("# Available Skills"));
     }
 
@@ -540,23 +537,16 @@ mod tests {
 
         let builder = PromptBuilder::new().with_eligible_skills(vec![skill]);
 
-        let prompt = builder.build(&[], None);
+        let prompt = builder.build(&[], None, None);
 
         assert!(prompt.contains(DEFERRED_LOADING_GUIDANCE));
-    }
-
-    #[test]
-    fn test_build_includes_orchestration_prompt() {
-        let prompt = PromptBuilder::new().build(&[], None);
-        assert!(prompt.contains("CODE TASK ORCHESTRATION"));
-        assert!(prompt.contains("tech lead"));
     }
 
     #[test]
     fn test_build_includes_model_behavior() {
         let prompt = PromptBuilder::new()
             .with_model_behavior("You MUST call tools proactively.")
-            .build(&[], None);
+            .build(&[], None, None);
 
         assert!(prompt.contains("# Model Behavior"));
         assert!(prompt.contains("You MUST call tools proactively."));
@@ -564,16 +554,59 @@ mod tests {
 
     #[test]
     fn test_build_omits_model_behavior_when_not_set() {
-        let prompt = PromptBuilder::new().build(&[], None);
+        let prompt = PromptBuilder::new().build(&[], None, None);
         assert!(!prompt.contains("# Model Behavior"));
     }
 
     #[test]
-    fn base_behavior_contains_memory_protocol() {
-        assert!(BASE_BEHAVIOR.contains("## Memory Protocol"));
-        assert!(BASE_BEHAVIOR.contains("When to Save Memory"));
-        assert!(BASE_BEHAVIOR.contains("When to Search Sessions"));
-        assert!(BASE_BEHAVIOR.contains("When to Extract Skills"));
+    fn sections_contain_memory_protocol() {
+        assert!(sections::PERSISTENCE.contains("Memory Protocol"));
+        assert!(sections::PERSISTENCE.contains("When to Save Memory"));
+        assert!(sections::PERSISTENCE.contains("When to Search Sessions"));
+        assert!(sections::PERSISTENCE.contains("When to Extract Skills"));
+    }
+
+    #[test]
+    fn test_update_skill_info_rebuilds_prompt_with_new_skills() {
+        use crate::agent_loop::skill_prefetch::SkillInfo;
+
+        let builder = PromptBuilder::new();
+
+        // Before update: no discovered skills section
+        let prompt_before = builder.build(&[], None, None);
+        assert!(
+            !prompt_before.contains("Discovered Skills"),
+            "No skills section before update"
+        );
+
+        // Update with discovered skills
+        builder.update_skill_info(&[
+            SkillInfo {
+                name: "web-search".to_string(),
+                description: "Search the web".to_string(),
+                schema: None,
+            },
+            SkillInfo {
+                name: "translate".to_string(),
+                description: "Translate text".to_string(),
+                schema: None,
+            },
+        ]);
+
+        // After update: prompt includes discovered skills
+        let prompt_after = builder.build(&[], None, None);
+        assert!(
+            prompt_after.contains("Discovered Skills"),
+            "Should contain Discovered Skills section"
+        );
+        assert!(
+            prompt_after.contains("web-search"),
+            "Should contain web-search skill"
+        );
+        assert!(
+            prompt_after.contains("translate"),
+            "Should contain translate skill"
+        );
     }
 
     #[test]
@@ -581,7 +614,7 @@ mod tests {
         let prompt = PromptBuilder::new()
             .with_model_behavior("Be proactive.")
             .with_capability_rules("Always confirm.")
-            .build(&[], None);
+            .build(&[], None, None);
 
         let behavior_pos = prompt.find("# Model Behavior").unwrap();
         let rules_pos = prompt.find("# Tool Usage Rules").unwrap();
@@ -589,5 +622,22 @@ mod tests {
             behavior_pos < rules_pos,
             "Model Behavior should appear before Tool Usage Rules"
         );
+    }
+
+    #[test]
+    fn test_build_with_session_context() {
+        let ctx = SessionContext {
+            os: "macos".into(),
+            shell: "/bin/zsh".into(),
+            cwd: "/home/user/project".into(),
+            git_branch: Some("main".into()),
+            language: "zh-CN".into(),
+        };
+
+        let prompt = PromptBuilder::new().build(&[], None, Some(&ctx));
+
+        assert!(prompt.contains("# Environment"));
+        assert!(prompt.contains("macos"));
+        assert!(prompt.contains("main"));
     }
 }

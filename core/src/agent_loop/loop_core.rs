@@ -569,7 +569,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                 parameters_schema: Some(td.parameters.clone()),
             })
             .collect();
-        let system_prompt = self.prompt_builder.build(&tool_infos, None);
+        let mut system_prompt = self.prompt_builder.build(&tool_infos, None, None);
 
         // Get tool definitions for the provider
         let mut tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
@@ -1237,6 +1237,9 @@ impl<P: LoopProvider> AgentLoop<P> {
                 match handle.await {
                     Ok(Some(new_skills)) => {
                         self.prompt_builder.update_skill_info(&new_skills);
+                        // Rebuild system prompt so the next stream() call
+                        // sees the newly discovered skills.
+                        system_prompt = self.prompt_builder.build(&tool_infos, None, None);
                         if let Some(ref prefetcher) = self.skill_prefetcher {
                             prefetcher.commit(new_skills);
                         }
