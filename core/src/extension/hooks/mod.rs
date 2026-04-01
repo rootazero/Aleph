@@ -241,6 +241,41 @@ impl InterceptorResult {
     }
 }
 
+/// Parse structured output from a command hook.
+///
+/// Each line is parsed independently using a prefix protocol:
+/// - `block: <reason>` — block the tool call
+/// - `update_input: <json>` — replace tool input arguments
+/// - `context: <text>` — inject additional context for LLM
+/// - `prevent_continuation` — stop the agent loop
+/// - (no prefix) — treat as a message
+pub fn parse_command_output(output: &str, result: &mut HookResult) {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(reason) = trimmed.strip_prefix("block:") {
+            result.blocked = true;
+            result.block_reason = Some(reason.trim().to_string());
+        } else if let Some(json_str) = trimmed.strip_prefix("update_input:") {
+            match serde_json::from_str(json_str.trim()) {
+                Ok(val) => result.updated_input = Some(val),
+                Err(e) => {
+                    tracing::warn!("Hook update_input invalid JSON: {}", e);
+                }
+            }
+        } else if let Some(ctx) = trimmed.strip_prefix("context:") {
+            result.additional_contexts.push(ctx.trim().to_string());
+        } else if trimmed == "prevent_continuation" {
+            result.prevent_continuation = true;
+        } else {
+            result.messages.push(trimmed.to_string());
+        }
+    }
+}
+
 /// Substitute variables in a string
 ///
 /// Supported variables:
@@ -561,6 +596,63 @@ mod tests {
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.agents_to_invoke, vec!["review-agent"]);
+    }
+
+    #[test]
+    fn test_parse_command_output_block() {
+        let mut result = HookResult::default();
+        parse_command_output("block: unauthorized access", &mut result);
+        assert!(result.blocked);
+        assert_eq!(result.block_reason, Some("unauthorized access".to_string()));
+    }
+
+    #[test]
+    fn test_parse_command_output_update_input() {
+        let mut result = HookResult::default();
+        parse_command_output(r#"update_input: {"path": "/safe"}"#, &mut result);
+        assert_eq!(result.updated_input, Some(serde_json::json!({"path": "/safe"})));
+    }
+
+    #[test]
+    fn test_parse_command_output_invalid_json_ignored() {
+        let mut result = HookResult::default();
+        parse_command_output("update_input: not json", &mut result);
+        assert!(result.updated_input.is_none());
+    }
+
+    #[test]
+    fn test_parse_command_output_context() {
+        let mut result = HookResult::default();
+        parse_command_output("context: File auto-formatted\ncontext: Lint passed", &mut result);
+        assert_eq!(result.additional_contexts, vec!["File auto-formatted", "Lint passed"]);
+    }
+
+    #[test]
+    fn test_parse_command_output_prevent_continuation() {
+        let mut result = HookResult::default();
+        parse_command_output("prevent_continuation", &mut result);
+        assert!(result.prevent_continuation);
+    }
+
+    #[test]
+    fn test_parse_command_output_plain_message() {
+        let mut result = HookResult::default();
+        parse_command_output("Hello from hook", &mut result);
+        assert_eq!(result.messages, vec!["Hello from hook"]);
+    }
+
+    #[test]
+    fn test_parse_command_output_mixed() {
+        let mut result = HookResult::default();
+        parse_command_output(
+            "context: formatted\nHello\nblock: danger\n\nprevent_continuation",
+            &mut result,
+        );
+        assert_eq!(result.additional_contexts, vec!["formatted"]);
+        assert_eq!(result.messages, vec!["Hello"]);
+        assert!(result.blocked);
+        assert_eq!(result.block_reason, Some("danger".to_string()));
+        assert!(result.prevent_continuation);
     }
 
     #[tokio::test]
