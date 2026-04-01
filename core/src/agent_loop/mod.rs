@@ -4,6 +4,7 @@
 //! and repeats until the task is complete.
 
 pub mod adapters;
+pub mod chain_context;
 pub mod context_budget;
 pub mod factory;
 mod loop_core;
@@ -19,11 +20,13 @@ pub mod truncation_recovery;
 pub mod tool_orchestrator;
 pub mod stop_hooks;
 pub mod streaming_bridge;
+pub mod tool_refresh;
 pub mod tool_summary;
 
 #[cfg(test)]
 mod integration_probe;
 
+pub use chain_context::ChainContext;
 pub use context_budget::diagnostics::{ContextDiagnostics, DiagnosticsSnapshot};
 pub use context_budget::pipeline::{CompactionPipeline, CompactionStage, PipelineResult};
 pub use context_budget::pressure::PressureSensor;
@@ -45,4 +48,5 @@ pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};
 pub use stop_hooks::{StopHook, StopHookAggregateResult, StopHookContext, StopHookVerdict};
+pub use tool_refresh::ToolRefreshSource;
 pub use tool_summary::{generate_tool_summary, ToolSummaryInput};

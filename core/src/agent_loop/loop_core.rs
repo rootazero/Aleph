@@ -356,7 +356,9 @@ pub struct AgentLoop<P: LoopProvider> {
     provider: P,
     fallback_provider: Option<Box<dyn LoopProvider>>,
     fallback_label: Option<String>,
-    tool_registry: Arc<LoopToolRegistry>,
+    tool_registry: std::sync::RwLock<Arc<LoopToolRegistry>>,
+    /// Optional source for runtime tool hot-refresh.
+    tool_refresh: Option<Arc<dyn super::tool_refresh::ToolRefreshSource>>,
     prompt_builder: PromptBuilder,
     safety_guard: Arc<SafetyGuard>,
     config: LoopConfig,
@@ -418,7 +420,8 @@ impl<P: LoopProvider> AgentLoop<P> {
             provider,
             fallback_provider: None,
             fallback_label: None,
-            tool_registry: Arc::new(tool_registry),
+            tool_registry: std::sync::RwLock::new(Arc::new(tool_registry)),
+            tool_refresh: None,
             prompt_builder,
             safety_guard: Arc::new(safety_guard),
             config,
@@ -495,9 +498,15 @@ impl<P: LoopProvider> AgentLoop<P> {
         self
     }
 
+    /// Attach a [`ToolRefreshSource`](super::tool_refresh::ToolRefreshSource) for runtime tool hot-refresh.
+    pub fn with_tool_refresh(mut self, source: Arc<dyn super::tool_refresh::ToolRefreshSource>) -> Self {
+        self.tool_refresh = Some(source);
+        self
+    }
+
     /// Get tool definitions from the registry (for inspection/testing).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tool_registry.tool_definitions()
+        self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions()
     }
 
     /// Run the agent loop with the given user input.
@@ -541,6 +550,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         // Build system prompt with tool info
         let tool_infos: Vec<ToolInfo> = self
             .tool_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
             .tool_definitions()
             .iter()
             .map(|td| ToolInfo {
@@ -552,7 +563,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let system_prompt = self.prompt_builder.build(&tool_infos, None);
 
         // Get tool definitions for the provider
-        let tool_defs = self.tool_registry.tool_definitions();
+        let mut tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
 
         let mut messages = messages;
 
@@ -805,7 +816,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             // tool calls will arrive until the stream completes. The overhead for non-tool
             // turns is minimal: 1 mpsc channel + 1 tokio::spawn + 1 abort.
             let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
-                Arc::clone(&self.tool_registry),
+                Arc::clone(&self.tool_registry.read().unwrap_or_else(|e| e.into_inner())),
                 Arc::clone(&self.safety_guard),
                 self.cancel_token.clone(),
             );
@@ -1190,6 +1201,21 @@ impl<P: LoopProvider> AgentLoop<P> {
             } else {
                 // No tool calls — abort the idle executor.
                 executor_handle.abort();
+            }
+
+            // --- Tool refresh: check if external sources signalled a change ---
+            if let Some(ref refresh_source) = self.tool_refresh {
+                if refresh_source.poll_changes() {
+                    let new_tools = refresh_source.fetch_tools();
+                    let new_registry = super::tool_refresh::build_refreshed_registry(new_tools);
+                    *self.tool_registry.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(new_registry);
+                    tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
+                    tracing::info!(
+                        chain_id = %self.chain.chain_id,
+                        tools = tool_defs.len(),
+                        "tool registry refreshed"
+                    );
+                }
             }
 
             // --- After-turn: record metrics for diminishing returns detection ---
