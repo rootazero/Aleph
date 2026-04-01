@@ -2,7 +2,7 @@
 
 use super::parser::{LessonItem, ReflectionOutput};
 use crate::memory::context::{
-    FactSource, FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryTier,
+    FactSource, FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
 };
 
 /// Classify an invariant text as Preference or Personal based on keywords.
@@ -78,6 +78,30 @@ pub fn map_to_facts(output: &ReflectionOutput) -> Vec<MemoryFact> {
         facts.push(fact);
     }
 
+    // Skills → LongTerm tier, Lesson type, skills/ path prefix
+    for text in &output.skills {
+        let slug = text
+            .split(':')
+            .next()
+            .unwrap_or(text)
+            .trim()
+            .to_lowercase()
+            .replace(' ', "-")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect::<String>();
+        let path = format!("aleph://knowledge/skills/{}/", slug);
+        let fact = MemoryFact::new(text.clone(), FactType::Lesson, Vec::new())
+            .with_confidence(0.85)
+            .with_tier(MemoryTier::LongTerm)
+            .with_scope(MemoryScope::Global)
+            .with_layer(MemoryLayer::L1Overview)
+            .with_category(MemoryCategory::Patterns)
+            .with_path(path)
+            .with_fact_source(FactSource::Extracted);
+        facts.push(fact);
+    }
+
     // Open Loops are intentionally skipped — they represent actions, not facts.
 
     facts
@@ -131,6 +155,23 @@ mod tests {
             facts[2].content,
             "UTF-8 slicing: byte index panics on CJK → use char_indices"
         );
+    }
+
+    #[test]
+    fn maps_skills_to_lesson_facts_with_skills_path() {
+        let md = "\
+## Skills
+- Cross-session FTS5 search: build index, group by session, return context
+";
+        let output = parse_reflection(md);
+        let facts = map_to_facts(&output);
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].fact_type, FactType::Lesson);
+        assert_eq!(facts[0].tier, MemoryTier::LongTerm);
+        assert_eq!(facts[0].scope, crate::memory::context::MemoryScope::Global);
+        assert!(facts[0].path.starts_with("aleph://knowledge/skills/"));
+        assert!((facts[0].confidence - 0.85).abs() < f32::EPSILON);
     }
 
     #[test]

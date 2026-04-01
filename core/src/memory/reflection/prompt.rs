@@ -15,6 +15,9 @@ Output EXACTLY this markdown format:
 ## Lessons
 - {symptom}: {root cause} → {fix or prevention strategy}
 
+## Skills
+- {skill name}: {concise reusable steps or key insight}
+
 ## Open Loops
 - {Follow-up actions with action verbs: investigate, verify, update, test, check}
 
@@ -23,9 +26,10 @@ Rules:
 2. Be specific and concrete — avoid vague statements
 3. Invariants must be TRUE ACROSS SESSIONS, not session-specific
 4. Lessons MUST have the symptom: cause → fix format
-5. Open Loops MUST start with an action verb
-6. If a section has no items, write: - (none)
-7. Do NOT repeat facts that are in the ALREADY EXTRACTED list below"#
+5. Skills: only include if the approach is non-trivial (5+ steps or non-obvious) and likely to recur
+6. Open Loops MUST start with an action verb
+7. If a section has no items, write: - (none)
+8. Do NOT repeat facts that are in the ALREADY EXTRACTED list below"#
 }
 
 /// Build the reflection user prompt with conversation context.
@@ -60,6 +64,7 @@ mod tests {
         assert!(prompt.contains("## Invariants"));
         assert!(prompt.contains("## Derived"));
         assert!(prompt.contains("## Lessons"));
+        assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("## Open Loops"));
     }
 

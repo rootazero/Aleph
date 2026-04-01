@@ -6,6 +6,7 @@ pub struct ReflectionOutput {
     pub invariants: Vec<String>,
     pub derived: Vec<String>,
     pub lessons: Vec<LessonItem>,
+    pub skills: Vec<String>,
     pub open_loops: Vec<String>,
 }
 
@@ -23,6 +24,7 @@ enum Section {
     Invariants,
     Derived,
     Lessons,
+    Skills,
     OpenLoops,
     Unknown,
 }
@@ -53,6 +55,8 @@ pub fn parse_reflection(text: &str) -> ReflectionOutput {
                 Section::Derived
             } else if lower.starts_with("lessons") {
                 Section::Lessons
+            } else if lower.starts_with("skills") {
+                Section::Skills
             } else if lower.starts_with("open loops") {
                 Section::OpenLoops
             } else {
@@ -71,6 +75,7 @@ pub fn parse_reflection(text: &str) -> ReflectionOutput {
                 Section::Invariants => out.invariants.push(item.to_string()),
                 Section::Derived => out.derived.push(item.to_string()),
                 Section::Lessons => out.lessons.push(parse_lesson(item)),
+                Section::Skills => out.skills.push(item.to_string()),
                 Section::OpenLoops => out.open_loops.push(item.to_string()),
                 Section::Unknown => {}
             }
@@ -184,11 +189,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_skills_section() {
+        let md = "\
+## Invariants
+- User prefers Chinese dialogue
+
+## Skills
+- Cross-session FTS5 search: build FTS5 index on messages table, group results by session, return context window
+- Atomic file writes: use tempfile + rename pattern to prevent corruption
+
+## Open Loops
+- Finish compression daemon
+";
+        let out = parse_reflection(md);
+        assert_eq!(out.invariants.len(), 1);
+        assert_eq!(out.skills.len(), 2);
+        assert!(out.skills[0].contains("FTS5"));
+        assert!(out.skills[1].contains("Atomic file writes"));
+        assert_eq!(out.open_loops.len(), 1);
+    }
+
+    #[test]
     fn parse_empty_returns_default() {
         let out = parse_reflection("");
         assert!(out.invariants.is_empty());
         assert!(out.derived.is_empty());
         assert!(out.lessons.is_empty());
+        assert!(out.skills.is_empty());
         assert!(out.open_loops.is_empty());
     }
 }
