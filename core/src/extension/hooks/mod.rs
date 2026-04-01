@@ -656,6 +656,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_hook_executor_command_with_context() {
+        let hooks = vec![HookConfig {
+            event: HookEvent::AfterToolCall,
+            kind: HookKind::default(),
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "echo 'context: File formatted'".to_string(),
+            }],
+            plugin_name: "test-plugin".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+
+        let executor = HookExecutor::new(hooks);
+        let context = HookContext::new("session").with_tool_name("Write");
+
+        let result = executor
+            .execute(HookEvent::AfterToolCall, &context)
+            .await
+            .unwrap();
+
+        assert_eq!(result.hooks_executed, 1);
+        assert_eq!(result.additional_contexts, vec!["File formatted"]);
+    }
+
+    #[tokio::test]
     async fn test_hook_executor_command() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,

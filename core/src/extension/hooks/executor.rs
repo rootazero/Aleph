@@ -136,14 +136,8 @@ impl HookExecutor {
                                 result.agents_to_invoke.push(agent.clone());
                             }
                             HookAction::Command { .. } => {
-                                // Check for block signal in command output
                                 if let Some(ref output) = ar.output {
-                                    if output.trim().to_lowercase().starts_with("block:") {
-                                        result.blocked = true;
-                                        result.block_reason = Some(
-                                            output.trim().get(6..).unwrap_or("").trim().to_string(),
-                                        );
-                                    }
+                                    super::parse_command_output(output, &mut result);
                                 }
                             }
                         }
@@ -385,13 +379,12 @@ impl HookExecutor {
 
                 match action_result {
                     Ok(ar) => {
-                        // Check for block signal in command output
                         if let HookAction::Command { .. } = action {
                             if let Some(ref output) = ar.output {
-                                if output.trim().to_lowercase().starts_with("block:") {
-                                    let reason =
-                                        output.trim().get(6..).unwrap_or("").trim().to_string();
-                                    return Ok((current_context, Some(reason)));
+                                let mut probe = super::HookResult::default();
+                                super::parse_command_output(output, &mut probe);
+                                if probe.blocked {
+                                    return Ok((current_context, probe.block_reason));
                                 }
                             }
                         }
