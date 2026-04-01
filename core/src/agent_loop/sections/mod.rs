@@ -71,7 +71,7 @@ pub fn render_session_guidance(tools: &[ToolInfo]) -> Option<String> {
     let tool_names: HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     let mut parts: Vec<&str> = Vec::new();
 
-    if tool_names.contains("browser_open") || tool_names.contains("browser_snapshot") {
+    if tool_names.iter().any(|name| name.starts_with("browser_")) {
         parts.push(BROWSER_GUIDANCE);
     }
     if tool_names.contains("code_exec") || tool_names.contains("bash") {

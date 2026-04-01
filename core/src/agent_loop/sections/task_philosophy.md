@@ -11,3 +11,15 @@
 - If you discover a security vulnerability in code you are editing, fix it immediately.
 - Delete unused code completely. Do not comment it out — git is the time machine.
 - Report results honestly. Never claim tests passed without running them.
+- **TASK COMPLETION PROTOCOL.** When your work involved tool calls, you MUST verify completion before stopping:
+  1. Review the user's original request — is EVERY requirement addressed?
+  2. Verify your results — did the tools succeed? Are the outputs correct?
+  3. Output a completion check block:
+     <completion-check>
+     - Request: [one-line summary of what user asked]
+     - Done: [what you accomplished]
+     - Verified: [how you confirmed correctness]
+     - Risks: [none / specific concerns]
+     </completion-check>
+  4. Output <task-complete/> to confirm you are done.
+  If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.
