@@ -635,4 +635,164 @@ mod tests {
         assert!(!outcome.outcome.is_error);
         assert!(outcome.hook_messages.is_empty());
     }
+
+    // -------------------------------------------------------------------------
+    // Integration tests — full pipeline round trip
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pipeline_full_round_trip_with_hooks() {
+        let hooks = vec![
+            HookConfig {
+                event: HookEvent::BeforeToolCall,
+                kind: HookKind::Observer,
+                priority: HookPriority::default(),
+                matcher: Some("echo".to_string()),
+                actions: vec![HookAction::Command {
+                    command: "echo 'context: pre-hook fired'".to_string(),
+                }],
+                plugin_name: "test".to_string(),
+                plugin_root: PathBuf::from("/tmp"),
+                handler: None,
+            },
+            HookConfig {
+                event: HookEvent::AfterToolCall,
+                kind: HookKind::Observer,
+                priority: HookPriority::default(),
+                matcher: Some("echo".to_string()),
+                actions: vec![HookAction::Command {
+                    command: "echo 'context: post-hook fired'".to_string(),
+                }],
+                plugin_name: "test".to_string(),
+                plugin_root: PathBuf::from("/tmp"),
+                handler: None,
+            },
+        ];
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+
+        let pipeline = ToolPipeline::new(
+            Arc::new(HookExecutor::new(hooks)),
+            Arc::new(permissive_guard()),
+            "test-session",
+        );
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!({"data": "test"}), &registry, &cancel)
+            .await;
+
+        assert!(!outcome.outcome.is_error);
+        assert!(outcome.outcome.output_text.contains("test"));
+        assert!(
+            outcome.additional_contexts.contains(&"pre-hook fired".to_string()),
+            "expected pre-hook fired in contexts: {:?}",
+            outcome.additional_contexts
+        );
+        assert!(
+            outcome.additional_contexts.contains(&"post-hook fired".to_string()),
+            "expected post-hook fired in contexts: {:?}",
+            outcome.additional_contexts
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_update_input_modifies_arguments() {
+        let hooks = vec![HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Observer,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: r#"echo 'update_input: {"injected": true}'"#.to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+
+        let pipeline = ToolPipeline::new(
+            Arc::new(HookExecutor::new(hooks)),
+            Arc::new(permissive_guard()),
+            "test-session",
+        );
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!({"original": true}), &registry, &cancel)
+            .await;
+
+        assert!(!outcome.outcome.is_error);
+        // Echo tool returns its input — should contain the hook-injected field.
+        assert!(
+            outcome.outcome.output_text.contains("injected"),
+            "expected injected field in output: {}",
+            outcome.outcome.output_text
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_failure_hooks_fire_on_error() {
+        struct FailTool;
+
+        #[async_trait]
+        impl LoopTool for FailTool {
+            fn name(&self) -> &str {
+                "fail"
+            }
+            fn description(&self) -> &str {
+                "Always fails"
+            }
+            fn schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult {
+                ToolResult::Error {
+                    error: "boom".to_string(),
+                    retryable: false,
+                }
+            }
+        }
+
+        let hooks = vec![HookConfig {
+            event: HookEvent::AfterToolCallFailure,
+            kind: HookKind::Observer,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "echo 'context: failure observed'".to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(FailTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+
+        let pipeline = ToolPipeline::new(
+            Arc::new(HookExecutor::new(hooks)),
+            Arc::new(permissive_guard()),
+            "test-session",
+        );
+
+        let outcome = pipeline
+            .execute("c1", "fail", &json!({}), &registry, &cancel)
+            .await;
+
+        assert!(outcome.outcome.is_error);
+        assert!(
+            outcome.additional_contexts.contains(&"failure observed".to_string()),
+            "expected failure observed in contexts: {:?}",
+            outcome.additional_contexts
+        );
+    }
 }
