@@ -7,8 +7,8 @@
 fn main() {
     // Read version from VERSION file (single source of truth)
     // This overrides CARGO_PKG_VERSION so all code uses the same version
-    println!("cargo:rerun-if-changed=../VERSION");
-    if let Ok(version) = std::fs::read_to_string("../VERSION") {
+    println!("cargo:rerun-if-changed=VERSION");
+    if let Ok(version) = std::fs::read_to_string("VERSION") {
         let version = version.trim();
         println!("cargo:rustc-env=ALEPH_VERSION={version}");
     } else {
@@ -24,11 +24,11 @@ fn main() {
         use std::path::Path;
         use std::process::Command;
 
-        let control_plane_dir = Path::new("../interfaces/webchat");
+        let control_plane_dir = Path::new("interfaces/webchat");
         let dist_dir = control_plane_dir.join("dist");
 
         // Watch dist/ files so cargo recompiles when assets change (rust-embed)
-        println!("cargo:rerun-if-changed=../interfaces/webchat/dist");
+        println!("cargo:rerun-if-changed=interfaces/webchat/dist");
         if dist_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&dist_dir) {
                 for entry in entries.flatten() {
@@ -38,9 +38,9 @@ fn main() {
         }
 
         // Watch source for fallback trunk build trigger
-        println!("cargo:rerun-if-changed=../interfaces/webchat/src");
-        println!("cargo:rerun-if-changed=../interfaces/webchat/Cargo.toml");
-        println!("cargo:rerun-if-changed=../interfaces/webchat/index.html");
+        println!("cargo:rerun-if-changed=interfaces/webchat/src");
+        println!("cargo:rerun-if-changed=interfaces/webchat/Cargo.toml");
+        println!("cargo:rerun-if-changed=interfaces/webchat/index.html");
 
         if !control_plane_dir.exists() {
             println!("cargo:warning=Panel directory not found, skipping UI build");
