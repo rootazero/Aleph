@@ -29,8 +29,8 @@ all: build
 
 # Build Swift bridge (macOS only)
 swift-bridge:
-    cd crates/desktop-macos/bridge && swift build -c release
-    @echo "✓ Swift bridge: crates/desktop-macos/bridge/.build/release/AlephBridge"
+    cd desktop/macos/bridge && swift build -c release
+    @echo "✓ Swift bridge: desktop/macos/bridge/.build/release/AlephBridge"
 
 # Build server (release)
 build: wasm swift-bridge
