@@ -114,13 +114,13 @@ impl PromptBuilder {
     }
 
     /// Register a section. Overwrites any existing section with the same name.
-    /// Sections with empty content are silently skipped.
+    /// Sections with empty content remove any prior section with the same name.
     pub fn register(&mut self, section: PromptSection) -> &mut Self {
+        // Always remove any existing section with the same name first.
+        self.sections.retain(|s| s.name != section.name);
         if section.content.is_empty() {
             return self;
         }
-        // Remove any existing section with the same name.
-        self.sections.retain(|s| s.name != section.name);
         self.sections.push(section);
         self
     }
@@ -171,16 +171,7 @@ impl PromptBuilder {
 
         // 4. Enforce budget.
         let total_content: usize = live.iter().map(|s| s.content.len()).sum();
-        let separator_overhead = if !live.is_empty() {
-            (live.len() - 1) * SECTION_SEPARATOR.len()
-                + if !stable.is_empty() && !dynamic.is_empty() {
-                    ZONE_SEPARATOR.len()
-                } else {
-                    0
-                }
-        } else {
-            0
-        };
+        let separator_overhead = Self::separator_overhead(stable.len(), dynamic.len());
         let total_chars = total_content + separator_overhead;
 
         let mut truncated_sections: Vec<String> = Vec::new();
@@ -268,28 +259,32 @@ impl PromptBuilder {
             .join(SECTION_SEPARATOR)
     }
 
+    /// Compute separator bytes for a given zone composition.
+    ///
+    /// Each zone joins its sections with `SECTION_SEPARATOR`. When both zones
+    /// are present a `ZONE_SEPARATOR` sits between them. The total separator
+    /// count is `(stable-1) + (dynamic-1) + 1` when both exist, which equals
+    /// `stable + dynamic - 1`. When only one zone exists it is `count - 1`.
+    fn separator_overhead(stable_count: usize, dynamic_count: usize) -> usize {
+        let total = stable_count + dynamic_count;
+        if total == 0 {
+            return 0;
+        }
+        let within_stable = stable_count.saturating_sub(1);
+        let within_dynamic = dynamic_count.saturating_sub(1);
+        let between_zones = if stable_count > 0 && dynamic_count > 0 { 1 } else { 0 };
+        (within_stable + within_dynamic) * SECTION_SEPARATOR.len()
+            + between_zones * ZONE_SEPARATOR.len()
+    }
+
     fn estimate_size(candidates: &[(Stability, &PromptSection)]) -> usize {
         if candidates.is_empty() {
             return 0;
         }
         let content: usize = candidates.iter().map(|(_, s)| s.content.len()).sum();
-        let has_stable = candidates.iter().any(|(stab, _)| *stab == Stability::Stable);
-        let has_dynamic = candidates.iter().any(|(stab, _)| *stab == Stability::Dynamic);
-        let sep_count = if candidates.len() > 1 {
-            candidates.len() - 1
-        } else {
-            0
-        };
-        // Each pair of adjacent sections gets a separator; the zone boundary
-        // replaces one of them if both zones are present.
-        let zone_extra = if has_stable && has_dynamic {
-            // The zone separator is the same length as section separator in our impl,
-            // but we count sections within each zone and one between zones.
-            0
-        } else {
-            0
-        };
-        content + sep_count * SECTION_SEPARATOR.len() + zone_extra
+        let stable_count = candidates.iter().filter(|(stab, _)| *stab == Stability::Stable).count();
+        let dynamic_count = candidates.iter().filter(|(stab, _)| *stab == Stability::Dynamic).count();
+        content + Self::separator_overhead(stable_count, dynamic_count)
     }
 }
 
@@ -363,10 +358,41 @@ impl PromptBuilder {
         self
     }
 
+    /// Register default identity (no soul configured).
+    pub fn with_default_identity(mut self) -> Self {
+        self.register(super::prompt_sections::identity::render(None, None));
+        self
+    }
+
     /// Register identity from a raw string (no SoulManifest).
     pub fn with_identity(mut self, identity: &str) -> Self {
         self.register(super::prompt_sections::identity::render(Some(identity), None));
         self
+    }
+
+    /// Build a prompt for a specific agent.
+    ///
+    /// Registers shared Stable behavioral sections, then adds the `agent_role`
+    /// section for sub-agents and resolves any agent-specific sections declared
+    /// in `agent.prompt_sections`.
+    pub fn for_agent(agent: &crate::agents::AgentDef) -> Self {
+        let mut builder = Self::new().with_default_behavior_sections();
+
+        // Sub-agents get the shared agent_role section
+        if agent.mode == crate::agents::AgentMode::SubAgent {
+            builder.register(
+                super::prompt_sections::agent_role::render(&agent.id),
+            );
+        }
+
+        // Resolve and register agent-specific sections
+        for section_name in &agent.prompt_sections {
+            if let Some(section) = super::prompt_sections::resolve(section_name) {
+                builder.register(section);
+            }
+        }
+
+        builder
     }
 }
 
@@ -639,5 +665,38 @@ mod tests {
         let boundary = result.cache_boundary_offset.expect("boundary should exist");
         assert!(boundary > 0, "boundary should be > 0");
         assert!(boundary <= env_pos, "boundary at or before dynamic zone");
+    }
+
+    #[test]
+    fn for_agent_includes_shared_and_specific_sections() {
+        use crate::agents::{AgentDef, AgentMode};
+        let agent = AgentDef::new("explore", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["explore_constraints".into()]);
+        let builder = PromptBuilder::for_agent(&agent);
+        let result = builder.build();
+        assert!(result.prompt.contains("# System"), "missing system_rules");
+        assert!(result.prompt.contains("**explore**"), "missing agent_role with agent id");
+        assert!(result.prompt.contains("read-only exploration specialist"), "missing explore_constraints");
+    }
+
+    #[test]
+    fn for_agent_primary_has_no_agent_role() {
+        use crate::agents::{AgentDef, AgentMode};
+        let agent = AgentDef::new("main", AgentMode::Primary);
+        let builder = PromptBuilder::for_agent(&agent);
+        let result = builder.build();
+        assert!(!result.prompt.contains("Sub-Agent Role"), "primary should not have agent_role");
+        assert!(result.prompt.contains("# System"), "missing system_rules");
+    }
+
+    #[test]
+    fn for_agent_unknown_sections_are_skipped() {
+        use crate::agents::{AgentDef, AgentMode};
+        let agent = AgentDef::new("custom", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["nonexistent_section".into()]);
+        let builder = PromptBuilder::for_agent(&agent);
+        let result = builder.build();
+        assert!(result.prompt.contains("# System"), "missing system_rules");
+        assert!(result.prompt.contains("Sub-Agent Role"), "missing agent_role");
     }
 }

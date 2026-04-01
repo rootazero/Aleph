@@ -126,10 +126,11 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),
-        // Verify agent - adversarial verifier
+        // Verify agent - adversarial verifier (read-only)
         AgentDef::new("verify", AgentMode::SubAgent)
             .with_prompt_sections(vec!["verify_protocol".into()])
             .with_allowed_tools(vec!["*".into()])
+            .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
     ]
@@ -209,7 +210,7 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 5);
+        assert_eq!(agents.len(), 7);
     }
 
     #[test]
@@ -254,7 +255,8 @@ mod tests {
         assert_eq!(verify.mode, AgentMode::SubAgent);
         assert!(verify.is_tool_allowed("glob"));
         assert!(verify.is_tool_allowed("bash"));
-        assert!(verify.is_tool_allowed("write_file")); // wildcard allows all
+        assert!(!verify.is_tool_allowed("write_file")); // read-only: write denied
+        assert!(!verify.is_tool_allowed("edit_file"));  // read-only: edit denied
         assert_eq!(verify.max_iterations, Some(25));
         assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);
     }

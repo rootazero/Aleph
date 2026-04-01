@@ -975,7 +975,7 @@ mod tests {
             CancellationToken::new(),
         )
         .with_stop_hooks(vec![
-            crate::agent_loop::stop_hooks::StopHook::new("allow_hook", "exit 0"),
+            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("allow_hook", "exit 0")) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
         ]);
 
         let mut cb = NoopCallback;
@@ -1068,7 +1068,7 @@ mod tests {
             CancellationToken::new(),
         )
         .with_stop_hooks(vec![
-            crate::agent_loop::stop_hooks::StopHook::new("conditional_hook", hook_script),
+            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("conditional_hook", hook_script)) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
         ]);
 
         let mut cb = NoopCallback;
@@ -1138,8 +1138,8 @@ mod tests {
             CancellationToken::new(),
         )
         .with_stop_hooks(vec![
-            crate::agent_loop::stop_hooks::StopHook::new("slow_hook", "sleep 60")
-                .with_timeout(std::time::Duration::from_millis(100)),
+            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("slow_hook", "sleep 60")
+                .with_timeout(std::time::Duration::from_millis(100))) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
         ]);
 
         let mut cb = NoopCallback;
@@ -1536,7 +1536,7 @@ mod tests {
             CancellationToken::new(),
         )
         .with_stop_hooks(vec![
-            crate::agent_loop::stop_hooks::StopHook::new("pass_hook", "exit 0"),
+            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("pass_hook", "exit 0")) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
         ]);
 
         let mut cb = NoopCallback;

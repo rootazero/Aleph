@@ -22,10 +22,12 @@ pub mod context_compactor;
 pub mod truncation_recovery;
 pub mod tool_orchestrator;
 pub mod stop_hooks;
+pub mod verify_stop_hook;
 pub mod streaming_bridge;
 pub mod tool_refresh;
 pub mod skill_prefetch;
 pub mod tool_summary;
+pub mod tool_pipeline;
 
 #[cfg(test)]
 mod integration_probe;
@@ -51,7 +53,9 @@ pub use provider_bridge::AiProviderBridge;
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};
-pub use stop_hooks::{StopHook, StopHookAggregateResult, StopHookContext, StopHookVerdict};
+pub use stop_hooks::{ShellStopHook, StopHookAggregateResult, StopHookContext, StopHookHandler, StopHookVerdict};
+pub use verify_stop_hook::{VerifyStopHook, VerifyStopHookConfig};
 pub use tool_refresh::ToolRefreshSource;
 pub use skill_prefetch::{SkillDiscoverySource, SkillInfo, SkillPrefetcher};
 pub use tool_summary::{generate_tool_summary, ToolSummaryInput};
+pub use tool_pipeline::{PipelineOutcome, ToolPipeline};

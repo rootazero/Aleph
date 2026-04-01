@@ -23,7 +23,7 @@ use super::context_budget::pipeline::{
 use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
-use super::stop_hooks::{self, StopHook, StopHookContext};
+use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::AiProvider;
 use crate::providers::adapter::StopReason;
@@ -383,7 +383,7 @@ pub struct AgentLoop<P: LoopProvider> {
     /// Token for cooperative cancellation of streaming and tool execution.
     cancel_token: CancellationToken,
     /// Stop hooks to run before the loop exits at task-completion break points.
-    stop_hooks: Vec<StopHook>,
+    stop_hooks: Vec<Box<dyn StopHookHandler>>,
     /// Optional lightweight provider for async tool use summaries.
     summary_provider: Option<Arc<dyn AiProvider>>,
     /// Chain context tracking subagent call chain nesting.
@@ -487,7 +487,7 @@ impl<P: LoopProvider> AgentLoop<P> {
     }
 
     /// Register stop hooks to run before the loop exits.
-    pub fn with_stop_hooks(mut self, hooks: Vec<StopHook>) -> Self {
+    pub fn with_stop_hooks(mut self, hooks: Vec<Box<dyn StopHookHandler>>) -> Self {
         self.stop_hooks = hooks;
         self
     }
