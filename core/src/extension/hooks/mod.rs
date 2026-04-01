@@ -52,6 +52,10 @@ pub struct HookContext {
     pub working_dir: Option<PathBuf>,
     /// Additional environment variables
     pub env: HashMap<String, String>,
+    /// Tool execution output (only set for AfterToolCall/AfterToolCallFailure hooks)
+    pub tool_output: Option<String>,
+    /// Whether the tool execution resulted in an error
+    pub tool_error: Option<bool>,
 }
 
 impl HookContext {
@@ -98,6 +102,18 @@ impl HookContext {
         self.env.insert(key.into(), value.into());
         self
     }
+
+    /// Set the tool output
+    pub fn with_tool_output(mut self, output: impl Into<String>) -> Self {
+        self.tool_output = Some(output.into());
+        self
+    }
+
+    /// Set whether the tool errored
+    pub fn with_tool_error(mut self, is_error: bool) -> Self {
+        self.tool_error = Some(is_error);
+        self
+    }
 }
 
 /// Result of a single hook action
@@ -141,6 +157,12 @@ pub struct HookResult {
     pub action_results: Vec<ActionResult>,
     /// Number of hooks executed
     pub hooks_executed: usize,
+    /// Hook-modified tool input (JSON). Last writer wins across interceptor chain.
+    pub updated_input: Option<serde_json::Value>,
+    /// Additional context strings to inject into next LLM turn (as system-reminders).
+    pub additional_contexts: Vec<String>,
+    /// If true, agent loop should stop even if the tool succeeded.
+    pub prevent_continuation: bool,
 }
 
 impl HookResult {
@@ -290,6 +312,8 @@ mod tests {
             file_path: Some(PathBuf::from("/path/to/file.txt")),
             working_dir: None,
             env: HashMap::new(),
+            tool_output: None,
+            tool_error: None,
         };
 
         let plugin_root = PathBuf::from("/plugins/my-plugin");
@@ -351,6 +375,24 @@ mod tests {
         assert_eq!(context.file_path, Some(PathBuf::from("/some/path")));
         assert_eq!(context.working_dir, Some(PathBuf::from("/work")));
         assert_eq!(context.env.get("MY_VAR"), Some(&"my_value".to_string()));
+    }
+
+    #[test]
+    fn test_hook_result_new_fields_default() {
+        let result = HookResult::default();
+        assert!(result.updated_input.is_none());
+        assert!(result.additional_contexts.is_empty());
+        assert!(!result.prevent_continuation);
+    }
+
+    #[test]
+    fn test_hook_context_with_tool_output() {
+        let ctx = HookContext::new("session-1")
+            .with_tool_name("Write")
+            .with_tool_output("File written successfully")
+            .with_tool_error(false);
+        assert_eq!(ctx.tool_output, Some("File written successfully".to_string()));
+        assert_eq!(ctx.tool_error, Some(false));
     }
 
     #[test]
