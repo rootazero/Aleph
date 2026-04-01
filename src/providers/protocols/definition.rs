@@ -163,7 +163,7 @@ differences:
         // Test parsing the actual groq-custom.yaml example
         let yaml = std::fs::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../examples/protocols/groq-custom.yaml"),
+                .join("examples/protocols/groq-custom.yaml"),
         )
         .expect("Failed to read groq-custom.yaml");
 
@@ -191,7 +191,7 @@ differences:
         // Test parsing the actual exotic-ai.yaml example
         let yaml = std::fs::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../examples/protocols/exotic-ai.yaml"),
+                .join("examples/protocols/exotic-ai.yaml"),
         )
         .expect("Failed to read exotic-ai.yaml");
 
