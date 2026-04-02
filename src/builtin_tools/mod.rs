@@ -46,7 +46,6 @@ pub mod config_guide;
 pub mod cron_manage;
 pub mod desktop;
 pub mod error;
-pub mod escalate_task;
 pub mod file_ops;
 pub mod generation;
 pub mod heartbeat_manage;
@@ -108,7 +107,6 @@ pub use config_guide::{
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use error::ToolError;
-pub use escalate_task::{EscalateTaskArgs, EscalateTaskOutput, EscalateTaskTool};
 pub use file_ops::{FileOpsArgs, FileOpsTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,

@@ -26,7 +26,7 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, EscalateTaskTool, FileOpsTool, ImageGenerateTool,
+    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool,
     PdfGenerateTool, ReadConfigGuideTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
@@ -135,11 +135,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         name: "session_send",
         description: "Send messages to other sessions (same or different agent)",
         requires_config: true, // Requires gateway_context
-    },
-    BuiltinToolDefinition {
-        name: "escalate_task",
-        description: "Request escalation to a more capable execution strategy",
-        requires_config: false,
     },
     BuiltinToolDefinition {
         name: "session_new",
@@ -504,7 +499,6 @@ pub fn create_tool_boxed(
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
         "agent_create" | "agent_list" | "agent_delete" => None,
-        "escalate_task" => Some(Box::new(EscalateTaskTool)),
         // Media tools — require MediaPipeline
         "media_understand" => config
             .and_then(|c| c.media_pipeline.as_ref())

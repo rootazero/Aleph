@@ -92,7 +92,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "subagent_spawn",
             "subagent_steer",
             "subagent_kill",
-            "escalate_task",
         ],
     },
     ToolCategory {
