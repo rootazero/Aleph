@@ -163,6 +163,12 @@ pub struct HookResult {
     pub additional_contexts: Vec<String>,
     /// If true, agent loop should stop even if the tool succeeded.
     pub prevent_continuation: bool,
+    /// If true, tool call is denied by policy (not retryable). Takes precedence over blocked.
+    pub denied: bool,
+    /// Reason for denial (if denied).
+    pub deny_reason: Option<String>,
+    /// Replacement for tool output text (last-writer-wins). Only effective in AfterToolCall/AfterToolCallFailure.
+    pub updated_output: Option<String>,
 }
 
 impl HookResult {
@@ -208,6 +214,9 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
         if let Some(reason) = trimmed.strip_prefix("block:") {
             result.blocked = true;
             result.block_reason = Some(reason.trim().to_string());
+        } else if let Some(reason) = trimmed.strip_prefix("deny:") {
+            result.denied = true;
+            result.deny_reason = Some(reason.trim().to_string());
         } else if let Some(json_str) = trimmed.strip_prefix("update_input:") {
             match serde_json::from_str(json_str.trim()) {
                 Ok(val) => result.updated_input = Some(val),
@@ -215,6 +224,8 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
                     tracing::warn!("Hook update_input invalid JSON: {}", e);
                 }
             }
+        } else if let Some(output_text) = trimmed.strip_prefix("update_output:") {
+            result.updated_output = Some(output_text.trim().to_string());
         } else if let Some(ctx) = trimmed.strip_prefix("context:") {
             result.additional_contexts.push(ctx.trim().to_string());
         } else if trimmed == "prevent_continuation" {
@@ -602,6 +613,38 @@ mod tests {
         assert!(result.blocked);
         assert_eq!(result.block_reason, Some("danger".to_string()));
         assert!(result.prevent_continuation);
+    }
+
+    #[test]
+    fn test_parse_command_output_deny() {
+        let mut result = HookResult::default();
+        parse_command_output("deny: policy violation", &mut result);
+        assert!(result.denied);
+        assert_eq!(result.deny_reason, Some("policy violation".to_string()));
+        assert!(!result.blocked);
+    }
+
+    #[test]
+    fn test_parse_command_output_deny_and_block_coexist() {
+        let mut result = HookResult::default();
+        parse_command_output("block: temp issue\ndeny: permanent ban", &mut result);
+        assert!(result.denied);
+        assert_eq!(result.deny_reason, Some("permanent ban".to_string()));
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn test_parse_command_output_update_output() {
+        let mut result = HookResult::default();
+        parse_command_output("update_output: [REDACTED]", &mut result);
+        assert_eq!(result.updated_output, Some("[REDACTED]".to_string()));
+    }
+
+    #[test]
+    fn test_parse_command_output_update_output_last_writer_wins() {
+        let mut result = HookResult::default();
+        parse_command_output("update_output: first\nupdate_output: second", &mut result);
+        assert_eq!(result.updated_output, Some("second".to_string()));
     }
 
     #[tokio::test]
