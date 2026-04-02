@@ -3,10 +3,10 @@
 //! Stages:
 //! 1. Build HookContext from tool call metadata
 //! 2. Input schema validation (fast-fail before hooks)
-//! 3. Pre-hooks (interceptors): block or modify arguments before execution
+//! 3. Pre-hooks (interceptors): block, deny, or modify arguments before execution
 //! 4. Safety check: blocked patterns and permission policy
 //! 5. Execute tool with cancellation support
-//! 6. Post-hooks (observers): inject additional context after success
+//! 6. Post-hooks (observers): inject additional context or modify output after success
 //! 7. Failure hooks (observers): fire on error outcomes
 
 use std::path::PathBuf;
