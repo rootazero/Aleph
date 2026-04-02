@@ -154,6 +154,24 @@ impl ToolPipeline {
                 return self.blocked_outcome(id, name, msg);
             }
 
+            // Deny check — policy refusal, not retryable
+            if interceptor_result.denied {
+                let reason = interceptor_result.deny_reason.unwrap_or_default();
+                return PipelineOutcome {
+                    outcome: ToolOutcome {
+                        tool_id: id.to_string(),
+                        tool_name: name.to_string(),
+                        output_text: format!("[HOOK_DENIED] {}", reason),
+                        is_error: true,
+                        should_stop: false,
+                        retryable: false,
+                    },
+                    additional_contexts: Vec::new(),
+                    prevent_continuation: false,
+                    hook_messages: Vec::new(),
+                };
+            }
+
             // Collect interceptor outputs (messages, contexts, prevent_continuation).
             hook_messages.extend(interceptor_result.messages);
             additional_contexts.extend(interceptor_result.additional_contexts);
@@ -245,6 +263,10 @@ impl ToolPipeline {
                     if post_result.prevent_continuation {
                         prevent_continuation = true;
                     }
+                    // Apply output modification (last-writer-wins)
+                    if let Some(new_output) = post_result.updated_output {
+                        outcome.output_text = new_output;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(tool = name, error = %e, "Post-hook execute failed");
@@ -263,6 +285,9 @@ impl ToolPipeline {
                         additional_contexts.extend(fail_result.additional_contexts);
                         if fail_result.prevent_continuation {
                             prevent_continuation = true;
+                        }
+                        if let Some(new_output) = fail_result.updated_output {
+                            outcome.output_text = new_output;
                         }
                     }
                     Err(e) => {
@@ -747,6 +772,85 @@ mod tests {
 
         assert!(outcome.outcome.is_error);
         assert!(outcome.outcome.output_text.contains("expected JSON object"));
+    }
+
+    #[tokio::test]
+    async fn pipeline_deny_produces_non_retryable_error() {
+        let hooks = vec![HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "echo 'deny: policy forbids this tool'".to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+
+        let pipeline = ToolPipeline::new(
+            Arc::new(HookExecutor::new(hooks)),
+            Arc::new(permissive_guard()),
+            "test-session",
+        );
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!({}), &registry, &cancel)
+            .await;
+
+        assert!(outcome.outcome.is_error);
+        assert!(
+            outcome.outcome.output_text.contains("[HOOK_DENIED]"),
+            "expected HOOK_DENIED, got: {}",
+            outcome.outcome.output_text
+        );
+        assert!(
+            !outcome.outcome.retryable,
+            "deny should not be retryable"
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_post_hook_updates_output() {
+        let hooks = vec![HookConfig {
+            event: HookEvent::AfterToolCall,
+            kind: HookKind::Observer,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "echo 'update_output: [REDACTED]'".to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+
+        let pipeline = ToolPipeline::new(
+            Arc::new(HookExecutor::new(hooks)),
+            Arc::new(permissive_guard()),
+            "test-session",
+        );
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!({"secret": "key"}), &registry, &cancel)
+            .await;
+
+        assert!(!outcome.outcome.is_error);
+        assert_eq!(
+            outcome.outcome.output_text, "[REDACTED]",
+            "post-hook should have replaced output"
+        );
     }
 
     #[tokio::test]
