@@ -97,6 +97,24 @@ impl LoopToolRegistry {
         self.tools.get(name).map(|b| b.as_ref())
     }
 
+    /// Resolve a tool by name with dot/underscore alias fallback.
+    ///
+    /// Same resolution logic as `execute()`, but returns the tool reference
+    /// without running it. Useful for pre-execution validation.
+    pub fn resolve(&self, name: &str) -> Option<&dyn LoopTool> {
+        if let Some(tool) = self.get(name) {
+            return Some(tool);
+        }
+        let alt = if name.contains('.') {
+            name.replace('.', "_")
+        } else if name.contains('_') {
+            name.replace('_', ".")
+        } else {
+            return None;
+        };
+        self.get(&alt)
+    }
+
     /// Number of registered tools.
     pub fn len(&self) -> usize {
         self.tools.len()

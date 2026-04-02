@@ -118,7 +118,7 @@ impl ToolPipeline {
         // Stage 2: Input schema validation (fast-fail before hooks)
         // -----------------------------------------------------------------
         let _span2 = tracing::debug_span!("pipeline_validate").entered();
-        if let Some(tool) = registry.get(name) {
+        if let Some(tool) = registry.resolve(name) {
             let schema = tool.schema();
             if let Err(msg) = validate_input_fast(&schema, arguments) {
                 return PipelineOutcome {
@@ -142,11 +142,8 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 3: Pre-hooks (interceptors)
         // -----------------------------------------------------------------
-        {
-            let _span3 = tracing::debug_span!("pipeline_pre_hooks").entered();
-            drop(_span3);
-        }
         let effective_args = if self.has_hooks() {
+            tracing::debug!("pipeline_pre_hooks: start");
             // Run interceptors — they can block or modify arguments.
             let (ctx_after, interceptor_result) = match self
                 .hooks
@@ -160,13 +157,7 @@ impl ToolPipeline {
                 }
             };
 
-            if interceptor_result.blocked {
-                let reason = interceptor_result.block_reason.unwrap_or_default();
-                let msg = format!("[HOOK_BLOCKED] {}", reason);
-                return self.blocked_outcome(id, name, msg);
-            }
-
-            // Deny check — policy refusal, not retryable
+            // Deny check first — policy refusal takes precedence over block
             if interceptor_result.denied {
                 let reason = interceptor_result.deny_reason.unwrap_or_default();
                 return PipelineOutcome {
@@ -182,6 +173,13 @@ impl ToolPipeline {
                     prevent_continuation: false,
                     hook_messages: Vec::new(),
                 };
+            }
+
+            // Block check — temporary interception, retryable
+            if interceptor_result.blocked {
+                let reason = interceptor_result.block_reason.unwrap_or_default();
+                let msg = format!("[HOOK_BLOCKED] {}", reason);
+                return self.blocked_outcome(id, name, msg);
             }
 
             // Collect interceptor outputs (messages, contexts, prevent_continuation).
@@ -235,10 +233,7 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 5: Execute tool with cancellation
         // -----------------------------------------------------------------
-        {
-            let _span5 = tracing::debug_span!("pipeline_execute").entered();
-            drop(_span5);
-        }
+        tracing::debug!("pipeline_execute: start");
         let result = tokio::select! {
             r = registry.execute(name, effective_args.clone()) => r,
             _ = cancel.cancelled() => {
@@ -263,11 +258,8 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stages 6 & 7: Post-hooks
         // -----------------------------------------------------------------
-        {
-            let _span67 = tracing::debug_span!("pipeline_post_hooks").entered();
-            drop(_span67);
-        }
         if self.has_hooks() {
+            tracing::debug!("pipeline_post_hooks: start");
             // Build post context from effective_args (not base_ctx) so post-hooks
             // see the actual arguments the tool was invoked with.
             let post_ctx = self
