@@ -1,12 +1,13 @@
-//! ToolPipeline — 6-stage hook-integrated tool execution pipeline.
+//! ToolPipeline — 7-stage hook-integrated tool execution pipeline.
 //!
 //! Stages:
 //! 1. Build HookContext from tool call metadata
-//! 2. Pre-hooks (interceptors): block or modify arguments before execution
-//! 3. Safety check: blocked patterns and permission policy
-//! 4. Execute tool with cancellation support
-//! 5. Post-hooks (observers): inject additional context after success
-//! 6. Failure hooks (observers): fire on error outcomes
+//! 2. Input schema validation (fast-fail before hooks)
+//! 3. Pre-hooks (interceptors): block or modify arguments before execution
+//! 4. Safety check: blocked patterns and permission policy
+//! 5. Execute tool with cancellation support
+//! 6. Post-hooks (observers): inject additional context after success
+//! 7. Failure hooks (observers): fire on error outcomes
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ pub struct PipelineOutcome {
 // ToolPipeline
 // =============================================================================
 
-/// 6-stage hook-integrated tool execution pipeline.
+/// 7-stage hook-integrated tool execution pipeline.
 pub struct ToolPipeline {
     hooks: Arc<HookExecutor>,
     safety: Arc<SafetyGuard>,
@@ -109,7 +110,29 @@ impl ToolPipeline {
         let base_ctx = self.build_context(name, arguments);
 
         // -----------------------------------------------------------------
-        // Stage 2: Pre-hooks (interceptors)
+        // Stage 2: Input schema validation (fast-fail before hooks)
+        // -----------------------------------------------------------------
+        if let Some(tool) = registry.get(name) {
+            let schema = tool.schema();
+            if let Err(msg) = validate_input_fast(&schema, arguments) {
+                return PipelineOutcome {
+                    outcome: ToolOutcome {
+                        tool_id: id.to_string(),
+                        tool_name: name.to_string(),
+                        output_text: format!("[VALIDATION_ERROR] {}", msg),
+                        is_error: true,
+                        should_stop: false,
+                        retryable: true,
+                    },
+                    additional_contexts: Vec::new(),
+                    prevent_continuation: false,
+                    hook_messages: Vec::new(),
+                };
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Stage 3: Pre-hooks (interceptors)
         // -----------------------------------------------------------------
         let effective_args = if self.has_hooks() {
             // Run interceptors — they can block or modify arguments.
@@ -152,7 +175,7 @@ impl ToolPipeline {
         };
 
         // -----------------------------------------------------------------
-        // Stage 3: Safety check
+        // Stage 4: Safety check
         // -----------------------------------------------------------------
         let safety_call = SafetyToolCall {
             name: name.to_string(),
@@ -176,7 +199,7 @@ impl ToolPipeline {
         }
 
         // -----------------------------------------------------------------
-        // Stage 4: Execute tool with cancellation
+        // Stage 5: Execute tool with cancellation
         // -----------------------------------------------------------------
         let result = tokio::select! {
             r = registry.execute(name, effective_args.clone()) => r,
@@ -210,7 +233,7 @@ impl ToolPipeline {
                 .with_tool_output(&outcome.output_text)
                 .with_tool_error(outcome.is_error);
 
-            // Stage 5: AfterToolCall (always)
+            // Stage 6: AfterToolCall (always)
             match self
                 .hooks
                 .execute(HookEvent::AfterToolCall, &post_ctx)
@@ -228,7 +251,7 @@ impl ToolPipeline {
                 }
             }
 
-            // Stage 6: AfterToolCallFailure (only on error)
+            // Stage 7: AfterToolCallFailure (only on error)
             if outcome.is_error {
                 match self
                     .hooks
@@ -369,6 +392,31 @@ fn map_safety_error(e: &SafetyError) -> String {
             format!("[DENIED] Tool '{}' denied by policy", tool)
         }
     }
+}
+
+/// Fast-fail input validation against tool schema.
+///
+/// Checks:
+/// 1. Input is a JSON object
+/// 2. All `required` fields from schema are present
+///
+/// This is a lightweight pre-check; full validation happens inside tool.call()
+/// via serde deserialization.
+fn validate_input_fast(schema: &Value, input: &Value) -> Result<(), String> {
+    if !input.is_object() {
+        return Err("expected JSON object".into());
+    }
+    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+        let obj = input.as_object().unwrap();
+        for field in required {
+            if let Some(name) = field.as_str() {
+                if !obj.contains_key(name) {
+                    return Err(format!("missing required field: {name}"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Convert a JSON Value to a display string.
@@ -622,6 +670,83 @@ mod tests {
             "expected injected field in output: {}",
             outcome.outcome.output_text
         );
+    }
+
+    #[tokio::test]
+    async fn pipeline_rejects_missing_required_field() {
+        struct StrictTool;
+
+        #[async_trait]
+        impl LoopTool for StrictTool {
+            fn name(&self) -> &str {
+                "strict"
+            }
+            fn description(&self) -> &str {
+                "Requires 'path' field"
+            }
+            fn schema(&self) -> Value {
+                json!({
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": { "type": "string" }
+                    }
+                })
+            }
+            async fn execute(&self, _input: Value) -> ToolResult {
+                ToolResult::Success {
+                    output: json!("ok"),
+                }
+            }
+        }
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(StrictTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+        let pipeline = empty_pipeline();
+
+        let outcome = pipeline
+            .execute("c1", "strict", &json!({"other": "value"}), &registry, &cancel)
+            .await;
+
+        assert!(outcome.outcome.is_error);
+        assert!(
+            outcome.outcome.output_text.contains("missing required field"),
+            "expected validation error, got: {}",
+            outcome.outcome.output_text
+        );
+    }
+
+    #[tokio::test]
+    async fn pipeline_passes_validation_when_no_required() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+        let pipeline = empty_pipeline();
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!({}), &registry, &cancel)
+            .await;
+
+        assert!(!outcome.outcome.is_error);
+    }
+
+    #[tokio::test]
+    async fn pipeline_rejects_non_object_input() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let registry = Arc::new(registry);
+        let cancel = CancellationToken::new();
+        let pipeline = empty_pipeline();
+
+        let outcome = pipeline
+            .execute("c1", "echo", &json!("not an object"), &registry, &cancel)
+            .await;
+
+        assert!(outcome.outcome.is_error);
+        assert!(outcome.outcome.output_text.contains("expected JSON object"));
     }
 
     #[tokio::test]
