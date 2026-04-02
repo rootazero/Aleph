@@ -92,6 +92,11 @@ impl ToolPipeline {
     // -------------------------------------------------------------------------
 
     /// Execute a single tool call through the full 6-stage pipeline.
+    #[tracing::instrument(
+        name = "tool_pipeline",
+        skip(self, arguments, registry, cancel),
+        fields(tool_name = %name, tool_id = %id)
+    )]
     pub async fn execute(
         &self,
         id: &str,
@@ -112,6 +117,7 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 2: Input schema validation (fast-fail before hooks)
         // -----------------------------------------------------------------
+        let _span2 = tracing::debug_span!("pipeline_validate").entered();
         if let Some(tool) = registry.get(name) {
             let schema = tool.schema();
             if let Err(msg) = validate_input_fast(&schema, arguments) {
@@ -130,10 +136,16 @@ impl ToolPipeline {
                 };
             }
         }
+        tracing::debug!("input validation passed");
+        drop(_span2);
 
         // -----------------------------------------------------------------
         // Stage 3: Pre-hooks (interceptors)
         // -----------------------------------------------------------------
+        {
+            let _span3 = tracing::debug_span!("pipeline_pre_hooks").entered();
+            drop(_span3);
+        }
         let effective_args = if self.has_hooks() {
             // Run interceptors — they can block or modify arguments.
             let (ctx_after, interceptor_result) = match self
@@ -195,6 +207,7 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 4: Safety check
         // -----------------------------------------------------------------
+        let _span4 = tracing::debug_span!("pipeline_safety").entered();
         let safety_call = SafetyToolCall {
             name: name.to_string(),
             input: effective_args.clone(),
@@ -216,9 +229,16 @@ impl ToolPipeline {
             };
         }
 
+        tracing::debug!("safety check passed");
+        drop(_span4);
+
         // -----------------------------------------------------------------
         // Stage 5: Execute tool with cancellation
         // -----------------------------------------------------------------
+        {
+            let _span5 = tracing::debug_span!("pipeline_execute").entered();
+            drop(_span5);
+        }
         let result = tokio::select! {
             r = registry.execute(name, effective_args.clone()) => r,
             _ = cancel.cancelled() => {
@@ -241,8 +261,12 @@ impl ToolPipeline {
         let mut outcome = Self::map_result(id, name, &result);
 
         // -----------------------------------------------------------------
-        // Stages 5 & 6: Post-hooks
+        // Stages 6 & 7: Post-hooks
         // -----------------------------------------------------------------
+        {
+            let _span67 = tracing::debug_span!("pipeline_post_hooks").entered();
+            drop(_span67);
+        }
         if self.has_hooks() {
             // Build post context from effective_args (not base_ctx) so post-hooks
             // see the actual arguments the tool was invoked with.
@@ -300,6 +324,8 @@ impl ToolPipeline {
         if prevent_continuation {
             outcome.should_stop = true;
         }
+
+        tracing::debug!(is_error = outcome.is_error, "tool execution complete");
 
         PipelineOutcome {
             outcome,
