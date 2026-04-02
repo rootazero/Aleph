@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.02]
+
+### Added
+- ToolPipeline: 7-stage hook-integrated tool execution engine with deny semantics, input schema validation, structured tracing spans, and post-hook output modification
+- Session-level hook callsites in AgentLoop (PreToolUse, PostToolUse, AfterToolCallFailure)
+- Hook system: parse_command_output line-prefix protocol, updated_input/additional_contexts/prevent_continuation in HookResult
+- Agent prompt pipeline with section registry and cache-aware verification
+- Background agent status retrieval, model override, and restored default/plan agents
+- Integration tests for full hook pipeline round trip
+
+### Fixed
+- session_search ACL: use actual caller identity instead of hardcoded "main" — subagents now use correct privilege level for permission checks
+- session_search result quality: over-fetch before ACL filtering to prevent inaccessible hits from consuming the entire result window
+- Auto-topic generation: remove unsupported max_output_tokens parameter for OpenAI Responses API
+- /new command topic generation: add required system_prompt (instructions) field for OpenAI Responses API
+- Telegram HTML delivery: add repair_html_tags() to fix mismatched tag nesting, preventing unnecessary fallback to plain text
+- Hook runtime: fix interceptor double-execution and stale post-hook context
+- Hook additional_contexts now properly injected into conversation as system-reminder messages
+- ToolPipeline: deny precedence, alias-aware validation, effective tracing spans
+
+### Changed
+- **Project structure**: promoted `core/` to project root — `src/` is now top-level, workspace root is both `[workspace]` and `[package]` (standard Rust practice)
+- **Project structure**: renamed `crates/` to `desktop/` with cleaner internal naming (`desktop/shared/`, `desktop/macos/`, `desktop/linux/`, `desktop/windows/`), moved `logging` to `shared/logging/`
+- Removed TaskTool and SubAgent delegation framework (12 files, -5766 lines of dead code)
+- Removed SubAgentHandler, EscalateTaskTool placeholder, and unused InterceptorResult
+- Removed system_prompt from AgentDef, replaced with prompt_sections
+
 ## [2026.03.29]
 
 ### Added
