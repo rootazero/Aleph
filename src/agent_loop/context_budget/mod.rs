@@ -9,6 +9,7 @@ pub mod pipeline;
 pub mod pressure;
 
 use super::tool::ToolDefinition;
+use crate::agent_loop::compaction::PressureLevel;
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
 
@@ -349,6 +350,15 @@ impl ContextBudget {
         self.circuit_breaker.record_success();
     }
 
+    /// Returns current pressure level based on last computed pressure.
+    /// Call after before_turn() to get meaningful result.
+    pub fn sense_pressure_level(&self) -> PressureLevel {
+        match &self.last_pressure {
+            Some(p) => PressureLevel::from_ratio(p.ratio),
+            None => PressureLevel::Calm,
+        }
+    }
+
     /// Record post-turn metrics and return a directive if diminishing returns detected.
     pub fn after_turn(&mut self, metrics: TurnMetrics) -> LoopDirective {
         if self.diminishing.record(metrics) {
@@ -582,5 +592,16 @@ mod tests {
         let msgs = vec![UnifiedMessage::user("hello")];
         let directive = budget.before_turn(&msgs, "", &[]);
         assert_eq!(directive, LoopDirective::FinalReply);
+    }
+
+    #[test]
+    fn sense_pressure_returns_correct_level() {
+        use crate::agent_loop::compaction::PressureLevel;
+        // Test that from_ratio mappings work correctly
+        assert_eq!(PressureLevel::from_ratio(0.50), PressureLevel::Calm);
+        assert_eq!(PressureLevel::from_ratio(0.65), PressureLevel::Preventive);
+        assert_eq!(PressureLevel::from_ratio(0.75), PressureLevel::Warning);
+        assert_eq!(PressureLevel::from_ratio(0.82), PressureLevel::High);
+        assert_eq!(PressureLevel::from_ratio(0.90), PressureLevel::Critical);
     }
 }
