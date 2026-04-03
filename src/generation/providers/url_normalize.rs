@@ -27,6 +27,7 @@ impl ResolvedUrl {
                     GenerationType::Video => "/v1/videos/generations",
                     GenerationType::Speech => "/v1/audio/speech",
                     GenerationType::Audio => "/v1/audio/generations",
+                    GenerationType::Transcription => "/v1/audio/transcriptions",
                 };
                 format!("{}{}", base, suffix)
             }
@@ -41,7 +42,6 @@ impl ResolvedUrl {
             ResolvedUrl::Standard(base) => {
                 let suffix = match gen_type {
                     GenerationType::Image => Some("/v1/images/edits"),
-                    GenerationType::Speech => Some("/v1/audio/transcriptions"),
                     _ => None,
                 };
                 suffix.map(|s| format!("{}{}", base, s))
@@ -163,11 +163,11 @@ mod tests {
     }
 
     #[test]
-    fn test_secondary_endpoint_speech_stt() {
-        let r = ResolvedUrl::Standard("https://api.example.com".into());
+    fn test_primary_endpoint_transcription() {
+        let r = resolve_base_url("https://api.openai.com");
         assert_eq!(
-            r.secondary_endpoint(GenerationType::Speech),
-            Some("https://api.example.com/v1/audio/transcriptions".into())
+            r.primary_endpoint(GenerationType::Transcription),
+            "https://api.openai.com/v1/audio/transcriptions"
         );
     }
 
