@@ -706,6 +706,55 @@ fn session_message_to_unified(
 }
 
 // ---------------------------------------------------------------------------
+// CompactionStrategy impl
+// ---------------------------------------------------------------------------
+
+use crate::agent_loop::compaction::{
+    CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
+};
+use std::future::Future;
+use std::pin::Pin;
+
+impl CompactionStrategy for SessionCompactor {
+    fn name(&self) -> &str {
+        "session_compactor"
+    }
+
+    fn estimate_savings(&self, ctx: &CompactionContext) -> TokenEstimate {
+        let total = ctx.pressure.used_tokens;
+        let fresh_ratio = ctx.fresh_tail_count as f64 / ctx.messages.len().max(1) as f64;
+        let compressible = (total as f64 * (1.0 - fresh_ratio)) as usize;
+        TokenEstimate {
+            estimated_savings: (compressible as f64 * 0.65) as usize,
+            confidence: 0.6,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut CompactionContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<CompactionResult>> + Send + 'a>> {
+        Box::pin(async move {
+            let before = ctx.pressure.ratio;
+            // Placeholder: actual integration with post_turn_compress requires AgentInstance
+            // and SessionKey which are not available in CompactionContext.
+            // Full integration comes in Task 11/12.
+            Ok(CompactionResult {
+                freed_tokens: 0,
+                compacted_count: 0,
+                strategy_name: self.name().to_string(),
+                pressure_before: before,
+                pressure_after: before,
+            })
+        })
+    }
+
+    fn is_applicable(&self, ctx: &CompactionContext) -> bool {
+        ctx.pressure_level >= PressureLevel::Warning && self.config.enabled
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -148,6 +148,23 @@ impl CompressionScheduler {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PostCompactCleanup impl
+// ---------------------------------------------------------------------------
+
+use crate::agent_loop::compaction::{CompactionResult, PostCompactCleanup};
+
+impl PostCompactCleanup for CompressionScheduler {
+    fn cleanup_order(&self) -> u32 {
+        30
+    }
+
+    fn on_compact_complete(&self, _result: &CompactionResult) {
+        self.reset_turns();
+        self.record_activity();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +255,25 @@ mod tests {
         assert_eq!(scheduler.get_pending_turns(), 10);
 
         scheduler.reset_turns();
+        assert_eq!(scheduler.get_pending_turns(), 0);
+    }
+
+    #[test]
+    fn scheduler_resets_on_compact_complete() {
+        use crate::agent_loop::compaction::{CompactionResult, PostCompactCleanup};
+
+        let scheduler = CompressionScheduler::with_defaults();
+        scheduler.increment_turns_by(15);
+        assert_eq!(scheduler.get_pending_turns(), 15);
+
+        let result = CompactionResult {
+            freed_tokens: 5000,
+            compacted_count: 2,
+            strategy_name: "micro".to_string(),
+            pressure_before: 0.82,
+            pressure_after: 0.65,
+        };
+        scheduler.on_compact_complete(&result);
         assert_eq!(scheduler.get_pending_turns(), 0);
     }
 }

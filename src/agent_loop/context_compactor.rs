@@ -261,6 +261,61 @@ fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
     lines.join("\n")
 }
 
+// =============================================================================
+// CompactionStrategy impl
+// =============================================================================
+
+use crate::agent_loop::compaction::{
+    CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
+};
+
+impl CompactionStrategy for ContextCompactor {
+    fn name(&self) -> &str {
+        "llm_summary"
+    }
+
+    fn estimate_savings(&self, ctx: &CompactionContext) -> TokenEstimate {
+        let compressible = ctx
+            .pressure
+            .used_tokens
+            .saturating_sub(ctx.fresh_tail_count * 200);
+        TokenEstimate {
+            estimated_savings: (compressible as f64 * self.config.target_ratio as f64) as usize,
+            confidence: 0.5,
+        }
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut CompactionContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<CompactionResult>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let before = ctx.pressure.ratio;
+            let result = self.compact(&mut ctx.messages, ctx.fresh_tail_count).await?;
+            let freed = result.tokens_before.saturating_sub(result.tokens_after);
+            ctx.pressure.used_tokens = ctx.pressure.used_tokens.saturating_sub(freed);
+            ctx.pressure.ratio = if ctx.pressure.budget_tokens == 0 {
+                1.0
+            } else {
+                ctx.pressure.used_tokens as f64 / ctx.pressure.budget_tokens as f64
+            };
+            Ok(CompactionResult {
+                freed_tokens: freed,
+                compacted_count: 1,
+                strategy_name: self.name().to_string(),
+                pressure_before: before,
+                pressure_after: ctx.pressure.ratio,
+            })
+        })
+    }
+
+    fn is_applicable(&self, ctx: &CompactionContext) -> bool {
+        ctx.pressure_level >= PressureLevel::High
+    }
+}
+
 // === Tests ===
 
 #[cfg(test)]

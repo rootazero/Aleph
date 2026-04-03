@@ -313,6 +313,23 @@ impl Default for SignalDetector {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PostCompactCleanup impl
+// ---------------------------------------------------------------------------
+
+use crate::agent_loop::compaction::{CompactionResult, PostCompactCleanup};
+
+impl PostCompactCleanup for SignalDetector {
+    fn cleanup_order(&self) -> u32 {
+        10
+    }
+
+    fn on_compact_complete(&self, _result: &CompactionResult) {
+        // SignalDetector is stateless — no cleanup needed.
+        // Trait impl provides extension point for future stateful tracking.
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
