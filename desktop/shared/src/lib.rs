@@ -125,6 +125,27 @@ pub enum PressAction {
     Click,
 }
 
+/// Information about a connected display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    /// Platform-specific display identifier.
+    pub id: u32,
+    /// Display name (may be empty on some platforms).
+    pub name: String,
+    /// Logical width in pixels.
+    pub width: u32,
+    /// Logical height in pixels.
+    pub height: u32,
+    /// Scale factor (e.g., 2.0 for Retina).
+    pub scale_factor: f64,
+    /// Whether this is the primary display.
+    pub is_primary: bool,
+    /// X origin in the global coordinate space.
+    pub origin_x: i32,
+    /// Y origin in the global coordinate space.
+    pub origin_y: i32,
+}
+
 /// Information about an on-screen window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {

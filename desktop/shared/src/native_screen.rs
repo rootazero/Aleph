@@ -12,8 +12,8 @@ use async_trait::async_trait;
 
 use crate::traits::ScreenCapability;
 use crate::{
-    action, perception, DesktopError, MouseButton, OcrResult, PressAction, Result, ScreenRegion,
-    Screenshot, WindowInfo,
+    action, perception, DesktopError, DisplayInfo, MouseButton, OcrResult, PressAction, Result,
+    ScreenRegion, Screenshot, WindowInfo,
 };
 
 /// Cross-platform `ScreenCapability` implementation.
@@ -186,6 +186,12 @@ impl ScreenCapability for NativeScreen {
         tokio::task::spawn_blocking(move || action::clipboard_write(&text))
             .await
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn display_list(&self) -> Result<Vec<DisplayInfo>> {
+        tokio::task::spawn_blocking(perception::list_displays)
+            .await
+            .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
     }
 }
 

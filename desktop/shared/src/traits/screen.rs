@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 
 use crate::screen_types::{ScreenRecordConfig, ScreenRecordResult};
-use crate::{MouseButton, OcrResult, PressAction, Result, ScreenRegion, Screenshot, WindowInfo};
+use crate::{DisplayInfo, MouseButton, OcrResult, PressAction, Result, ScreenRegion, Screenshot, WindowInfo};
 
 /// Screen perception and input automation.
 #[async_trait]
@@ -86,5 +86,10 @@ pub trait ScreenCapability: Send + Sync {
     async fn clipboard_write(&self, text: &str) -> Result<()> {
         let _ = text;
         Err(crate::DesktopError::NotImplemented("clipboard_write".into()))
+    }
+
+    /// List all connected displays.
+    async fn display_list(&self) -> Result<Vec<DisplayInfo>> {
+        Err(crate::DesktopError::NotImplemented("display_list".into()))
     }
 }
