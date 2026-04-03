@@ -25,6 +25,8 @@ pub enum GenerationType {
     Audio,
     /// Text-to-speech synthesis (ElevenLabs, OpenAI TTS, etc.)
     Speech,
+    /// Speech-to-text transcription (Whisper, etc.)
+    Transcription,
 }
 
 impl GenerationType {
@@ -62,6 +64,7 @@ impl GenerationType {
             GenerationType::Video => "Video",
             GenerationType::Audio => "Audio",
             GenerationType::Speech => "Speech",
+            GenerationType::Transcription => "Transcription",
         }
     }
 }
