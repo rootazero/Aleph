@@ -137,7 +137,7 @@ const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
 static DREAM_DAEMON: OnceCell<Arc<DreamDaemon>> = OnceCell::new();
 
-fn now_timestamp() -> i64 {
+pub(crate) fn now_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
