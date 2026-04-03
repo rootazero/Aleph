@@ -9,11 +9,15 @@
 //! - [`types::CompactionContext`] / [`types::CompactionResult`] — data carriers
 
 pub mod micro_compactor;
+pub mod tool_aware_chunker;
 pub mod types;
 
 pub use micro_compactor::{
     classify_importance, format_compact_placeholder, Importance, MicroCompactor,
     MicroCompactorConfig, ToolOutputEntry,
+};
+pub use tool_aware_chunker::{
+    parse_semantic_units, SemanticChunk, SemanticUnit, ToolAwareChunker,
 };
 pub use types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
