@@ -1,14 +1,16 @@
-use leptos::*;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use std::rc::Rc;
-use crate::api::{GenerationProvidersApi, GenerationProviderConfig, GenerationProviderEntry, VoiceInfo};
 use crate::api::{GenerationConfig, GenerationConfigApi};
+use crate::api::{
+    GenerationProviderConfig, GenerationProviderEntry, GenerationProvidersApi, VoiceInfo,
+};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use crate::preset_providers::{PresetProvider, PresetProviders};
 use crate::i18n::*;
+use crate::preset_providers::{PresetProvider, PresetProviders};
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos::*;
+use std::rc::Rc;
 
 /// Extract base URL from a potentially full endpoint URL.
 ///
@@ -79,14 +81,11 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let current_presets = move || PresetProviders::by_category(selected_category.get());
 
     // Check if a preset is configured
-    let is_configured = move |preset_id: &str| {
-        providers.get().iter().any(|p| p.name == preset_id)
-    };
+    let is_configured = move |preset_id: &str| providers.get().iter().any(|p| p.name == preset_id);
 
     // Get provider entry for a preset
-    let get_provider_entry = move |preset_id: &str| {
-        providers.get().into_iter().find(|p| p.name == preset_id)
-    };
+    let get_provider_entry =
+        move |preset_id: &str| providers.get().into_iter().find(|p| p.name == preset_id);
 
     view! {
         <div class="flex h-full">
@@ -122,6 +121,11 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         />
                         <CategoryTab
                             category=GenerationType::Speech
+                            selected=selected_category
+                            on_select=set_selected_category
+                        />
+                        <CategoryTab
+                            category=GenerationType::Transcription
                             selected=selected_category
                             on_select=set_selected_category
                         />
@@ -524,14 +528,30 @@ fn ProviderDetailView(
     let form_enabled = RwSignal::new(provider.config.enabled);
 
     // Generation type is now determined by which typed map the provider belongs to
-    let effective_gen_type = provider.effective_generation_type().unwrap_or(GenerationType::Image);
+    let effective_gen_type = provider
+        .effective_generation_type()
+        .unwrap_or(GenerationType::Image);
     let is_speech = effective_gen_type == GenerationType::Speech;
 
     // Voice configuration signals (for speech providers)
     let form_voice = RwSignal::new(provider.config.defaults.voice.clone().unwrap_or_default());
     let form_speed = RwSignal::new(provider.config.defaults.speed.unwrap_or(1.0));
-    let form_audio_format = RwSignal::new(provider.config.defaults.format.clone().unwrap_or_else(|| "mp3".to_string()));
-    let form_stt_model = RwSignal::new(provider.config.defaults.stt_model.clone().unwrap_or_else(|| "whisper-1".to_string()));
+    let form_audio_format = RwSignal::new(
+        provider
+            .config
+            .defaults
+            .format
+            .clone()
+            .unwrap_or_else(|| "mp3".to_string()),
+    );
+    let form_stt_model = RwSignal::new(
+        provider
+            .config
+            .defaults
+            .stt_model
+            .clone()
+            .unwrap_or_else(|| "whisper-1".to_string()),
+    );
     let voices_list: RwSignal<Vec<VoiceInfo>> = RwSignal::new(Vec::new());
     let voices_loading = RwSignal::new(false);
 
@@ -588,20 +608,39 @@ fn ProviderDetailView(
                 provider_type: config_provider_type.clone(),
                 api_key: {
                     let key = form_api_key.get();
-                    if key.is_empty() { None } else { Some(key) }
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(key)
+                    }
                 },
                 secret_name: None,
                 base_url: {
                     let url = extract_base_url(&form_base_url.get());
-                    if url.is_empty() { None } else { Some(url) }
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url)
+                    }
                 },
                 edit_url: {
                     let url = form_edit_url.get();
-                    if url.is_empty() { None } else { Some(url) }
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url)
+                    }
                 },
                 models: {
                     let m = form_model.get();
-                    if m.is_empty() { vec![] } else { m.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() }
+                    if m.is_empty() {
+                        vec![]
+                    } else {
+                        m.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    }
                 },
                 enabled: form_enabled.get(),
                 color: config_color.clone(),
@@ -630,7 +669,10 @@ fn ProviderDetailView(
                 Ok(_) => {
                     saving.set(false);
                     save_success.set(true);
-                    set_timeout(move || save_success.set(false), std::time::Duration::from_secs(2));
+                    set_timeout(
+                        move || save_success.set(false),
+                        std::time::Duration::from_secs(2),
+                    );
                     on_reload();
                 }
                 Err(e) => {
@@ -659,7 +701,9 @@ fn ProviderDetailView(
                 config.base_url,
                 config.models.first().cloned(),
                 Some(&name),
-            ).await {
+            )
+            .await
+            {
                 Ok(result) => {
                     testing.set(false);
                     test_result.set(Some((result.success, result.message)));
@@ -1075,7 +1119,12 @@ fn PresetSetupPanel(
     let provider_type = preset.provider_type.clone();
     let color = preset.color.clone();
     let capabilities = preset.capabilities.clone();
-    let gen_type_str = preset.capabilities.first().map(|g| g.as_str()).unwrap_or("image").to_string();
+    let gen_type_str = preset
+        .capabilities
+        .first()
+        .map(|g| g.as_str())
+        .unwrap_or("image")
+        .to_string();
 
     let build_config = {
         let provider_type = provider_type.clone();
@@ -1086,17 +1135,32 @@ fn PresetSetupPanel(
                 provider_type: provider_type.clone(),
                 api_key: {
                     let key = api_key.get();
-                    if key.is_empty() { None } else { Some(key) }
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(key)
+                    }
                 },
                 secret_name: None,
                 base_url: {
                     let url = base_url.get();
-                    if url.is_empty() { None } else { Some(url) }
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url)
+                    }
                 },
                 edit_url: None,
                 models: {
                     let m = form_model.get();
-                    if m.is_empty() { vec![] } else { m.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() }
+                    if m.is_empty() {
+                        vec![]
+                    } else {
+                        m.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    }
                 },
                 enabled: true,
                 color: color.clone(),
@@ -1127,7 +1191,9 @@ fn PresetSetupPanel(
                     if url.is_empty() { None } else { Some(url) },
                     if mdl.is_empty() { None } else { Some(mdl) },
                     None, // New provider — no name yet
-                ).await {
+                )
+                .await
+                {
                     Ok(result) => {
                         set_testing.set(false);
                         set_test_result.set(Some((result.success, result.message)));
@@ -1283,6 +1349,7 @@ fn AddCustomProviderPanel(
     // Auto-infer provider_type from category
     let default_provider_type = match category {
         GenerationType::Speech => "openai_tts",
+        GenerationType::Transcription => "openai_compat",
         GenerationType::Image => "openai",
         _ => "openai_compat",
     };
@@ -1303,19 +1370,40 @@ fn AddCustomProviderPanel(
             provider_type: provider_type.get(),
             api_key: {
                 let key = api_key.get();
-                if key.is_empty() { None } else { Some(key) }
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(key)
+                }
             },
             secret_name: None,
             base_url: {
                 let url = base_url.get();
                 let url = extract_base_url(&url);
-                if url.is_empty() { None } else { Some(url) }
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url)
+                }
             },
             edit_url: {
                 let url = edit_url.get();
-                if url.is_empty() { None } else { Some(url) }
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url)
+                }
             },
-            models: if form_model.get().is_empty() { vec![] } else { form_model.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() },
+            models: if form_model.get().is_empty() {
+                vec![]
+            } else {
+                form_model
+                    .get()
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            },
             enabled: true,
             color: "#808080".to_string(),
             capabilities: vec![category],
@@ -1337,7 +1425,8 @@ fn AddCustomProviderPanel(
         let mdl = config.models.first().cloned();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl, None).await {
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl, None).await
+            {
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));
@@ -1623,7 +1712,10 @@ fn GenerationSettingsPanel() -> impl IntoView {
                 Ok(_) => {
                     saving.set(false);
                     save_success.set(true);
-                    set_timeout(move || save_success.set(false), std::time::Duration::from_secs(2));
+                    set_timeout(
+                        move || save_success.set(false),
+                        std::time::Duration::from_secs(2),
+                    );
                 }
                 Err(e) => {
                     saving.set(false);
