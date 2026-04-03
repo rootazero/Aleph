@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::context::{MemoryFact, MemoryScope};
+use crate::memory::context::{FactType, MemoryFact, MemoryScope};
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::adapter::RequestPayload;
@@ -421,6 +421,17 @@ impl SessionCompactor {
                 self.metrics
                     .d0_summaries_created
                     .fetch_add(1, Ordering::Relaxed);
+
+                // Also store raw chunk content for post-compression semantic recovery.
+                // This allows recall_context to search pre-compression conversation text
+                // at aleph://session/{id}/raw/{seq}.
+                let raw_content: String = chunk
+                    .iter()
+                    .map(|(role, text)| format!("[{}]: {}", role, text))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                self.store_raw_chunk(&session_id, next_seq as usize, &raw_content)
+                    .await?;
             }
 
             next_seq += 1;
@@ -593,6 +604,34 @@ impl SessionCompactor {
             .with_scope(MemoryScope::SessionLocal)
             .with_path_prefix(&path_prefix);
         self.database.count_facts(&filter).await
+    }
+
+    /// Store raw conversation chunk for post-compression semantic recovery.
+    ///
+    /// Persists the verbatim (role-prefixed) content of a chunk at
+    /// `aleph://session/{session_id}/raw/{seq}` so that `recall_context`
+    /// can search pre-compression conversation content even after summaries
+    /// have replaced the originals.
+    pub async fn store_raw_chunk(
+        &self,
+        session_id: &str,
+        seq: usize,
+        content: &str,
+    ) -> Result<(), AlephError> {
+        let path = format!("aleph://session/{}/raw/{}", session_id, seq);
+        let fact = MemoryFact::new(content.to_string(), FactType::Other, Vec::new())
+            .with_path(path)
+            .with_scope(MemoryScope::SessionLocal)
+            .with_confidence(1.0);
+        if let Err(e) = self.database.insert_fact(&fact).await {
+            warn!(
+                error = %e,
+                session = %session_id,
+                seq,
+                "Failed to store raw chunk"
+            );
+        }
+        Ok(())
     }
 
     /// Fetch all valid facts at a given depth for a session.

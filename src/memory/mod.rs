@@ -23,7 +23,6 @@ pub mod cleanup;
 pub mod cli;
 pub mod composer;
 pub mod compression;
-pub mod compression_daemon;
 pub mod consolidation;
 pub mod content_scanner;
 pub mod context;
@@ -83,7 +82,6 @@ pub use compression::{
     CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
-pub use compression_daemon::{CompressionDaemon, CompressionDaemonConfig};
 pub use consolidation::{
     ConsolidatedFact, ConsolidationAnalyzer, ConsolidationConfig, FrequentFact, ProfileCategory,
     UserProfile,
