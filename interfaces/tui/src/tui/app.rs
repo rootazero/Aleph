@@ -5,9 +5,12 @@
 
 use std::time::Duration;
 
-use aleph_protocol::{RunSummary, StreamEvent};
+use aleph_protocol::{
+    present_agent_trace_event_with_preset, summarize_tool_input, AgentTraceEvent,
+    AgentTracePresentation, AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind,
+    AgentTraceToolResult, RunSummary, StreamEvent,
+};
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 use super::command_tree::{CommandEntry, DisplayEntry};
 use super::slash::LocalCommand;
@@ -183,6 +186,8 @@ pub struct AppState {
     // -- Run tracking --
     pub current_run: Option<String>,
     pub last_run_duration: Option<Duration>,
+    pub current_run_uses_agent_trace: bool,
+    pub current_run_trace_summary_applied: bool,
 
     // -- Settings --
     pub verbose: bool,
@@ -223,6 +228,8 @@ impl AppState {
 
             current_run: None,
             last_run_duration: None,
+            current_run_uses_agent_trace: false,
+            current_run_trace_summary_applied: false,
 
             verbose: false,
             gateway_commands: Vec::new(),
@@ -458,6 +465,21 @@ impl AppState {
         self.focus = Focus::Dialog;
     }
 
+    /// Switch to a different session and reset transient chat/run UI state.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn switch_session(&mut self, session_key: String) {
+        self.session_key = session_key.clone();
+        self.messages.clear();
+        self.current_run = None;
+        self.current_run_uses_agent_trace = false;
+        self.current_run_trace_summary_applied = false;
+        self.dialog = None;
+        self.palette = None;
+        self.focus = Focus::Input;
+        self.scroll_to_bottom();
+        self.add_system_message(format!("Switched to session {}", session_key));
+    }
+
     // -- Settings -------------------------------------------------------
 
     /// Toggle verbose/debug output mode.
@@ -478,6 +500,210 @@ impl AppState {
         self.total_tokens = self.total_tokens.saturating_add(summary.total_tokens);
     }
 
+    fn append_reasoning_entry(&mut self, content: String) {
+        self.ensure_assistant_message();
+        if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
+            match reasoning {
+                Some(existing) if !existing.is_empty() => {
+                    existing.push('\n');
+                    existing.push_str(&content);
+                }
+                Some(existing) => existing.push_str(&content),
+                None => *reasoning = Some(content),
+            }
+        }
+    }
+
+    fn append_assistant_content(&mut self, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+
+        self.ensure_assistant_message();
+        if let ChatMessage::Assistant {
+            content: msg_content,
+            ..
+        } = self.current_assistant_mut()
+        {
+            msg_content.push_str(content);
+        }
+    }
+
+    fn start_tool_execution(&mut self, tool_id: String, tool_name: String, params: String) {
+        self.ensure_assistant_message();
+        if let Some(tool) = self.find_tool_mut(&tool_id) {
+            tool.name = tool_name;
+            tool.params = params;
+            tool.status = ToolStatus::Running;
+            tool.duration = None;
+            tool.progress = None;
+            tool.error = None;
+            return;
+        }
+
+        if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
+            tools.push(ToolExecution {
+                id: tool_id,
+                name: tool_name,
+                params,
+                status: ToolStatus::Running,
+                duration: None,
+                progress: None,
+                error: None,
+            });
+        }
+    }
+
+    fn finish_tool_execution(
+        &mut self,
+        tool_id: &str,
+        result: &AgentTraceToolResult,
+        duration_ms: u64,
+    ) {
+        if let Some(tool) = self.find_tool_mut(tool_id) {
+            tool.status = if result.is_success() {
+                ToolStatus::Success
+            } else {
+                ToolStatus::Failed
+            };
+            tool.duration = Some(Duration::from_millis(duration_ms));
+            tool.error = result.error_text().map(ToOwned::to_owned);
+            tool.progress = None;
+        }
+    }
+
+    fn mark_current_assistant_complete(&mut self) {
+        if let Some(ChatMessage::Assistant { is_streaming, .. }) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m, ChatMessage::Assistant { .. }))
+        {
+            *is_streaming = false;
+        }
+    }
+
+    fn update_total_tokens_from_trace(&mut self, total_tokens: usize) {
+        let bounded = total_tokens.min(u64::MAX as usize) as u64;
+        self.total_tokens = self.total_tokens.saturating_add(bounded);
+    }
+
+    fn default_trace_presentation(event: &AgentTraceEvent) -> Option<AgentTracePresentation> {
+        present_agent_trace_event_with_preset(event, AgentTracePresentationPreset::TuiDebug)
+    }
+
+    fn append_trace_debug_entry(
+        &mut self,
+        event: &AgentTraceEvent,
+        presentation: &AgentTracePresentation,
+    ) {
+        match event {
+            AgentTraceEvent::TextEmitted { stream, .. } => match stream {
+                AgentTraceTextKind::Intermediate => {
+                    self.append_reasoning_entry(presentation.content.clone())
+                }
+                AgentTraceTextKind::Final => self.append_assistant_content(&presentation.content),
+            },
+            AgentTraceEvent::ToolSummary { .. }
+            | AgentTraceEvent::TurnStarted { .. }
+            | AgentTraceEvent::TurnStateEntered { .. }
+            | AgentTraceEvent::TurnCompleted { .. }
+            | AgentTraceEvent::SessionCompleted { .. } => {
+                self.append_reasoning_entry(presentation.content.clone())
+            }
+            AgentTraceEvent::ToolCallStarted { .. } | AgentTraceEvent::ToolCallCompleted { .. } => {
+            }
+        }
+    }
+
+    fn apply_agent_trace_event(&mut self, event: &AgentTraceEvent) -> Action {
+        let presentation = Self::default_trace_presentation(event);
+        if let Some(presentation) = &presentation {
+            self.append_trace_debug_entry(event, presentation);
+        }
+
+        match event {
+            AgentTraceEvent::TextEmitted { .. } => Action::ScrollToBottomIfAutoScroll,
+            AgentTraceEvent::ToolCallStarted { call, .. } => {
+                self.start_tool_execution(
+                    call.tool_id.clone(),
+                    call.tool_name.clone(),
+                    summarize_tool_input(
+                        &call.input,
+                        AgentTracePresentationPreset::TuiDebug.options(),
+                    ),
+                );
+                Action::ScrollToBottomIfAutoScroll
+            }
+            AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
+                self.finish_tool_execution(&call.tool_id, result, call.duration_ms);
+                Action::ScrollToBottomIfAutoScroll
+            }
+            AgentTraceEvent::ToolSummary { summary, .. } => {
+                let _ = summary;
+                Action::ScrollToBottomIfAutoScroll
+            }
+            AgentTraceEvent::SessionCompleted {
+                total_tokens,
+                final_text,
+                ..
+            } => {
+                if let Some(text) = final_text {
+                    let needs_final_text = !matches!(
+                        self.messages.iter().rev().find_map(|msg| match msg {
+                            ChatMessage::Assistant { content, .. } => Some(!content.is_empty()),
+                            _ => None,
+                        }),
+                        Some(true)
+                    );
+
+                    if needs_final_text {
+                        self.append_assistant_content(text);
+                    }
+                }
+
+                if !self.current_run_trace_summary_applied {
+                    self.update_total_tokens_from_trace(*total_tokens);
+                    self.current_run_trace_summary_applied = true;
+                }
+                self.current_run = None;
+                self.current_run_uses_agent_trace = false;
+                self.mark_current_assistant_complete();
+                Action::ScrollToBottomIfAutoScroll
+            }
+            _ => Action::None,
+        }
+    }
+
+    pub fn load_trace_replay(&mut self, replay: AgentTraceReplay) {
+        let summary = format!(
+            "Loaded replay {} from session {} [{}] via {}.",
+            replay.task.task_id, replay.task.session_id, replay.task.status, replay.task.agent_id
+        );
+
+        self.messages.clear();
+        self.current_run = Some(replay.task.task_id.clone());
+        self.current_run_uses_agent_trace = true;
+        self.dialog = None;
+        self.palette = None;
+        self.focus = Focus::Input;
+        self.scroll_to_bottom();
+        self.add_system_message(summary);
+
+        for trace in &replay.traces {
+            let _ = self.apply_agent_trace_event(&trace.event);
+        }
+
+        if replay.traces.is_empty() {
+            self.add_system_message("Replay has no structured trace events.".to_string());
+        }
+
+        self.current_run = None;
+        self.current_run_uses_agent_trace = false;
+        self.current_run_trace_summary_applied = false;
+        self.mark_current_assistant_complete();
+    }
+
     /// Request application quit. Sets should_quit flag.
     pub fn request_quit(&mut self) {
         self.should_quit = true;
@@ -491,8 +717,15 @@ impl AppState {
         match event {
             StreamEvent::RunAccepted { run_id, .. } => {
                 self.current_run = Some(run_id);
+                self.current_run_uses_agent_trace = false;
+                self.current_run_trace_summary_applied = false;
                 self.is_connected = true;
                 Action::None
+            }
+
+            StreamEvent::AgentTrace { event, .. } => {
+                self.current_run_uses_agent_trace = true;
+                self.apply_agent_trace_event(&event)
             }
 
             StreamEvent::Reasoning { content, .. } => {
@@ -512,18 +745,14 @@ impl AppState {
                 params,
                 ..
             } => {
-                self.ensure_assistant_message();
-                if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
-                    tools.push(ToolExecution {
-                        id: tool_id,
-                        name: tool_name,
-                        params: format_params_brief(&params),
-                        status: ToolStatus::Running,
-                        duration: None,
-                        progress: None,
-                        error: None,
-                    });
+                if self.current_run_uses_agent_trace {
+                    return Action::None;
                 }
+                self.start_tool_execution(
+                    tool_id,
+                    tool_name,
+                    summarize_tool_input(&params, AgentTracePresentationPreset::TuiDebug.options()),
+                );
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -542,30 +771,25 @@ impl AppState {
                 duration_ms,
                 ..
             } => {
-                if let Some(tool) = self.find_tool_mut(&tool_id) {
-                    tool.status = if result.success {
-                        ToolStatus::Success
-                    } else {
-                        ToolStatus::Failed
-                    };
-                    tool.duration = Some(Duration::from_millis(duration_ms));
-                    if let Some(err) = result.error {
-                        tool.error = Some(err);
-                    }
-                    tool.progress = None;
+                if self.current_run_uses_agent_trace {
+                    return Action::None;
                 }
+                let result = if result.success {
+                    AgentTraceToolResult::Success {
+                        output: serde_json::json!(result.output),
+                    }
+                } else {
+                    AgentTraceToolResult::Error {
+                        error: result.error.unwrap_or_default(),
+                        retryable: false,
+                    }
+                };
+                self.finish_tool_execution(&tool_id, &result, duration_ms);
                 Action::ScrollToBottomIfAutoScroll
             }
 
             StreamEvent::ResponseChunk { content, .. } => {
-                self.ensure_assistant_message();
-                if let ChatMessage::Assistant {
-                    content: msg_content,
-                    ..
-                } = self.current_assistant_mut()
-                {
-                    msg_content.push_str(&content);
-                }
+                self.append_assistant_content(&content);
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -576,27 +800,21 @@ impl AppState {
             } => {
                 self.current_run = None;
                 self.last_run_duration = Some(Duration::from_millis(total_duration_ms));
-                self.update_token_usage(&summary);
-
-                // Mark the current assistant message as no longer streaming
-                if let Some(ChatMessage::Assistant { is_streaming, .. }) =
-                    self.messages.iter_mut().rev().find(|m| matches!(m, ChatMessage::Assistant { .. }))
-                {
-                    *is_streaming = false;
+                if !self.current_run_trace_summary_applied {
+                    self.update_token_usage(&summary);
                 }
+                self.current_run_uses_agent_trace = false;
+                self.current_run_trace_summary_applied = false;
+                self.mark_current_assistant_complete();
 
                 Action::ScrollToBottomIfAutoScroll
             }
 
             StreamEvent::RunError { error, .. } => {
                 self.current_run = None;
-
-                // Mark the current assistant message as no longer streaming
-                if let Some(ChatMessage::Assistant { is_streaming, .. }) =
-                    self.messages.iter_mut().rev().find(|m| matches!(m, ChatMessage::Assistant { .. }))
-                {
-                    *is_streaming = false;
-                }
+                self.current_run_uses_agent_trace = false;
+                self.current_run_trace_summary_applied = false;
+                self.mark_current_assistant_complete();
 
                 self.add_system_message(format!("Error: {}", error));
                 Action::ScrollToBottomIfAutoScroll
@@ -613,17 +831,11 @@ impl AppState {
             }
 
             StreamEvent::ReasoningBlock { content, .. } => {
-                // Treated same as Reasoning — append to reasoning buffer
-                self.ensure_assistant_message();
-                if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
-                    match reasoning {
-                        Some(existing) => {
-                            existing.push('\n');
-                            existing.push_str(&content);
-                        }
-                        None => *reasoning = Some(content),
-                    }
+                if self.current_run_uses_agent_trace {
+                    return Action::None;
                 }
+                // Treated same as Reasoning — append to reasoning buffer
+                self.append_reasoning_entry(content);
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -648,58 +860,6 @@ impl AppState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Format tool parameters as a brief one-line summary.
-///
-/// - String values are returned as-is (truncated at 80 chars).
-/// - Objects show `key=value` pairs, separated by spaces.
-/// - Arrays show `[N items]`.
-/// - Other types use their JSON representation.
-pub fn format_params_brief(params: &Value) -> String {
-    match params {
-        Value::String(s) => {
-            if s.chars().count() > 80 {
-                let end = s.char_indices().nth(77).map_or(s.len(), |(i, _)| i);
-                format!("{}...", &s[..end])
-            } else {
-                s.clone()
-            }
-        }
-        Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .take(5)
-                .map(|(k, v)| {
-                    let val = match v {
-                        Value::String(s) => {
-                            if s.chars().count() > 40 {
-                                let end = s.char_indices().nth(37).map_or(s.len(), |(i, _)| i);
-                                format!("\"{}...\"", &s[..end])
-                            } else {
-                                format!("\"{}\"", s)
-                            }
-                        }
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Array(arr) => format!("[{} items]", arr.len()),
-                        Value::Object(_) => "{...}".to_string(),
-                    };
-                    format!("{}={}", k, val)
-                })
-                .collect();
-            let result = parts.join(" ");
-            if map.len() > 5 {
-                format!("{} (+{} more)", result, map.len() - 5)
-            } else {
-                result
-            }
-        }
-        Value::Array(arr) => format!("[{} items]", arr.len()),
-        Value::Null => String::new(),
-        other => other.to_string(),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -707,6 +867,8 @@ pub fn format_params_brief(params: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::{AgentTraceSessionOutcome, AgentTraceTextKind};
+    use serde_json::Value;
 
     #[test]
     fn new_state_has_welcome_message() {
@@ -777,13 +939,22 @@ mod tests {
     #[test]
     fn format_params_string() {
         let val = Value::String("hello world".into());
-        assert_eq!(format_params_brief(&val), "hello world");
+        assert_eq!(
+            aleph_protocol::summarize_tool_input(
+                &val,
+                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
+            ),
+            "hello world"
+        );
     }
 
     #[test]
     fn format_params_string_truncation() {
         let long = "a".repeat(100);
-        let result = format_params_brief(&Value::String(long));
+        let result = aleph_protocol::summarize_tool_input(
+            &Value::String(long),
+            aleph_protocol::AgentTracePresentationPreset::TuiDebug.options(),
+        );
         assert!(result.len() < 100);
         assert!(result.ends_with("..."));
     }
@@ -794,7 +965,10 @@ mod tests {
             "command": "ls -la",
             "count": 42,
         });
-        let result = format_params_brief(&val);
+        let result = aleph_protocol::summarize_tool_input(
+            &val,
+            aleph_protocol::AgentTracePresentationPreset::TuiDebug.options(),
+        );
         assert!(result.contains("command="));
         assert!(result.contains("ls -la"));
         assert!(result.contains("count="));
@@ -803,13 +977,25 @@ mod tests {
 
     #[test]
     fn format_params_null() {
-        assert_eq!(format_params_brief(&Value::Null), "");
+        assert_eq!(
+            aleph_protocol::summarize_tool_input(
+                &Value::Null,
+                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
+            ),
+            ""
+        );
     }
 
     #[test]
     fn format_params_array() {
         let val = serde_json::json!([1, 2, 3]);
-        assert_eq!(format_params_brief(&val), "[3 items]");
+        assert_eq!(
+            aleph_protocol::summarize_tool_input(
+                &val,
+                aleph_protocol::AgentTracePresentationPreset::TuiDebug.options()
+            ),
+            "[3 items]"
+        );
     }
 
     #[test]
@@ -1030,6 +1216,192 @@ mod tests {
     }
 
     #[test]
+    fn handle_agent_trace_text_events_populate_assistant_content_and_reasoning() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.handle_gateway_event(StreamEvent::RunAccepted {
+            run_id: "run-1".into(),
+            session_key: "s".into(),
+            accepted_at: "2026-03-04T00:00:00Z".into(),
+        });
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 1,
+            event: AgentTraceEvent::TextEmitted {
+                iteration: 1,
+                stream: AgentTraceTextKind::Intermediate,
+                text: "Inspecting replay trace".into(),
+            },
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 2,
+            event: AgentTraceEvent::TextEmitted {
+                iteration: 1,
+                stream: AgentTraceTextKind::Final,
+                text: "Replay loaded".into(),
+            },
+        });
+
+        match &state.messages[1] {
+            ChatMessage::Assistant {
+                content, reasoning, ..
+            } => {
+                assert_eq!(content, "Replay loaded");
+                assert_eq!(reasoning.as_deref(), Some("Inspecting replay trace"));
+            }
+            other => panic!("Expected Assistant message, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_agent_trace_session_completed_updates_totals_and_closes_stream() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.handle_gateway_event(StreamEvent::RunAccepted {
+            run_id: "run-1".into(),
+            session_key: "s".into(),
+            accepted_at: "2026-03-04T00:00:00Z".into(),
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 1,
+            event: AgentTraceEvent::TextEmitted {
+                iteration: 1,
+                stream: AgentTraceTextKind::Final,
+                text: "Replay loaded".into(),
+            },
+        });
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 2,
+            event: AgentTraceEvent::SessionCompleted {
+                outcome: AgentTraceSessionOutcome::Completed,
+                iterations: 1,
+                tool_calls_made: 0,
+                total_tokens: 321,
+                hit_limit: false,
+                final_text: Some("Replay loaded".into()),
+            },
+        });
+
+        assert_eq!(state.total_tokens, 321);
+        assert!(state.current_run.is_none());
+        assert!(!state.current_run_uses_agent_trace);
+        match &state.messages[1] {
+            ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
+            other => panic!("Expected Assistant message, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.handle_gateway_event(StreamEvent::RunAccepted {
+            run_id: "run-1".into(),
+            session_key: "s".into(),
+            accepted_at: "2026-03-04T00:00:00Z".into(),
+        });
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 1,
+            event: AgentTraceEvent::TurnStarted { iteration: 1 },
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 2,
+            event: AgentTraceEvent::TurnStateEntered {
+                iteration: 1,
+                state: aleph_protocol::AgentTraceState::Think,
+            },
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 3,
+            event: AgentTraceEvent::TurnCompleted {
+                iteration: 1,
+                outcome: aleph_protocol::AgentTraceTurnOutcome::Continue,
+                metrics: aleph_protocol::AgentTraceTurnMetrics {
+                    requested_tool_calls: 1,
+                    executed_tool_calls: 1,
+                    productive: true,
+                    consecutive_errors: 0,
+                    total_tokens: 64,
+                },
+            },
+        });
+
+        match &state.messages[1] {
+            ChatMessage::Assistant { reasoning, .. } => {
+                assert_eq!(
+                    reasoning.as_deref(),
+                    Some(
+                        "Turn started #1\nState #1: think\nTurn completed #1 (continue, 1 requested, 1 executed, 64 tokens)"
+                    )
+                );
+            }
+            other => panic!("Expected Assistant message, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn load_trace_replay_records_session_summary_in_reasoning() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.load_trace_replay(AgentTraceReplay {
+            task: aleph_protocol::AgentTraceTaskSummary {
+                task_id: "task-1".into(),
+                session_id: "session-1".into(),
+                agent_id: "agent-1".into(),
+                status: "completed".into(),
+                prompt_preview: "Inspect replay".into(),
+                created_at: 10,
+                updated_at: 20,
+                started_at: Some(11),
+                completed_at: Some(19),
+                trace_count: 2,
+                last_event_kind: Some("session_completed".into()),
+            },
+            traces: vec![
+                aleph_protocol::AgentTraceRecord {
+                    step_index: 0,
+                    timestamp: 11,
+                    event: AgentTraceEvent::TurnStarted { iteration: 1 },
+                },
+                aleph_protocol::AgentTraceRecord {
+                    step_index: 1,
+                    timestamp: 19,
+                    event: AgentTraceEvent::SessionCompleted {
+                        outcome: AgentTraceSessionOutcome::Completed,
+                        iterations: 1,
+                        tool_calls_made: 0,
+                        total_tokens: 33,
+                        hit_limit: false,
+                        final_text: Some("done".into()),
+                    },
+                },
+            ],
+        });
+
+        match &state.messages[1] {
+            ChatMessage::Assistant {
+                content, reasoning, ..
+            } => {
+                assert_eq!(content, "done");
+                assert_eq!(
+                    reasoning.as_deref(),
+                    Some("Turn started #1\nSession completed (completed, 1 iterations, 0 tool calls, 33 tokens)")
+                );
+            }
+            other => panic!("Expected Assistant message, got: {:?}", other),
+        }
+    }
+
+    #[test]
     fn handle_tool_lifecycle() {
         let mut state = AppState::new("s".into(), "m".into());
 
@@ -1075,6 +1447,81 @@ mod tests {
     }
 
     #[test]
+    fn handle_agent_trace_tool_lifecycle_takes_precedence() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 1,
+            event: aleph_protocol::AgentTraceEvent::ToolCallStarted {
+                iteration: 1,
+                call: aleph_protocol::AgentTraceToolCallStart {
+                    tool_id: "t1".into(),
+                    tool_name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            },
+        });
+
+        state.handle_gateway_event(StreamEvent::ToolStart {
+            run_id: "run-1".into(),
+            seq: 2,
+            tool_name: "bash".into(),
+            tool_id: "t1".into(),
+            params: serde_json::json!({"command": "ls"}),
+        });
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 3,
+            event: aleph_protocol::AgentTraceEvent::ToolSummary {
+                iteration: 1,
+                summary: "Listed the current directory".into(),
+            },
+        });
+
+        state.handle_gateway_event(StreamEvent::ReasoningBlock {
+            run_id: "run-1".into(),
+            seq: 4,
+            step_type: aleph_protocol::ReasoningStepType::Observation,
+            label: "Tool Summary".into(),
+            content: "legacy summary".into(),
+            confidence: None,
+            is_final: false,
+        });
+
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 5,
+            event: aleph_protocol::AgentTraceEvent::ToolCallCompleted {
+                iteration: 1,
+                call: aleph_protocol::AgentTraceToolCallEnd {
+                    tool_id: "t1".into(),
+                    tool_name: "bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                    duration_ms: 120,
+                },
+                result: aleph_protocol::AgentTraceToolResult::Success {
+                    output: serde_json::json!({"ok": true}),
+                },
+            },
+        });
+
+        match &state.messages[1] {
+            ChatMessage::Assistant {
+                tools, reasoning, ..
+            } => {
+                assert_eq!(tools.len(), 1);
+                assert_eq!(tools[0].id, "t1");
+                assert_eq!(tools[0].status, ToolStatus::Success);
+                assert_eq!(tools[0].duration, Some(Duration::from_millis(120)));
+                assert_eq!(reasoning.as_deref(), Some("Listed the current directory"));
+            }
+            other => panic!("Expected Assistant message, got: {:?}", other),
+        }
+    }
+
+    #[test]
     fn handle_run_complete_clears_run() {
         let mut state = AppState::new("s".into(), "m".into());
         state.current_run = Some("run-1".into());
@@ -1104,6 +1551,43 @@ mod tests {
             ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
             other => panic!("Expected Assistant message, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn run_complete_does_not_double_count_after_agent_trace_session_completed() {
+        let mut state = AppState::new("s".into(), "m".into());
+
+        state.handle_gateway_event(StreamEvent::RunAccepted {
+            run_id: "run-1".into(),
+            session_key: "s".into(),
+            accepted_at: "2026-03-04T00:00:00Z".into(),
+        });
+        state.handle_gateway_event(StreamEvent::AgentTrace {
+            run_id: "run-1".into(),
+            seq: 1,
+            event: AgentTraceEvent::SessionCompleted {
+                outcome: AgentTraceSessionOutcome::Completed,
+                iterations: 1,
+                tool_calls_made: 0,
+                total_tokens: 321,
+                hit_limit: false,
+                final_text: Some("done".into()),
+            },
+        });
+        state.handle_gateway_event(StreamEvent::RunComplete {
+            run_id: "run-1".into(),
+            seq: 2,
+            summary: RunSummary {
+                total_tokens: 321,
+                tool_calls: 0,
+                loops: 1,
+                final_response: Some("done".into()),
+            },
+            total_duration_ms: 1500,
+        });
+
+        assert_eq!(state.total_tokens, 321);
+        assert!(!state.current_run_trace_summary_applied);
     }
 
     #[test]

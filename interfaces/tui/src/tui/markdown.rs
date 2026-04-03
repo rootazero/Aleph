@@ -60,10 +60,7 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
                 "\u{250a} ".to_string(),
                 Style::default().fg(DEFAULT_THEME.quote),
             )];
-            let inline = parse_inline(
-                content,
-                Style::default().fg(DEFAULT_THEME.quote),
-            );
+            let inline = parse_inline(content, Style::default().fg(DEFAULT_THEME.quote));
             spans.extend(inline);
             let wrapped = wrap_line_spans(&spans, width);
             result.extend(wrapped);
@@ -244,13 +241,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
 }
 
 /// Flush accumulated plain text (from plain_start to current byte index) as a styled span.
-fn flush_plain(
-    text: &str,
-    start: usize,
-    end: usize,
-    style: Style,
-    spans: &mut Vec<Span<'static>>,
-) {
+fn flush_plain(text: &str, start: usize, end: usize, style: Style, spans: &mut Vec<Span<'static>>) {
     if start < end {
         if let Some(s) = text.get(start..end) {
             if !s.is_empty() {
@@ -272,11 +263,7 @@ fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Opt
 }
 
 /// Parse a markdown link: [text](url). Returns (link_text, char_index_after_closing_paren).
-fn parse_link(
-    chars: &[(usize, char)],
-    text: &str,
-    start: usize,
-) -> Option<(String, usize)> {
+fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(String, usize)> {
     // start is at '['
     // Find closing ']'
     let mut i = start + 1;
@@ -312,12 +299,7 @@ fn parse_link(
 }
 
 /// Render a fenced code block with borders and language label.
-fn render_code_block(
-    lang: &str,
-    lines: &[String],
-    width: usize,
-    result: &mut Vec<Line<'static>>,
-) {
+fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Vec<Line<'static>>) {
     let border_style = Style::default().fg(DEFAULT_THEME.code_block_border);
     let code_style = Style::default().bg(DEFAULT_THEME.code_bg);
     let inner_width = if width > 4 { width - 2 } else { width };
@@ -330,11 +312,7 @@ fn render_code_block(
     };
     let label_width = UnicodeWidthStr::width(label.as_str());
     let dash_count = inner_width.saturating_sub(label_width + 1);
-    let top = format!(
-        "\u{250c}\u{2500}{}{}",
-        label,
-        "\u{2500}".repeat(dash_count)
-    );
+    let top = format!("\u{250c}\u{2500}{}{}", label, "\u{2500}".repeat(dash_count));
     result.push(Line::from(Span::styled(top, border_style)));
 
     // Code lines
@@ -344,10 +322,7 @@ fn render_code_block(
     }
 
     // Bottom border: └──────────────
-    let bottom = format!(
-        "\u{2514}{}",
-        "\u{2500}".repeat(inner_width)
-    );
+    let bottom = format!("\u{2514}{}", "\u{2500}".repeat(inner_width));
     result.push(Line::from(Span::styled(bottom, border_style)));
 }
 
@@ -361,7 +336,10 @@ fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> 
     }
 
     // Calculate total visual width
-    let total_width: usize = spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+    let total_width: usize = spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
 
     if total_width <= width {
         return vec![Line::from(spans.to_vec())];
@@ -445,13 +423,23 @@ mod tests {
         let input = "```rust\nfn main() {}\n```";
         let lines = markdown_to_lines(input, 80);
         // Should produce at least 3 lines: top border, code line, bottom border
-        assert!(lines.len() >= 3, "code block should have >= 3 lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 3,
+            "code block should have >= 3 lines, got {}",
+            lines.len()
+        );
         // Top border should contain the language
         let top = line_to_plain_text(&lines[0]);
-        assert!(top.contains("rust"), "top border should contain language label");
+        assert!(
+            top.contains("rust"),
+            "top border should contain language label"
+        );
         // Code line should contain the code
         let code = line_to_plain_text(&lines[1]);
-        assert!(code.contains("fn main()"), "code line should contain the code");
+        assert!(
+            code.contains("fn main()"),
+            "code line should contain the code"
+        );
     }
 
     #[test]
@@ -477,12 +465,19 @@ mod tests {
     fn list_item() {
         let input = "- item one\n- item two";
         let lines = markdown_to_lines(input, 80);
-        assert!(lines.len() >= 2, "list should have >= 2 lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 2,
+            "list should have >= 2 lines, got {}",
+            lines.len()
+        );
         let first = line_to_plain_text(&lines[0]);
         let second = line_to_plain_text(&lines[1]);
         assert!(first.contains("\u{2022}"), "first line should have bullet");
         assert!(first.contains("item one"));
-        assert!(second.contains("\u{2022}"), "second line should have bullet");
+        assert!(
+            second.contains("\u{2022}"),
+            "second line should have bullet"
+        );
         assert!(second.contains("item two"));
     }
 
@@ -491,7 +486,10 @@ mod tests {
         let lines = markdown_to_lines("> quoted text", 80);
         assert!(!lines.is_empty());
         let text = line_to_plain_text(&lines[0]);
-        assert!(text.contains("\u{250a}"), "blockquote should contain ┊ prefix");
+        assert!(
+            text.contains("\u{250a}"),
+            "blockquote should contain ┊ prefix"
+        );
         assert!(text.contains("quoted text"));
     }
 
@@ -533,9 +531,16 @@ mod tests {
         let input = "```rust\nfn main()";
         let lines = markdown_to_lines(input, 80);
         // Should still render something (graceful degradation)
-        assert!(!lines.is_empty(), "unterminated code block should produce output");
+        assert!(
+            !lines.is_empty(),
+            "unterminated code block should produce output"
+        );
         // Should contain the code
-        let all_text: String = lines.iter().map(|l| line_to_plain_text(l)).collect::<Vec<_>>().join("\n");
+        let all_text: String = lines
+            .iter()
+            .map(|l| line_to_plain_text(l))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(all_text.contains("fn main()"), "code should still appear");
     }
 }

@@ -1,8 +1,8 @@
 //! Panel API for agent management (agents.* RPC calls)
 
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::context::DashboardState;
 
 // -- Types --
 
@@ -132,37 +132,75 @@ impl AgentsApi {
     }
 
     pub async fn set_default(state: &DashboardState, id: &str) -> Result<(), String> {
-        state.rpc_call("agents.set_default", json!({"id": id})).await?;
+        state
+            .rpc_call("agents.set_default", json!({"id": id}))
+            .await?;
         Ok(())
     }
 
     // Files
 
-    pub async fn files_list(state: &DashboardState, agent_id: &str) -> Result<FilesListResponse, String> {
-        let result = state.rpc_call("agents.files.list", json!({"agent_id": agent_id})).await?;
+    pub async fn files_list(
+        state: &DashboardState,
+        agent_id: &str,
+    ) -> Result<FilesListResponse, String> {
+        let result = state
+            .rpc_call("agents.files.list", json!({"agent_id": agent_id}))
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn files_get(state: &DashboardState, agent_id: &str, filename: &str) -> Result<String, String> {
-        let result = state.rpc_call("agents.files.get", json!({"agent_id": agent_id, "filename": filename})).await?;
-        result.get("content").and_then(|v| v.as_str()).map(|s| s.to_string())
+    pub async fn files_get(
+        state: &DashboardState,
+        agent_id: &str,
+        filename: &str,
+    ) -> Result<String, String> {
+        let result = state
+            .rpc_call(
+                "agents.files.get",
+                json!({"agent_id": agent_id, "filename": filename}),
+            )
+            .await?;
+        result
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
             .ok_or_else(|| "Missing content in response".to_string())
     }
 
-    pub async fn files_set(state: &DashboardState, agent_id: &str, filename: &str, content: &str) -> Result<(), String> {
-        state.rpc_call("agents.files.set", json!({
-            "agent_id": agent_id,
-            "filename": filename,
-            "content": content,
-        })).await?;
+    pub async fn files_set(
+        state: &DashboardState,
+        agent_id: &str,
+        filename: &str,
+        content: &str,
+    ) -> Result<(), String> {
+        state
+            .rpc_call(
+                "agents.files.set",
+                json!({
+                    "agent_id": agent_id,
+                    "filename": filename,
+                    "content": content,
+                }),
+            )
+            .await?;
         Ok(())
     }
 
-    pub async fn files_delete(state: &DashboardState, agent_id: &str, filename: &str) -> Result<(), String> {
-        state.rpc_call("agents.files.delete", json!({
-            "agent_id": agent_id,
-            "filename": filename,
-        })).await?;
+    pub async fn files_delete(
+        state: &DashboardState,
+        agent_id: &str,
+        filename: &str,
+    ) -> Result<(), String> {
+        state
+            .rpc_call(
+                "agents.files.delete",
+                json!({
+                    "agent_id": agent_id,
+                    "filename": filename,
+                }),
+            )
+            .await?;
         Ok(())
     }
 

@@ -58,8 +58,7 @@ impl StopHookHandler for ShellStopHook {
     }
 
     async fn evaluate(&self, ctx: &StopHookContext, cancel: &CancellationToken) -> StopHookVerdict {
-        let context_json =
-            serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string());
+        let context_json = serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string());
         execute_shell_hook(self, &context_json, cancel).await
     }
 }
@@ -272,9 +271,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_block() {
-        let hooks: Vec<Box<dyn StopHookHandler>> = vec![
-            shell_hook("blocker", "echo 'tests not passing' && exit 2"),
-        ];
+        let hooks: Vec<Box<dyn StopHookHandler>> =
+            vec![shell_hook("blocker", "echo 'tests not passing' && exit 2")];
         let ctx = StopHookContext {
             final_text: None,
             iterations: 1,
@@ -303,9 +301,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_timeout() {
-        let hooks: Vec<Box<dyn StopHookHandler>> = vec![
-            Box::new(ShellStopHook::new("slow", "sleep 60").with_timeout(Duration::from_millis(100))),
-        ];
+        let hooks: Vec<Box<dyn StopHookHandler>> = vec![Box::new(
+            ShellStopHook::new("slow", "sleep 60").with_timeout(Duration::from_millis(100)),
+        )];
         let ctx = StopHookContext {
             final_text: None,
             iterations: 1,
@@ -322,12 +320,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_receives_context_json() {
-        let hooks: Vec<Box<dyn StopHookHandler>> = vec![
-            shell_hook(
-                "ctx_checker",
-                r#"input=$(cat); echo "$input" | grep -q "end_turn" && echo "found end_turn" && exit 2 || exit 0"#,
-            ),
-        ];
+        let hooks: Vec<Box<dyn StopHookHandler>> = vec![shell_hook(
+            "ctx_checker",
+            r#"input=$(cat); echo "$input" | grep -q "end_turn" && echo "found end_turn" && exit 2 || exit 0"#,
+        )];
         let ctx = StopHookContext {
             final_text: Some("done".into()),
             iterations: 5,
@@ -359,9 +355,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_cancel_kills_child() {
-        let hooks: Vec<Box<dyn StopHookHandler>> = vec![
-            Box::new(ShellStopHook::new("long_running", "sleep 60").with_timeout(Duration::from_secs(30))),
-        ];
+        let hooks: Vec<Box<dyn StopHookHandler>> = vec![Box::new(
+            ShellStopHook::new("long_running", "sleep 60").with_timeout(Duration::from_secs(30)),
+        )];
         let ctx = StopHookContext {
             final_text: None,
             iterations: 1,
@@ -406,8 +402,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StopHookHandler for AlwaysAllowHook {
-        fn name(&self) -> &str { "always_allow" }
-        async fn evaluate(&self, _ctx: &StopHookContext, _cancel: &CancellationToken) -> StopHookVerdict {
+        fn name(&self) -> &str {
+            "always_allow"
+        }
+        async fn evaluate(
+            &self,
+            _ctx: &StopHookContext,
+            _cancel: &CancellationToken,
+        ) -> StopHookVerdict {
             StopHookVerdict::Allow
         }
     }
@@ -419,11 +421,20 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StopHookHandler for IterationGuardHook {
-        fn name(&self) -> &str { "iteration_guard" }
-        async fn evaluate(&self, ctx: &StopHookContext, _cancel: &CancellationToken) -> StopHookVerdict {
+        fn name(&self) -> &str {
+            "iteration_guard"
+        }
+        async fn evaluate(
+            &self,
+            ctx: &StopHookContext,
+            _cancel: &CancellationToken,
+        ) -> StopHookVerdict {
             if ctx.iterations > self.max_iterations {
                 StopHookVerdict::Block {
-                    reason: format!("too many iterations: {} > {}", ctx.iterations, self.max_iterations),
+                    reason: format!(
+                        "too many iterations: {} > {}",
+                        ctx.iterations, self.max_iterations
+                    ),
                 }
             } else {
                 StopHookVerdict::Allow
@@ -459,6 +470,9 @@ mod tests {
         };
         let cancel = CancellationToken::new();
         let result = execute_stop_hooks(&hooks, &ctx, &cancel).await;
-        assert!(result.blocking_reason().unwrap().contains("too many iterations"));
+        assert!(result
+            .blocking_reason()
+            .unwrap()
+            .contains("too many iterations"));
     }
 }

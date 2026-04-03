@@ -13,9 +13,13 @@ use aleph_desktop::Result;
 use async_trait::async_trait;
 use block2::RcBlock;
 use objc2::runtime::Bool;
-use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio, AVMediaTypeVideo};
+use objc2_av_foundation::{
+    AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio, AVMediaTypeVideo,
+};
 use objc2_speech::{SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus};
-use objc2_user_notifications::{UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter};
+use objc2_user_notifications::{
+    UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
+};
 
 // ---------------------------------------------------------------------------
 // C FFI — CoreGraphics (ScreenRecording)
@@ -32,9 +36,7 @@ extern "C" {
 
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(
-        options: core_foundation::base::CFTypeRef,
-    ) -> bool;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
 }
 
 /// Timeout for async permission callbacks.
@@ -214,9 +216,7 @@ fn request_accessibility() -> PermissionStatus {
 
     let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
 
-    let trusted = unsafe {
-        AXIsProcessTrustedWithOptions(options.as_CFTypeRef())
-    };
+    let trusted = unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) };
 
     if trusted {
         PermissionStatus::Granted
@@ -259,9 +259,9 @@ fn sf_status_to_permission(status: SFSpeechRecognizerAuthorizationStatus) -> Per
 
 fn un_status_to_permission(status: UNAuthorizationStatus) -> PermissionStatus {
     match status {
-        UNAuthorizationStatus::Authorized | UNAuthorizationStatus::Provisional | UNAuthorizationStatus::Ephemeral => {
-            PermissionStatus::Granted
-        }
+        UNAuthorizationStatus::Authorized
+        | UNAuthorizationStatus::Provisional
+        | UNAuthorizationStatus::Ephemeral => PermissionStatus::Granted,
         UNAuthorizationStatus::Denied => PermissionStatus::Denied,
         UNAuthorizationStatus::NotDetermined => PermissionStatus::NotDetermined,
         _ => PermissionStatus::Unknown,
@@ -312,16 +312,18 @@ fn do_request(permission: TccPermission) -> PermissionInfo {
 #[async_trait]
 impl PermissionCapability for MacOSPermission {
     async fn check(&self, permission: TccPermission) -> Result<PermissionInfo> {
-        let info =
-            tokio::task::spawn_blocking(move || do_check(permission))
-                .await
-                .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
+        let info = tokio::task::spawn_blocking(move || do_check(permission))
+            .await
+            .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
         Ok(info)
     }
 
     async fn check_all(&self) -> Result<Vec<PermissionInfo>> {
         let results = tokio::task::spawn_blocking(|| {
-            TccPermission::ALL.iter().map(|&p| do_check(p)).collect::<Vec<_>>()
+            TccPermission::ALL
+                .iter()
+                .map(|&p| do_check(p))
+                .collect::<Vec<_>>()
         })
         .await
         .unwrap_or_else(|_| {
@@ -334,10 +336,9 @@ impl PermissionCapability for MacOSPermission {
     }
 
     async fn request(&self, permission: TccPermission) -> Result<PermissionInfo> {
-        let info =
-            tokio::task::spawn_blocking(move || do_request(permission))
-                .await
-                .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
+        let info = tokio::task::spawn_blocking(move || do_request(permission))
+            .await
+            .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
         Ok(info)
     }
 }

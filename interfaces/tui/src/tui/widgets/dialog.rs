@@ -40,11 +40,11 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 
     // Split inner area into question + options + hint
     let chunks = Layout::vertical([
-        Constraint::Length(1), // blank line
-        Constraint::Min(2),   // question
-        Constraint::Length(1), // blank line
+        Constraint::Length(1),                   // blank line
+        Constraint::Min(2),                      // question
+        Constraint::Length(1),                   // blank line
         Constraint::Length(option_count.max(1)), // options
-        Constraint::Length(1), // hint line
+        Constraint::Length(1),                   // hint line
     ])
     .split(inner);
 
@@ -70,10 +70,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
             } else {
                 Style::default().fg(DEFAULT_THEME.muted)
             };
-            Line::from(Span::styled(
-                format!("  [{}] {}", i + 1, opt),
-                style,
-            ))
+            Line::from(Span::styled(format!("  [{}] {}", i + 1, opt), style))
         })
         .collect();
 
@@ -90,9 +87,7 @@ pub fn render_dialog(frame: &mut Frame, dialog: &DialogState, area: Rect) {
 
 /// Calculate a centered rect within the given area.
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area
-        .x
-        .saturating_add(area.width.saturating_sub(width) / 2);
+    let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
     let y = area
         .y
         .saturating_add(area.height.saturating_sub(height) / 2);

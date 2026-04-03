@@ -19,6 +19,7 @@ use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
+use crate::resilience::{AgentTask, Lane, RiskLevel, StateDatabase, TaskStatus};
 
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
@@ -56,6 +57,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Media processor for multimodal attachment handling (images, audio, etc.)
     pub(super) media_processor: Option<Arc<crate::media::processor::MediaProcessor>>,
+    /// Optional resilience database for task/trace persistence.
+    pub(super) state_database: Option<Arc<StateDatabase>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -83,6 +86,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             session_manager: None,
             event_bus: None,
             media_processor: None,
+            state_database: None,
         }
     }
 
@@ -148,6 +152,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
+    /// Set the resilience state database for task/trace persistence.
+    pub fn with_state_database(mut self, state_database: Arc<StateDatabase>) -> Self {
+        self.state_database = Some(state_database);
+        self
+    }
+
     /// Set the workspace manager for workspace-scoped profile resolution.
     ///
     /// When set, the engine resolves the user's active workspace at the start
@@ -156,6 +166,71 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
         self
+    }
+
+    pub(super) async fn persist_run_task_started(
+        &self,
+        run_id: &str,
+        request: &RunRequest,
+        agent: &AgentInstance,
+    ) -> bool {
+        let Some(db) = self.state_database.as_ref() else {
+            return false;
+        };
+
+        let metadata_json = serde_json::to_string(&serde_json::json!({
+            "run_id": run_id,
+            "session_key": request.session_key.to_key_string(),
+            "channel_id": request.metadata.get("channel_id"),
+            "sender_id": request.metadata.get("sender_id"),
+            "conversation_id": request.metadata.get("conversation_id"),
+            "source": "gateway_execution_engine"
+        }))
+        .ok();
+
+        let mut task = AgentTask::new(
+            run_id,
+            request.session_key.to_key_string(),
+            agent.id().to_string(),
+            request.input.clone(),
+            RiskLevel::High,
+        )
+        .with_lane(Lane::Main);
+        task.metadata_json = metadata_json;
+
+        if let Err(error) = db.insert_agent_task(&task).await {
+            warn!(
+                run_id = %run_id,
+                error = %error,
+                "Failed to persist execution task"
+            );
+            return false;
+        }
+
+        if let Err(error) = db.update_task_status(run_id, TaskStatus::Running).await {
+            warn!(
+                run_id = %run_id,
+                error = %error,
+                "Failed to mark execution task as running"
+            );
+        }
+
+        true
+    }
+
+    pub(super) async fn persist_run_task_status(&self, run_id: &str, status: TaskStatus) {
+        let Some(db) = self.state_database.as_ref() else {
+            return;
+        };
+
+        if let Err(error) = db.update_task_status(run_id, status).await {
+            warn!(
+                run_id = %run_id,
+                status = %status,
+                error = %error,
+                "Failed to update execution task status"
+            );
+        }
     }
 
     /// Execute a run request
@@ -225,6 +300,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             runs.remove(&run_id);
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
+
+        let trace_task_persisted = self
+            .persist_run_task_started(&run_id, &request, &agent)
+            .await;
 
         // Emit run accepted event
         let _ = emitter
@@ -396,6 +475,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 agent.clone(),
                 emitter.clone(),
                 deadline.clone(),
+                trace_task_persisted.then(|| run_id.clone()),
                 cancel_token.clone(),
             ) => result,
 
@@ -452,6 +532,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         let final_result = match &result {
             Ok(response) => {
+                self.persist_run_task_status(&run_id, TaskStatus::Completed)
+                    .await;
+
                 // Store assistant response
                 agent
                     .add_message(&request.session_key, MessageRole::Assistant, response)
@@ -600,6 +683,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(())
             }
             Err(e) => {
+                let task_status = match e {
+                    ExecutionError::Cancelled => TaskStatus::Interrupted,
+                    _ => TaskStatus::Failed,
+                };
+                self.persist_run_task_status(&run_id, task_status).await;
+
                 let error_code = match &e {
                     ExecutionError::Timeout => "TIMEOUT",
                     ExecutionError::Cancelled => "CANCELLED",
@@ -697,6 +786,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         agent.set_state(AgentState::Idle).await;
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+        self.persist_run_task_status(run_id, TaskStatus::Completed)
+            .await;
 
         agent
             .add_message(&request.session_key, MessageRole::Assistant, &response)
@@ -756,6 +847,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         agent.set_state(AgentState::Idle).await;
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
+        self.persist_run_task_status(run_id, TaskStatus::Failed)
+            .await;
         let error_response = format!("\u{274c} {}", error_msg);
 
         agent

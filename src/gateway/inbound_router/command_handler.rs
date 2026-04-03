@@ -191,8 +191,9 @@ impl InboundMessageRouter {
         );
 
         let __msgs = [UnifiedMessage::user(&prompt)];
-        let payload = RequestPayload::new(&__msgs)
-            .with_system(Some("You are a title generator. Output ONLY the title, nothing else."));
+        let payload = RequestPayload::new(&__msgs).with_system(Some(
+            "You are a title generator. Output ONLY the title, nothing else.",
+        ));
         match llm.process(payload).await {
             Ok(resp) => {
                 let topic = resp.text_content().trim().to_string();

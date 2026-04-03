@@ -1,8 +1,8 @@
-use leptos::prelude::*;
+use crate::api::{CompressedFact, MemoryApi, MemoryStats, RawMemory};
 use crate::components::ui::*;
 use crate::context::DashboardState;
-use crate::api::{MemoryApi, RawMemory, CompressedFact, MemoryStats};
 use crate::i18n::*;
+use leptos::prelude::*;
 
 #[component]
 pub fn Memory() -> impl IntoView {

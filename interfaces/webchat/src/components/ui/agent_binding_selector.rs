@@ -1,8 +1,8 @@
 // Agent Binding Selector — dropdown to bind/unbind an agent for a channel
 
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use gloo_timers::future::TimeoutFuture;
 use std::collections::HashMap;
 
 use crate::api::agents::AgentsApi;
@@ -74,13 +74,7 @@ pub fn AgentBindingSelector(
         };
 
         spawn_local(async move {
-            match WorkspaceApi::set_channel_agent(
-                &dash,
-                &ch_id,
-                agent_id_opt.as_deref(),
-            )
-            .await
-            {
+            match WorkspaceApi::set_channel_agent(&dash, &ch_id, agent_id_opt.as_deref()).await {
                 Ok(_) => {
                     selected.set(value.clone());
                     // Update local bindings cache

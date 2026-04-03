@@ -1,23 +1,23 @@
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
 use leptos_router::hooks::use_location;
-use crate::i18n::*;
 
 // Views
-use crate::views::home::Home;
 use crate::views::agent_trace::AgentTrace;
-use crate::views::memory::Memory;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
+use crate::views::home::Home;
 use crate::views::logs::Logs;
+use crate::views::memory::Memory;
+use crate::views::settings::*;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
-use crate::views::settings::*;
 // Layout components
-use crate::components::top_bar::TopBar;
-use crate::components::mode_sidebar::ModeSidebar;
 use crate::components::bottom_bar::{BottomBar, PanelMode};
+use crate::components::mode_sidebar::ModeSidebar;
+use crate::components::top_bar::TopBar;
 use crate::context::{DashboardContext, DashboardState};
 
 #[component]
@@ -43,11 +43,15 @@ fn AppContent() -> impl IntoView {
                 Ok(()) => {
                     web_sys::console::log_1(&"Connected to Gateway".into());
                     if let Err(e) = state.setup_alert_subscriptions().await {
-                        web_sys::console::error_1(&format!("Failed to setup alert subscriptions: {}", e).into());
+                        web_sys::console::error_1(
+                            &format!("Failed to setup alert subscriptions: {}", e).into(),
+                        );
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to connect to Gateway: {}", e).into());
+                    web_sys::console::error_1(
+                        &format!("Failed to connect to Gateway: {}", e).into(),
+                    );
                 }
             }
         });
@@ -169,11 +173,12 @@ fn SettingsRouter() -> impl IntoView {
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
             _ if path.starts_with("/settings/channels/") => {
-                let platform_type = path.strip_prefix("/settings/channels/")
+                let platform_type = path
+                    .strip_prefix("/settings/channels/")
                     .unwrap_or("")
                     .to_string();
                 view! { <ChannelPlatformPage platform_type=platform_type /> }.into_any()
-            },
+            }
 
             // Not in settings mode or unknown path — render nothing (div is hidden)
             _ => ().into_any(),

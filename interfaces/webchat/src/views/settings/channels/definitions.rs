@@ -68,7 +68,8 @@ const ICON_IMESSAGE: &str =
 
 const ICON_SLACK: &str = r#"<path d="M14.5 2c-.83 0-1.5.67-1.5 1.5v5c0 .83.67 1.5 1.5 1.5h5c.83 0 1.5-.67 1.5-1.5S20.33 7 19.5 7H16V3.5c0-.83-.67-1.5-1.5-1.5zm-5 0C8.67 2 8 2.67 8 3.5V7H4.5C3.67 7 3 7.67 3 8.5S3.67 10 4.5 10h5c.83 0 1.5-.67 1.5-1.5v-5C11 2.67 10.33 2 9.5 2zm5 12c-.83 0-1.5.67-1.5 1.5V17h-3.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5h5c.83 0 1.5-.67 1.5-1.5v-5c0-.83-.67-1.5-1.5-1.5zm-10 0c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5H8v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-5c0-.83-.67-1.5-1.5-1.5h-5z"/>"#;
 
-const ICON_EMAIL: &str = r#"<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22,7 12,13 2,7"/>"#;
+const ICON_EMAIL: &str =
+    r#"<rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="22,7 12,13 2,7"/>"#;
 
 const ICON_MATRIX: &str = r#"<path d="M2 2v20h4V2H2zm16 0v20h4V2h-4zM7 4h1v2H7V4zm2 2h2v2H9V6zm4 0h2v2h-2V6zm3-2h1v2h-1V4zM7 18h1v2H7v-2zm2-2h2v2H9v-2zm4 0h2v2h-2v-2zm3 2h1v2h-1v-2z"/>"#;
 
@@ -76,7 +77,8 @@ const ICON_SIGNAL: &str = r#"<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-
 
 const ICON_MATTERMOST: &str = r#"<path d="M12 2C6.48 2 2 6.48 2 12c0 2.17.7 4.19 1.88 5.83L2 22l4.17-1.88C7.81 21.3 9.83 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2z"/>"#;
 
-const ICON_IRC: &str = r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#;
+const ICON_IRC: &str =
+    r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#;
 
 const ICON_WEBHOOK: &str = r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>"#;
 
@@ -265,7 +267,10 @@ static IMESSAGE_FIELDS: &[FieldDef] = &[
     FieldDef {
         key: "poll_interval_ms",
         label: "Poll Interval (ms)",
-        kind: FieldKind::Number { min: 100, max: 10000 },
+        kind: FieldKind::Number {
+            min: 100,
+            max: 10000,
+        },
         placeholder: "1000",
         help: "Polling interval in milliseconds",
         required: false,

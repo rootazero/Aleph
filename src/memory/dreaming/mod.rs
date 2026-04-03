@@ -14,13 +14,13 @@ use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
 use crate::memory::decay::DecayConfig;
 use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
-use crate::memory::store::{DreamStore, MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::{DreamStore, MemoryBackend};
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -56,6 +56,12 @@ pub struct DreamContext {
     pub graph_decay_config: GraphDecayConfig,
     pub memory_decay_config: DecayConfig,
     pub command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
+    /// Optional AI provider for LLM-powered stages (e.g. drift arbitration).
+    pub provider: Option<Arc<dyn AiProvider>>,
+    /// Output: graph decay report populated by DecayStage.
+    pub graph_decay_report: Option<GraphDecayReport>,
+    /// Output: memory decay report populated by DecayStage.
+    pub memory_decay_report: Option<MemoryDecayReport>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,8 +136,6 @@ impl Default for DreamPipeline {
 // Original DreamDaemon code (preserved unchanged)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_LOOKBACK_HOURS: i64 = 24;
-const DEFAULT_MAX_MEMORIES: u32 = 500;
 const DEFAULT_CHECK_INTERVAL_SECONDS: u64 = 60;
 
 static LAST_ACTIVITY_TS: Lazy<AtomicI64> = Lazy::new(|| AtomicI64::new(now_timestamp()));
@@ -160,7 +164,11 @@ fn idle_seconds() -> i64 {
 }
 
 /// Ensure DreamDaemon is running (once) when memory is enabled.
-pub fn ensure_dream_daemon(database: MemoryBackend, config: Arc<MemoryConfig>) {
+pub fn ensure_dream_daemon(
+    database: MemoryBackend,
+    config: Arc<MemoryConfig>,
+    provider: Option<Arc<dyn AiProvider>>,
+) {
     if cfg!(test) {
         return;
     }
@@ -181,12 +189,18 @@ pub fn ensure_dream_daemon(database: MemoryBackend, config: Arc<MemoryConfig>) {
         }
     };
 
-    let daemon = match DreamDaemon::from_config(database, &config) {
-        Ok(daemon) => Arc::new(daemon),
+    let daemon_builder = match DreamDaemon::from_config(database, &config) {
+        Ok(d) => d,
         Err(err) => {
             warn!(error = %err, "DreamDaemon not started: invalid config");
             return;
         }
+    };
+
+    let daemon = if let Some(p) = provider {
+        Arc::new(daemon_builder.with_provider(p))
+    } else {
+        Arc::new(daemon_builder)
     };
 
     if DREAM_DAEMON.set(daemon.clone()).is_ok() {
@@ -246,12 +260,6 @@ struct DreamRunReport {
     memory_count: usize,
 }
 
-#[derive(Debug, Clone)]
-struct DreamCluster {
-    window_title: String,
-    memories: Vec<MemoryEntry>,
-}
-
 /// DreamDaemon orchestrates idle-time consolidation and decay.
 pub struct DreamDaemon {
     database: MemoryBackend,
@@ -266,6 +274,8 @@ pub struct DreamDaemon {
     /// are recorded as `StrengthDecayed` events in addition to the direct
     /// LanceDB update path.
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
+    /// Optional AI provider for LLM-powered dream stages (e.g. drift arbitration).
+    provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl DreamDaemon {
@@ -284,7 +294,14 @@ impl DreamDaemon {
             window_end,
             is_running: AtomicBool::new(false),
             command_handler: None,
+            provider: None,
         })
+    }
+
+    /// Attach an AI provider for LLM-powered dream stages.
+    pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.provider = Some(provider);
+        self
     }
 
     /// Attach an event-sourcing command handler so that decay mutations are
@@ -458,6 +475,24 @@ impl DreamDaemon {
         }
     }
 
+    /// Determine whether to run a daily or weekly dream cycle.
+    async fn determine_run_type(&self) -> DreamRunType {
+        if !self.config.weekly_enabled {
+            return DreamRunType::Daily;
+        }
+        // Check last_weekly_at from DreamStatus
+        if let Ok(status) = self.database.get_dream_status().await {
+            if let Some(last_run) = status.last_run_at {
+                // Simple heuristic: if last run was > weekly_interval_days ago, do weekly
+                let days_since = (now_timestamp() - last_run) / 86400;
+                if days_since >= self.config.weekly_interval_days as i64 {
+                    return DreamRunType::Weekly;
+                }
+            }
+        }
+        DreamRunType::Daily
+    }
+
     async fn run_dream(
         &self,
         run_start: i64,
@@ -465,157 +500,50 @@ impl DreamDaemon {
     ) -> Result<DreamRunReport, AlephError> {
         let activity_snapshot = last_activity_timestamp().max(run_start);
 
-        let since = run_start - DEFAULT_LOOKBACK_HOURS * 3600;
-        let memories = self
-            .database
-            .get_memories_since(
-                since,
-                &crate::memory::namespace::NamespaceScope::Owner,
-                "default",
-            )
-            .await?;
-        // Limit to max memories
-        let memories: Vec<_> = memories
-            .into_iter()
-            .take(DEFAULT_MAX_MEMORIES as usize)
-            .collect();
+        let run_type = self.determine_run_type().await;
 
-        let mut report = DreamRunReport {
-            status: DreamRunStatus::Success,
-            insight: None,
-            graph_decay: GraphDecayReport::default(),
-            memory_decay: MemoryDecayReport::default(),
-            memory_count: memories.len(),
+        let pipeline = match run_type {
+            DreamRunType::Daily => DreamPipeline::daily(),
+            DreamRunType::Weekly => DreamPipeline::weekly(),
         };
 
-        if activity_detected(activity_snapshot) {
-            report.status = DreamRunStatus::Cancelled;
-            report.insight = Some(DailyInsight::new(
-                run_date.clone(),
-                "Dream cancelled: user activity detected".to_string(),
-                memories.len() as u32,
-            ));
-            return Ok(report);
-        }
-
-        let clusters = cluster_memories(memories);
-        let summary = build_summary(&clusters, &run_date);
-
-        report.insight = Some(DailyInsight::new(
-            run_date.clone(),
-            summary.clone(),
-            report.memory_count as u32,
-        ));
-
-        if activity_detected(activity_snapshot) {
-            report.status = DreamRunStatus::Cancelled;
-            return Ok(report);
-        }
-
-        let entities = GraphStore::extract_entities_from_text(&summary);
-        if !entities.is_empty() {
-            let context_key = format!("dream:{}", run_date);
-            let insight_aliases = vec![run_date.clone()];
-            let insight_node = self
-                .graph_store
-                .upsert_node(
-                    &format!("Daily Insight {}", run_date),
-                    "insight",
-                    &insight_aliases,
-                    None,
-                )
-                .await?;
-
-            for entity in entities {
-                let node = self
-                    .graph_store
-                    .upsert_node(&entity, "concept", &[], None)
-                    .await?;
-                let _ = self
-                    .graph_store
-                    .upsert_edge(
-                        &insight_node.id,
-                        &node.id,
-                        "mentions",
-                        &context_key,
-                        0.6,
-                        1.0,
-                    )
-                    .await?;
-            }
-        }
-
-        if activity_detected(activity_snapshot) {
-            report.status = DreamRunStatus::Cancelled;
-            return Ok(report);
-        }
-
-        report.graph_decay = self.graph_store.apply_decay(&self.graph_decay).await?;
-
-        // Apply fact decay — always update LanceDB directly,
-        // and optionally emit StrengthDecayed events for audit.
-        let half_life_days = self.memory_decay.half_life_days;
-        let min_strength = self.memory_decay.min_strength;
-
-        let now_ts = now_timestamp();
-
-        if let Some(handler) = &self.command_handler {
-            // Pre-compute per-fact decay data so we can emit events.
-            let valid_facts = self.database.get_all_facts(false, None).await?;
-            let decay_tuples: Vec<(String, f32, f32)> = valid_facts
-                .iter()
-                .filter_map(|fact| {
-                    // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
-                    let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
-                    let days_since_access = (now_ts - last_access) as f64 / 86400.0;
-                    let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64)
-                        .exp() as f32;
-                    let new_strength = fact.strength * decay;
-                    // Only record facts that actually change.
-                    if (new_strength - fact.strength).abs() > f32::EPSILON {
-                        Some((fact.id.clone(), fact.strength, new_strength))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if !decay_tuples.is_empty() {
-                use crate::memory::events::commands::ApplyDecayCommand;
-                let _ = handler
-                    .apply_decay(ApplyDecayCommand {
-                        fact_ids_with_strength: decay_tuples,
-                        decay_factor: (-(2.0_f64.ln()) / half_life_days as f64).exp() as f32,
-                        correlation_id: None,
-                    })
-                    .await?;
-            }
-
-            // Still apply the actual LanceDB update.
-            let decayed_count = self
-                .database
-                .apply_fact_decay(half_life_days, min_strength)
-                .await?;
-            report.memory_decay = MemoryDecayReport {
-                updated_facts: decayed_count as u64,
-                pruned_facts: 0,
-            };
-        } else {
-            let decayed_count = self
-                .database
-                .apply_fact_decay(half_life_days, min_strength)
-                .await?;
-            report.memory_decay = MemoryDecayReport {
-                updated_facts: decayed_count as u64,
-                pruned_facts: 0,
-            };
+        let ctx = DreamContext {
+            memories: Vec::new(),
+            clusters: Vec::new(),
+            new_facts: Vec::new(),
+            drift_resolutions: Vec::new(),
+            config: self.config.clone(),
+            run_metadata: DreamRunMetadata {
+                run_type,
+                run_date: run_date.clone(),
+                run_start_ts: run_start,
+            },
+            activity_checker: Arc::new(move || last_activity_timestamp() > activity_snapshot),
+            synthesis_insights_count: 0,
+            database: self.database.clone(),
+            graph_store: self.graph_store.clone(),
+            graph_decay_config: self.graph_decay.clone(),
+            memory_decay_config: self.memory_decay.clone(),
+            command_handler: self.command_handler.clone(),
+            provider: self.provider.clone(),
+            graph_decay_report: None,
+            memory_decay_report: None,
         };
 
-        if activity_detected(activity_snapshot) {
-            report.status = DreamRunStatus::Cancelled;
-        }
+        let report = pipeline.run(ctx).await?;
 
-        Ok(report)
+        // Convert DreamReport to legacy DreamRunReport
+        Ok(DreamRunReport {
+            status: match report.status {
+                DreamReportStatus::Completed => DreamRunStatus::Success,
+                DreamReportStatus::Interrupted => DreamRunStatus::Cancelled,
+                DreamReportStatus::Failed => DreamRunStatus::Cancelled,
+            },
+            insight: None, // SummarizeStage already persisted the insight
+            graph_decay: report.graph_decay_report.unwrap_or_default(),
+            memory_decay: report.memory_decay_report.unwrap_or_default(),
+            memory_count: report.memory_count,
+        })
     }
 }
 
@@ -656,10 +584,6 @@ pub fn should_consolidate(fact: &MemoryFact, strength_threshold: f32) -> bool {
 /// Core tier facts are never pruned regardless of strength.
 pub fn should_prune(fact: &MemoryFact, pruning_threshold: f32) -> bool {
     fact.tier != MemoryTier::Core && fact.strength < pruning_threshold
-}
-
-fn activity_detected(snapshot: i64) -> bool {
-    last_activity_timestamp() > snapshot
 }
 
 fn parse_window(config: &ConfigDreamingConfig) -> Result<(NaiveTime, NaiveTime), AlephError> {
@@ -708,85 +632,6 @@ fn decay_config_from_policy(policy: &MemoryDecayPolicy) -> DecayConfig {
     config
 }
 
-fn cluster_memories(memories: Vec<MemoryEntry>) -> Vec<DreamCluster> {
-    let mut buckets: HashMap<String, DreamCluster> = HashMap::new();
-
-    for memory in memories {
-        let key = memory.context.window_title.clone();
-        if let Some(cluster) = buckets.get_mut(&key) {
-            cluster.memories.push(memory);
-        } else {
-            buckets.insert(
-                key.clone(),
-                DreamCluster {
-                    window_title: key,
-                    memories: vec![memory],
-                },
-            );
-        }
-    }
-
-    let mut clusters: Vec<DreamCluster> = buckets.into_values().collect();
-    clusters.sort_by_key(|cluster| std::cmp::Reverse(cluster.memories.len()));
-    clusters
-}
-
-fn build_summary(clusters: &[DreamCluster], date: &str) -> String {
-    if clusters.is_empty() {
-        return format!("Daily Insight ({})\nNo recent memories recorded.", date);
-    }
-
-    let mut summary = String::new();
-    summary.push_str(&format!("Daily Insight ({})\n", date));
-
-    for cluster in clusters.iter().take(10) {
-        let label = if cluster.window_title.is_empty() {
-            "(unknown window)".to_string()
-        } else {
-            cluster.window_title.clone()
-        };
-
-        let mut samples: Vec<String> = Vec::new();
-        for memory in cluster.memories.iter().take(3) {
-            let snippet = truncate_text(&memory.user_input, 80);
-            if !snippet.is_empty() {
-                samples.push(snippet);
-            }
-        }
-
-        if samples.is_empty() {
-            summary.push_str(&format!(
-                "- {}: {} memories\n",
-                label,
-                cluster.memories.len()
-            ));
-        } else {
-            summary.push_str(&format!(
-                "- {}: {} memories. Examples: {}\n",
-                label,
-                cluster.memories.len(),
-                samples.join("; ")
-            ));
-        }
-    }
-
-    summary.trim_end().to_string()
-}
-
-fn truncate_text(text: &str, max_len: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let mut chars = trimmed.chars();
-    let truncated: String = chars.by_ref().take(max_len).collect();
-    if chars.next().is_some() {
-        format!("{}...", truncated)
-    } else {
-        truncated
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -892,5 +737,83 @@ mod consolidation_tests {
         assert!((config.pruning_threshold - 0.1).abs() < f32::EPSILON);
         assert_eq!(config.max_facts_per_run, 50);
         assert_eq!(config.cooldown_days, 1);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_integration_tests {
+    use super::*;
+    use crate::memory::store::lance::LanceMemoryBackend;
+
+    async fn create_test_context(
+        activity_detected: bool,
+    ) -> (DreamContext, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LanceMemoryBackend::open_or_create(tmp.path())
+            .await
+            .unwrap();
+        let database: MemoryBackend = Arc::new(backend);
+        let graph_store = GraphStore::new(database.clone());
+
+        let ctx = DreamContext {
+            memories: Vec::new(),
+            clusters: Vec::new(),
+            new_facts: Vec::new(),
+            drift_resolutions: Vec::new(),
+            config: ConfigDreamingConfig::default(),
+            run_metadata: DreamRunMetadata {
+                run_type: DreamRunType::Daily,
+                run_date: "2026-04-03".to_string(),
+                run_start_ts: now_timestamp(),
+            },
+            activity_checker: Arc::new(move || activity_detected),
+            synthesis_insights_count: 0,
+            database,
+            graph_store,
+            graph_decay_config: GraphDecayConfig::default(),
+            memory_decay_config: DecayConfig::default(),
+            command_handler: None,
+            provider: None,
+            graph_decay_report: None,
+            memory_decay_report: None,
+        };
+
+        (ctx, tmp)
+    }
+
+    #[tokio::test]
+    async fn daily_pipeline_runs_all_stages() {
+        let pipeline = DreamPipeline::daily();
+        let (ctx, _tmp) = create_test_context(false).await;
+        let report = pipeline.run(ctx).await.unwrap();
+        assert_eq!(report.status, DreamReportStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn weekly_pipeline_runs_all_stages() {
+        let pipeline = DreamPipeline::weekly();
+        let (ctx, _tmp) = create_test_context(false).await;
+        let report = pipeline.run(ctx).await.unwrap();
+        assert_eq!(report.status, DreamReportStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn pipeline_interrupts_on_activity() {
+        let pipeline = DreamPipeline::daily();
+        let (ctx, _tmp) = create_test_context(true).await;
+        let report = pipeline.run(ctx).await.unwrap();
+        assert_eq!(report.status, DreamReportStatus::Interrupted);
+    }
+
+    #[tokio::test]
+    async fn daily_pipeline_has_six_stages() {
+        let pipeline = DreamPipeline::daily();
+        assert_eq!(pipeline.stages.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn weekly_pipeline_has_seven_stages() {
+        let pipeline = DreamPipeline::weekly();
+        assert_eq!(pipeline.stages.len(), 7);
     }
 }

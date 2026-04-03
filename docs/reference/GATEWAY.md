@@ -174,6 +174,7 @@ Subscribe to events using glob patterns:
 |---------|--------|
 | `stream.*` | All streaming events |
 | `stream.chunk` | Text chunks |
+| `stream.agent_trace` | Structured loop-originated execution trace |
 | `stream.tool_start` | Tool execution start |
 | `stream.tool_end` | Tool execution end |
 | `agent.*` | Agent lifecycle events |

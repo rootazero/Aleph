@@ -3,15 +3,14 @@
 //! Combines scheduled cron jobs and heartbeat monitoring tasks
 //! into a single tabbed view accessible at /dashboard/tasks.
 
+use crate::api::heartbeat::{
+    CreateHeartbeatTask, HeartbeatApi, HeartbeatRunInfo, HeartbeatTaskInfo, UpdateHeartbeatTask,
+};
+use crate::context::DashboardState;
+use crate::i18n::*;
+use crate::views::cron::CronView;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::heartbeat::{
-    HeartbeatApi, HeartbeatTaskInfo, HeartbeatRunInfo,
-    CreateHeartbeatTask, UpdateHeartbeatTask,
-};
-use crate::views::cron::CronView;
-use crate::i18n::*;
 
 // ============================================================================
 // Helper Functions
@@ -415,25 +414,33 @@ fn HeartbeatEditor(
     let on_save = move |_| {
         let name = form_name.get();
         if name.trim().is_empty() {
-            error.set(Some(t_string!(i18n, heartbeat.error_name_required).to_string()));
+            error.set(Some(
+                t_string!(i18n, heartbeat.error_name_required).to_string(),
+            ));
             return;
         }
 
         let interval = form_interval.get();
         if interval.trim().is_empty() {
-            error.set(Some(t_string!(i18n, heartbeat.error_interval_required).to_string()));
+            error.set(Some(
+                t_string!(i18n, heartbeat.error_interval_required).to_string(),
+            ));
             return;
         }
 
         let probe_tool = form_probe_tool.get();
         if probe_tool.trim().is_empty() {
-            error.set(Some(t_string!(i18n, heartbeat.error_probe_tool_required).to_string()));
+            error.set(Some(
+                t_string!(i18n, heartbeat.error_probe_tool_required).to_string(),
+            ));
             return;
         }
 
         // Validate interval
         if parse_interval_to_ms(&interval).is_none() {
-            error.set(Some("Invalid interval format. Use e.g. 5m, 30s, 2h".to_string()));
+            error.set(Some(
+                "Invalid interval format. Use e.g. 5m, 30s, 2h".to_string(),
+            ));
             return;
         }
 
@@ -443,7 +450,11 @@ fn HeartbeatEditor(
         let agent_id = form_agent_id.get();
         let trigger_condition = {
             let s = form_trigger_condition.get();
-            if s.trim().is_empty() { None } else { Some(s) }
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         };
         let enabled = form_enabled.get();
 
@@ -504,10 +515,16 @@ fn HeartbeatEditor(
 
     // Handle toggle enable/disable
     let on_toggle = move |_| {
-        let Some(idx) = selected.get() else { return; };
-        if idx == usize::MAX { return; }
+        let Some(idx) = selected.get() else {
+            return;
+        };
+        if idx == usize::MAX {
+            return;
+        }
         let task_list = tasks.get();
-        let Some(task) = task_list.get(idx) else { return; };
+        let Some(task) = task_list.get(idx) else {
+            return;
+        };
         let task_id = task.id.clone();
         let new_enabled = !task.enabled;
         spawn_local(async move {
@@ -529,10 +546,16 @@ fn HeartbeatEditor(
 
     // Handle wake (immediate probe)
     let on_wake = move |_| {
-        let Some(idx) = selected.get() else { return; };
-        if idx == usize::MAX { return; }
+        let Some(idx) = selected.get() else {
+            return;
+        };
+        if idx == usize::MAX {
+            return;
+        }
         let task_list = tasks.get();
-        let Some(task) = task_list.get(idx) else { return; };
+        let Some(task) = task_list.get(idx) else {
+            return;
+        };
         let task_id = task.id.clone();
         spawn_local(async move {
             if let Err(e) = HeartbeatApi::wake(&state, &task_id).await {
@@ -548,10 +571,16 @@ fn HeartbeatEditor(
             return;
         }
 
-        let Some(idx) = selected.get() else { return; };
-        if idx == usize::MAX { return; }
+        let Some(idx) = selected.get() else {
+            return;
+        };
+        if idx == usize::MAX {
+            return;
+        }
         let task_list = tasks.get();
-        let Some(task) = task_list.get(idx) else { return; };
+        let Some(task) = task_list.get(idx) else {
+            return;
+        };
         let task_id = task.id.clone();
         spawn_local(async move {
             match HeartbeatApi::delete(&state, &task_id).await {

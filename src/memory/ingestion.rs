@@ -30,7 +30,7 @@ impl MemoryIngestion {
         embedder: Arc<dyn EmbeddingProvider>,
         config: Arc<MemoryConfig>,
     ) -> Self {
-        ensure_dream_daemon(database.clone(), Arc::clone(&config));
+        ensure_dream_daemon(database.clone(), Arc::clone(&config), None);
         let noise_filter = NoiseFilter::new(config.noise_filter.clone());
         Self {
             database,

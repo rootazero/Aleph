@@ -91,6 +91,18 @@ pub trait EventEmitter: Send + Sync {
             .await;
     }
 
+    /// Emit a structured agent trace event
+    async fn emit_agent_trace(&self, run_id: &str, event: crate::agent_loop::LoopTraceEvent) {
+        let seq = self.next_seq();
+        let _ = self
+            .emit(StreamEvent::AgentTrace {
+                run_id: run_id.to_string(),
+                seq,
+                event,
+            })
+            .await;
+    }
+
     /// Emit response text chunk
     async fn emit_response_chunk(
         &self,
@@ -154,6 +166,7 @@ pub(crate) fn event_method(event: &StreamEvent) -> &'static str {
         StreamEvent::ToolStart { .. } => "stream.tool_start",
         StreamEvent::ToolUpdate { .. } => "stream.tool_update",
         StreamEvent::ToolEnd { .. } => "stream.tool_end",
+        StreamEvent::AgentTrace { .. } => "stream.agent_trace",
         StreamEvent::ResponseChunk { .. } => "stream.response_chunk",
         StreamEvent::RunComplete { .. } => "stream.run_complete",
         StreamEvent::RunError { .. } => "stream.run_error",

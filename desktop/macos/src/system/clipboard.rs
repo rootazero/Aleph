@@ -3,7 +3,9 @@
 use aleph_desktop::system_types::ClipboardContent;
 use aleph_desktop::{DesktopError, Result};
 use base64::{engine::general_purpose, Engine as _};
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
+};
 use objc2_foundation::NSString;
 
 /// Read the current clipboard content (text + optional image).
@@ -93,11 +95,8 @@ fn tiff_to_png_base64(tiff_bytes: &[u8]) -> Option<String> {
         .ok()?;
     let img = reader.decode().ok()?;
     let mut png_buf = Vec::new();
-    img.write_to(
-        &mut Cursor::new(&mut png_buf),
-        image::ImageFormat::Png,
-    )
-    .ok()?;
+    img.write_to(&mut Cursor::new(&mut png_buf), image::ImageFormat::Png)
+        .ok()?;
     Some(general_purpose::STANDARD.encode(&png_buf))
 }
 

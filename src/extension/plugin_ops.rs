@@ -107,7 +107,15 @@ impl ExtensionManager {
     ) -> ExtensionResult<()> {
         let mut loader = self.plugin_loader.write().await;
         let mut registry = self.plugin_registry.write().await;
-        loader.load_plugin(manifest, &mut registry)
+        let result = loader.load_plugin(manifest, &mut registry);
+        drop(registry);
+        drop(loader);
+
+        if result.is_ok() {
+            self.sync_runtime_snapshots().await;
+        }
+
+        result
     }
 
     /// Unload a runtime plugin.
@@ -140,5 +148,23 @@ impl ExtensionManager {
     /// Get a specific plugin record by name.
     pub async fn get_plugin_record(&self, name: &str) -> Option<PluginRecord> {
         self.plugin_registry.read().await.get_plugin(name).cloned()
+    }
+
+    /// Enable or disable a plugin and refresh runtime snapshots.
+    pub async fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> bool {
+        let changed = {
+            let mut registry = self.plugin_registry.write().await;
+            if enabled {
+                registry.enable_plugin(plugin_id)
+            } else {
+                registry.disable_plugin(plugin_id)
+            }
+        };
+
+        if changed {
+            self.sync_runtime_snapshots().await;
+        }
+
+        changed
     }
 }

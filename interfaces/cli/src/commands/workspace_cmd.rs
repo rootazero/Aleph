@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// List all workspaces
 pub async fn list(server_url: &str, json: bool) -> CliResult<()> {

@@ -1,14 +1,12 @@
-//! Platform OCR provider — delegates OCR to the macOS Vision framework via the
-//! Desktop Bridge (`desktop.ocr` JSON-RPC method).
+//! Platform OCR provider — delegates OCR to the platform-native desktop layer.
 //!
 //! This provider only supports OCR. Image understanding and object detection
 //! are not available — use [`ClaudeVisionProvider`](super::ClaudeVisionProvider)
 //! or another multimodal provider for those capabilities.
 
 use async_trait::async_trait;
+use std::sync::Arc;
 
-use crate::desktop::client::DesktopBridgeClient;
-use crate::desktop::types::DesktopRequest;
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
 use crate::vision::types::{
@@ -17,7 +15,7 @@ use crate::vision::types::{
 
 /// Vision provider backed by the platform-native OCR engine.
 ///
-/// On macOS this delegates to the Vision framework through the Desktop Bridge.
+/// On macOS this delegates to the Vision framework through `NativeScreen`.
 /// On other platforms, all calls return [`VisionError::OcrNotAvailable`].
 ///
 /// # Capabilities
@@ -27,40 +25,42 @@ use crate::vision::types::{
 /// - Object detection: **no**
 #[derive(Clone)]
 pub struct PlatformOcrProvider {
-    client: DesktopBridgeClient,
+    screen: Arc<dyn aleph_desktop::ScreenCapability>,
 }
 
 impl PlatformOcrProvider {
-    /// Create a new platform OCR provider using the default Desktop Bridge socket.
+    /// Create a new platform OCR provider using the default native screen capability.
     pub fn new() -> Self {
         Self {
-            client: DesktopBridgeClient::new(),
+            screen: Arc::new(aleph_desktop::NativeScreen::new()),
         }
     }
 
-    /// Create a new provider with a custom Desktop Bridge client (for testing).
-    pub fn with_client(client: DesktopBridgeClient) -> Self {
-        Self { client }
+    /// Create a new provider with a custom screen capability (for testing).
+    pub fn with_screen(screen: Arc<dyn aleph_desktop::ScreenCapability>) -> Self {
+        Self { screen }
     }
 
-    /// Resolve an [`ImageInput`] to a base64 string suitable for the bridge.
+    /// Resolve an [`ImageInput`] to PNG bytes suitable for the native OCR API.
     ///
-    /// - `Base64` variant: returned directly.
-    /// - `FilePath` variant: read from disk and base64-encoded.
+    /// - `Base64` variant: decoded into bytes.
+    /// - `FilePath` variant: read from disk as-is.
     /// - `Url` variant: not supported for platform OCR (would need HTTP fetch).
-    fn resolve_base64(image: &ImageInput) -> Result<String, VisionError> {
+    fn resolve_png_bytes(image: &ImageInput) -> Result<Vec<u8>, VisionError> {
         match image {
-            ImageInput::Base64 { data, .. } => Ok(data.clone()),
-            ImageInput::FilePath { path } => {
-                let bytes = std::fs::read(path).map_err(|e| {
-                    VisionError::ImageError(format!(
-                        "Failed to read image file {}: {}",
-                        path.display(),
-                        e
-                    ))
-                })?;
-                Ok(base64_encode(&bytes))
+            ImageInput::Base64 { data, .. } => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))
             }
+            ImageInput::FilePath { path } => std::fs::read(path).map_err(|e| {
+                VisionError::ImageError(format!(
+                    "Failed to read image file {}: {}",
+                    path.display(),
+                    e
+                ))
+            }),
             ImageInput::Url { url } => Err(VisionError::ProviderError(format!(
                 "Platform OCR does not support URL images directly: {url}"
             ))),
@@ -89,22 +89,14 @@ impl VisionProvider for PlatformOcrProvider {
     }
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
-        let image_base64 = Some(Self::resolve_base64(image)?);
+        let png_bytes = Self::resolve_png_bytes(image)?;
+        let result = self
+            .screen
+            .ocr(Some(&png_bytes))
+            .await
+            .map_err(|e| VisionError::ProviderError(format!("Platform OCR failed: {e}")))?;
 
-        let request = DesktopRequest::Ocr { image_base64 };
-
-        let result =
-            self.client.send(request).await.map_err(|e| {
-                VisionError::ProviderError(format!("Desktop Bridge OCR failed: {e}"))
-            })?;
-
-        // Parse the bridge response into OcrResult.
-        //
-        // The bridge returns a JSON object with:
-        //   { "text": "full text", "lines": [ { "text": "...", "bounding_box": {...}, "confidence": 0.99 } ] }
-        //
-        // We normalize this into our VisionResult types.
-        parse_ocr_response(&result)
+        Ok(convert_platform_ocr_result(result))
     }
 
     fn capabilities(&self) -> VisionCapabilities {
@@ -124,52 +116,27 @@ impl VisionProvider for PlatformOcrProvider {
 // Helpers
 // =============================================================================
 
-/// Base64-encode raw bytes (standard, no padding stripping).
-fn base64_encode(bytes: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
+/// Convert the desktop-layer OCR result into the vision-layer OCR shape.
+fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
+    let lines = result
+        .lines
+        .into_iter()
+        .map(|line| OcrLine {
+            text: line.text,
+            bounding_box: line.bounding_box.map(|bb| Rect {
+                x: bb.x,
+                y: bb.y,
+                width: bb.w,
+                height: bb.h,
+            }),
+            confidence: line.confidence.unwrap_or(0.0),
+        })
+        .collect();
 
-/// Parse the Desktop Bridge OCR response JSON into an [`OcrResult`].
-fn parse_ocr_response(value: &serde_json::Value) -> Result<OcrResult, VisionError> {
-    let full_text = value
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let mut lines = Vec::new();
-    if let Some(arr) = value.get("lines").and_then(|v| v.as_array()) {
-        for item in arr {
-            let text = item
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let bounding_box = item.get("bounding_box").and_then(|bb| {
-                Some(Rect {
-                    x: bb.get("x")?.as_f64()?,
-                    y: bb.get("y")?.as_f64()?,
-                    width: bb.get("width")?.as_f64()?,
-                    height: bb.get("height")?.as_f64()?,
-                })
-            });
-
-            let confidence = item
-                .get("confidence")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-
-            lines.push(OcrLine {
-                text,
-                bounding_box,
-                confidence,
-            });
-        }
+    OcrResult {
+        full_text: result.full_text,
+        lines,
     }
-
-    Ok(OcrResult { full_text, lines })
 }
 
 // =============================================================================
@@ -217,42 +184,46 @@ mod tests {
     }
 
     #[test]
-    fn resolve_base64_from_base64_input() {
+    fn resolve_png_bytes_from_base64_input() {
         let image = ImageInput::Base64 {
-            data: "abc123".to_string(),
+            data: "aGVsbG8=".to_string(),
             format: ImageFormat::Png,
         };
-        let result = PlatformOcrProvider::resolve_base64(&image).unwrap();
-        assert_eq!(result, "abc123");
+        let result = PlatformOcrProvider::resolve_png_bytes(&image).unwrap();
+        assert_eq!(result, b"hello");
     }
 
     #[test]
-    fn resolve_base64_from_url_returns_error() {
+    fn resolve_png_bytes_from_url_returns_error() {
         let image = ImageInput::Url {
             url: "https://example.com/img.png".to_string(),
         };
-        let err = PlatformOcrProvider::resolve_base64(&image).unwrap_err();
+        let err = PlatformOcrProvider::resolve_png_bytes(&image).unwrap_err();
         assert!(matches!(err, VisionError::ProviderError(_)));
     }
 
     #[test]
-    fn parse_ocr_response_full() {
-        let json = serde_json::json!({
-            "text": "Hello World\nLine 2",
-            "lines": [
-                {
-                    "text": "Hello World",
-                    "bounding_box": { "x": 10.0, "y": 20.0, "width": 200.0, "height": 30.0 },
-                    "confidence": 0.98
+    fn convert_platform_ocr_result_full() {
+        let result = convert_platform_ocr_result(aleph_desktop::OcrResult {
+            full_text: "Hello World\nLine 2".to_string(),
+            lines: vec![
+                aleph_desktop::OcrLine {
+                    text: "Hello World".to_string(),
+                    bounding_box: Some(aleph_desktop::BoundingBox {
+                        x: 10.0,
+                        y: 20.0,
+                        w: 200.0,
+                        h: 30.0,
+                    }),
+                    confidence: Some(0.98),
                 },
-                {
-                    "text": "Line 2",
-                    "confidence": 0.95
-                }
-            ]
+                aleph_desktop::OcrLine {
+                    text: "Line 2".to_string(),
+                    bounding_box: None,
+                    confidence: Some(0.95),
+                },
+            ],
         });
-
-        let result = parse_ocr_response(&json).unwrap();
         assert_eq!(result.full_text, "Hello World\nLine 2");
         assert_eq!(result.lines.len(), 2);
         assert_eq!(result.lines[0].text, "Hello World");
@@ -267,17 +238,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_ocr_response_empty() {
-        let json = serde_json::json!({});
-        let result = parse_ocr_response(&json).unwrap();
+    fn convert_platform_ocr_result_empty() {
+        let result = convert_platform_ocr_result(aleph_desktop::OcrResult {
+            full_text: String::new(),
+            lines: vec![],
+        });
         assert_eq!(result.full_text, "");
         assert!(result.lines.is_empty());
     }
 
     #[test]
-    fn parse_ocr_response_text_only() {
-        let json = serde_json::json!({ "text": "Just text" });
-        let result = parse_ocr_response(&json).unwrap();
+    fn convert_platform_ocr_result_text_only() {
+        let result = convert_platform_ocr_result(aleph_desktop::OcrResult {
+            full_text: "Just text".to_string(),
+            lines: vec![],
+        });
         assert_eq!(result.full_text, "Just text");
         assert!(result.lines.is_empty());
     }

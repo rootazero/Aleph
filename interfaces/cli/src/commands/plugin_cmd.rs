@@ -300,18 +300,17 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
     let mut result = PluginValidation::default();
 
     if !plugin_dir.exists() {
-        result
-            .errors
-            .push(format!("Directory does not exist: {}", plugin_dir.display()));
+        result.errors.push(format!(
+            "Directory does not exist: {}",
+            plugin_dir.display()
+        ));
         return Ok(result);
     }
 
     // Check manifest
     let manifest_path = plugin_dir.join("aleph.plugin.toml");
     if !manifest_path.exists() {
-        result
-            .errors
-            .push("No aleph.plugin.toml found".to_string());
+        result.errors.push("No aleph.plugin.toml found".to_string());
         return Ok(result);
     }
 
@@ -464,9 +463,7 @@ pub fn run_doctor_checks() -> Vec<DoctorCheck> {
 }
 
 fn check_node_available() -> DoctorCheck {
-    let result = std::process::Command::new("node")
-        .arg("--version")
-        .output();
+    let result = std::process::Command::new("node").arg("--version").output();
     DoctorCheck {
         name: "node".into(),
         description: "Node.js runtime (for Node.js plugins)".into(),
@@ -482,9 +479,7 @@ fn check_node_available() -> DoctorCheck {
 }
 
 fn check_npm_available() -> DoctorCheck {
-    let result = std::process::Command::new("npm")
-        .arg("--version")
-        .output();
+    let result = std::process::Command::new("npm").arg("--version").output();
     DoctorCheck {
         name: "npm".into(),
         description: "npm package manager".into(),
@@ -605,8 +600,8 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
     // 3. Create zip
     let file = std::fs::File::create(&output_path).map_err(CliError::Io)?;
     let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
 
     // 4. Walk directory, add files
     add_dir_to_zip(&mut zip, plugin_dir, plugin_dir, &options)?;
@@ -735,7 +730,12 @@ mod tests {
     #[test]
     fn validate_valid_plugin() {
         let dir = tempdir().unwrap();
-        scaffold_plugin(dir.path().join("p").as_path(), "test", PluginTemplate::Static).unwrap();
+        scaffold_plugin(
+            dir.path().join("p").as_path(),
+            "test",
+            PluginTemplate::Static,
+        )
+        .unwrap();
 
         let result = validate_plugin_dir(dir.path().join("p").as_path()).unwrap();
         assert!(result.errors.is_empty(), "Errors: {:?}", result.errors);
@@ -784,7 +784,10 @@ description = "duplicate"
 "#;
         std::fs::write(dir.path().join("aleph.plugin.toml"), manifest).unwrap();
         let result = validate_plugin_dir(dir.path()).unwrap();
-        assert!(result.errors.iter().any(|e| e.contains("Duplicate tool name: 'foo'")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("Duplicate tool name: 'foo'")));
     }
 
     #[test]

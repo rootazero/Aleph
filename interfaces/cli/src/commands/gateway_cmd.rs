@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 /// Call any Gateway RPC method directly
 pub async fn call(
@@ -16,9 +16,8 @@ pub async fn call(
 
     let params: Option<Value> = match params_json {
         Some(s) => {
-            let v: Value = serde_json::from_str(s).map_err(|e| {
-                CliError::Other(format!("Invalid JSON params: {}", e))
-            })?;
+            let v: Value = serde_json::from_str(s)
+                .map_err(|e| CliError::Other(format!("Invalid JSON params: {}", e)))?;
             Some(v)
         }
         None => None,

@@ -9,10 +9,9 @@ pub fn render(skills: &[SkillManifest], active_tool_names: &[&str]) -> PromptSec
         .iter()
         .filter(|s| match *s.scope() {
             PromptScope::System => true,
-            PromptScope::Tool => {
-                s.bound_tool()
-                    .is_some_and(|bound| active_tool_names.contains(&bound))
-            }
+            PromptScope::Tool => s
+                .bound_tool()
+                .is_some_and(|bound| active_tool_names.contains(&bound)),
             PromptScope::Standalone | PromptScope::Disabled => false,
         })
         .collect();

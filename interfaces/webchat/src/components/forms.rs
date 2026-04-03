@@ -12,7 +12,7 @@ use leptos::prelude::*;
 /// A styled section container for grouping related settings
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// view! {
 ///     <SettingsSection title="Language">
 ///         <FormField label="Interface Language">
@@ -52,7 +52,7 @@ pub fn SettingsSection(
 /// A form field with label and optional help text
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// view! {
 ///     <FormField label="Email" help_text="Your email address">
 ///         <input type="email" />

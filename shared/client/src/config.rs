@@ -83,9 +83,7 @@ impl CliConfig {
 
     /// Load configuration from file
     pub fn load(path: Option<&str>) -> CliResult<Self> {
-        let config_path = path
-            .map(PathBuf::from)
-            .unwrap_or_else(Self::default_path);
+        let config_path = path.map(PathBuf::from).unwrap_or_else(Self::default_path);
 
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
@@ -101,9 +99,7 @@ impl CliConfig {
 
     /// Save configuration to file
     pub fn save(&self, path: Option<&str>) -> CliResult<()> {
-        let config_path = path
-            .map(PathBuf::from)
-            .unwrap_or_else(Self::default_path);
+        let config_path = path.map(PathBuf::from).unwrap_or_else(Self::default_path);
 
         // Create parent directory if needed
         if let Some(parent) = config_path.parent() {
@@ -125,5 +121,4 @@ impl CliConfig {
         self.auth_token = Some(token);
         self.save(path)
     }
-
 }

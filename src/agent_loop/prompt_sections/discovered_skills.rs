@@ -50,7 +50,11 @@ mod tests {
             },
         ];
         let section = render(&skills);
-        assert!(section.content.contains("**code-review**: Review code quality"));
-        assert!(section.content.contains("**tdd-guide**: Test-driven development"));
+        assert!(section
+            .content
+            .contains("**code-review**: Review code quality"));
+        assert!(section
+            .content
+            .contains("**tdd-guide**: Test-driven development"));
     }
 }

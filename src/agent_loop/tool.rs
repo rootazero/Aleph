@@ -10,7 +10,7 @@ use std::collections::HashMap;
 // =============================================================================
 
 /// Outcome of a tool execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolResult {
     Success {
         output: Value,

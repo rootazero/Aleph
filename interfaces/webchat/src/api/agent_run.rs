@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRunRequest {
@@ -37,30 +37,22 @@ impl AgentApi {
 
         let result = state.rpc_call("agent.run", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse response: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
     /// Get agent run status
-    pub async fn status(
-        state: &DashboardState,
-        run_id: String,
-    ) -> Result<AgentStatus, String> {
+    pub async fn status(state: &DashboardState, run_id: String) -> Result<AgentStatus, String> {
         let params = serde_json::json!({
             "run_id": run_id,
         });
 
         let result = state.rpc_call("agent.status", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse status: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse status: {}", e))
     }
 
     /// Cancel a running agent
-    pub async fn cancel(
-        state: &DashboardState,
-        run_id: String,
-    ) -> Result<(), String> {
+    pub async fn cancel(state: &DashboardState, run_id: String) -> Result<(), String> {
         let params = serde_json::json!({
             "run_id": run_id,
         });
@@ -70,10 +62,7 @@ impl AgentApi {
     }
 
     /// Force abort an agent
-    pub async fn abort(
-        state: &DashboardState,
-        run_id: String,
-    ) -> Result<(), String> {
+    pub async fn abort(state: &DashboardState, run_id: String) -> Result<(), String> {
         let params = serde_json::json!({
             "run_id": run_id,
         });

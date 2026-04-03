@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Print the config file path (local, no RPC)
 pub fn file() {
@@ -46,8 +46,7 @@ pub async fn set(
     client.authenticate(config).await?;
 
     // Parse value as JSON, fall back to string
-    let json_value: Value =
-        serde_json::from_str(value).unwrap_or(Value::String(value.to_string()));
+    let json_value: Value = serde_json::from_str(value).unwrap_or(Value::String(value.to_string()));
 
     // Build nested patch object from dot-path
     let patch = build_patch_from_path(path, json_value);
@@ -152,9 +151,7 @@ pub async fn schema(
 pub fn edit() -> CliResult<()> {
     let config_path = dirs::home_dir()
         .map(|h| h.join(".aleph").join("config.toml"))
-        .ok_or_else(|| {
-            aleph_client::CliError::Other("Cannot find home directory".to_string())
-        })?;
+        .ok_or_else(|| aleph_client::CliError::Other("Cannot find home directory".to_string()))?;
 
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
 
@@ -195,10 +192,7 @@ mod tests {
     #[test]
     fn test_build_patch_nested() {
         let patch = build_patch_from_path("gateway.port", serde_json::json!(18790));
-        assert_eq!(
-            patch,
-            serde_json::json!({ "gateway": { "port": 18790 } })
-        );
+        assert_eq!(patch, serde_json::json!({ "gateway": { "port": 18790 } }));
     }
 
     #[test]

@@ -5,9 +5,9 @@
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
-use aleph_protocol::{GuestScope, Invitation};
-use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use crate::output::print_json;
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
+use aleph_protocol::{GuestScope, Invitation};
 
 #[derive(Subcommand)]
 pub enum GuestsAction {
@@ -77,10 +77,10 @@ pub async fn handle_guests(
             expires_days,
         } => handle_invite(server_url, &name, &tools, expires_days, json, config).await,
         GuestsAction::List => handle_list(server_url, json, config).await,
-        GuestsAction::Revoke { guest_id, force } =>
-            handle_revoke(server_url, &guest_id, force, config).await,
-        GuestsAction::Info { guest_id } =>
-            handle_info(server_url, &guest_id, json, config).await,
+        GuestsAction::Revoke { guest_id, force } => {
+            handle_revoke(server_url, &guest_id, force, config).await
+        }
+        GuestsAction::Info { guest_id } => handle_info(server_url, &guest_id, json, config).await,
     }
 }
 
@@ -155,11 +155,7 @@ async fn handle_invite(
 }
 
 /// Handle listing pending invitations
-async fn handle_list(
-    server_url: &str,
-    json: bool,
-    config: &CliConfig,
-) -> CliResult<()> {
+async fn handle_list(server_url: &str, json: bool, config: &CliConfig) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Authenticate first
@@ -170,8 +166,7 @@ async fn handle_list(
         invitations: Vec<Invitation>,
     }
 
-    let response: ListInvitationsResponse =
-        client.call("guests.listPending", None::<()>).await?;
+    let response: ListInvitationsResponse = client.call("guests.listPending", None::<()>).await?;
 
     if json {
         print_json(&serde_json::to_value(&response.invitations)?);
@@ -220,8 +215,7 @@ async fn handle_revoke(
     };
 
     // RPC returns an empty/success response; we only care about errors
-    let _: serde_json::Value =
-        client.call("guests.revokeInvitation", Some(params)).await?;
+    let _: serde_json::Value = client.call("guests.revokeInvitation", Some(params)).await?;
 
     println!("Guest invitation revoked: {}", guest_id);
 

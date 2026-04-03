@@ -72,9 +72,7 @@ impl ChannelStatus {
 ///
 /// Renders a small colored dot followed by the status label text.
 #[component]
-pub fn ChannelStatusBadge(
-    status: Signal<ChannelStatus>,
-) -> impl IntoView {
+pub fn ChannelStatusBadge(status: Signal<ChannelStatus>) -> impl IntoView {
     let i18n = use_i18n();
     let label = move || match status.get() {
         ChannelStatus::Disconnected => t_string!(i18n, common.channel_disconnected).to_string(),
@@ -101,9 +99,7 @@ pub fn ChannelStatusBadge(
 ///
 /// Renders a rounded pill with status-colored background and label.
 #[component]
-pub fn ChannelStatusPill(
-    status: Signal<ChannelStatus>,
-) -> impl IntoView {
+pub fn ChannelStatusPill(status: Signal<ChannelStatus>) -> impl IntoView {
     let i18n = use_i18n();
     let label = move || match status.get() {
         ChannelStatus::Disconnected => t_string!(i18n, common.channel_disconnected).to_string(),

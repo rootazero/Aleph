@@ -2,14 +2,16 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// List pending tool approval requests
 pub async fn pending(server_url: &str, json: bool) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
-    let result: Value = client.call("mcp.list_pending_approvals", None::<()>).await?;
+    let result: Value = client
+        .call("mcp.list_pending_approvals", None::<()>)
+        .await?;
 
     if json {
         output::print_json(&result);

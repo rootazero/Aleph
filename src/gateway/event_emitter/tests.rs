@@ -91,6 +91,13 @@ fn test_event_method_names() {
         params: serde_json::json!({}),
     };
     assert_eq!(event_method(&event), "stream.tool_start");
+
+    let event = StreamEvent::agent_trace(
+        "run-1",
+        1,
+        crate::agent_loop::LoopTraceEvent::TurnStarted { iteration: 1 },
+    );
+    assert_eq!(event_method(&event), "stream.agent_trace");
 }
 
 #[test]
@@ -166,6 +173,30 @@ fn test_deserialize_reasoning_block() {
     } else {
         panic!("Wrong event type");
     }
+}
+
+#[test]
+fn test_agent_trace_serialization() {
+    let event = StreamEvent::agent_trace(
+        "run-123",
+        7,
+        crate::agent_loop::LoopTraceEvent::TurnCompleted {
+            iteration: 2,
+            outcome: crate::agent_loop::LoopTraceTurnOutcome::Continue,
+            metrics: crate::agent_loop::LoopTraceTurnMetrics {
+                requested_tool_calls: 1,
+                executed_tool_calls: 1,
+                productive: true,
+                consecutive_errors: 0,
+                total_tokens: 42,
+            },
+        },
+    );
+
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("agent_trace"));
+    assert!(json.contains("turn_completed"));
+    assert!(json.contains("\"productive\":true"));
 }
 
 #[test]

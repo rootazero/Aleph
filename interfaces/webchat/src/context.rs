@@ -1,39 +1,49 @@
+use crate::components::sidebar::SystemAlert;
+use futures::channel::{mpsc, oneshot};
+use futures::{FutureExt, StreamExt};
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shared_ui_logic::connection::wasm::WasmConnector;
+use serde_json::Value;
 use shared_ui_logic::connection::connector::AlephConnector;
-use gloo_timers::future::TimeoutFuture;
+use shared_ui_logic::connection::wasm::WasmConnector;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::collections::HashMap;
-use futures::{StreamExt, FutureExt};
-use futures::channel::{oneshot, mpsc};
-use serde_json::Value;
-use crate::components::sidebar::SystemAlert;
 
 #[cfg(target_arch = "wasm32")]
 fn get_local_storage(key: &str) -> Option<String> {
     web_sys::window()?
-        .local_storage().ok()??
-        .get_item(key).ok()?
+        .local_storage()
+        .ok()??
+        .get_item(key)
+        .ok()?
 }
 
 #[cfg(target_arch = "wasm32")]
 fn set_local_storage(key: &str, value: &str) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
         let _ = storage.set_item(key, value);
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn remove_local_storage(key: &str) {
-    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok()).flatten() {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
         let _ = storage.remove_item(key);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_local_storage(_key: &str) -> Option<String> { None }
+fn get_local_storage(_key: &str) -> Option<String> {
+    None
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn set_local_storage(_key: &str, _value: &str) {}
@@ -180,17 +190,25 @@ impl DashboardState {
 
     /// Subscribe to a specific event topic on the Gateway
     pub async fn subscribe_topic(&self, pattern: &str) -> Result<(), String> {
-        self.rpc_call("events.subscribe", serde_json::json!({
-            "topics": [pattern]
-        })).await?;
+        self.rpc_call(
+            "events.subscribe",
+            serde_json::json!({
+                "topics": [pattern]
+            }),
+        )
+        .await?;
         Ok(())
     }
 
     /// Unsubscribe from an event topic
     pub async fn unsubscribe_topic(&self, pattern: &str) -> Result<(), String> {
-        self.rpc_call("events.unsubscribe", serde_json::json!({
-            "topics": [pattern]
-        })).await?;
+        self.rpc_call(
+            "events.unsubscribe",
+            serde_json::json!({
+                "topics": [pattern]
+            }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -220,14 +238,17 @@ impl DashboardState {
         {
             let rpc_tx = self.rpc_tx.with_value(|tx| tx.clone());
             if let Some(tx) = rpc_tx {
-                tx.unbounded_send(request).map_err(|_| "Failed to send RPC request".to_string())?;
+                tx.unbounded_send(request)
+                    .map_err(|_| "Failed to send RPC request".to_string())?;
             } else {
                 return Err("Not connected".to_string());
             }
         }
 
         // Wait for response
-        response_rx.await.map_err(|_| "Response channel closed".to_string())?
+        response_rx
+            .await
+            .map_err(|_| "Response channel closed".to_string())?
     }
 
     /// Authenticate with the gateway after WebSocket connection is established
@@ -237,10 +258,8 @@ impl DashboardState {
         {
             if let Some(window) = web_sys::window() {
                 if let Ok(search) = window.location().search() {
-                    if let Some(token) = search
-                        .trim_start_matches('?')
-                        .split('&')
-                        .find_map(|pair| {
+                    if let Some(token) =
+                        search.trim_start_matches('?').split('&').find_map(|pair| {
                             let mut parts = pair.splitn(2, '=');
                             if parts.next() == Some("token") {
                                 parts.next().map(|v| v.to_string())
@@ -252,10 +271,13 @@ impl DashboardState {
                         if !token.is_empty() {
                             set_local_storage("aleph_shared_token", &token);
                             // Clean URL to remove token from address bar
-                            let _ = window.history()
-                                .and_then(|h| h.replace_state_with_url(
-                                    &wasm_bindgen::JsValue::NULL, "", Some("/"),
-                                ));
+                            let _ = window.history().and_then(|h| {
+                                h.replace_state_with_url(
+                                    &wasm_bindgen::JsValue::NULL,
+                                    "",
+                                    Some("/"),
+                                )
+                            });
                         }
                     }
                 }
@@ -264,10 +286,15 @@ impl DashboardState {
 
         // Try stored device token first
         if let Some(token) = get_local_storage("aleph_device_token") {
-            let result = self.rpc_call("connect", serde_json::json!({
-                "token": token,
-                "device_name": "Web Panel"
-            })).await;
+            let result = self
+                .rpc_call(
+                    "connect",
+                    serde_json::json!({
+                        "token": token,
+                        "device_name": "Web Panel"
+                    }),
+                )
+                .await;
 
             if let Ok(resp) = result {
                 // Update stored token if a new one was issued
@@ -283,10 +310,15 @@ impl DashboardState {
 
         // Try shared token from localStorage (set during login page)
         if let Some(token) = get_local_storage("aleph_shared_token") {
-            let result = self.rpc_call("connect", serde_json::json!({
-                "shared_token": token,
-                "device_name": "Web Panel"
-            })).await;
+            let result = self
+                .rpc_call(
+                    "connect",
+                    serde_json::json!({
+                        "shared_token": token,
+                        "device_name": "Web Panel"
+                    }),
+                )
+                .await;
 
             match result {
                 Ok(resp) => {
@@ -305,9 +337,14 @@ impl DashboardState {
         }
 
         // No token available — try a plain connect (works when auth_mode is "none")
-        let result = self.rpc_call("connect", serde_json::json!({
-            "device_name": "Web Panel"
-        })).await;
+        let result = self
+            .rpc_call(
+                "connect",
+                serde_json::json!({
+                    "device_name": "Web Panel"
+                }),
+            )
+            .await;
 
         match result {
             Ok(resp) => {
@@ -351,7 +388,8 @@ impl DashboardState {
                     let mut stream = stream.fuse();
                     let mut rpc_rx = rpc_rx.fuse();
                     let mut disconnect_rx = disconnect_rx.fuse();
-                    let mut pending_rpcs: HashMap<String, oneshot::Sender<Result<Value, String>>> = HashMap::new();
+                    let mut pending_rpcs: HashMap<String, oneshot::Sender<Result<Value, String>>> =
+                        HashMap::new();
 
                     loop {
                         // Use futures::select! to handle multiple async operations
@@ -469,7 +507,9 @@ impl DashboardState {
                         let state_for_subscribe = *self;
                         spawn_local(async move {
                             if let Err(e) = state_for_subscribe.subscribe_topic("config.**").await {
-                                web_sys::console::error_1(&format!("Failed to subscribe to config events: {}", e).into());
+                                web_sys::console::error_1(
+                                    &format!("Failed to subscribe to config events: {}", e).into(),
+                                );
                             }
                         });
 
@@ -532,7 +572,9 @@ impl DashboardState {
             // Exponential backoff: 1s, 2s, 4s, 8s, 16s
             let delay_ms = (1000 * 2_u32.pow(attempt)).min(16000);
 
-            web_sys::console::log_1(&format!("Reconnecting in {}ms (attempt {})", delay_ms, attempt + 1).into());
+            web_sys::console::log_1(
+                &format!("Reconnecting in {}ms (attempt {})", delay_ms, attempt + 1).into(),
+            );
 
             TimeoutFuture::new(delay_ms).await;
 
@@ -543,10 +585,13 @@ impl DashboardState {
                     return Ok(());
                 }
                 Err(e) => {
-                    web_sys::console::error_1(&format!("Reconnection attempt {} failed: {}", attempt + 1, e).into());
+                    web_sys::console::error_1(
+                        &format!("Reconnection attempt {} failed: {}", attempt + 1, e).into(),
+                    );
 
                     if attempt + 1 >= max_attempts {
-                        let error_msg = format!("Failed to reconnect after {} attempts", max_attempts);
+                        let error_msg =
+                            format!("Failed to reconnect after {} attempts", max_attempts);
                         self.connection_error.set(Some(error_msg.clone()));
                         self.is_reconnecting.set(false);
                         return Err(error_msg);
@@ -581,7 +626,9 @@ impl DashboardState {
         // Setup event handler for alert events
         let state = *self;
         let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
-            web_sys::console::log_1(&format!("Alert event received: {} - {:?}", event.topic, event.data).into());
+            web_sys::console::log_1(
+                &format!("Alert event received: {} - {:?}", event.topic, event.data).into(),
+            );
 
             // Parse alert data and update state
             if event.topic.starts_with("alerts.") {
@@ -595,16 +642,22 @@ impl DashboardState {
                         "warning" => crate::components::sidebar::AlertLevel::Warning,
                         "error" | "critical" => crate::components::sidebar::AlertLevel::Critical,
                         _ => {
-                            web_sys::console::warn_1(&format!("Unknown alert severity: {}", severity).into());
+                            web_sys::console::warn_1(
+                                &format!("Unknown alert severity: {}", severity).into(),
+                            );
                             crate::components::sidebar::AlertLevel::None
                         }
                     };
 
-                    let count = event.data.get("count")
+                    let count = event
+                        .data
+                        .get("count")
                         .and_then(|c| c.as_u64())
                         .map(|c| c as u32);
 
-                    let message = event.data.get("message")
+                    let message = event
+                        .data
+                        .get("message")
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string());
 
@@ -620,7 +673,9 @@ impl DashboardState {
                     state.update_alert(alert.key.clone(), alert);
                 } else {
                     // If no severity, clear the alert
-                    web_sys::console::warn_1(&format!("Alert event missing severity field: {}", event.topic).into());
+                    web_sys::console::warn_1(
+                        &format!("Alert event missing severity field: {}", event.topic).into(),
+                    );
                     state.clear_alert(alert_key);
                 }
             }
@@ -660,7 +715,8 @@ impl DashboardState {
                     };
 
                     if level != crate::components::sidebar::AlertLevel::None {
-                        let message = result.get("message")
+                        let message = result
+                            .get("message")
                             .and_then(|m| m.as_str())
                             .map(|s| s.to_string());
 
@@ -672,7 +728,9 @@ impl DashboardState {
                         };
 
                         self.update_alert(alert.key.clone(), alert);
-                        web_sys::console::log_1(&format!("Loaded system.health alert: {:?}", level).into());
+                        web_sys::console::log_1(
+                            &format!("Loaded system.health alert: {:?}", level).into(),
+                        );
                     }
                 }
             }
@@ -695,7 +753,9 @@ impl DashboardState {
                         };
 
                         self.update_alert(alert.key.clone(), alert);
-                        web_sys::console::log_1(&format!("Loaded memory.status alert: {:.1} MB", db_size).into());
+                        web_sys::console::log_1(
+                            &format!("Loaded memory.status alert: {:.1} MB", db_size).into(),
+                        );
                     }
                 }
             }

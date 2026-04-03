@@ -1,9 +1,12 @@
-/// Database migration logic for namespace support
+/// Database migration logic for resilience storage.
 ///
-/// This module provides idempotent migration functions for adding namespace
-/// support to existing databases. Migrations are safe to run multiple times.
+/// This module provides idempotent migration functions for evolving the
+/// resilience database schema over time. Migrations are safe to run multiple
+/// times and prefer preserving existing data where feasible.
 use crate::error::AlephError;
+use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
 use rusqlite::Connection;
+use serde_json::Value;
 
 /// Migrate memory_facts table to include namespace column
 ///
@@ -290,9 +293,206 @@ pub fn migrate_add_embedding_model(conn: &Connection) -> Result<(), AlephError> 
     Ok(())
 }
 
+/// Migrate task_traces from legacy flat role/content storage to structured
+/// AgentTraceEvent storage.
+///
+/// The legacy schema stored a best-effort `role` plus arbitrary `content_json`.
+/// The new schema stores a stable `event_kind` alongside the full serialized
+/// `AgentTraceEvent`, making replay consume the same structured facts as live
+/// panels/debug tools.
+pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_task_traces_agent_trace")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin task_traces agent trace migration: {}",
+                e
+            ))
+        })?;
+
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_traces'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+            AlephError::config(format!("Failed to check task_traces table: {}", e))
+        })?;
+
+    if table_exists == 0 {
+        conn.execute_batch("RELEASE migration_task_traces_agent_trace")
+            .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+        return Ok(());
+    }
+
+    let has_event_json: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('task_traces') WHERE name='event_json'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+            AlephError::config(format!("Failed to inspect task_traces columns: {}", e))
+        })?;
+    let has_event_kind: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('task_traces') WHERE name='event_kind'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+            AlephError::config(format!("Failed to inspect task_traces columns: {}", e))
+        })?;
+
+    if has_event_json > 0 && has_event_kind > 0 {
+        conn.execute_batch("RELEASE migration_task_traces_agent_trace")
+            .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        ALTER TABLE task_traces RENAME TO task_traces_legacy;
+        CREATE TABLE task_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            event_kind TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
+        );
+        "#,
+    )
+    .map_err(|e| {
+        let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+        AlephError::config(format!("Failed to recreate task_traces table: {}", e))
+    })?;
+
+    {
+        let mut select = conn
+            .prepare(
+                r#"
+                SELECT id, task_id, step_index, role, content_json, timestamp
+                FROM task_traces_legacy
+                ORDER BY id ASC
+                "#,
+            )
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                AlephError::config(format!("Failed to prepare legacy trace query: {}", e))
+            })?;
+
+        let legacy_rows = select
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                AlephError::config(format!("Failed to load legacy traces: {}", e))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                AlephError::config(format!("Failed to collect legacy traces: {}", e))
+            })?;
+
+        let mut insert = conn
+            .prepare(
+                r#"
+                INSERT INTO task_traces (id, task_id, step_index, event_kind, event_json, timestamp)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                AlephError::config(format!("Failed to prepare migrated trace insert: {}", e))
+            })?;
+
+        for (id, task_id, step_index, role, content_json, timestamp) in legacy_rows {
+            let event = legacy_trace_to_agent_trace(step_index, &role, &content_json);
+            let event_json = serde_json::to_string(&event).map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                AlephError::config(format!("Failed to serialize migrated trace: {}", e))
+            })?;
+
+            insert
+                .execute(rusqlite::params![
+                    id,
+                    task_id,
+                    step_index,
+                    event.kind(),
+                    event_json,
+                    timestamp
+                ])
+                .map_err(|e| {
+                    let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+                    AlephError::config(format!("Failed to insert migrated trace: {}", e))
+                })?;
+        }
+    }
+
+    conn.execute_batch(
+        r#"
+        DROP TABLE task_traces_legacy;
+        CREATE INDEX IF NOT EXISTS idx_task_traces_task ON task_traces(task_id, step_index);
+        "#,
+    )
+    .map_err(|e| {
+        let _ = conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace");
+        AlephError::config(format!("Failed to finalize task_traces migration: {}", e))
+    })?;
+
+    conn.execute_batch("RELEASE migration_task_traces_agent_trace")
+        .map_err(|e| AlephError::config(format!("Failed to commit migration: {}", e)))?;
+
+    Ok(())
+}
+
+fn legacy_trace_to_agent_trace(step_index: u32, role: &str, content_json: &str) -> AgentTraceEvent {
+    let iteration = step_index as usize;
+    let text = extract_legacy_trace_text(content_json);
+
+    match role {
+        "tool" => AgentTraceEvent::ToolSummary {
+            iteration,
+            summary: text,
+        },
+        _ => AgentTraceEvent::TextEmitted {
+            iteration,
+            stream: AgentTraceTextKind::Final,
+            text,
+        },
+    }
+}
+
+fn extract_legacy_trace_text(content_json: &str) -> String {
+    match serde_json::from_str::<Value>(content_json) {
+        Ok(Value::String(text)) => text,
+        Ok(Value::Object(map)) => ["content", "text", "output", "message", "result"]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(Value::as_str))
+            .map(str::to_owned)
+            .unwrap_or_else(|| Value::Object(map).to_string()),
+        Ok(value) => value.to_string(),
+        Err(_) => content_json.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
     use rusqlite::Connection;
 
     #[test]
@@ -709,5 +909,86 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_col, 1);
+    }
+
+    #[test]
+    fn test_migrate_task_traces_to_agent_trace() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            r#"
+            CREATE TABLE agent_tasks (
+                id TEXT PRIMARY KEY
+            );
+            CREATE TABLE task_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content_json TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+            INSERT INTO agent_tasks (id) VALUES ('task-1');
+            INSERT INTO task_traces (task_id, step_index, role, content_json, timestamp)
+            VALUES
+                ('task-1', 0, 'assistant', '{"content":"hello"}', 123),
+                ('task-1', 1, 'tool', '{"output":"search complete"}', 124);
+            "#,
+        )
+        .unwrap();
+
+        migrate_task_traces_to_agent_trace(&conn).unwrap();
+
+        let columns: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM pragma_table_info('task_traces') ORDER BY cid ASC")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            columns,
+            vec![
+                "id",
+                "task_id",
+                "step_index",
+                "event_kind",
+                "event_json",
+                "timestamp"
+            ]
+        );
+
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT event_kind, event_json FROM task_traces ORDER BY id ASC")
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+
+        assert_eq!(rows[0].0, "text_emitted");
+        assert_eq!(
+            serde_json::from_str::<AgentTraceEvent>(&rows[0].1).unwrap(),
+            AgentTraceEvent::TextEmitted {
+                iteration: 0,
+                stream: AgentTraceTextKind::Final,
+                text: "hello".to_string(),
+            }
+        );
+
+        assert_eq!(rows[1].0, "tool_summary");
+        assert_eq!(
+            serde_json::from_str::<AgentTraceEvent>(&rows[1].1).unwrap(),
+            AgentTraceEvent::ToolSummary {
+                iteration: 1,
+                summary: "search complete".to_string(),
+            }
+        );
+
+        migrate_task_traces_to_agent_trace(&conn).unwrap();
     }
 }

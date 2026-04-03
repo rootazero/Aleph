@@ -17,7 +17,6 @@ pub enum Role {
     Anonymous,
 }
 
-
 impl Role {
     /// Returns true if the role is Owner
     pub fn is_owner(&self) -> bool {

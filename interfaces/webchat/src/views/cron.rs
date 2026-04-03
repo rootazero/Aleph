@@ -6,11 +6,11 @@
 //! - View execution history for each job
 //! - Trigger immediate runs
 
+use crate::api::cron::{CreateCronJob, CronApi, CronJobInfo, JobRunInfo, UpdateCronJob};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::cron::{CronApi, CronJobInfo, CreateCronJob, UpdateCronJob, JobRunInfo};
-use crate::i18n::*;
 
 // ============================================================================
 // Helper Functions
@@ -35,7 +35,11 @@ fn format_schedule_summary(
                 }
                 "cron" => {
                     // Backend serializes as "expr", panel historically used "expression"
-                    if let Some(expr) = obj.get("expr").or_else(|| obj.get("expression")).and_then(|v| v.as_str()) {
+                    if let Some(expr) = obj
+                        .get("expr")
+                        .or_else(|| obj.get("expression"))
+                        .and_then(|v| v.as_str())
+                    {
                         return expr.to_string();
                     }
                 }
@@ -44,7 +48,11 @@ fn format_schedule_summary(
                         return format!("At {}", dt);
                     }
                     // Backend stores ms; convert to seconds for display
-                    if let Some(ts_ms) = obj.get("at").or_else(|| obj.get("at_ms")).and_then(|v| v.as_i64()) {
+                    if let Some(ts_ms) = obj
+                        .get("at")
+                        .or_else(|| obj.get("at_ms"))
+                        .and_then(|v| v.as_i64())
+                    {
                         return format!("At {}", format_timestamp(ts_ms / 1000));
                     }
                 }
@@ -164,12 +172,18 @@ fn extract_schedule_from_kind(
     match kind {
         "cron" => {
             let expr = obj.get("expr").and_then(|v| v.as_str()).unwrap_or("");
-            let stagger = obj.get("stagger_ms").and_then(|v| v.as_i64()).map(|v| v.to_string());
+            let stagger = obj
+                .get("stagger_ms")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string());
             (kind.to_string(), expr.to_string(), None, stagger)
         }
         "every" => {
             let every_ms = obj.get("every_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-            let anchor = obj.get("anchor_ms").and_then(|v| v.as_i64()).map(|v| v.to_string());
+            let anchor = obj
+                .get("anchor_ms")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.to_string());
             (kind.to_string(), every_ms.to_string(), anchor, None)
         }
         "at" => {
@@ -542,7 +556,8 @@ fn JobEditor(
 
                     // Extract schedule type and value from schedule_kind JSON object
                     // Backend returns: {"kind":"cron","expr":"..."} or {"kind":"every","every_ms":...} etc.
-                    let (sk_type, sk_val, sk_anchor, sk_stagger) = extract_schedule_from_kind(&job.schedule_kind);
+                    let (sk_type, sk_val, sk_anchor, sk_stagger) =
+                        extract_schedule_from_kind(&job.schedule_kind);
                     form_schedule_kind.set(sk_type);
                     form_schedule.set(sk_val);
 
@@ -551,27 +566,47 @@ fn JobEditor(
                     form_timezone.set(job.timezone.clone().unwrap_or_default());
                     form_tags.set(job.tags.join(", "));
                     form_enabled.set(job.enabled);
-                    form_anchor_ms.set(sk_anchor.or(job.anchor_ms.map(|v| v.to_string())).unwrap_or_default());
-                    form_stagger_ms.set(sk_stagger.or(job.stagger_ms.map(|v| v.to_string())).unwrap_or_default());
+                    form_anchor_ms.set(
+                        sk_anchor
+                            .or(job.anchor_ms.map(|v| v.to_string()))
+                            .unwrap_or_default(),
+                    );
+                    form_stagger_ms.set(
+                        sk_stagger
+                            .or(job.stagger_ms.map(|v| v.to_string()))
+                            .unwrap_or_default(),
+                    );
                     form_session_target.set(job.session_target.clone().unwrap_or_default());
 
                     // Populate failure alert from JSON
                     if let Some(ref alert) = job.failure_alert {
                         form_alert_after.set(
-                            alert.get("after_n").and_then(|v| v.as_u64())
-                                .map(|v| v.to_string()).unwrap_or_else(|| "2".to_string())
+                            alert
+                                .get("after_n")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "2".to_string()),
                         );
                         form_alert_cooldown.set(
-                            alert.get("cooldown").and_then(|v| v.as_str())
-                                .unwrap_or("1h").to_string()
+                            alert
+                                .get("cooldown")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("1h")
+                                .to_string(),
                         );
                         form_alert_kind.set(
-                            alert.get("kind").and_then(|v| v.as_str())
-                                .unwrap_or("announce").to_string()
+                            alert
+                                .get("kind")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("announce")
+                                .to_string(),
                         );
                         form_alert_channel.set(
-                            alert.get("channel").and_then(|v| v.as_str())
-                                .unwrap_or("").to_string()
+                            alert
+                                .get("channel")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                         );
                         form_alert_expanded.set(true);
                     } else {
@@ -612,9 +647,14 @@ fn JobEditor(
         let prompt = form_prompt.get();
         let timezone = {
             let tz = form_timezone.get();
-            if tz.trim().is_empty() { None } else { Some(tz) }
+            if tz.trim().is_empty() {
+                None
+            } else {
+                Some(tz)
+            }
         };
-        let tags: Vec<String> = form_tags.get()
+        let tags: Vec<String> = form_tags
+            .get()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -623,8 +663,10 @@ fn JobEditor(
 
         // Build schedule_kind JSON object from form fields
         let schedule_kind_obj = build_schedule_kind_json(
-            &schedule_kind, &schedule,
-            &form_anchor_ms.get(), &form_stagger_ms.get(),
+            &schedule_kind,
+            &schedule,
+            &form_anchor_ms.get(),
+            &form_stagger_ms.get(),
         );
 
         if schedule_kind_obj.is_none() {
@@ -634,7 +676,8 @@ fn JobEditor(
                 _ => "cron expression, e.g. 0 0 9 * * *",
             };
             error.set(Some(format!(
-                "Invalid schedule value for type '{}'. Expected: {}", schedule_kind, hint
+                "Invalid schedule value for type '{}'. Expected: {}",
+                schedule_kind, hint
             )));
             saving.set(false);
             return;
@@ -642,7 +685,11 @@ fn JobEditor(
 
         let session_target = {
             let s = form_session_target.get();
-            if s.trim().is_empty() { None } else { Some(s) }
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         };
 
         // Build failure_alert JSON if channel is specified
@@ -797,12 +844,10 @@ fn JobEditor(
     };
 
     // Dynamic placeholder for schedule input
-    let schedule_placeholder = move || {
-        match form_schedule_kind.get().as_str() {
-            "every" => "5m, 2h, 30s",
-            "at" => "1711944000",
-            _ => "*/5 * * * *",
-        }
+    let schedule_placeholder = move || match form_schedule_kind.get().as_str() {
+        "every" => "5m, 2h, 30s",
+        "at" => "1711944000",
+        _ => "*/5 * * * *",
     };
 
     view! {
@@ -1197,9 +1242,7 @@ fn JobEditor(
 // ============================================================================
 
 #[component]
-fn RunHistory(
-    runs: RwSignal<Vec<JobRunInfo>>,
-) -> impl IntoView {
+fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
     let i18n = use_i18n();
 
     view! {

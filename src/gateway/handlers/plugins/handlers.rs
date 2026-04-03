@@ -329,6 +329,11 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
             let registry = AdapterRegistry::with_defaults();
             match registry.parse_dir(&dest_path) {
                 Ok(output) => {
+                    if let Ok(manager) = get_extension_manager() {
+                        if let Err(e) = manager.reload().await {
+                            tracing::warn!("Failed to refresh extensions after install: {}", e);
+                        }
+                    }
                     let info = PluginInfoJson {
                         name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
                         version: output.version.unwrap_or_default(),
@@ -435,6 +440,11 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
 
     // Return list of installed plugin names
     // For simplicity, return empty list - caller should use plugins.list to refresh
+    if let Ok(manager) = get_extension_manager() {
+        if let Err(e) = manager.reload().await {
+            tracing::warn!("Failed to refresh extensions after zip install: {}", e);
+        }
+    }
     JsonRpcResponse::success(
         request.id,
         json!({ "installedNames": Vec::<String>::new() }),
@@ -464,7 +474,14 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
     }
 
     match std::fs::remove_dir_all(&plugin_path) {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Ok(()) => {
+            if let Ok(manager) = get_extension_manager() {
+                if let Err(e) = manager.reload().await {
+                    tracing::warn!("Failed to refresh extensions after uninstall: {}", e);
+                }
+            }
+            JsonRpcResponse::success(request.id, json!({ "ok": true }))
+        }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -511,8 +528,7 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Sync with PluginRegistry
     if let Ok(manager) = get_extension_manager() {
-        let mut registry = manager.get_plugin_registry_mut().await;
-        registry.enable_plugin(&params.name);
+        manager.set_plugin_enabled(&params.name, true).await;
     }
 
     tracing::info!(plugin = %params.name, "Plugin enabled");
@@ -553,8 +569,7 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Sync with PluginRegistry
     if let Ok(manager) = get_extension_manager() {
-        let mut registry = manager.get_plugin_registry_mut().await;
-        registry.disable_plugin(&params.name);
+        manager.set_plugin_enabled(&params.name, false).await;
     }
 
     tracing::info!(plugin = %params.name, "Plugin disabled");

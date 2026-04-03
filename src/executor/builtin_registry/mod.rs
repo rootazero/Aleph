@@ -122,6 +122,97 @@ mod tests {
         assert!(registry.get_tool("get_tool_schema").is_some());
     }
 
+    #[tokio::test]
+    async fn test_resolve_plugin_handler_uses_extension_snapshot_for_dynamic_tool() {
+        let manager = Arc::new(
+            crate::extension::ExtensionManager::with_defaults()
+                .await
+                .unwrap(),
+        );
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            registry.register_plugin(crate::extension::PluginRecord::new(
+                "dyn-plugin".to_string(),
+                "Dynamic Plugin".to_string(),
+                crate::extension::PluginKind::Static,
+                crate::extension::PluginOrigin::Global,
+            ));
+            registry.register_tool(crate::extension::ToolRegistration {
+                name: "dynamic_tool".to_string(),
+                description: "Dynamic plugin tool".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "handle_dynamic_tool".to_string(),
+                plugin_id: "dyn-plugin".to_string(),
+            });
+        }
+        manager.sync_runtime_snapshots().await;
+
+        assert_eq!(
+            super::registry::resolve_plugin_handler_from_sources(
+                Some(manager.as_ref()),
+                &std::collections::HashMap::new(),
+                "dynamic_tool",
+            ),
+            Some(("dyn-plugin".to_string(), "handle_dynamic_tool".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_plugin_handler_ignores_disabled_plugin_tool() {
+        let manager = Arc::new(
+            crate::extension::ExtensionManager::with_defaults()
+                .await
+                .unwrap(),
+        );
+        {
+            let mut registry = manager.get_plugin_registry_mut().await;
+            registry.register_plugin(crate::extension::PluginRecord::new(
+                "disabled-plugin".to_string(),
+                "Disabled Plugin".to_string(),
+                crate::extension::PluginKind::Static,
+                crate::extension::PluginOrigin::Global,
+            ));
+            registry.register_tool(crate::extension::ToolRegistration {
+                name: "hidden_tool".to_string(),
+                description: "Hidden plugin tool".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+                handler: "handle_hidden_tool".to_string(),
+                plugin_id: "disabled-plugin".to_string(),
+            });
+        }
+        manager.set_plugin_enabled("disabled-plugin", false).await;
+
+        assert_eq!(
+            super::registry::resolve_plugin_handler_from_sources(
+                Some(manager.as_ref()),
+                &std::collections::HashMap::new(),
+                "hidden_tool",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_plugin_handler_falls_back_to_static_plugin_metadata() {
+        let mut tools = std::collections::HashMap::new();
+        tools.insert(
+            "legacy_tool".to_string(),
+            crate::dispatcher::UnifiedTool::new(
+                "plugin:legacy:legacy_tool",
+                "legacy_tool",
+                "Legacy plugin tool",
+                crate::dispatcher::ToolSource::Plugin {
+                    plugin_id: "legacy-plugin".to_string(),
+                },
+            ),
+        );
+
+        assert_eq!(
+            super::registry::resolve_plugin_handler_from_sources(None, &tools, "legacy_tool"),
+            Some(("legacy-plugin".to_string(), "tool_legacy_tool".to_string()))
+        );
+    }
+
     // ========================================================================
     // Sessions Tools Tests (gateway feature only)
     // ========================================================================

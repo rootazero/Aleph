@@ -1,13 +1,13 @@
 //! Chat API — wraps chat.send / chat.abort / chat.history / chat.clear RPC methods.
 
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 /// A single chat message (from history).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,        // "user" | "assistant" | "system"
+    pub role: String, // "user" | "assistant" | "system"
     pub content: String,
     #[serde(default)]
     pub run_id: Option<String>,
@@ -50,11 +50,13 @@ impl ChatApi {
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
             .iter()
-            .map(|a| serde_json::json!({
-                "name": a.name,
-                "mime_type": a.mime_type,
-                "data": a.data_base64,
-            }))
+            .map(|a| {
+                serde_json::json!({
+                    "name": a.name,
+                    "mime_type": a.mime_type,
+                    "data": a.data_base64,
+                })
+            })
             .collect();
 
         let params = serde_json::json!({
@@ -87,7 +89,10 @@ impl ChatApi {
             "limit": limit,
         });
         let result = state.rpc_call("chat.history", params).await?;
-        let messages = result.get("messages").cloned().unwrap_or(Value::Array(vec![]));
+        let messages = result
+            .get("messages")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
         serde_json::from_value(messages).map_err(|e| e.to_string())
     }
 

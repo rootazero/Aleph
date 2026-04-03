@@ -138,10 +138,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
         let id = trimmed.clone();
         spawn_local(async move {
             match state
-                .rpc_call(
-                    "channel.create",
-                    json!({ "type": pt, "id": id }),
-                )
+                .rpc_call("channel.create", json!({ "type": pt, "id": id }))
                 .await
             {
                 Ok(_) => {

@@ -5,9 +5,13 @@ use tailwind_fuse::*;
 pub enum ButtonVariant {
     #[tw(default, class = "bg-primary text-text-inverse hover:bg-primary-hover")]
     Primary,
-    #[tw(class = "bg-surface-sunken text-text-primary border border-border hover:bg-surface-raised")]
+    #[tw(
+        class = "bg-surface-sunken text-text-primary border border-border hover:bg-surface-raised"
+    )]
     Secondary,
-    #[tw(class = "bg-transparent text-text-secondary hover:text-text-primary hover:bg-surface-sunken")]
+    #[tw(
+        class = "bg-transparent text-text-secondary hover:text-text-primary hover:bg-surface-sunken"
+    )]
     Ghost,
     #[tw(class = "bg-danger text-text-inverse hover:brightness-95")]
     Destructive,

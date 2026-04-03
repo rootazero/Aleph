@@ -12,9 +12,10 @@
 //!    immediately; exclusive tools are queued until all in-flight concurrent
 //!    tools complete.
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json::Value;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -126,10 +127,7 @@ impl StreamingToolBridge {
                     // This is a bounded buffer — backpressure from slow execution
                     // should not block the delta stream.
                     if let Err(e) = self.ready_tx.try_send(ready) {
-                        tracing::warn!(
-                            "Failed to send ready tool call to executor: {}",
-                            e
-                        );
+                        tracing::warn!("Failed to send ready tool call to executor: {}", e);
                     }
                 }
             }
@@ -200,19 +198,23 @@ impl StreamingToolExecutor {
                 Ok(outcome) => results.push((idx, outcome)),
                 Err(e) => {
                     tracing::error!("Spawned tool task panicked: {}", e);
-                    results.push((idx, PipelineOutcome {
-                        outcome: ToolOutcome {
-                            tool_id: String::new(),
-                            tool_name: String::new(),
-                            output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
-                            is_error: true,
-                            should_stop: false,
-                            retryable: false,
+                    results.push((
+                        idx,
+                        PipelineOutcome {
+                            outcome: ToolOutcome {
+                                tool_id: String::new(),
+                                tool_name: String::new(),
+                                duration_ms: 0,
+                                output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
+                                is_error: true,
+                                should_stop: false,
+                                retryable: false,
+                            },
+                            additional_contexts: Vec::new(),
+                            prevent_continuation: false,
+                            hook_messages: Vec::new(),
                         },
-                        additional_contexts: Vec::new(),
-                        prevent_continuation: false,
-                        hook_messages: Vec::new(),
-                    }));
+                    ));
                 }
             }
         }
@@ -222,7 +224,9 @@ impl StreamingToolExecutor {
             if self.cancel.is_cancelled() {
                 break;
             }
-            let outcome = self.execute_one(&call.id, &call.name, &call.arguments).await;
+            let outcome = self
+                .execute_one(&call.id, &call.name, &call.arguments)
+                .await;
             results.push((call.index, outcome));
         }
 
@@ -243,13 +247,24 @@ impl StreamingToolExecutor {
         let cancel = self.cancel.clone();
 
         tokio::spawn(async move {
-            pipeline.execute(&id, &name, &arguments, &registry, &cancel).await
+            let started_at = Instant::now();
+            let mut outcome = pipeline
+                .execute(&id, &name, &arguments, &registry, &cancel)
+                .await;
+            outcome.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
+            outcome
         })
     }
 
     /// Execute a single tool inline (for exclusive tools).
     async fn execute_one(&self, id: &str, name: &str, arguments: &Value) -> PipelineOutcome {
-        self.pipeline.execute(id, name, arguments, &self.registry, &self.cancel).await
+        let started_at = Instant::now();
+        let mut outcome = self
+            .pipeline
+            .execute(id, name, arguments, &self.registry, &self.cancel)
+            .await;
+        outcome.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
+        outcome
     }
 }
 
@@ -275,7 +290,11 @@ mod tests {
     fn permissive_pipeline() -> Arc<ToolPipeline> {
         Arc::new(ToolPipeline::new(
             Arc::new(HookExecutor::empty()),
-            Arc::new(SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)),
+            Arc::new(SafetyGuard::new(
+                vec![],
+                HashMap::new(),
+                PermissionAction::Allow,
+            )),
             "test-session",
         ))
     }
@@ -285,9 +304,15 @@ mod tests {
 
     #[async_trait]
     impl LoopTool for EchoTool {
-        fn name(&self) -> &str { "echo" }
-        fn description(&self) -> &str { "Echoes input" }
-        fn schema(&self) -> Value { json!({ "type": "object", "properties": {} }) }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "Echoes input"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
         async fn execute(&self, input: Value) -> ToolResult {
             ToolResult::Success { output: input }
         }
@@ -300,14 +325,24 @@ mod tests {
 
     #[async_trait]
     impl LoopTool for SlowTool {
-        fn name(&self) -> &str { "slow" }
-        fn description(&self) -> &str { "Sleeps then returns" }
-        fn schema(&self) -> Value { json!({ "type": "object", "properties": {} }) }
+        fn name(&self) -> &str {
+            "slow"
+        }
+        fn description(&self) -> &str {
+            "Sleeps then returns"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
         async fn execute(&self, _input: Value) -> ToolResult {
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
-            ToolResult::Success { output: json!("done") }
+            ToolResult::Success {
+                output: json!("done"),
+            }
         }
-        fn is_concurrent_safe(&self, _input: &Value) -> bool { true }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            true
+        }
     }
 
     /// An exclusive (not concurrent-safe) tool.
@@ -315,13 +350,23 @@ mod tests {
 
     #[async_trait]
     impl LoopTool for ExclusiveTool {
-        fn name(&self) -> &str { "exclusive" }
-        fn description(&self) -> &str { "Exclusive tool" }
-        fn schema(&self) -> Value { json!({ "type": "object", "properties": {} }) }
-        async fn execute(&self, _input: Value) -> ToolResult {
-            ToolResult::Success { output: json!("exclusive_done") }
+        fn name(&self) -> &str {
+            "exclusive"
         }
-        fn is_concurrent_safe(&self, _input: &Value) -> bool { false }
+        fn description(&self) -> &str {
+            "Exclusive tool"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Success {
+                output: json!("exclusive_done"),
+            }
+        }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            false
+        }
     }
 
     /// A very slow tool for cancellation testing.
@@ -329,12 +374,20 @@ mod tests {
 
     #[async_trait]
     impl LoopTool for VerySlowTool {
-        fn name(&self) -> &str { "very_slow" }
-        fn description(&self) -> &str { "Very slow tool" }
-        fn schema(&self) -> Value { json!({ "type": "object", "properties": {} }) }
+        fn name(&self) -> &str {
+            "very_slow"
+        }
+        fn description(&self) -> &str {
+            "Very slow tool"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
         async fn execute(&self, _input: Value) -> ToolResult {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            ToolResult::Success { output: json!("should_not_reach") }
+            ToolResult::Success {
+                output: json!("should_not_reach"),
+            }
         }
     }
 
@@ -347,17 +400,27 @@ mod tests {
 
     #[async_trait]
     impl LoopTool for ConcurrentSlowTool {
-        fn name(&self) -> &str { "concurrent_slow" }
-        fn description(&self) -> &str { "Slow concurrent tool" }
-        fn schema(&self) -> Value { json!({ "type": "object", "properties": {} }) }
+        fn name(&self) -> &str {
+            "concurrent_slow"
+        }
+        fn description(&self) -> &str {
+            "Slow concurrent tool"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
         async fn execute(&self, _input: Value) -> ToolResult {
             let prev = self.active.fetch_add(1, Ordering::SeqCst);
             self.peak.fetch_max(prev + 1, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
             self.active.fetch_sub(1, Ordering::SeqCst);
-            ToolResult::Success { output: json!("done") }
+            ToolResult::Success {
+                output: json!("done"),
+            }
         }
-        fn is_concurrent_safe(&self, _input: &Value) -> bool { true }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            true
+        }
     }
 
     /// Feed a complete tool call (start + args + end) into the bridge.
@@ -370,9 +433,7 @@ mod tests {
             id: id.to_string(),
             delta: args.to_string(),
         });
-        bridge.feed(&ProviderDelta::ToolCallEnd {
-            id: id.to_string(),
-        });
+        bridge.feed(&ProviderDelta::ToolCallEnd { id: id.to_string() });
     }
 
     // -------------------------------------------------------------------------
@@ -385,11 +446,8 @@ mod tests {
         registry.register(Box::new(EchoTool));
 
         let cancel = CancellationToken::new();
-        let (mut bridge, executor) = StreamingToolBridge::new(
-            Arc::new(registry),
-            permissive_pipeline(),
-            cancel,
-        );
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
 
         feed_tool_call(&mut bridge, "call_1", "echo", r#"{"msg":"hello"}"#);
         bridge.finish();
@@ -419,11 +477,8 @@ mod tests {
         }));
 
         let cancel = CancellationToken::new();
-        let (mut bridge, executor) = StreamingToolBridge::new(
-            Arc::new(registry),
-            permissive_pipeline(),
-            cancel,
-        );
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
 
         // Feed two concurrent-safe tool calls.
         feed_tool_call(&mut bridge, "c1", "concurrent_slow", "{}");
@@ -462,11 +517,8 @@ mod tests {
         registry.register(Box::new(ExclusiveTool));
 
         let cancel = CancellationToken::new();
-        let (mut bridge, executor) = StreamingToolBridge::new(
-            Arc::new(registry),
-            permissive_pipeline(),
-            cancel,
-        );
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
 
         // First: concurrent tool, second: exclusive tool.
         feed_tool_call(&mut bridge, "t1", "slow", "{}");
@@ -495,11 +547,8 @@ mod tests {
     async fn empty_stream_returns_empty_results() {
         let registry = LoopToolRegistry::new();
         let cancel = CancellationToken::new();
-        let (bridge, executor) = StreamingToolBridge::new(
-            Arc::new(registry),
-            permissive_pipeline(),
-            cancel,
-        );
+        let (bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
 
         // Finish immediately without feeding any deltas.
         bridge.finish();
@@ -518,11 +567,8 @@ mod tests {
         registry.register(Box::new(VerySlowTool));
 
         let cancel = CancellationToken::new();
-        let (mut bridge, executor) = StreamingToolBridge::new(
-            Arc::new(registry),
-            permissive_pipeline(),
-            cancel.clone(),
-        );
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel.clone());
 
         feed_tool_call(&mut bridge, "s1", "very_slow", "{}");
         bridge.finish();
@@ -547,13 +593,17 @@ mod tests {
 
         // The spawned tool should have been cancelled.
         assert!(!results.is_empty());
-        let cancelled_count = results.iter().filter(|r| {
-            r.outcome.output_text.contains("CANCELLED")
-        }).count();
+        let cancelled_count = results
+            .iter()
+            .filter(|r| r.outcome.output_text.contains("CANCELLED"))
+            .count();
         assert!(
             cancelled_count > 0,
             "Expected at least one cancelled outcome, got: {:?}",
-            results.iter().map(|r| &r.outcome.output_text).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|r| &r.outcome.output_text)
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -6,11 +6,11 @@
 //! - Reorder rules (drag & drop or move up/down)
 //! - Real-time updates via config events
 
+use crate::api::{RoutingRuleConfig, RoutingRuleInfo, RoutingRulesApi};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::{RoutingRulesApi, RoutingRuleInfo, RoutingRuleConfig};
-use crate::i18n::*;
 
 #[component]
 pub fn RoutingRulesView() -> impl IntoView {
@@ -236,11 +236,19 @@ fn RuleEditor(
             regex: regex.clone(),
             provider: {
                 let p = form_provider.get();
-                if p.is_empty() { None } else { Some(p) }
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(p)
+                }
             },
             system_prompt: {
                 let s = form_system_prompt.get();
-                if s.is_empty() { None } else { Some(s) }
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
             },
             strip_prefix: None,
             capabilities: None,

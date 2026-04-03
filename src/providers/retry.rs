@@ -51,11 +51,8 @@ fn is_retryable_with_policy(error: &AlephError, policy: &RetryPolicy) -> bool {
                 .iter()
                 .any(|code| message.contains(&code.to_string()))
         }
-        // Rate limit with retry-after is potentially retryable
-        AlephError::RateLimitError { message, .. } => {
-            // Match OpenCode: retry on "too_many_requests" or overloaded
-            is_overloaded_message(message)
-        }
+        // Rate limit errors are NOT retryable — retrying amplifies the problem.
+        AlephError::RateLimitError { .. } => false,
         // Don't retry these errors
         AlephError::AuthenticationError { .. } => false,
         AlephError::InvalidConfig { .. } => false,
@@ -65,14 +62,14 @@ fn is_retryable_with_policy(error: &AlephError, policy: &RetryPolicy) -> bool {
 
 /// Check if error message indicates an overloaded condition (retryable)
 ///
-/// Matches OpenCode's detection of overloaded providers.
+/// Matches server-side overload conditions that are transient.
+/// NOTE: "rate limit" and "too_many_requests" are intentionally excluded —
+/// rate limits indicate quota exhaustion and retrying amplifies the problem.
 fn is_overloaded_message(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("overloaded")
-        || lower.contains("too_many_requests")
         || lower.contains("exhausted")
         || lower.contains("capacity")
-        || lower.contains("rate limit")
 }
 
 /// Extended retryable check that returns the reason if retryable
@@ -446,12 +443,14 @@ mod tests {
     #[test]
     fn test_is_overloaded_message() {
         assert!(is_overloaded_message("Server is overloaded"));
-        assert!(is_overloaded_message("too_many_requests"));
-        assert!(is_overloaded_message("Rate limit exceeded"));
         assert!(is_overloaded_message("Resource exhausted"));
         assert!(is_overloaded_message("At capacity"));
         assert!(!is_overloaded_message("Invalid request"));
         assert!(!is_overloaded_message("Authentication failed"));
+        // Rate limit and too_many_requests are NOT overloaded — they should
+        // not trigger retries as that amplifies the problem.
+        assert!(!is_overloaded_message("too_many_requests"));
+        assert!(!is_overloaded_message("Rate limit exceeded"));
     }
 
     #[test]

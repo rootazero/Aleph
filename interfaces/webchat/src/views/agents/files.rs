@@ -1,10 +1,10 @@
 // Files Tab — fixed 6 identity files with inline editor
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, WorkspaceFile};
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 /// The 6 canonical identity files, displayed in this order.
 const IDENTITY_FILES: &[&str] = &[

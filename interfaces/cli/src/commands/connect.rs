@@ -1,10 +1,15 @@
 //! Connect and authenticate command
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Run connect command
-pub async fn run(server_url: &str, device_name: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+pub async fn run(
+    server_url: &str,
+    device_name: &str,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Create a modified config with the device name

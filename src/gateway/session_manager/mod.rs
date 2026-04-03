@@ -282,7 +282,10 @@ impl SessionManager {
             .map_err(|e| {
                 SessionManagerError::DatabaseError(format!("FTS5 backfill failed: {}", e))
             })?;
-            tracing::info!(count = backfill_count, "Backfilled FTS5 index with existing messages");
+            tracing::info!(
+                count = backfill_count,
+                "Backfilled FTS5 index with existing messages"
+            );
         }
 
         Ok(())

@@ -177,18 +177,13 @@ fn render_assistant_message(
                     lines.push(Line::from(vec![
                         Span::styled("\u{2503} ", prefix_style),
                         Span::styled("\u{250a} ", reasoning_prefix),
-                        Span::styled(
-                            wrapped_line.into_owned(),
-                            reasoning_style,
-                        ),
+                        Span::styled(wrapped_line.into_owned(), reasoning_style),
                     ]));
                 }
             }
 
             // Blank line after reasoning
-            lines.push(Line::from(vec![Span::styled(
-                "\u{2503} ", prefix_style,
-            )]));
+            lines.push(Line::from(vec![Span::styled("\u{2503} ", prefix_style)]));
         }
     }
 
@@ -333,7 +328,10 @@ mod tests {
                 .iter()
                 .any(|s| s.content.as_ref().contains("thinking"))
         });
-        assert!(!has_thinking, "Reasoning should not show in non-verbose mode");
+        assert!(
+            !has_thinking,
+            "Reasoning should not show in non-verbose mode"
+        );
 
         // Verbose: reasoning should appear
         state.verbose = true;

@@ -1,8 +1,8 @@
+use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::{ConfigApi, GeneralConfig, GeneralConfigApi};
-use crate::i18n::*;
 
 #[component]
 pub fn GeneralView() -> impl IntoView {
@@ -19,7 +19,9 @@ pub fn GeneralView() -> impl IntoView {
 
     // Store save_config in a StoredValue to avoid closure capture issues
     let save_config_fn = StoredValue::new(move || {
-        if !state.is_connected.get() { return; }
+        if !state.is_connected.get() {
+            return;
+        }
         if let Some(cfg) = config.get() {
             set_saving.set(true);
             set_error.set(None);
@@ -206,7 +208,9 @@ fn ConfigReloadSection() -> impl IntoView {
     let (result_msg, set_result_msg) = signal(Option::<(bool, String)>::None);
 
     let on_reload = move |_| {
-        if !state.is_connected.get() { return; }
+        if !state.is_connected.get() {
+            return;
+        }
         set_reloading.set(true);
         set_result_msg.set(None);
 
@@ -216,8 +220,14 @@ fn ConfigReloadSection() -> impl IntoView {
                     let msg = if result.ok {
                         format!("Reloaded: {}", result.reloaded.join(", "))
                     } else {
-                        let failed_names: Vec<String> = result.failed.iter()
-                            .filter_map(|f| f.get("subsystem").and_then(|s| s.as_str()).map(String::from))
+                        let failed_names: Vec<String> = result
+                            .failed
+                            .iter()
+                            .filter_map(|f| {
+                                f.get("subsystem")
+                                    .and_then(|s| s.as_str())
+                                    .map(String::from)
+                            })
                             .collect();
                         format!("Partial reload. Failed: {}", failed_names.join(", "))
                     };

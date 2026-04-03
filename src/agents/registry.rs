@@ -112,8 +112,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
             .with_max_iterations(15),
         // Default agent - general-purpose sub-agent
-        AgentDef::new("default", AgentMode::SubAgent)
-            .with_context_mode(ContextMode::Summary),
+        AgentDef::new("default", AgentMode::SubAgent).with_context_mode(ContextMode::Summary),
         // Plan agent - read-only planner
         AgentDef::new("plan", AgentMode::SubAgent)
             .with_prompt_sections(vec!["plan_protocol".into()])
@@ -256,7 +255,7 @@ mod tests {
         assert!(verify.is_tool_allowed("glob"));
         assert!(verify.is_tool_allowed("bash"));
         assert!(!verify.is_tool_allowed("write_file")); // read-only: write denied
-        assert!(!verify.is_tool_allowed("edit_file"));  // read-only: edit denied
+        assert!(!verify.is_tool_allowed("edit_file")); // read-only: edit denied
         assert_eq!(verify.max_iterations, Some(25));
         assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);
     }
@@ -271,9 +270,15 @@ mod tests {
         assert!(by_id["main"].prompt_sections.is_empty());
 
         // Sub-agents each have their specific section
-        assert_eq!(by_id["explore"].prompt_sections, vec!["explore_constraints"]);
+        assert_eq!(
+            by_id["explore"].prompt_sections,
+            vec!["explore_constraints"]
+        );
         assert_eq!(by_id["coder"].prompt_sections, vec!["coder_guidelines"]);
-        assert_eq!(by_id["researcher"].prompt_sections, vec!["researcher_protocol"]);
+        assert_eq!(
+            by_id["researcher"].prompt_sections,
+            vec!["researcher_protocol"]
+        );
         assert_eq!(by_id["verify"].prompt_sections, vec!["verify_protocol"]);
     }
 }

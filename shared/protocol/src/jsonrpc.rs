@@ -202,7 +202,10 @@ impl JsonRpcError {
 
     /// Create an internal error
     pub fn internal_error(details: impl Into<String>) -> Self {
-        Self::new(INTERNAL_ERROR, format!("Internal error: {}", details.into()))
+        Self::new(
+            INTERNAL_ERROR,
+            format!("Internal error: {}", details.into()),
+        )
     }
 }
 
@@ -330,7 +333,8 @@ mod tests {
 
     #[test]
     fn test_response_success() {
-        let resp = JsonRpcResponse::success(Value::Number(1.into()), serde_json::json!({"ok": true}));
+        let resp =
+            JsonRpcResponse::success(Value::Number(1.into()), serde_json::json!({"ok": true}));
         assert!(!resp.is_error());
         assert!(resp.result.is_some());
     }

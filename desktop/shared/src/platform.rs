@@ -1,6 +1,9 @@
 //! Platform aggregator trait.
 
-use crate::traits::{AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
+use crate::traits::{
+    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
+    SystemCapability,
+};
 
 /// Aggregator that provides access to all desktop capabilities on a given platform.
 ///

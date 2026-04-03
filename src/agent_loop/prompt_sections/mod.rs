@@ -2,32 +2,32 @@
 //!
 //! Each submodule exports a `render()` function that returns a `PromptSection`.
 
-pub mod identity;
-pub mod tone;
-pub mod directives;
-pub mod model_behavior;
-pub mod system_rules;
-pub mod doing_tasks;
 pub mod actions;
-pub mod tool_usage;
-pub mod tone_and_style;
-pub mod output_efficiency;
-pub mod tools;
-pub mod skills;
-pub mod memory_protocol;
 pub mod custom_instructions;
-pub mod environment;
-pub mod session_guidance;
-pub mod memory;
+pub mod directives;
 pub mod discovered_skills;
+pub mod doing_tasks;
+pub mod environment;
+pub mod identity;
+pub mod memory;
+pub mod memory_protocol;
+pub mod model_behavior;
+pub mod output_efficiency;
+pub mod session_guidance;
+pub mod skills;
+pub mod system_rules;
+pub mod tone;
+pub mod tone_and_style;
+pub mod tool_usage;
+pub mod tools;
 
 // Agent-specific sections
 pub mod agent_role;
-pub mod explore_constraints;
 pub mod coder_guidelines;
+pub mod explore_constraints;
+pub mod plan_protocol;
 pub mod researcher_protocol;
 pub mod verify_protocol;
-pub mod plan_protocol;
 
 use super::prompt_builder::PromptSection;
 

@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use crate::context::DashboardState;
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LogsResponse {

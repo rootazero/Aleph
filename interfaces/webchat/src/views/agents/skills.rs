@@ -1,12 +1,12 @@
 // Skills Tab — per-agent skill toggles
 
+use crate::api::agents::AgentsApi;
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::Deserialize;
 use serde_json::json;
-use crate::api::agents::AgentsApi;
-use crate::context::DashboardState;
-use crate::i18n::*;
 
 #[derive(Debug, Clone, Deserialize)]
 struct SkillEntry {
@@ -34,7 +34,9 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
     // Load available skills and agent's current skills
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         let id = agent_id.get_value();
         spawn_local(async move {
             if let Ok(result) = dash.rpc_call("skills.list", serde_json::Value::Null).await {
@@ -46,7 +48,10 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
             }
             if let Ok(detail) = AgentsApi::get(&dash, &id).await {
                 if let Some(skills) = detail.definition.get("skills").and_then(|v| v.as_array()) {
-                    let ids: Vec<String> = skills.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                    let ids: Vec<String> = skills
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
                     agent_skills.set(ids);
                 }
             }

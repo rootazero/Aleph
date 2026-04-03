@@ -14,6 +14,7 @@ use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
 /// Hook executor - runs hook actions based on events
+#[derive(Clone)]
 pub struct HookExecutor {
     pub(super) hooks: Vec<HookConfig>,
     /// Command timeout in seconds
@@ -400,8 +401,7 @@ impl HookExecutor {
                         warn!("Interceptor hook action failed: {}", e);
                         // Interceptor failures block by default for safety
                         accumulated.blocked = true;
-                        accumulated.block_reason =
-                            Some(format!("Interceptor hook failed: {}", e));
+                        accumulated.block_reason = Some(format!("Interceptor hook failed: {}", e));
                         return Ok((current_context, accumulated));
                     }
                 }

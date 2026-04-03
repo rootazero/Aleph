@@ -1,10 +1,10 @@
 // Teams Tab — read-only display of teams an agent belongs to
 
+use crate::api::teams::TeamsApi;
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::teams::TeamsApi;
-use crate::i18n::*;
 
 #[component]
 pub fn TeamsTab(agent_id: String) -> impl IntoView {
@@ -16,7 +16,9 @@ pub fn TeamsTab(agent_id: String) -> impl IntoView {
 
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         let id = agent_id.get_value();
         spawn_local(async move {
             match TeamsApi::agent_teams(&dash, &id).await {

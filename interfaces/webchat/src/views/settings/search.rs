@@ -4,12 +4,12 @@
 //! - Left panel: Preset search provider grid + global search settings
 //! - Right panel: Detail panel for selected provider
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
+use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
-use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 // ============================================================================
 // Preset Definitions
@@ -101,7 +101,10 @@ fn find_preset(name: &str) -> Option<&'static SearchPreset> {
 }
 
 /// Find backend entry for a provider name from the config's backends list
-fn find_backend<'a>(backends: &'a [SearchBackendEntry], name: &str) -> Option<&'a SearchBackendEntry> {
+fn find_backend<'a>(
+    backends: &'a [SearchBackendEntry],
+    name: &str,
+) -> Option<&'a SearchBackendEntry> {
     backends.iter().find(|b| b.name == name)
 }
 
@@ -420,10 +423,7 @@ fn CustomSearchProvidersList(
 // ============================================================================
 
 #[component]
-fn GlobalSettings(
-    config: RwSignal<SearchConfig>,
-    loading: RwSignal<bool>,
-) -> impl IntoView {
+fn GlobalSettings(config: RwSignal<SearchConfig>, loading: RwSignal<bool>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div>
@@ -546,9 +546,21 @@ fn ProviderDetailPanel(
             .collect();
         backends.push(SearchBackendEntry {
             name: provider_name.to_string(),
-            api_key: if api_key.is_empty() { None } else { Some(api_key) },
-            base_url: if base_url.is_empty() { None } else { Some(base_url) },
-            engine_id: if engine_id.is_empty() { None } else { Some(engine_id) },
+            api_key: if api_key.is_empty() {
+                None
+            } else {
+                Some(api_key)
+            },
+            base_url: if base_url.is_empty() {
+                None
+            } else {
+                Some(base_url)
+            },
+            engine_id: if engine_id.is_empty() {
+                None
+            } else {
+                Some(engine_id)
+            },
             verified: false,
         });
         backends
@@ -556,7 +568,9 @@ fn ProviderDetailPanel(
 
     let on_test = move |_| {
         let sel = selected.get();
-        if sel.is_none() { return; }
+        if sel.is_none() {
+            return;
+        }
         let provider_name = sel.unwrap();
 
         testing.set(true);
@@ -571,10 +585,24 @@ fn ProviderDetailPanel(
             match SearchConfigApi::test_connection(
                 &state,
                 &provider_name,
-                if api_key.is_empty() { None } else { Some(api_key) },
-                if base_url.is_empty() { None } else { Some(base_url) },
-                if engine_id.is_empty() { None } else { Some(engine_id) },
-            ).await {
+                if api_key.is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
+                if base_url.is_empty() {
+                    None
+                } else {
+                    Some(base_url)
+                },
+                if engine_id.is_empty() {
+                    None
+                } else {
+                    Some(engine_id)
+                },
+            )
+            .await
+            {
                 Ok(result) => {
                     test_success.set(Some(result.success));
                     if result.success {
@@ -606,7 +634,9 @@ fn ProviderDetailPanel(
 
     let on_save = move |_| {
         let sel = selected.get();
-        if sel.is_none() { return; }
+        if sel.is_none() {
+            return;
+        }
         let provider_name = sel.unwrap();
 
         saving.set(true);
@@ -645,7 +675,9 @@ fn ProviderDetailPanel(
 
     let on_set_active = move |_| {
         let sel = selected.get();
-        if sel.is_none() { return; }
+        if sel.is_none() {
+            return;
+        }
         let provider_name = sel.unwrap();
 
         saving.set(true);
@@ -681,7 +713,9 @@ fn ProviderDetailPanel(
 
     let on_delete = move |_| {
         let sel = selected.get();
-        if sel.is_none() { return; }
+        if sel.is_none() {
+            return;
+        }
         let provider_name = sel.unwrap();
 
         deleting.set(true);
@@ -1097,15 +1131,27 @@ fn AddCustomSearchProviderPanel(
             name: name.clone(),
             api_key: {
                 let v = form_api_key.get();
-                if v.is_empty() { None } else { Some(v) }
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
             },
             base_url: {
                 let v = form_base_url.get();
-                if v.is_empty() { None } else { Some(v) }
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
             },
             engine_id: {
                 let v = form_engine_id.get();
-                if v.is_empty() { None } else { Some(v) }
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
             },
             verified: false,
         });

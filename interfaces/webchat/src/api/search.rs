@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchBackendEntry {
@@ -69,7 +69,9 @@ impl SearchConfigApi {
 
     pub async fn delete_backend(state: &DashboardState, name: &str) -> Result<(), String> {
         let params = serde_json::json!({ "name": name });
-        state.rpc_call("search_config.deleteBackend", params).await?;
+        state
+            .rpc_call("search_config.deleteBackend", params)
+            .await?;
         Ok(())
     }
 }

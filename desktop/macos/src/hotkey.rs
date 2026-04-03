@@ -159,9 +159,9 @@ impl HotkeyListener {
         // --- Local monitor (app focused) -------------------------------------
         let local_block = self.build_local_handler_block();
         // SAFETY: Our block always returns the event pointer unchanged (pass-through).
-        if let Some(monitor) = unsafe {
-            NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local_block)
-        } {
+        if let Some(monitor) =
+            unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local_block) }
+        {
             debug!("Local hotkey monitor installed");
             self.monitors.push(monitor);
         } else {
@@ -194,9 +194,7 @@ impl HotkeyListener {
     }
 
     /// Build the `DynBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>` for the local monitor.
-    fn build_local_handler_block(
-        &self,
-    ) -> RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> {
+    fn build_local_handler_block(&self) -> RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> {
         let tx = self.tx.clone();
         let registrations = self.snapshot_registrations();
 

@@ -7,17 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aleph_protocol::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent,
-};
+use aleph_protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, StreamEvent};
 use futures_util::{SinkExt, StreamExt};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use tokio_tungstenite::{
-    connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, error, info, warn};
 
 use crate::config::CliConfig;
@@ -29,7 +25,9 @@ struct PendingRequest {
 }
 
 /// Type alias for WebSocket write half
-type WsWriter = Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
+type WsWriter = Arc<
+    Mutex<futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
+>;
 
 /// WebSocket client for Aleph Gateway
 pub struct AlephClient {
@@ -79,7 +77,14 @@ impl AlephClient {
         let write_clone = write.clone();
 
         tokio::spawn(async move {
-            Self::read_loop(read, pending_clone, event_tx_clone, connected_clone, write_clone).await;
+            Self::read_loop(
+                read,
+                pending_clone,
+                event_tx_clone,
+                connected_clone,
+                write_clone,
+            )
+            .await;
         });
 
         info!("Connected to Gateway");
@@ -167,9 +172,9 @@ impl AlephClient {
         if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(text) {
             // Check if this is a request (has non-null id) or notification (no id or null id)
             let is_request = match &request.id {
-                Some(Value::Null) => false,  // null id means notification
-                Some(_) => true,              // non-null id means request
-                None => false,                // no id means notification
+                Some(Value::Null) => false, // null id means notification
+                Some(_) => true,            // non-null id means request
+                None => false,              // no id means notification
             };
 
             if is_request {
@@ -201,7 +206,8 @@ impl AlephClient {
     /// Handle a request from Server
     async fn handle_server_request(request: &JsonRpcRequest, id: Value, write: &WsWriter) {
         warn!(method = %request.method, "Unknown method from Server");
-        let rpc_response = JsonRpcResponse::error(id, JsonRpcError::method_not_found(&request.method));
+        let rpc_response =
+            JsonRpcResponse::error(id, JsonRpcError::method_not_found(&request.method));
 
         // Send response
         let json = match serde_json::to_string(&rpc_response) {
@@ -221,7 +227,9 @@ impl AlephClient {
 
     /// Generate next request ID
     fn next_id(&self) -> String {
-        let id = self.id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = self
+            .id_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         id.to_string()
     }
 
@@ -231,7 +239,8 @@ impl AlephClient {
         method: &str,
         params: Option<P>,
     ) -> CliResult<R> {
-        self.call_with_timeout(method, params, Duration::from_secs(30)).await
+        self.call_with_timeout(method, params, Duration::from_secs(30))
+            .await
     }
 
     /// Send a JSON-RPC request with custom timeout
@@ -246,9 +255,7 @@ impl AlephClient {
         }
 
         let id = self.next_id();
-        let params_value = params
-            .map(|p| serde_json::to_value(p))
-            .transpose()?;
+        let params_value = params.map(|p| serde_json::to_value(p)).transpose()?;
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -333,7 +340,8 @@ impl AlephClient {
     pub async fn close(&self) -> CliResult<()> {
         let mut write = self.write.lock().await;
         write.send(Message::Close(None)).await?;
-        self.connected.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.connected
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }

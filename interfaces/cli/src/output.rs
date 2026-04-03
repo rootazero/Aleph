@@ -124,9 +124,17 @@ mod tests {
 
         // Compute expected widths
         let expected_widths: Vec<usize> = vec![
-            "ID".len().max("1".len()).max("2".len()).max("3".len()),                                       // 2
-            "Name".len().max("short".len()).max("a-much-longer-name".len()).max("mid".len()),               // 18
-            "Status".len().max("ok".len()).max("error".len()).max("ok".len()),                              // 6
+            "ID".len().max("1".len()).max("2".len()).max("3".len()), // 2
+            "Name"
+                .len()
+                .max("short".len())
+                .max("a-much-longer-name".len())
+                .max("mid".len()), // 18
+            "Status"
+                .len()
+                .max("ok".len())
+                .max("error".len())
+                .max("ok".len()), // 6
         ];
         assert_eq!(expected_widths, vec![2, 18, 6]);
 

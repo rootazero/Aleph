@@ -198,6 +198,12 @@ enum Commands {
         action: LogsAction,
     },
 
+    /// Structured trace replay inspection
+    Trace {
+        #[command(subcommand)]
+        action: TraceAction,
+    },
+
     /// Identity/soul management
     Identity {
         #[command(subcommand)]
@@ -726,6 +732,21 @@ enum LogsAction {
 }
 
 #[derive(Subcommand)]
+enum TraceAction {
+    /// List recent persisted trace replays
+    List {
+        /// Maximum number of tasks to show
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Show a structured replay for a persisted task
+    Show {
+        /// Replay task ID
+        task_id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum IdentityAction {
     /// Get current identity/soul
     Get,
@@ -860,7 +881,14 @@ async fn main() -> CliResult<()> {
             commands::ask::run(&server_url, &message, session.as_deref(), &config).await?;
         }
         Some(Commands::Chat { session, agent }) => {
-            commands::chat::run(&server_url, agent.as_deref(), session.as_deref(), &config, cli.verbose).await?;
+            commands::chat::run(
+                &server_url,
+                agent.as_deref(),
+                session.as_deref(),
+                &config,
+                cli.verbose,
+            )
+            .await?;
         }
         Some(Commands::Session { action }) => match action {
             SessionAction::List => {
@@ -887,7 +915,8 @@ async fn main() -> CliResult<()> {
                 commands::config_cmd::file();
             }
             ConfigAction::Get { section } => {
-                commands::config_cmd::get(&server_url, section.as_deref(), &config, cli.json).await?;
+                commands::config_cmd::get(&server_url, section.as_deref(), &config, cli.json)
+                    .await?;
             }
             ConfigAction::Set { path, value } => {
                 commands::config_cmd::set(&server_url, &path, &value, &config, cli.json).await?;
@@ -899,7 +928,8 @@ async fn main() -> CliResult<()> {
                 commands::config_cmd::reload(&server_url, &config, cli.json).await?;
             }
             ConfigAction::Schema { output } => {
-                commands::config_cmd::schema(&server_url, output.as_deref(), &config, cli.json).await?;
+                commands::config_cmd::schema(&server_url, output.as_deref(), &config, cli.json)
+                    .await?;
             }
             ConfigAction::Edit => {
                 commands::config_cmd::edit()?;
@@ -921,20 +951,29 @@ async fn main() -> CliResult<()> {
                 commands::channels_cmd::list(&server_url, &config, cli.json).await?;
             }
             ChannelsAction::Status { name } => {
-                commands::channels_cmd::status(&server_url, name.as_deref(), &config, cli.json).await?;
+                commands::channels_cmd::status(&server_url, name.as_deref(), &config, cli.json)
+                    .await?;
             }
         },
         Some(Commands::Daemon { action }) => match action {
             DaemonAction::Status => {
                 commands::daemon::status(cli.json)?;
             }
-            DaemonAction::Start { port, daemon, config } => {
+            DaemonAction::Start {
+                port,
+                daemon,
+                config,
+            } => {
                 commands::daemon::start(port, daemon, config.as_deref(), cli.json)?;
             }
             DaemonAction::Stop => {
                 commands::daemon::stop(cli.json)?;
             }
-            DaemonAction::Restart { port, daemon, config } => {
+            DaemonAction::Restart {
+                port,
+                daemon,
+                config,
+            } => {
                 commands::daemon::restart(port, daemon, config.as_deref(), cli.json)?;
             }
             DaemonAction::Logs { lines, level } => {
@@ -989,15 +1028,11 @@ async fn main() -> CliResult<()> {
             MemoryAction::Search { query, limit } => {
                 commands::memory_cmd::search(&server_url, &query, limit, cli.json).await?
             }
-            MemoryAction::Stats => {
-                commands::memory_cmd::stats(&server_url, cli.json).await?
-            }
+            MemoryAction::Stats => commands::memory_cmd::stats(&server_url, cli.json).await?,
             MemoryAction::Clear { facts_only } => {
                 commands::memory_cmd::clear(&server_url, facts_only, cli.json).await?
             }
-            MemoryAction::Compress => {
-                commands::memory_cmd::compress(&server_url, cli.json).await?
-            }
+            MemoryAction::Compress => commands::memory_cmd::compress(&server_url, cli.json).await?,
             MemoryAction::Delete { id } => {
                 commands::memory_cmd::delete(&server_url, &id, cli.json).await?
             }
@@ -1012,9 +1047,8 @@ async fn main() -> CliResult<()> {
                 PluginAction::Install { source, .. } => {
                     // If source looks like a plain plugin name (no '/', '.', or ':'),
                     // route to marketplace install instead.
-                    let is_marketplace_name = !source.contains('/')
-                        && !source.contains('.')
-                        && !source.contains(':');
+                    let is_marketplace_name =
+                        !source.contains('/') && !source.contains('.') && !source.contains(':');
                     if is_marketplace_name {
                         let (client, _events) = AlephClient::connect(&server_url).await?;
                         let result: serde_json::Value = client
@@ -1042,7 +1076,11 @@ async fn main() -> CliResult<()> {
                 PluginAction::Disable { name } => {
                     commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
                 }
-                PluginAction::Call { plugin, tool, params } => {
+                PluginAction::Call {
+                    plugin,
+                    tool,
+                    params,
+                } => {
                     commands::plugins_cmd::call(
                         &server_url,
                         &plugin,
@@ -1065,9 +1103,13 @@ async fn main() -> CliResult<()> {
                     commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
                 }
                 // Dev tool commands
-                PluginAction::Init { name, template, dir } => {
-                    let tmpl: plugin_cmd::PluginTemplate = template.parse()
-                        .map_err(|e: String| CliError::Other(e))?;
+                PluginAction::Init {
+                    name,
+                    template,
+                    dir,
+                } => {
+                    let tmpl: plugin_cmd::PluginTemplate =
+                        template.parse().map_err(|e: String| CliError::Other(e))?;
                     let dir_path = dir.map(std::path::PathBuf::from);
                     plugin_cmd::init(&name, tmpl, dir_path.as_deref())?;
                 }
@@ -1087,7 +1129,10 @@ async fn main() -> CliResult<()> {
                     match action {
                         MarketplaceAction::Add { source } => {
                             let result: serde_json::Value = client
-                                .call("plugin.marketplace.add", Some(serde_json::json!({ "source": source })))
+                                .call(
+                                    "plugin.marketplace.add",
+                                    Some(serde_json::json!({ "source": source })),
+                                )
                                 .await?;
                             if cli.json {
                                 crate::output::print_json(&result);
@@ -1121,7 +1166,10 @@ async fn main() -> CliResult<()> {
                         }
                         MarketplaceAction::Remove { name } => {
                             let result: serde_json::Value = client
-                                .call("plugin.marketplace.remove", Some(serde_json::json!({ "name": name })))
+                                .call(
+                                    "plugin.marketplace.remove",
+                                    Some(serde_json::json!({ "name": name })),
+                                )
                                 .await?;
                             if cli.json {
                                 crate::output::print_json(&result);
@@ -1133,7 +1181,7 @@ async fn main() -> CliResult<()> {
                     client.close().await?;
                 }
             }
-        },
+        }
         Some(Commands::Plugins { action }) => {
             eprintln!("Warning: 'aleph plugins' is deprecated. Use 'aleph plugin' instead.");
             match action {
@@ -1152,7 +1200,11 @@ async fn main() -> CliResult<()> {
                 PluginsAction::Disable { name } => {
                     commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
                 }
-                PluginsAction::Call { plugin, tool, params } => {
+                PluginsAction::Call {
+                    plugin,
+                    tool,
+                    params,
+                } => {
                     commands::plugins_cmd::call(
                         &server_url,
                         &plugin,
@@ -1175,7 +1227,7 @@ async fn main() -> CliResult<()> {
                     commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
                 }
             }
-        },
+        }
         Some(Commands::Services { action }) => match action {
             ServicesAction::List { plugin, state } => {
                 commands::services_cmd::list(
@@ -1299,6 +1351,14 @@ async fn main() -> CliResult<()> {
                 commands::logs_cmd::dir(&server_url, cli.json).await?;
             }
         },
+        Some(Commands::Trace { action }) => match action {
+            TraceAction::List { limit } => {
+                commands::trace_cmd::list(&server_url, limit, cli.json).await?;
+            }
+            TraceAction::Show { task_id } => {
+                commands::trace_cmd::show(&server_url, &task_id, cli.json).await?;
+            }
+        },
         Some(Commands::Identity { action }) => match action {
             IdentityAction::Get => {
                 commands::identity_cmd::get(&server_url, cli.json).await?;
@@ -1372,8 +1432,14 @@ async fn main() -> CliResult<()> {
                 session_key,
                 keep_system,
             } => {
-                commands::chat_cmd::clear(&server_url, &session_key, keep_system, &config, cli.json)
-                    .await?;
+                commands::chat_cmd::clear(
+                    &server_url,
+                    &session_key,
+                    keep_system,
+                    &config,
+                    cli.json,
+                )
+                .await?;
             }
         },
         Some(Commands::Completion { shell }) => {
@@ -1386,4 +1452,20 @@ async fn main() -> CliResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn parse_trace_list_command() {
+        assert!(Cli::try_parse_from(["aleph", "trace", "list"]).is_ok());
+    }
+
+    #[test]
+    fn parse_trace_show_command() {
+        assert!(Cli::try_parse_from(["aleph", "trace", "show", "task-1"]).is_ok());
+    }
 }

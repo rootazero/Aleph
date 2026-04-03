@@ -90,6 +90,13 @@ pub enum StreamEvent {
         duration_ms: u64,
     },
 
+    /// Structured execution trace emitted directly by the agent loop.
+    AgentTrace {
+        run_id: String,
+        seq: u64,
+        event: crate::agent_loop::LoopTraceEvent,
+    },
+
     /// Response text chunk (streaming output)
     ResponseChunk {
         run_id: String,
@@ -262,6 +269,19 @@ impl StreamEvent {
             seq,
             uncertainty: uncertainty.into(),
             suggested_action,
+        }
+    }
+
+    /// Create a new structured agent trace event
+    pub fn agent_trace(
+        run_id: impl Into<String>,
+        seq: u64,
+        event: crate::agent_loop::LoopTraceEvent,
+    ) -> Self {
+        Self::AgentTrace {
+            run_id: run_id.into(),
+            seq,
+            event,
         }
     }
 }

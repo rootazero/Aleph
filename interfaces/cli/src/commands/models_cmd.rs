@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// List all available models
 pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
@@ -25,15 +25,16 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
                 .and_then(|v| v.as_u64())
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "-".to_string());
-            rows.push(vec![
-                id.to_string(),
-                provider.to_string(),
-                context_window,
-            ]);
+            rows.push(vec![id.to_string(), provider.to_string(), context_window]);
         }
     }
 
-    output::print_table(&["Model ID", "Provider", "Context Window"], &rows, json, &result);
+    output::print_table(
+        &["Model ID", "Provider", "Context Window"],
+        &rows,
+        json,
+        &result,
+    );
 
     client.close().await?;
     Ok(())

@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingProviderEntry {
@@ -46,9 +46,15 @@ pub struct EmbeddingProviderConfig {
     pub enabled: bool,
 }
 
-fn default_enabled() -> bool { true }
-fn default_batch_size() -> u32 { 32 }
-fn default_timeout_ms() -> u64 { 10000 }
+fn default_enabled() -> bool {
+    true
+}
+fn default_batch_size() -> u32 {
+    32
+}
+fn default_timeout_ms() -> u64 {
+    10000
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingTestResult {
@@ -72,7 +78,9 @@ pub struct EmbeddingProvidersApi;
 impl EmbeddingProvidersApi {
     /// List all configured embedding providers
     pub async fn list(state: &DashboardState) -> Result<Vec<EmbeddingProviderEntry>, String> {
-        let result = state.rpc_call("embedding_providers.list", Value::Null).await?;
+        let result = state
+            .rpc_call("embedding_providers.list", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
@@ -120,7 +128,9 @@ impl EmbeddingProvidersApi {
     /// without clearing the vector store.
     pub async fn set_active(state: &DashboardState, id: &str) -> Result<(), String> {
         let params = serde_json::json!({ "id": id });
-        state.rpc_call("embedding_providers.setActive", params).await?;
+        state
+            .rpc_call("embedding_providers.setActive", params)
+            .await?;
         Ok(())
     }
 
@@ -137,7 +147,9 @@ impl EmbeddingProvidersApi {
 
     /// Get preset embedding provider configurations
     pub async fn presets(state: &DashboardState) -> Result<Vec<EmbeddingPresetEntry>, String> {
-        let result = state.rpc_call("embedding_providers.presets", Value::Null).await?;
+        let result = state
+            .rpc_call("embedding_providers.presets", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 

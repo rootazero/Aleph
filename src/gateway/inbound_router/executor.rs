@@ -255,10 +255,7 @@ impl InboundMessageRouter {
                                 delay_ms,
                                 "Agent busy, queuing retry"
                             );
-                            tokio::time::sleep(
-                                tokio::time::Duration::from_millis(delay_ms),
-                            )
-                            .await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                             continue;
                         }
 

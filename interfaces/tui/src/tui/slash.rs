@@ -16,12 +16,18 @@ pub enum LocalCommand {
     Verbose,
     /// Show help text
     Help,
+    /// List recent persisted trace replays
+    ReplayList,
+    /// Load a persisted trace replay by task ID
+    ReplayShow { task_id: String },
 }
 
 /// Local command catalog: (name, description) pairs.
 const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/clear", "Clear the screen"),
     ("/verbose", "Toggle verbose/debug output"),
+    ("/replays", "List recent persisted trace replays"),
+    ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
     ("/quit", "Exit the application (aliases: /q, /exit)"),
 ];
@@ -53,6 +59,7 @@ pub fn parse_input(input: &str) -> ParsedInput {
         Some(pos) => &trimmed[..pos],
         None => trimmed,
     };
+    let args = trimmed[cmd.len()..].trim();
 
     // Normalize command to lowercase
     let cmd_lower = cmd.to_lowercase();
@@ -60,6 +67,16 @@ pub fn parse_input(input: &str) -> ParsedInput {
     match cmd_lower.as_str() {
         "/clear" => ParsedInput::Local(LocalCommand::Clear),
         "/verbose" => ParsedInput::Local(LocalCommand::Verbose),
+        "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
+        "/replay" => {
+            if args.is_empty() {
+                ParsedInput::Local(LocalCommand::ReplayList)
+            } else {
+                ParsedInput::Local(LocalCommand::ReplayShow {
+                    task_id: args.to_string(),
+                })
+            }
+        }
         "/help" => ParsedInput::Local(LocalCommand::Help),
         "/quit" | "/q" | "/exit" => ParsedInput::Local(LocalCommand::Quit),
         // Everything else goes to Gateway
@@ -86,27 +103,15 @@ mod tests {
             parse_input("/verbose"),
             ParsedInput::Local(LocalCommand::Verbose)
         );
-        assert_eq!(
-            parse_input("/help"),
-            ParsedInput::Local(LocalCommand::Help)
-        );
-        assert_eq!(
-            parse_input("/quit"),
-            ParsedInput::Local(LocalCommand::Quit)
-        );
+        assert_eq!(parse_input("/help"), ParsedInput::Local(LocalCommand::Help));
+        assert_eq!(parse_input("/quit"), ParsedInput::Local(LocalCommand::Quit));
         assert_eq!(parse_input("/q"), ParsedInput::Local(LocalCommand::Quit));
-        assert_eq!(
-            parse_input("/exit"),
-            ParsedInput::Local(LocalCommand::Quit)
-        );
+        assert_eq!(parse_input("/exit"), ParsedInput::Local(LocalCommand::Quit));
     }
 
     #[test]
     fn parse_local_case_insensitive() {
-        assert_eq!(
-            parse_input("/HELP"),
-            ParsedInput::Local(LocalCommand::Help)
-        );
+        assert_eq!(parse_input("/HELP"), ParsedInput::Local(LocalCommand::Help));
         assert_eq!(
             parse_input("/Clear"),
             ParsedInput::Local(LocalCommand::Clear)
@@ -115,6 +120,11 @@ mod tests {
 
     #[test]
     fn parse_gateway_commands() {
+        assert!(matches!(parse_input("/replays"), ParsedInput::Local(_)));
+        assert!(matches!(
+            parse_input("/replay task-1"),
+            ParsedInput::Local(_)
+        ));
         assert_eq!(
             parse_input("/new my-session"),
             ParsedInput::Gateway("/new my-session".to_string())
@@ -160,9 +170,10 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 4);
+        assert_eq!(cmds.len(), 6);
         assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
         assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/replays"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/replay"));
     }
-
 }

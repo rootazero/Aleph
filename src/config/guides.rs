@@ -4,10 +4,7 @@
 use std::path::Path;
 
 const GUIDES: &[(&str, &str)] = &[
-    (
-        "overview.md",
-        include_str!("../../docs/guides/overview.md"),
-    ),
+    ("overview.md", include_str!("../../docs/guides/overview.md")),
     (
         "providers.md",
         include_str!("../../docs/guides/providers.md"),
@@ -15,18 +12,12 @@ const GUIDES: &[(&str, &str)] = &[
     ("mcp.md", include_str!("../../docs/guides/mcp.md")),
     ("skills.md", include_str!("../../docs/guides/skills.md")),
     ("agents.md", include_str!("../../docs/guides/agents.md")),
-    (
-        "general.md",
-        include_str!("../../docs/guides/general.md"),
-    ),
+    ("general.md", include_str!("../../docs/guides/general.md")),
     (
         "generation.md",
         include_str!("../../docs/guides/generation.md"),
     ),
-    (
-        "channels.md",
-        include_str!("../../docs/guides/channels.md"),
-    ),
+    ("channels.md", include_str!("../../docs/guides/channels.md")),
     ("cron.md", include_str!("../../docs/guides/cron.md")),
 ];
 

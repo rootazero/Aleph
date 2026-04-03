@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
 use crate::api::tool_permissions::ToolPermissionsApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use std::collections::HashMap;
 
 /// Permission level constants
 const ALLOW: &str = "allow";
@@ -35,7 +35,9 @@ pub fn PoliciesView() -> impl IntoView {
     // Load tool permissions + schema
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         spawn_local(async move {
             let schema = match AgentsApi::tools_schema(&dash).await {
                 Ok(s) => s,
@@ -55,13 +57,17 @@ pub fn PoliciesView() -> impl IntoView {
                 }
             };
 
-            let all_tools: Vec<String> = schema.groups.iter()
+            let all_tools: Vec<String> = schema
+                .groups
+                .iter()
                 .flat_map(|g| g.tools.iter().map(|t| t.name.clone()))
                 .collect();
 
             let mut current = HashMap::new();
             for t in &all_tools {
-                let perm = perms.overrides.get(t)
+                let perm = perms
+                    .overrides
+                    .get(t)
                     .cloned()
                     .unwrap_or_else(|| perms.default.clone());
                 current.insert(t.clone(), perm);
@@ -85,9 +91,9 @@ pub fn PoliciesView() -> impl IntoView {
 
     let toggle_group = move |tool_names: Vec<String>| {
         tool_perms.update(|map| {
-            let all_allowed = tool_names.iter().all(|t| {
-                map.get(t).map(|v| v == ALLOW).unwrap_or(false)
-            });
+            let all_allowed = tool_names
+                .iter()
+                .all(|t| map.get(t).map(|v| v == ALLOW).unwrap_or(false));
             let target = if all_allowed { DENY } else { ALLOW };
             for t in &tool_names {
                 map.insert(t.clone(), target.to_string());
@@ -109,7 +115,8 @@ pub fn PoliciesView() -> impl IntoView {
             let current_default = default_perm.get();
             let current_perms = tool_perms.get();
 
-            let overrides: HashMap<String, String> = current_perms.into_iter()
+            let overrides: HashMap<String, String> = current_perms
+                .into_iter()
                 .filter(|(_, v)| *v != current_default)
                 .collect();
 
@@ -117,7 +124,9 @@ pub fn PoliciesView() -> impl IntoView {
                 Ok(()) => {
                     original_perms.set(tool_perms.get());
                     original_default.set(default_perm.get());
-                    tp_success.set(Some(t_string!(i18n, settings.policies.saved_note).to_string()));
+                    tp_success.set(Some(
+                        t_string!(i18n, settings.policies.saved_note).to_string(),
+                    ));
                 }
                 Err(e) => {
                     tp_error.set(Some(format!("Failed to save: {}", e)));

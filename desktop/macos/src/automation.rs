@@ -45,9 +45,7 @@ impl AutomationCapability for MacOSAutomation {
                     .output()
                     .await
             }
-            ScriptLanguage::Shell => {
-                Command::new("bash").arg("-c").arg(source).output().await
-            }
+            ScriptLanguage::Shell => Command::new("bash").arg("-c").arg(source).output().await,
             ScriptLanguage::PowerShell => {
                 return Err(DesktopError::NotImplemented(
                     "PowerShell is not available on macOS".into(),
@@ -55,9 +53,8 @@ impl AutomationCapability for MacOSAutomation {
             }
         };
 
-        let output = output.map_err(|e| {
-            DesktopError::InputFailed(format!("failed to spawn process: {e}"))
-        })?;
+        let output = output
+            .map_err(|e| DesktopError::InputFailed(format!("failed to spawn process: {e}")))?;
 
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -136,9 +133,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_shell() {
         let auto = MacOSAutomation::new();
-        let result = auto
-            .run_script(ScriptLanguage::Shell, "echo hello")
-            .await;
+        let result = auto.run_script(ScriptLanguage::Shell, "echo hello").await;
         assert_eq!(result.unwrap(), "hello");
     }
 

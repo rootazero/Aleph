@@ -175,6 +175,7 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::ReasoningBlock { .. } => None,
             StreamEvent::ToolEnd { .. } => None,
             StreamEvent::ToolUpdate { .. } => None,
+            StreamEvent::AgentTrace { .. } => None,
             StreamEvent::RunAccepted { .. } => None,
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,

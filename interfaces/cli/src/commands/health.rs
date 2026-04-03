@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 #[derive(Deserialize)]
 struct HealthResponse {

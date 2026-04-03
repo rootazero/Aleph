@@ -4,12 +4,15 @@
 //! exclusive tools run one at a time. Original order is always preserved.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::tool::LoopToolRegistry;
 use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
-use crate::agent_loop::{LoopCallback, SafetyToolCall, ToolResult};
+use crate::agent_loop::{
+    LoopCallback, LoopTraceEvent, SafetyToolCall, ToolCallEndEvent, ToolCallStartEvent, ToolResult,
+};
 use crate::providers::adapter::NativeToolCall;
 use serde_json::Value;
 
@@ -22,6 +25,8 @@ use serde_json::Value;
 pub struct ToolOutcome {
     pub tool_id: String,
     pub tool_name: String,
+    /// End-to-end execution time for this tool call in milliseconds.
+    pub duration_ms: u64,
     pub output_text: String,
     pub is_error: bool,
     pub should_stop: bool,
@@ -108,7 +113,14 @@ pub async fn execute_tool_batch(
                         input: tc.arguments.clone(),
                     };
                     if pipeline.safety().check(&safety_call).is_ok() {
-                        callback.on_tool_start(&tc.name, &tc.arguments);
+                        callback.on_trace(&LoopTraceEvent::ToolCallStarted {
+                            iteration: 0,
+                            call: ToolCallStartEvent {
+                                tool_id: tc.id.clone(),
+                                tool_name: tc.name.clone(),
+                                input: tc.arguments.clone(),
+                            },
+                        });
                         safe_indices.push(idx);
                     } else {
                         // Safety-blocked: produce outcome directly, skip execution.
@@ -125,7 +137,15 @@ pub async fn execute_tool_batch(
                         .iter()
                         .map(|&idx| {
                             let tc = &tool_calls[idx];
-                            pipeline.execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
+                            async move {
+                                let started_at = Instant::now();
+                                let mut outcome = pipeline
+                                    .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
+                                    .await;
+                                outcome.outcome.duration_ms =
+                                    started_at.elapsed().as_millis() as u64;
+                                outcome
+                            }
                         })
                         .collect();
 
@@ -134,7 +154,16 @@ pub async fn execute_tool_batch(
                     for (i, po) in outcomes.into_iter().enumerate() {
                         let idx = safe_indices[i];
                         let tool_result = outcome_to_tool_result(&po.outcome);
-                        callback.on_tool_done(&tool_calls[idx].name, &tool_result);
+                        callback.on_trace(&LoopTraceEvent::ToolCallCompleted {
+                            iteration: 0,
+                            call: ToolCallEndEvent {
+                                tool_id: tool_calls[idx].id.clone(),
+                                tool_name: tool_calls[idx].name.clone(),
+                                input: tool_calls[idx].arguments.clone(),
+                                duration_ms: po.outcome.duration_ms,
+                            },
+                            result: tool_result,
+                        });
                         results.push((idx, po));
                     }
                 }
@@ -150,16 +179,34 @@ pub async fn execute_tool_batch(
                 };
                 let is_safe = pipeline.safety().check(&safety_call).is_ok();
                 if is_safe {
-                    callback.on_tool_start(&tc.name, &tc.arguments);
+                    callback.on_trace(&LoopTraceEvent::ToolCallStarted {
+                        iteration: 0,
+                        call: ToolCallStartEvent {
+                            tool_id: tc.id.clone(),
+                            tool_name: tc.name.clone(),
+                            input: tc.arguments.clone(),
+                        },
+                    });
                 }
 
-                let po = pipeline
+                let started_at = Instant::now();
+                let mut po = pipeline
                     .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
                     .await;
+                po.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
 
                 if is_safe {
                     let tool_result = outcome_to_tool_result(&po.outcome);
-                    callback.on_tool_done(&tc.name, &tool_result);
+                    callback.on_trace(&LoopTraceEvent::ToolCallCompleted {
+                        iteration: 0,
+                        call: ToolCallEndEvent {
+                            tool_id: tc.id.clone(),
+                            tool_name: tc.name.clone(),
+                            input: tc.arguments.clone(),
+                            duration_ms: po.outcome.duration_ms,
+                        },
+                        result: tool_result,
+                    });
                 }
                 results.push((idx, po));
             }
@@ -204,15 +251,19 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::agent_loop::loop_core::NoopCallback;
-    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
     use crate::agent_loop::safety::SafetyGuard;
+    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
 
     fn permissive_pipeline() -> ToolPipeline {
         ToolPipeline::new(
             Arc::new(HookExecutor::empty()),
-            Arc::new(SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)),
+            Arc::new(SafetyGuard::new(
+                vec![],
+                HashMap::new(),
+                PermissionAction::Allow,
+            )),
             "test-session",
         )
     }
@@ -414,7 +465,8 @@ mod tests {
         let mut callback = NoopCallback;
 
         let start = Instant::now();
-        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
+        let outcomes =
+            execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
         let elapsed = start.elapsed();
 
         assert_eq!(outcomes.len(), 3);
@@ -460,7 +512,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut callback = NoopCallback;
 
-        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
+        let outcomes =
+            execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
 
         // Verify order matches input.
         assert_eq!(outcomes.len(), 4);
@@ -475,7 +528,11 @@ mod tests {
 
         // All should succeed.
         for o in &outcomes {
-            assert!(!o.outcome.is_error, "tool {} should not be an error", o.outcome.tool_name);
+            assert!(
+                !o.outcome.is_error,
+                "tool {} should not be an error",
+                o.outcome.tool_name
+            );
         }
     }
 
@@ -505,7 +562,8 @@ mod tests {
             cancel_clone.cancel();
         });
 
-        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
+        let outcomes =
+            execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
 
         // Should have outcomes (the first batch starts before cancel fires).
         // At least one outcome should be cancelled.
@@ -517,7 +575,10 @@ mod tests {
         assert!(
             cancelled_count > 0,
             "Expected at least one cancelled outcome, got none. Outcomes: {:?}",
-            outcomes.iter().map(|o| &o.outcome.output_text).collect::<Vec<_>>()
+            outcomes
+                .iter()
+                .map(|o| &o.outcome.output_text)
+                .collect::<Vec<_>>()
         );
     }
 }

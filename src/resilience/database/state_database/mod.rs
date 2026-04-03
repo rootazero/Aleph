@@ -125,6 +125,9 @@ impl StateDatabase {
         // Migrate to add embedding_model column for model tracking (idempotent)
         migration::migrate_add_embedding_model(&conn)?;
 
+        // Migrate task traces to structured AgentTraceEvent storage (idempotent)
+        migration::migrate_task_traces_to_agent_trace(&conn)?;
+
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
 
@@ -187,6 +190,7 @@ impl StateDatabase {
         migration::migrate_add_experience_replays(&conn)?;
         migration::migrate_add_vfs_paths(&conn)?;
         migration::migrate_add_embedding_model(&conn)?;
+        migration::migrate_task_traces_to_agent_trace(&conn)?;
 
         if !dim_changed {
             Self::migrate_to_vec0(&conn)?;

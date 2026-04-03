@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// Truncate a string to a maximum character length, appending "..." if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -30,19 +30,9 @@ pub async fn search(server_url: &str, query: &str, limit: usize, json: bool) -> 
                 .and_then(|v| v.as_f64())
                 .map(|s| format!("{:.3}", s))
                 .unwrap_or_else(|| "-".to_string());
-            let content = item
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
-            let source = item
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
-            rows.push(vec![
-                score,
-                truncate(content, 80),
-                source.to_string(),
-            ]);
+            let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("-");
+            let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("-");
+            rows.push(vec![score, truncate(content, 80), source.to_string()]);
         }
     }
 

@@ -11,6 +11,7 @@
 
 use super::server::AlephToolServer;
 use crate::builtin_tools::*;
+use crate::sync_primitives::Arc;
 
 impl AlephToolServer {
     /// Register the bash execution tool
@@ -162,10 +163,7 @@ impl AlephToolServer {
         self.tool(BrowserTool::new())
     }
 
-    /// Register the desktop bridge tool (requires macOS App running).
-    ///
-    /// When the macOS App is not running, all tool calls return a friendly
-    /// message instead of an error, allowing the agent to degrade gracefully.
+    /// Register the platform-native desktop tool for the current OS build.
     ///
     /// # Example
     /// ```rust,ignore
@@ -173,7 +171,24 @@ impl AlephToolServer {
     ///     .with_desktop();
     /// ```
     pub fn with_desktop(self) -> Self {
-        self.tool(DesktopTool::new())
+        let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
+            #[cfg(target_os = "macos")]
+            {
+                Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+            }
+        };
+
+        self.tool(DesktopTool::new().with_platform(desktop_platform))
     }
 
     /// Register the vision tool (image understanding + OCR).

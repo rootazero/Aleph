@@ -18,6 +18,27 @@ use tokio::sync::RwLock;
 
 use super::{BuiltinToolConfig, ToolRegistry};
 
+pub(crate) fn resolve_plugin_handler_from_sources(
+    extension_manager: Option<&crate::extension::ExtensionManager>,
+    tools: &HashMap<String, UnifiedTool>,
+    tool_name: &str,
+) -> Option<(String, String)> {
+    if let Some(ext_mgr) = extension_manager {
+        if let Some(tool) = ext_mgr.resolve_active_plugin_tool(tool_name) {
+            return Some((tool.plugin_id, tool.handler));
+        }
+    }
+
+    tools
+        .get(tool_name)
+        .and_then(|unified| match &unified.source {
+            ToolSource::Plugin { plugin_id } => {
+                Some((plugin_id.clone(), format!("tool_{}", tool_name)))
+            }
+            _ => None,
+        })
+}
+
 /// Registry of builtin tools for Agent Loop
 ///
 /// Holds instances of builtin tools and provides direct invocation capabilities.
@@ -233,6 +254,14 @@ impl BuiltinToolRegistry {
         self.tools
             .get(name)
             .and_then(|t| t.parameters_schema.clone())
+    }
+
+    pub(crate) fn resolve_plugin_handler(&self, tool_name: &str) -> Option<(String, String)> {
+        resolve_plugin_handler_from_sources(
+            self.extension_manager.as_deref(),
+            &self.tools,
+            tool_name,
+        )
     }
 
     /// Check if an operation is permitted
@@ -456,17 +485,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .session_context_handle
                     .as_ref()
                     .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| {
-                        ctx.session_key_str
-                            .split(':')
-                            .next()
-                            .map(|s| s.to_string())
-                    })
+                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
                     .unwrap_or_else(|| "main".to_string());
-                let tool = crate::builtin_tools::SessionSearchTool::new(
-                    Arc::clone(context),
-                    caller_id,
-                );
+                let tool =
+                    crate::builtin_tools::SessionSearchTool::new(Arc::clone(context), caller_id);
                 tool.call_json(arguments).await
             }),
 
@@ -867,29 +889,22 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             _ => {
-                // Check if this is a plugin tool
-                if let Some(unified) = self.tools.get(tool_name) {
-                    if let ToolSource::Plugin { ref plugin_id } = unified.source {
-                        let plugin_id = plugin_id.clone();
-                        // plugin-host.js registers tool handlers as "tool_{name}"
-                        let handler = format!("tool_{}", tool_name);
-                        let ext_mgr = self.extension_manager.clone();
-                        return Box::pin(async move {
-                            let ext_mgr = ext_mgr.ok_or_else(|| {
-                                AlephError::tool("Plugin tool execution unavailable: extension manager not configured")
-                            })?;
-                            info!(plugin = %plugin_id, tool = %handler, "Executing plugin tool");
-                            ext_mgr
-                                .call_plugin_tool(&plugin_id, &handler, arguments)
-                                .await
-                                .map_err(|e| {
-                                    AlephError::tool(format!(
-                                        "Plugin tool '{}' failed: {}",
-                                        handler, e
-                                    ))
-                                })
-                        });
-                    }
+                if let Some((plugin_id, handler)) = self.resolve_plugin_handler(tool_name) {
+                    let ext_mgr = self.extension_manager.clone();
+                    return Box::pin(async move {
+                        let ext_mgr = ext_mgr.ok_or_else(|| {
+                            AlephError::tool(
+                                "Plugin tool execution unavailable: extension manager not configured",
+                            )
+                        })?;
+                        info!(plugin = %plugin_id, tool = %handler, "Executing plugin tool");
+                        ext_mgr
+                            .call_plugin_tool(&plugin_id, &handler, arguments)
+                            .await
+                            .map_err(|e| {
+                                AlephError::tool(format!("Plugin tool '{}' failed: {}", handler, e))
+                            })
+                    });
                 }
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");

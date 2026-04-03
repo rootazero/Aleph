@@ -1,8 +1,8 @@
 //
 // Top bar — logo, theme toggle. Agent selection is handled by the chat sidebar.
 //
-use leptos::prelude::*;
 use super::theme_toggle::ThemeToggle;
+use leptos::prelude::*;
 
 #[component]
 pub fn TopBar() -> impl IntoView {

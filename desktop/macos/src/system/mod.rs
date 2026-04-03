@@ -66,10 +66,7 @@ impl SystemCapability for MacOSSystem {
 fn user_idle_seconds() -> f64 {
     extern "C" {
         // CGEventSourceSecondsSinceLastEventType(stateID: CGEventSourceStateID, eventType: CGEventType) -> CFTimeInterval
-        fn CGEventSourceSecondsSinceLastEventType(
-            state_id: i32,
-            event_type: u32,
-        ) -> f64;
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
     }
 
     // kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = ~0u (0xFFFFFFFF)

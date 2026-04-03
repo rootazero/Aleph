@@ -6,8 +6,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// List all skills (file-based and runtime-loaded), merged into one table.
 pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
@@ -25,15 +25,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
         if let Some(items) = val.as_array() {
             for s in items {
                 let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let desc = s
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
-                rows.push(vec![
-                    name.to_string(),
-                    "file".to_string(),
-                    desc.to_string(),
-                ]);
+                let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("-");
+                rows.push(vec![name.to_string(), "file".to_string(), desc.to_string()]);
                 let mut item = s.clone();
                 if let Some(obj) = item.as_object_mut() {
                     obj.insert("type".to_string(), Value::String("file".to_string()));
@@ -48,10 +41,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
         if let Some(items) = val.as_array() {
             for s in items {
                 let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let desc = s
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("-");
+                let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("-");
                 rows.push(vec![
                     name.to_string(),
                     "markdown".to_string(),

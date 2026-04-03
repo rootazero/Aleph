@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 // ============================================================================
 // General Config API

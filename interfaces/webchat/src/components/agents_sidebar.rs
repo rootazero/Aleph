@@ -1,14 +1,14 @@
 //
 // Agents mode sidebar — agent list with create, select, and default agent controls.
 //
-use std::collections::HashMap;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use leptos_router::hooks::use_location;
 use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::api::workspace::WorkspaceApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
+use std::collections::HashMap;
 
 #[component]
 pub fn AgentsSidebar() -> impl IntoView {

@@ -166,8 +166,16 @@ impl PromptBuilder {
         live.sort_by_key(|s| s.priority);
 
         // 3. Split into zones.
-        let stable: Vec<&PromptSection> = live.iter().filter(|s| s.stability == Stability::Stable).copied().collect();
-        let dynamic: Vec<&PromptSection> = live.iter().filter(|s| s.stability == Stability::Dynamic).copied().collect();
+        let stable: Vec<&PromptSection> = live
+            .iter()
+            .filter(|s| s.stability == Stability::Stable)
+            .copied()
+            .collect();
+        let dynamic: Vec<&PromptSection> = live
+            .iter()
+            .filter(|s| s.stability == Stability::Dynamic)
+            .copied()
+            .collect();
 
         // 4. Enforce budget.
         let total_content: usize = live.iter().map(|s| s.content.len()).sum();
@@ -179,10 +187,8 @@ impl PromptBuilder {
         let (final_stable, final_dynamic) = if total_chars > self.budget.max_chars {
             // Collect all sections with their zone tag, sorted by priority ascending.
             // We'll remove from the *end* (highest priority number = least important).
-            let mut candidates: Vec<(Stability, &PromptSection)> = live
-                .iter()
-                .map(|s| (s.stability, *s))
-                .collect();
+            let mut candidates: Vec<(Stability, &PromptSection)> =
+                live.iter().map(|s| (s.stability, *s)).collect();
 
             // Remove non-protected sections from highest priority number first.
             let mut current_size = total_chars;
@@ -219,17 +225,17 @@ impl PromptBuilder {
         let dynamic_text = Self::join_sections(&final_dynamic);
 
         // 7. Combine.
-        let (prompt, cache_boundary_offset) = match (stable_text.is_empty(), dynamic_text.is_empty())
-        {
-            (true, true) => (String::new(), None),
-            (true, false) => (dynamic_text, None),
-            (false, true) => (stable_text, None),
-            (false, false) => {
-                let boundary = stable_text.len() + ZONE_SEPARATOR.len();
-                let combined = format!("{}{}{}", stable_text, ZONE_SEPARATOR, dynamic_text);
-                (combined, Some(boundary))
-            }
-        };
+        let (prompt, cache_boundary_offset) =
+            match (stable_text.is_empty(), dynamic_text.is_empty()) {
+                (true, true) => (String::new(), None),
+                (true, false) => (dynamic_text, None),
+                (false, true) => (stable_text, None),
+                (false, false) => {
+                    let boundary = stable_text.len() + ZONE_SEPARATOR.len();
+                    let combined = format!("{}{}{}", stable_text, ZONE_SEPARATOR, dynamic_text);
+                    (combined, Some(boundary))
+                }
+            };
 
         PromptResult {
             prompt,
@@ -272,7 +278,11 @@ impl PromptBuilder {
         }
         let within_stable = stable_count.saturating_sub(1);
         let within_dynamic = dynamic_count.saturating_sub(1);
-        let between_zones = if stable_count > 0 && dynamic_count > 0 { 1 } else { 0 };
+        let between_zones = if stable_count > 0 && dynamic_count > 0 {
+            1
+        } else {
+            0
+        };
         (within_stable + within_dynamic) * SECTION_SEPARATOR.len()
             + between_zones * ZONE_SEPARATOR.len()
     }
@@ -282,8 +292,14 @@ impl PromptBuilder {
             return 0;
         }
         let content: usize = candidates.iter().map(|(_, s)| s.content.len()).sum();
-        let stable_count = candidates.iter().filter(|(stab, _)| *stab == Stability::Stable).count();
-        let dynamic_count = candidates.iter().filter(|(stab, _)| *stab == Stability::Dynamic).count();
+        let stable_count = candidates
+            .iter()
+            .filter(|(stab, _)| *stab == Stability::Stable)
+            .count();
+        let dynamic_count = candidates
+            .iter()
+            .filter(|(stab, _)| *stab == Stability::Dynamic)
+            .count();
         content + Self::separator_overhead(stable_count, dynamic_count)
     }
 }
@@ -296,7 +312,11 @@ impl PromptBuilder {
     /// Register identity, tone, directives, custom_instructions from SoulManifest.
     pub fn with_soul(mut self, soul: &crate::thinker::soul::SoulManifest) -> Self {
         self.register(super::prompt_sections::identity::render(
-            if soul.identity.is_empty() { None } else { Some(&soul.identity) },
+            if soul.identity.is_empty() {
+                None
+            } else {
+                Some(&soul.identity)
+            },
             None,
         ));
         if !soul.voice.tone.is_empty() {
@@ -311,7 +331,9 @@ impl PromptBuilder {
             self.register(dir);
         }
         if let Some(addendum) = &soul.addendum {
-            self.register(super::prompt_sections::custom_instructions::render(addendum));
+            self.register(super::prompt_sections::custom_instructions::render(
+                addendum,
+            ));
         }
         self
     }
@@ -343,7 +365,11 @@ impl PromptBuilder {
         self
     }
 
-    pub fn with_skills(mut self, skills: &[crate::domain::skill::SkillManifest], active_tools: &[&str]) -> Self {
+    pub fn with_skills(
+        mut self,
+        skills: &[crate::domain::skill::SkillManifest],
+        active_tools: &[&str],
+    ) -> Self {
         self.register(super::prompt_sections::skills::render(skills, active_tools));
         self
     }
@@ -366,7 +392,10 @@ impl PromptBuilder {
 
     /// Register identity from a raw string (no SoulManifest).
     pub fn with_identity(mut self, identity: &str) -> Self {
-        self.register(super::prompt_sections::identity::render(Some(identity), None));
+        self.register(super::prompt_sections::identity::render(
+            Some(identity),
+            None,
+        ));
         self
     }
 
@@ -380,9 +409,7 @@ impl PromptBuilder {
 
         // Sub-agents get the shared agent_role section
         if agent.mode == crate::agents::AgentMode::SubAgent {
-            builder.register(
-                super::prompt_sections::agent_role::render(&agent.id),
-            );
+            builder.register(super::prompt_sections::agent_role::render(&agent.id));
         }
 
         // Resolve and register agent-specific sections
@@ -554,7 +581,9 @@ mod tests {
             "Protected section must survive"
         );
         assert!(
-            result.truncated_sections.contains(&"expendable".to_string()),
+            result
+                .truncated_sections
+                .contains(&"expendable".to_string()),
             "Non-protected section should be truncated"
         );
     }
@@ -589,7 +618,10 @@ mod tests {
         assert!(result.prompt.contains("# System"), "missing system_rules");
         assert!(!result.prompt.is_empty());
         // Verify multiple sections were registered (check for separators)
-        assert!(result.prompt.contains("---"), "should have section separators");
+        assert!(
+            result.prompt.contains("---"),
+            "should have section separators"
+        );
     }
 
     #[test]
@@ -637,17 +669,38 @@ mod tests {
 
         // Verify stable sections exist
         assert!(result.prompt.contains("# System"), "missing system_rules");
-        assert!(result.prompt.contains("# Doing Tasks"), "missing doing_tasks");
-        assert!(result.prompt.contains("# Executing Actions"), "missing actions");
-        assert!(result.prompt.contains("# Using Your Tools"), "missing tool_usage");
-        assert!(result.prompt.contains("# Tone and Style"), "missing tone_and_style");
-        assert!(result.prompt.contains("# Output Efficiency"), "missing output_efficiency");
+        assert!(
+            result.prompt.contains("# Doing Tasks"),
+            "missing doing_tasks"
+        );
+        assert!(
+            result.prompt.contains("# Executing Actions"),
+            "missing actions"
+        );
+        assert!(
+            result.prompt.contains("# Using Your Tools"),
+            "missing tool_usage"
+        );
+        assert!(
+            result.prompt.contains("# Tone and Style"),
+            "missing tone_and_style"
+        );
+        assert!(
+            result.prompt.contains("# Output Efficiency"),
+            "missing output_efficiency"
+        );
         assert!(result.prompt.contains("# Available Tools"), "missing tools");
         assert!(result.prompt.contains("web_search"), "missing tool name");
 
         // Verify dynamic section exists
-        assert!(result.prompt.contains("# Environment"), "missing environment");
-        assert!(result.prompt.contains("/test/workspace"), "missing cwd from env");
+        assert!(
+            result.prompt.contains("# Environment"),
+            "missing environment"
+        );
+        assert!(
+            result.prompt.contains("/test/workspace"),
+            "missing cwd from env"
+        );
 
         // Verify ordering: stable before dynamic
         let system_pos = result.prompt.find("# System").unwrap();
@@ -675,8 +728,14 @@ mod tests {
         let builder = PromptBuilder::for_agent(&agent);
         let result = builder.build();
         assert!(result.prompt.contains("# System"), "missing system_rules");
-        assert!(result.prompt.contains("**explore**"), "missing agent_role with agent id");
-        assert!(result.prompt.contains("read-only exploration specialist"), "missing explore_constraints");
+        assert!(
+            result.prompt.contains("**explore**"),
+            "missing agent_role with agent id"
+        );
+        assert!(
+            result.prompt.contains("read-only exploration specialist"),
+            "missing explore_constraints"
+        );
     }
 
     #[test]
@@ -685,7 +744,10 @@ mod tests {
         let agent = AgentDef::new("main", AgentMode::Primary);
         let builder = PromptBuilder::for_agent(&agent);
         let result = builder.build();
-        assert!(!result.prompt.contains("Sub-Agent Role"), "primary should not have agent_role");
+        assert!(
+            !result.prompt.contains("Sub-Agent Role"),
+            "primary should not have agent_role"
+        );
         assert!(result.prompt.contains("# System"), "missing system_rules");
     }
 
@@ -697,6 +759,9 @@ mod tests {
         let builder = PromptBuilder::for_agent(&agent);
         let result = builder.build();
         assert!(result.prompt.contains("# System"), "missing system_rules");
-        assert!(result.prompt.contains("Sub-Agent Role"), "missing agent_role");
+        assert!(
+            result.prompt.contains("Sub-Agent Role"),
+            "missing agent_role"
+        );
     }
 }

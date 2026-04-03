@@ -2,8 +2,8 @@
 //!
 //! Wraps the existing SecretInput with debounced on-change behavior.
 
-use leptos::prelude::*;
 use super::ui::secret_input::SecretInput;
+use leptos::prelude::*;
 
 /// API key input with debounced change callback
 #[component]
@@ -22,8 +22,10 @@ pub fn ApiKeyInput(
 ) -> impl IntoView {
     // Hold the pending timeout handle in local (non-Send) storage.
     // Dropping the handle cancels the timer, which implements debouncing.
-    let timer_handle: StoredValue<Option<gloo_timers::callback::Timeout>, leptos::prelude::LocalStorage> =
-        StoredValue::new_local(None);
+    let timer_handle: StoredValue<
+        Option<gloo_timers::callback::Timeout>,
+        leptos::prelude::LocalStorage,
+    > = StoredValue::new_local(None);
 
     let on_change = {
         move |val: String| {

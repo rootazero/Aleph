@@ -52,6 +52,13 @@ pub enum StreamEvent {
         duration_ms: u64,
     },
 
+    /// Structured execution trace emitted directly by the agent loop.
+    AgentTrace {
+        run_id: String,
+        seq: u64,
+        event: AgentTraceEvent,
+    },
+
     /// Response text chunk (streaming output)
     ResponseChunk {
         run_id: String,
@@ -141,6 +148,143 @@ impl UncertaintyAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTraceState {
+    Prepare,
+    Think,
+    Resolve,
+    Act,
+    Finalize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTraceTextKind {
+    Final,
+    Intermediate,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTraceTurnOutcome {
+    #[default]
+    Continue,
+    Stop,
+    HitLimit,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentTraceTurnMetrics {
+    pub requested_tool_calls: usize,
+    pub executed_tool_calls: usize,
+    pub productive: bool,
+    pub consecutive_errors: usize,
+    pub total_tokens: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTraceSessionOutcome {
+    Completed,
+    HitLimit,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentTraceToolCallStart {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentTraceToolCallEnd {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub input: Value,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AgentTraceToolResult {
+    Success { output: Value },
+    Error { error: String, retryable: bool },
+    SuccessAndStopLoop { output: Value },
+}
+
+impl AgentTraceToolResult {
+    pub fn is_success(&self) -> bool {
+        !matches!(self, Self::Error { .. })
+    }
+
+    pub fn error_text(&self) -> Option<&str> {
+        match self {
+            Self::Error { error, .. } => Some(error),
+            Self::Success { .. } | Self::SuccessAndStopLoop { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentTraceEvent {
+    TurnStarted {
+        iteration: usize,
+    },
+    TurnStateEntered {
+        iteration: usize,
+        state: AgentTraceState,
+    },
+    TextEmitted {
+        iteration: usize,
+        stream: AgentTraceTextKind,
+        text: String,
+    },
+    ToolCallStarted {
+        iteration: usize,
+        call: AgentTraceToolCallStart,
+    },
+    ToolCallCompleted {
+        iteration: usize,
+        call: AgentTraceToolCallEnd,
+        result: AgentTraceToolResult,
+    },
+    ToolSummary {
+        iteration: usize,
+        summary: String,
+    },
+    TurnCompleted {
+        iteration: usize,
+        outcome: AgentTraceTurnOutcome,
+        metrics: AgentTraceTurnMetrics,
+    },
+    SessionCompleted {
+        outcome: AgentTraceSessionOutcome,
+        iterations: usize,
+        tool_calls_made: usize,
+        total_tokens: usize,
+        hit_limit: bool,
+        final_text: Option<String>,
+    },
+}
+
+impl AgentTraceEvent {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::TurnStarted { .. } => "turn_started",
+            Self::TurnStateEntered { .. } => "turn_state_entered",
+            Self::TextEmitted { .. } => "text_emitted",
+            Self::ToolCallStarted { .. } => "tool_call_started",
+            Self::ToolCallCompleted { .. } => "tool_call_completed",
+            Self::ToolSummary { .. } => "tool_summary",
+            Self::TurnCompleted { .. } => "turn_completed",
+            Self::SessionCompleted { .. } => "session_completed",
+        }
+    }
+}
+
 impl StreamEvent {
     /// Create a new ReasoningBlock event
     pub fn reasoning_block(
@@ -198,6 +342,15 @@ impl StreamEvent {
         }
     }
 
+    /// Create a new structured agent trace event
+    pub fn agent_trace(run_id: impl Into<String>, seq: u64, event: AgentTraceEvent) -> Self {
+        Self::AgentTrace {
+            run_id: run_id.into(),
+            seq,
+            event,
+        }
+    }
+
     /// Get the run_id from any event variant
     pub fn run_id(&self) -> &str {
         match self {
@@ -206,6 +359,7 @@ impl StreamEvent {
             | Self::ToolStart { run_id, .. }
             | Self::ToolUpdate { run_id, .. }
             | Self::ToolEnd { run_id, .. }
+            | Self::AgentTrace { run_id, .. }
             | Self::ResponseChunk { run_id, .. }
             | Self::RunComplete { run_id, .. }
             | Self::RunError { run_id, .. }
@@ -223,6 +377,7 @@ impl StreamEvent {
             Self::ToolStart { .. } => "stream.tool_start",
             Self::ToolUpdate { .. } => "stream.tool_update",
             Self::ToolEnd { .. } => "stream.tool_end",
+            Self::AgentTrace { .. } => "stream.agent_trace",
             Self::ResponseChunk { .. } => "stream.response_chunk",
             Self::RunComplete { .. } => "stream.run_complete",
             Self::RunError { .. } => "stream.run_error",
@@ -395,6 +550,10 @@ mod tests {
             params: serde_json::json!({}),
         };
         assert_eq!(event.method_name(), "stream.tool_start");
+
+        let event =
+            StreamEvent::agent_trace("run-1", 1, AgentTraceEvent::TurnStarted { iteration: 1 });
+        assert_eq!(event.method_name(), "stream.agent_trace");
     }
 
     #[test]
@@ -412,6 +571,31 @@ mod tests {
         assert!(json.contains("reasoning_block"));
         assert!(json.contains("analysis"));
         assert!(json.contains("Analyzing options"));
+    }
+
+    #[test]
+    fn test_agent_trace_serialization() {
+        let event = StreamEvent::agent_trace(
+            "run-123",
+            2,
+            AgentTraceEvent::ToolCallCompleted {
+                iteration: 3,
+                call: AgentTraceToolCallEnd {
+                    tool_id: "tool-1".to_string(),
+                    tool_name: "read_file".to_string(),
+                    input: serde_json::json!({"path": "README.md"}),
+                    duration_ms: 12,
+                },
+                result: AgentTraceToolResult::Success {
+                    output: serde_json::json!({"ok": true}),
+                },
+            },
+        );
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("agent_trace"));
+        assert!(json.contains("tool_call_completed"));
+        assert!(json.contains("read_file"));
     }
 
     #[test]

@@ -6,13 +6,13 @@
 //! - Guild Management: Dual-column guild + channel selection with checkboxes
 //! - Permission Audit: Traffic-light permission checks with health badge
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use leptos_router::components::A;
+use crate::api::DiscordApi;
 use crate::components::forms::ErrorMessageDynamic;
 use crate::components::ui::AgentBindingSelector;
 use crate::context::DashboardState;
-use crate::api::DiscordApi;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos_router::components::A;
 
 // ============================================================================
 // Data types
@@ -209,9 +209,7 @@ pub fn DiscordChannelView() -> impl IntoView {
 // ============================================================================
 
 #[component]
-fn BotIdentitySection(
-    bot_identity: RwSignal<Option<BotIdentity>>,
-) -> impl IntoView {
+fn BotIdentitySection(bot_identity: RwSignal<Option<BotIdentity>>) -> impl IntoView {
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
             <h2 class="text-xl font-semibold text-text-primary mb-4">"Bot Identity"</h2>
@@ -333,25 +331,32 @@ fn TokenSection(
             match DiscordApi::validate_token(&state, token_val).await {
                 Ok(result) => {
                     // Parse bot identity from response
-                    let name = result.get("username")
+                    let name = result
+                        .get("username")
                         .and_then(|v| v.as_str())
                         .unwrap_or("Unknown")
                         .to_string();
-                    let discriminator = result.get("discriminator")
+                    let discriminator = result
+                        .get("discriminator")
                         .and_then(|v| v.as_str())
                         .unwrap_or("0")
                         .to_string();
-                    let id = result.get("id")
+                    let id = result
+                        .get("id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let avatar = result.get("avatar")
+                    let avatar = result
+                        .get("avatar")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
 
                     let avatar_url = if !avatar.is_empty() && !id.is_empty() {
-                        format!("https://cdn.discordapp.com/avatars/{}/{}.png?size=128", id, avatar)
+                        format!(
+                            "https://cdn.discordapp.com/avatars/{}/{}.png?size=128",
+                            id, avatar
+                        )
                     } else {
                         String::new()
                     };
@@ -368,34 +373,41 @@ fn TokenSection(
                     loading_guilds.set(true);
                     match DiscordApi::list_guilds(&state, channel_id).await {
                         Ok(guild_list) => {
-                            let parsed: Vec<GuildInfo> = guild_list.iter().map(|g| {
-                                GuildInfo {
-                                    id: g.get("id")
+                            let parsed: Vec<GuildInfo> = guild_list
+                                .iter()
+                                .map(|g| GuildInfo {
+                                    id: g
+                                        .get("id")
                                         .and_then(|v| v.as_str())
                                         .and_then(|s| s.parse::<u64>().ok())
                                         .or_else(|| g.get("id").and_then(|v| v.as_u64()))
                                         .unwrap_or(0),
-                                    name: g.get("name")
+                                    name: g
+                                        .get("name")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("Unknown Guild")
                                         .to_string(),
-                                    icon_url: g.get("icon")
-                                        .and_then(|v| v.as_str())
-                                        .map(|icon| {
-                                            let gid = g.get("id")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("0");
-                                            format!("https://cdn.discordapp.com/icons/{}/{}.png?size=64", gid, icon)
-                                        }),
-                                    member_count: g.get("approximate_member_count")
+                                    icon_url: g.get("icon").and_then(|v| v.as_str()).map(|icon| {
+                                        let gid =
+                                            g.get("id").and_then(|v| v.as_str()).unwrap_or("0");
+                                        format!(
+                                            "https://cdn.discordapp.com/icons/{}/{}.png?size=64",
+                                            gid, icon
+                                        )
+                                    }),
+                                    member_count: g
+                                        .get("approximate_member_count")
                                         .and_then(|v| v.as_u64()),
                                     checked: false,
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             guilds.set(parsed);
                         }
                         Err(e) => {
-                            error.set(Some(format!("Token valid, but failed to fetch guilds: {}", e)));
+                            error.set(Some(format!(
+                                "Token valid, but failed to fetch guilds: {}",
+                                e
+                            )));
                         }
                     }
                     loading_guilds.set(false);
@@ -484,30 +496,33 @@ fn GuildSection(
         spawn_local(async move {
             match DiscordApi::list_guilds(&state, channel_id).await {
                 Ok(guild_list) => {
-                    let parsed: Vec<GuildInfo> = guild_list.iter().map(|g| {
-                        GuildInfo {
-                            id: g.get("id")
+                    let parsed: Vec<GuildInfo> = guild_list
+                        .iter()
+                        .map(|g| GuildInfo {
+                            id: g
+                                .get("id")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .or_else(|| g.get("id").and_then(|v| v.as_u64()))
                                 .unwrap_or(0),
-                            name: g.get("name")
+                            name: g
+                                .get("name")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("Unknown Guild")
                                 .to_string(),
-                            icon_url: g.get("icon")
-                                .and_then(|v| v.as_str())
-                                .map(|icon| {
-                                    let gid = g.get("id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("0");
-                                    format!("https://cdn.discordapp.com/icons/{}/{}.png?size=64", gid, icon)
-                                }),
-                            member_count: g.get("approximate_member_count")
+                            icon_url: g.get("icon").and_then(|v| v.as_str()).map(|icon| {
+                                let gid = g.get("id").and_then(|v| v.as_str()).unwrap_or("0");
+                                format!(
+                                    "https://cdn.discordapp.com/icons/{}/{}.png?size=64",
+                                    gid, icon
+                                )
+                            }),
+                            member_count: g
+                                .get("approximate_member_count")
                                 .and_then(|v| v.as_u64()),
                             checked: false,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     guilds.set(parsed);
                 }
                 Err(e) => {
@@ -527,21 +542,22 @@ fn GuildSection(
         spawn_local(async move {
             match DiscordApi::list_channels(&state, channel_id, guild_id).await {
                 Ok(channel_list) => {
-                    let parsed: Vec<ChannelInfo> = channel_list.iter().map(|c| {
-                        ChannelInfo {
-                            id: c.get("id")
+                    let parsed: Vec<ChannelInfo> = channel_list
+                        .iter()
+                        .map(|c| ChannelInfo {
+                            id: c
+                                .get("id")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .or_else(|| c.get("id").and_then(|v| v.as_u64()))
                                 .unwrap_or(0),
-                            name: c.get("name")
+                            name: c
+                                .get("name")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown")
                                 .to_string(),
                             kind: {
-                                let kind_val = c.get("type")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0);
+                                let kind_val = c.get("type").and_then(|v| v.as_u64()).unwrap_or(0);
                                 match kind_val {
                                     0 => "Text".to_string(),
                                     2 => "Voice".to_string(),
@@ -553,8 +569,8 @@ fn GuildSection(
                                 }
                             },
                             checked: false,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     channels.set(parsed);
                 }
                 Err(e) => {
@@ -570,38 +586,51 @@ fn GuildSection(
             match DiscordApi::audit_permissions(&state, channel_id, guild_id).await {
                 Ok(result) => {
                     // Parse permission checks from audit result
-                    let checks_val = result.get("checks")
+                    let checks_val = result
+                        .get("checks")
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
 
-                    let parsed_checks: Vec<PermissionCheck> = checks_val.iter().map(|c| {
-                        let status_str = c.get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("missing");
-                        PermissionCheck {
-                            name: c.get("name")
+                    let parsed_checks: Vec<PermissionCheck> = checks_val
+                        .iter()
+                        .map(|c| {
+                            let status_str = c
+                                .get("status")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("Unknown")
-                                .to_string(),
-                            status: match status_str {
-                                "granted" => PermissionStatus::Granted,
-                                "partial" => PermissionStatus::Partial,
-                                _ => PermissionStatus::Missing,
-                            },
-                            description: c.get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                        }
-                    }).collect();
+                                .unwrap_or("missing");
+                            PermissionCheck {
+                                name: c
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string(),
+                                status: match status_str {
+                                    "granted" => PermissionStatus::Granted,
+                                    "partial" => PermissionStatus::Partial,
+                                    _ => PermissionStatus::Missing,
+                                },
+                                description: c
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            }
+                        })
+                        .collect();
 
                     // Compute overall health
                     let health = if parsed_checks.is_empty() {
                         OverallHealth::Unknown
-                    } else if parsed_checks.iter().all(|c| c.status == PermissionStatus::Granted) {
+                    } else if parsed_checks
+                        .iter()
+                        .all(|c| c.status == PermissionStatus::Granted)
+                    {
                         OverallHealth::Healthy
-                    } else if parsed_checks.iter().any(|c| c.status == PermissionStatus::Missing) {
+                    } else if parsed_checks
+                        .iter()
+                        .any(|c| c.status == PermissionStatus::Missing)
+                    {
                         OverallHealth::Unhealthy
                     } else {
                         OverallHealth::Degraded

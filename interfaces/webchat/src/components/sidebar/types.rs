@@ -1,4 +1,3 @@
-
 /// Alert level
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum AlertLevel {

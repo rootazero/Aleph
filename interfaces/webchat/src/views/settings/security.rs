@@ -9,7 +9,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{SecurityConfigApi, SecurityConfig, DeviceInfo, SearchConfigApi, SearchConfig};
+use crate::api::{DeviceInfo, SearchConfig, SearchConfigApi, SecurityConfig, SecurityConfigApi};
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -138,9 +138,7 @@ pub fn SecurityView() -> impl IntoView {
 }
 
 #[component]
-fn GatewaySecuritySettings(
-    config: RwSignal<Option<SecurityConfig>>,
-) -> impl IntoView {
+fn GatewaySecuritySettings(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -206,9 +204,7 @@ fn GatewaySecuritySettings(
 }
 
 #[component]
-fn NetworkAccessSection(
-    config: RwSignal<Option<SecurityConfig>>,
-) -> impl IntoView {
+fn NetworkAccessSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let save_success = RwSignal::new(false);
@@ -225,15 +221,22 @@ fn NetworkAccessSection(
                     Ok(result) => {
                         saving.set(false);
                         // Check if server returned needs_restart
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&result).unwrap_or_default()) {
-                            if v.get("needs_restart").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(
+                            &serde_json::to_string(&result).unwrap_or_default(),
+                        ) {
+                            if v.get("needs_restart")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
                                 needs_restart.set(true);
                             }
                         }
                         needs_restart.set(true);
                         save_success.set(true);
                         set_timeout(
-                            move || { save_success.set(false); },
+                            move || {
+                                save_success.set(false);
+                            },
                             std::time::Duration::from_secs(5),
                         );
                     }
@@ -332,10 +335,7 @@ fn NetworkAccessSection(
 }
 
 #[component]
-fn PairedDevices(
-    devices: RwSignal<Vec<DeviceInfo>>,
-    state: DashboardState,
-) -> impl IntoView {
+fn PairedDevices(devices: RwSignal<Vec<DeviceInfo>>, state: DashboardState) -> impl IntoView {
     let i18n = use_i18n();
     let revoke_device = move |device_id: String| {
         spawn_local(async move {
@@ -385,16 +385,15 @@ fn PairedDevices(
 }
 
 #[component]
-fn DeviceCard<F>(
-    device: DeviceInfo,
-    on_revoke: F,
-) -> impl IntoView
+fn DeviceCard<F>(device: DeviceInfo, on_revoke: F) -> impl IntoView
 where
     F: Fn() + 'static,
 {
     let i18n = use_i18n();
     let paired_date = device.paired_at.clone();
-    let last_seen_text = device.last_seen.clone()
+    let last_seen_text = device
+        .last_seen
+        .clone()
         .unwrap_or_else(|| t_string!(i18n, settings.security.never).to_string());
 
     view! {
@@ -419,9 +418,7 @@ where
 }
 
 #[component]
-fn OutboundSecuritySection(
-    config: RwSignal<Option<SecurityConfig>>,
-) -> impl IntoView {
+fn OutboundSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">

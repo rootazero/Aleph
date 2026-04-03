@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 /// Run a POE task
 pub async fn run(
@@ -242,15 +242,9 @@ pub async fn pending(server_url: &str, json: bool) -> CliResult<()> {
     let mut rows = Vec::new();
     if let Some(contracts) = result.get("pending_contracts").and_then(|v| v.as_array()) {
         for c in contracts {
-            let instruction = c
-                .get("instruction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
+            let instruction = c.get("instruction").and_then(|v| v.as_str()).unwrap_or("-");
             let truncated = if instruction.chars().count() > 60 {
-                format!(
-                    "{}...",
-                    instruction.chars().take(60).collect::<String>()
-                )
+                format!("{}...", instruction.chars().take(60).collect::<String>())
             } else {
                 instruction.to_string()
             };

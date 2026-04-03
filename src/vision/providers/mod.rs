@@ -1,7 +1,7 @@
 //! Concrete [`VisionProvider`] implementations.
 //!
 //! - [`ClaudeVisionProvider`] — delegates to Claude's multimodal API
-//! - [`PlatformOcrProvider`] — delegates to macOS Vision framework via Desktop Bridge
+//! - [`PlatformOcrProvider`] — delegates to the platform-native OCR engine via `desktop/*`
 
 mod claude;
 mod platform_ocr;

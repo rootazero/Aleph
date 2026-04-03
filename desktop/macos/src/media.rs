@@ -95,13 +95,13 @@ mod core_audio_ffi {
 
 mod av_capture_delegates {
     use objc2::DefinedClass;
+    use objc2_av_foundation::AVCaptureConnection;
     use objc2_av_foundation::{
-        AVCaptureFileOutput, AVCapturePhoto, AVCapturePhotoOutput,
-        AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate,
+        AVCaptureFileOutput, AVCaptureFileOutputRecordingDelegate, AVCapturePhoto,
+        AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput,
     };
     use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSURL};
-    use objc2_av_foundation::AVCaptureConnection;
-    use std::sync::{Arc, Mutex, Condvar};
+    use std::sync::{Arc, Condvar, Mutex};
 
     // ── Photo capture delegate ──────────────────────────────────
 
@@ -247,9 +247,8 @@ fn snap_native_blocking() -> Result<CameraSnapResult> {
     use objc2::runtime::ProtocolObject;
     use objc2::AllocAnyThread;
     use objc2_av_foundation::{
-        AVCaptureDevice, AVCaptureDeviceInput, AVCapturePhotoOutput,
-        AVCapturePhotoSettings, AVCapturePhotoCaptureDelegate, AVCaptureSession,
-        AVMediaTypeVideo,
+        AVCaptureDevice, AVCaptureDeviceInput, AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput,
+        AVCapturePhotoSettings, AVCaptureSession, AVMediaTypeVideo,
     };
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
@@ -388,9 +387,8 @@ fn clip_native_blocking(config: &CameraClipConfig) -> Result<CameraClipResult> {
     // 2. Create session and add video input
     let session = unsafe { AVCaptureSession::new() };
 
-    let video_input =
-        unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&video_device) }
-            .map_err(|e| bridge_err(&format!("Failed to create video input: {e}")))?;
+    let video_input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&video_device) }
+        .map_err(|e| bridge_err(&format!("Failed to create video input: {e}")))?;
 
     let video_input_ref: &objc2_av_foundation::AVCaptureInput = &video_input;
     if !unsafe { session.canAddInput(video_input_ref) } {
@@ -405,12 +403,9 @@ fn clip_native_blocking(config: &CameraClipConfig) -> Result<CameraClipResult> {
             if let Some(audio_device) =
                 unsafe { AVCaptureDevice::defaultDeviceWithMediaType(audio_type) }
             {
-                match unsafe {
-                    AVCaptureDeviceInput::deviceInputWithDevice_error(&audio_device)
-                } {
+                match unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&audio_device) } {
                     Ok(audio_input) => {
-                        let audio_input_ref: &objc2_av_foundation::AVCaptureInput =
-                            &audio_input;
+                        let audio_input_ref: &objc2_av_foundation::AVCaptureInput = &audio_input;
                         if unsafe { session.canAddInput(audio_input_ref) } {
                             unsafe { session.addInput(audio_input_ref) };
                             true
@@ -471,8 +466,7 @@ fn clip_native_blocking(config: &CameraClipConfig) -> Result<CameraClipResult> {
         ProtocolObject::from_ref(&*delegate);
     let file_output: &objc2_av_foundation::AVCaptureFileOutput = &movie_output;
     unsafe {
-        file_output
-            .startRecordingToOutputFileURL_recordingDelegate(&file_url, delegate_proto);
+        file_output.startRecordingToOutputFileURL_recordingDelegate(&file_url, delegate_proto);
     }
 
     // 8. Record for the specified duration
@@ -542,22 +536,27 @@ async fn record_audio_with_ffmpeg(config: &AudioRecordConfig) -> Result<AudioRec
     // :0 = default audio input device (no video)
     let out_path_str = out_path.to_string_lossy().into_owned();
     let args = [
-        "-f", "avfoundation",
-        "-i", ":0",
-        "-t", &duration_str,
-        "-y", &out_path_str,
+        "-f",
+        "avfoundation",
+        "-i",
+        ":0",
+        "-t",
+        &duration_str,
+        "-y",
+        &out_path_str,
     ];
 
-    debug!(duration = config.duration_secs, "Recording audio via ffmpeg");
+    debug!(
+        duration = config.duration_secs,
+        "Recording audio via ffmpeg"
+    );
 
     let output = tokio::process::Command::new("ffmpeg")
         .args(&args)
         .output()
         .await
         .map_err(|e| {
-            aleph_desktop::DesktopError::BridgeFailed(format!(
-                "Failed to run ffmpeg: {e}"
-            ))
+            aleph_desktop::DesktopError::BridgeFailed(format!("Failed to run ffmpeg: {e}"))
         })?;
 
     if !output.status.success() {
@@ -678,7 +677,10 @@ fn list_audio_devices_ffi() -> Result<Vec<AudioDeviceInfo>> {
     Ok(devices)
 }
 
-fn get_device_string_property(device_id: core_audio_ffi::AudioDeviceID, selector: u32) -> Option<String> {
+fn get_device_string_property(
+    device_id: core_audio_ffi::AudioDeviceID,
+    selector: u32,
+) -> Option<String> {
     use core_audio_ffi::*;
 
     let address = AudioObjectPropertyAddress {
@@ -709,7 +711,9 @@ fn get_device_string_property(device_id: core_audio_ffi::AudioDeviceID, selector
     // Convert CFStringRef to Rust String
     let cf_str = unsafe {
         use core_foundation::base::TCFType;
-        core_foundation::string::CFString::wrap_under_create_rule(cf_string as core_foundation::string::CFStringRef)
+        core_foundation::string::CFString::wrap_under_create_rule(
+            cf_string as core_foundation::string::CFStringRef,
+        )
     };
     Some(cf_str.to_string())
 }
@@ -725,13 +729,7 @@ fn get_input_channel_count(device_id: core_audio_ffi::AudioDeviceID) -> u32 {
 
     let mut data_size: u32 = 0;
     let status = unsafe {
-        AudioObjectGetPropertyDataSize(
-            device_id,
-            &address,
-            0,
-            std::ptr::null(),
-            &mut data_size,
-        )
+        AudioObjectGetPropertyDataSize(device_id, &address, 0, std::ptr::null(), &mut data_size)
     };
     if status != 0 || data_size == 0 {
         return 0;
@@ -799,9 +797,8 @@ fn speech_to_text_blocking(
     let locale_str = NSString::from_str(&config.language);
     let locale = NSLocale::initWithLocaleIdentifier(NSLocale::alloc(), &locale_str);
 
-    let recognizer = unsafe {
-        SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale)
-    };
+    let recognizer =
+        unsafe { SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale) };
     let recognizer = recognizer.ok_or_else(|| {
         aleph_desktop::DesktopError::BridgeFailed(format!(
             "Failed to create speech recognizer for locale: {}",
@@ -819,10 +816,7 @@ fn speech_to_text_blocking(
     let path_str = NSString::from_str(audio_path);
     let url = NSURL::fileURLWithPath(&path_str);
     let request = unsafe {
-        SFSpeechURLRecognitionRequest::initWithURL(
-            SFSpeechURLRecognitionRequest::alloc(),
-            &url,
-        )
+        SFSpeechURLRecognitionRequest::initWithURL(SFSpeechURLRecognitionRequest::alloc(), &url)
     };
 
     // Bridge the async callback with a channel
@@ -850,9 +844,7 @@ fn speech_to_text_blocking(
 
     // Start recognition task — must stay alive until result received.
     // DO NOT use `_task` (leading underscore) — it drops immediately!
-    let task = unsafe {
-        recognizer.recognitionTaskWithRequest_resultHandler(&request, &handler)
-    };
+    let task = unsafe { recognizer.recognitionTaskWithRequest_resultHandler(&request, &handler) };
 
     // Wait for result with a 60-second timeout (Apple's speech recognition limit)
     let result = match rx.recv_timeout(Duration::from_secs(60)) {
@@ -901,7 +893,10 @@ impl MediaCapability for MacOSMedia {
 
     async fn record_audio(&self, config: AudioRecordConfig) -> Result<AudioRecordResult> {
         let config = config.clamped();
-        debug!(duration = config.duration_secs, "Recording audio via ffmpeg");
+        debug!(
+            duration = config.duration_secs,
+            "Recording audio via ffmpeg"
+        );
         record_audio_with_ffmpeg(&config).await
     }
 

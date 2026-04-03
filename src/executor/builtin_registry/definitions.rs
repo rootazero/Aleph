@@ -26,8 +26,8 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool,
-    PdfGenerateTool, ReadConfigGuideTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
+    ReadConfigGuideTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -98,7 +98,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "desktop",
-        description: "Control the macOS desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays",
+        description: "Control the desktop via platform-native capabilities: screenshots, OCR, keyboard/mouse, app launch, windows, and screen recording",
         requires_config: false,
     },
     BuiltinToolDefinition {

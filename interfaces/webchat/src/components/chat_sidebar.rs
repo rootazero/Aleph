@@ -66,15 +66,10 @@ pub fn ChatSidebar() -> impl IntoView {
         is_loading.set(true);
         leptos::task::spawn_local(async move {
             // Fetch agents
-            match dash
-                .rpc_call("agents.list", serde_json::json!({}))
-                .await
-            {
+            match dash.rpc_call("agents.list", serde_json::json!({})).await {
                 Ok(result) => {
                     if let Some(arr) = result.get("agents") {
-                        if let Ok(list) =
-                            serde_json::from_value::<Vec<AgentEntry>>(arr.clone())
-                        {
+                        if let Ok(list) = serde_json::from_value::<Vec<AgentEntry>>(arr.clone()) {
                             // Auto-select default agent if none selected
                             if selected_agent.get_untracked().is_none() {
                                 let default_id = list
@@ -92,30 +87,21 @@ pub fn ChatSidebar() -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to list agents: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to list agents: {e}").into());
                 }
             }
 
             // Fetch sessions
-            match dash
-                .rpc_call("sessions.list", serde_json::json!({}))
-                .await
-            {
+            match dash.rpc_call("sessions.list", serde_json::json!({})).await {
                 Ok(result) => {
                     if let Some(arr) = result.get("sessions") {
-                        if let Ok(list) =
-                            serde_json::from_value::<Vec<SessionEntry>>(arr.clone())
-                        {
+                        if let Ok(list) = serde_json::from_value::<Vec<SessionEntry>>(arr.clone()) {
                             sessions.set(list);
                         }
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to list sessions: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to list sessions: {e}").into());
                 }
             }
 
@@ -192,9 +178,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     chat.messages.set(msgs);
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to load history: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to load history: {e}").into());
                 }
             }
         });
@@ -251,9 +235,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     reload(dash);
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to rename session: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to rename session: {e}").into());
                 }
             }
             is_saving.set(false);
@@ -283,9 +265,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     reload(dash);
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to delete session: {e}").into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to delete session: {e}").into());
                 }
             }
             is_saving.set(false);

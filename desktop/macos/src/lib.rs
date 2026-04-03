@@ -1,7 +1,7 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
-pub mod hotkey;
 mod automation;
+pub mod hotkey;
 mod media;
 mod permission;
 mod pim;
@@ -11,8 +11,8 @@ use aleph_desktop::traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
     SystemCapability,
 };
-use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
+use aleph_desktop::NativeScreen;
 
 use automation::MacOSAutomation;
 use media::MacOSMedia;

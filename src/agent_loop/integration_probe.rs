@@ -459,8 +459,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_compaction_triggers() {
-        use crate::agent_loop::context_compactor::{CompactorConfig, ContextCompactor};
         use crate::agent_loop::context_budget::{ContextBudget, ContextBudgetConfig};
+        use crate::agent_loop::context_compactor::{CompactorConfig, ContextCompactor};
 
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let registry = LoopToolRegistry::new();
@@ -879,7 +879,8 @@ mod tests {
         impl SkillDiscoverySource for MockDiscoverySource {
             fn discover(
                 &self,
-            ) -> Pin<Box<dyn std::future::Future<Output = Vec<SkillInfo>> + Send + '_>> {
+            ) -> Pin<Box<dyn std::future::Future<Output = Vec<SkillInfo>> + Send + '_>>
+            {
                 Box::pin(async { self.skills.clone() })
             }
         }
@@ -963,20 +964,22 @@ mod tests {
         )) as Arc<dyn AiProvider>;
         let bridge = AiProviderBridge::new(provider);
 
-        let mut agent = AgentLoop::new(
-            bridge,
-            registry,
-            PromptBuilder::new(),
-            SafetyGuard::default_guard(),
-            LoopConfig {
-                max_iterations: 10,
-                token_budget: 100_000,
-            },
-            CancellationToken::new(),
-        )
-        .with_stop_hooks(vec![
-            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("allow_hook", "exit 0")) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
-        ]);
+        let mut agent =
+            AgentLoop::new(
+                bridge,
+                registry,
+                PromptBuilder::new(),
+                SafetyGuard::default_guard(),
+                LoopConfig {
+                    max_iterations: 10,
+                    token_budget: 100_000,
+                },
+                CancellationToken::new(),
+            )
+            .with_stop_hooks(vec![Box::new(
+                crate::agent_loop::stop_hooks::ShellStopHook::new("allow_hook", "exit 0"),
+            )
+                as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>]);
 
         let mut cb = NoopCallback;
         let result = agent.run("test stop hooks", &mut cb).await.unwrap();
@@ -1056,20 +1059,22 @@ mod tests {
         // Clean up any leftover marker
         let _ = std::fs::remove_file("/tmp/aleph_e2e_stop_hook_passed");
 
-        let mut agent = AgentLoop::new(
-            bridge,
-            registry,
-            PromptBuilder::new(),
-            SafetyGuard::default_guard(),
-            LoopConfig {
-                max_iterations: 10,
-                token_budget: 100_000,
-            },
-            CancellationToken::new(),
-        )
-        .with_stop_hooks(vec![
-            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("conditional_hook", hook_script)) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
-        ]);
+        let mut agent =
+            AgentLoop::new(
+                bridge,
+                registry,
+                PromptBuilder::new(),
+                SafetyGuard::default_guard(),
+                LoopConfig {
+                    max_iterations: 10,
+                    token_budget: 100_000,
+                },
+                CancellationToken::new(),
+            )
+            .with_stop_hooks(vec![Box::new(
+                crate::agent_loop::stop_hooks::ShellStopHook::new("conditional_hook", hook_script),
+            )
+                as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>]);
 
         let mut cb = NoopCallback;
         let result = agent.run("test blocking hook", &mut cb).await.unwrap();
@@ -1137,10 +1142,11 @@ mod tests {
             },
             CancellationToken::new(),
         )
-        .with_stop_hooks(vec![
-            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("slow_hook", "sleep 60")
-                .with_timeout(std::time::Duration::from_millis(100))) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
-        ]);
+        .with_stop_hooks(vec![Box::new(
+            crate::agent_loop::stop_hooks::ShellStopHook::new("slow_hook", "sleep 60")
+                .with_timeout(std::time::Duration::from_millis(100)),
+        )
+            as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>]);
 
         let mut cb = NoopCallback;
         let start = std::time::Instant::now();
@@ -1227,10 +1233,7 @@ mod tests {
                 self.flag.swap(false, Ordering::AcqRel)
             }
             fn fetch_tools(&self) -> Vec<Box<dyn crate::agent_loop::tool::LoopTool>> {
-                vec![
-                    Box::new(EchoTool),
-                    Box::new(UpperTool),
-                ]
+                vec![Box::new(EchoTool), Box::new(UpperTool)]
             }
         }
 
@@ -1524,20 +1527,22 @@ mod tests {
         )) as Arc<dyn AiProvider>;
         let bridge = AiProviderBridge::new(provider);
 
-        let mut agent = AgentLoop::new(
-            bridge,
-            registry,
-            PromptBuilder::new(),
-            SafetyGuard::default_guard(),
-            LoopConfig {
-                max_iterations: 10,
-                token_budget: 500_000,
-            },
-            CancellationToken::new(),
-        )
-        .with_stop_hooks(vec![
-            Box::new(crate::agent_loop::stop_hooks::ShellStopHook::new("pass_hook", "exit 0")) as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>,
-        ]);
+        let mut agent =
+            AgentLoop::new(
+                bridge,
+                registry,
+                PromptBuilder::new(),
+                SafetyGuard::default_guard(),
+                LoopConfig {
+                    max_iterations: 10,
+                    token_budget: 500_000,
+                },
+                CancellationToken::new(),
+            )
+            .with_stop_hooks(vec![Box::new(
+                crate::agent_loop::stop_hooks::ShellStopHook::new("pass_hook", "exit 0"),
+            )
+                as Box<dyn crate::agent_loop::stop_hooks::StopHookHandler>]);
 
         let mut cb = NoopCallback;
         let result = agent.run("full e2e test", &mut cb).await.unwrap();

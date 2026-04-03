@@ -1,6 +1,6 @@
 //! Ask command - send a single message
 
-use aleph_protocol::StreamEvent;
+use aleph_protocol::{AgentTraceEvent, StreamEvent};
 use serde::Serialize;
 
 use aleph_client::{AlephClient, CliConfig, CliResult};
@@ -40,19 +40,38 @@ pub async fn run(
     // Collect response
     let mut response_text = String::new();
     let mut tool_count = 0;
+    let mut agent_trace_seen = false;
+    let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
 
     // Process events until run completes
     while let Some(event) = events.recv().await {
         match event {
-            StreamEvent::ResponseChunk { content, is_final, .. } => {
+            StreamEvent::AgentTrace { event, .. } => {
+                agent_trace_seen = true;
+                match event {
+                    AgentTraceEvent::ToolCallStarted { call, .. } => {
+                        tool_count += 1;
+                        eprintln!("  [Tool: {}]", call.tool_name);
+                    }
+                    AgentTraceEvent::ToolSummary { summary, .. } if verbose => {
+                        eprintln!("  [Summary: {}]", summary);
+                    }
+                    _ => {}
+                }
+            }
+            StreamEvent::ResponseChunk {
+                content, is_final, ..
+            } => {
                 response_text.push_str(&content);
                 if is_final {
                     break;
                 }
             }
             StreamEvent::ToolStart { tool_name, .. } => {
-                tool_count += 1;
-                eprintln!("  [Tool: {}]", tool_name);
+                if !agent_trace_seen {
+                    tool_count += 1;
+                    eprintln!("  [Tool: {}]", tool_name);
+                }
             }
             StreamEvent::RunComplete { .. } => {
                 break;
@@ -63,8 +82,13 @@ pub async fn run(
             }
             StreamEvent::Reasoning { content, .. } => {
                 // Show reasoning in verbose mode
-                if std::env::var("ALEPH_VERBOSE").is_ok() {
+                if verbose {
                     eprintln!("  [Thinking: {}]", content);
+                }
+            }
+            StreamEvent::ReasoningBlock { content, .. } => {
+                if verbose && !agent_trace_seen {
+                    eprintln!("  [Summary: {}]", content);
                 }
             }
             _ => {}

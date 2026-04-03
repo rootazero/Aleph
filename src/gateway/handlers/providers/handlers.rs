@@ -31,21 +31,24 @@ pub async fn handle_list(
     let providers: Vec<ProviderInfo> = config
         .providers
         .iter()
-        .map(|(name, cfg)| ProviderInfo {
-            name: name.clone(),
-            enabled: cfg.enabled,
-            model: cfg.models.first().cloned().unwrap_or_default(),
-            models: cfg.models.clone(),
-            provider_type: Some(cfg.protocol()),
-            base_url: cfg.base_url.clone(),
-            color: cfg.color.clone(),
-            timeout_seconds: cfg.timeout_seconds,
-            max_tokens: cfg.max_tokens,
-            temperature: cfg.temperature,
-            has_api_key: has_api_key(name, &vault),
-            api_key: None,
-            is_default: default_provider.as_ref() == Some(name),
-            verified: cfg.verified,
+        .map(|(name, cfg)| {
+            let api_key = resolve_api_key(name, &vault);
+            ProviderInfo {
+                name: name.clone(),
+                enabled: cfg.enabled,
+                model: cfg.models.first().cloned().unwrap_or_default(),
+                models: cfg.models.clone(),
+                provider_type: Some(cfg.protocol()),
+                base_url: cfg.base_url.clone(),
+                color: cfg.color.clone(),
+                timeout_seconds: cfg.timeout_seconds,
+                max_tokens: cfg.max_tokens,
+                temperature: cfg.temperature,
+                has_api_key: api_key.is_some(),
+                api_key,
+                is_default: default_provider.as_ref() == Some(name),
+                verified: cfg.verified,
+            }
         })
         .collect();
 
@@ -71,6 +74,7 @@ pub async fn handle_get(
     match config.providers.get(&params.name) {
         Some(cfg) => {
             let default_provider = config.general.default_provider.clone();
+            let api_key = resolve_api_key(&params.name, &vault);
             let info = ProviderInfo {
                 name: params.name.clone(),
                 enabled: cfg.enabled,
@@ -82,8 +86,8 @@ pub async fn handle_get(
                 timeout_seconds: cfg.timeout_seconds,
                 max_tokens: cfg.max_tokens,
                 temperature: cfg.temperature,
-                has_api_key: has_api_key(&params.name, &vault),
-                api_key: None,
+                has_api_key: api_key.is_some(),
+                api_key,
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };

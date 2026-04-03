@@ -5,13 +5,13 @@
 //! - Right panel: Detail/form editor for selected provider
 //! - Preset quick-setup for common AI services
 
+use crate::api::{OAuthStatus, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
+use crate::components::api_key_input::ApiKeyInput;
+use crate::context::DashboardState;
+use crate::i18n::*;
+use crate::preset_data::{find_preset, OAUTH_PRESETS, PRESETS};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::{ProvidersApi, ProviderInfo, ProviderConfig, TestResult, OAuthStatus};
-use crate::components::api_key_input::ApiKeyInput;
-use crate::preset_data::{PRESETS, OAUTH_PRESETS, find_preset};
-use crate::i18n::*;
 
 /// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
 fn canonical_oauth_name(name: &str) -> &'static str {
@@ -19,7 +19,11 @@ fn canonical_oauth_name(name: &str) -> &'static str {
         "codex" => "chatgpt",
         other => {
             // Return a static str — for known presets only
-            OAUTH_PRESETS.iter().find(|p| p.name == other).map(|p| p.name).unwrap_or("chatgpt")
+            OAUTH_PRESETS
+                .iter()
+                .find(|p| p.name == other)
+                .map(|p| p.name)
+                .unwrap_or("chatgpt")
         }
     }
 }
@@ -121,7 +125,8 @@ fn SubscriptionLoginSection(
 ) -> impl IntoView {
     let i18n = use_i18n();
     // Track OAuth connection status for each OAuth preset
-    let oauth_statuses: Vec<(&'static str, RwSignal<Option<bool>>)> = OAUTH_PRESETS.iter()
+    let oauth_statuses: Vec<(&'static str, RwSignal<Option<bool>>)> = OAUTH_PRESETS
+        .iter()
         .map(|preset| (preset.name, RwSignal::new(None::<bool>)))
         .collect();
     let oauth_statuses = std::rc::Rc::new(oauth_statuses);
@@ -379,7 +384,11 @@ fn CustomProvidersList(
     selected: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let i18n = use_i18n();
-    let mut preset_names: Vec<&str> = PRESETS.iter().chain(OAUTH_PRESETS.iter()).map(|p| p.name).collect();
+    let mut preset_names: Vec<&str> = PRESETS
+        .iter()
+        .chain(OAUTH_PRESETS.iter())
+        .map(|p| p.name)
+        .collect();
     // Also exclude canonical OAuth names (e.g. "chatgpt" for "codex")
     for preset in OAUTH_PRESETS.iter() {
         let canonical = canonical_oauth_name(preset.name);
@@ -509,7 +518,11 @@ fn ProviderDetailPanel(
 
     let is_new = move || {
         let sel = selected.get();
-        sel.as_deref() == Some("__new__") || sel.as_ref().map(|s| s.starts_with("__preset__")).unwrap_or(false)
+        sel.as_deref() == Some("__new__")
+            || sel
+                .as_ref()
+                .map(|s| s.starts_with("__preset__"))
+                .unwrap_or(false)
     };
 
     // Load form when selection changes
@@ -544,14 +557,29 @@ fn ProviderDetailPanel(
                 // Existing provider — populate form with actual values
                 if let Some(provider) = providers.get().iter().find(|p| p.name == sel) {
                     form_name.set(provider.name.clone());
-                    form_protocol.set(provider.provider_type.clone().unwrap_or_else(|| provider.name.clone()));
+                    form_protocol.set(
+                        provider
+                            .provider_type
+                            .clone()
+                            .unwrap_or_else(|| provider.name.clone()),
+                    );
                     form_model.set(provider.model.clone());
                     form_api_key.set(provider.api_key.clone().unwrap_or_default());
                     form_enabled.set(provider.enabled);
                     form_base_url.set(provider.base_url.clone().unwrap_or_default());
                     form_timeout.set(provider.timeout_seconds);
-                    form_max_tokens.set(provider.max_tokens.map(|v| v.to_string()).unwrap_or_default());
-                    form_temperature.set(provider.temperature.map(|v| v.to_string()).unwrap_or_default());
+                    form_max_tokens.set(
+                        provider
+                            .max_tokens
+                            .map(|v| v.to_string())
+                            .unwrap_or_default(),
+                    );
+                    form_temperature.set(
+                        provider
+                            .temperature
+                            .map(|v| v.to_string())
+                            .unwrap_or_default(),
+                    );
                 }
             }
         }
@@ -560,12 +588,22 @@ fn ProviderDetailPanel(
     // Check OAuth status when an OAuth provider is selected
     Effect::new(move || {
         let sel = selected.get();
-        let provider_name = sel.as_deref()
+        let provider_name = sel
+            .as_deref()
             .and_then(|s| s.strip_prefix("__preset__").or(Some(s)))
-            .and_then(|name| if name.starts_with("__") { None } else { Some(name.to_string()) });
+            .and_then(|name| {
+                if name.starts_with("__") {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            });
 
         if let Some(name) = provider_name {
-            if find_preset(&name).map(|p| p.auth_type == "oauth").unwrap_or(false) {
+            if find_preset(&name)
+                .map(|p| p.auth_type == "oauth")
+                .unwrap_or(false)
+            {
                 oauth_loading.set(true);
                 let state = expect_context::<DashboardState>();
                 spawn_local(async move {
@@ -593,21 +631,37 @@ fn ProviderDetailPanel(
             model: form_model.get(),
             api_key: {
                 let key = form_api_key.get();
-                if key.is_empty() { None } else { Some(key) }
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(key)
+                }
             },
             base_url: {
                 let url = form_base_url.get();
-                if url.is_empty() { None } else { Some(url) }
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(url)
+                }
             },
             color: None,
             timeout_seconds: Some(form_timeout.get()),
             max_tokens: {
                 let t = form_max_tokens.get();
-                if t.is_empty() { None } else { t.parse().ok() }
+                if t.is_empty() {
+                    None
+                } else {
+                    t.parse().ok()
+                }
             },
             temperature: {
                 let t = form_temperature.get();
-                if t.is_empty() { None } else { t.parse().ok() }
+                if t.is_empty() {
+                    None
+                } else {
+                    t.parse().ok()
+                }
             },
             top_p: None,
             top_k: None,
@@ -666,7 +720,9 @@ fn ProviderDetailPanel(
 
     let on_set_default = move |_| {
         if let Some(name) = selected.get() {
-            if name.starts_with("__") { return; }
+            if name.starts_with("__") {
+                return;
+            }
             saving.set(true);
             spawn_local(async move {
                 match ProvidersApi::set_default(&state, name).await {
@@ -684,7 +740,9 @@ fn ProviderDetailPanel(
 
     let on_delete = move |_| {
         if let Some(name) = selected.get() {
-            if name.starts_with("__") { return; }
+            if name.starts_with("__") {
+                return;
+            }
             saving.set(true);
             spawn_local(async move {
                 match ProvidersApi::delete(&state, name).await {

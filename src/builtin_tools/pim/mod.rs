@@ -1,14 +1,9 @@
-//! PIM (Personal Information Management) tool — Calendar, Reminders, Notes, Contacts.
-//!
-//! Provides unified access to macOS PIM data through the Desktop Bridge.
-//! Requires the Aleph Desktop Bridge to be connected. When the bridge is absent,
-//! all operations return a friendly message instead of an error.
+//! PIM (Personal Information Management) tool — Calendar, Reminders, Notes,
+//! Contacts via the platform-native `desktop/*` capability layer.
 
 mod args;
-mod request;
 
 pub use args::{PimArgs, PimOutput};
-pub use request::build_pim_request;
 
 use crate::sync_primitives::Arc;
 
@@ -16,7 +11,6 @@ use async_trait::async_trait;
 use serde_json;
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
-use crate::desktop::DesktopBridgeClient;
 use crate::error::Result;
 use crate::tools::AlephTool;
 use aleph_desktop::pim_types::{NewCalendarEvent, NewReminder};
@@ -24,7 +18,6 @@ use aleph_desktop::pim_types::{NewCalendarEvent, NewReminder};
 /// PIM tool — unified access to macOS Calendar, Reminders, Notes, and Contacts.
 #[derive(Clone)]
 pub struct PimTool {
-    client: DesktopBridgeClient,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
 }
@@ -32,7 +25,6 @@ pub struct PimTool {
 impl PimTool {
     pub fn new() -> Self {
         Self {
-            client: DesktopBridgeClient::new(),
             approval_policy: None,
             platform: None,
         }
@@ -95,8 +87,8 @@ impl PimTool {
 
     /// Try to dispatch a PIM action via `DesktopPlatform.pim()`.
     ///
-    /// Returns `Some(PimOutput)` if the action was handled, or `None` to fall
-    /// through to the legacy bridge path.
+    /// Returns `Some(PimOutput)` if the action was handled, or `None` if the
+    /// current platform layer does not implement that action.
     async fn call_via_platform(&self, args: &PimArgs) -> Option<PimOutput> {
         let platform = self.platform.as_ref()?;
         let pim = platform.pim()?;
@@ -258,7 +250,7 @@ impl PimTool {
                     .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
                 // contacts_create, contacts_update, contacts_delete are not in
-                // PimCapability trait — fall through to the legacy bridge.
+                // PimCapability today and remain unsupported on the platform path.
                 _ => return None,
             };
 
@@ -327,6 +319,36 @@ impl PimTool {
             }
         }
     }
+
+    fn no_capability_output(&self) -> PimOutput {
+        PimOutput {
+            success: false,
+            data: None,
+            message: Some("PIM capability is not configured for this server build.".to_string()),
+        }
+    }
+
+    fn unsupported_action_output(&self, args: &PimArgs) -> PimOutput {
+        let message = if self
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.pim())
+            .is_none()
+        {
+            "PIM capability is not available on this platform/build.".to_string()
+        } else {
+            format!(
+                "PIM action '{}' is not implemented by the current `desktop/*` platform capability layer.",
+                args.action
+            )
+        };
+
+        PimOutput {
+            success: false,
+            data: None,
+            message: Some(message),
+        }
+    }
 }
 
 impl Default for PimTool {
@@ -338,9 +360,7 @@ impl Default for PimTool {
 #[async_trait]
 impl AlephTool for PimTool {
     const NAME: &'static str = "pim";
-    const DESCRIPTION: &'static str = r#"Access macOS Calendar, Reminders, Notes, and Contacts via the Desktop Bridge.
-
-Requires the Aleph Desktop Bridge (starts automatically with the server).
+    const DESCRIPTION: &'static str = r#"Access Notes, Calendar, Reminders, and Contacts via platform-native `desktop/*` capabilities.
 
 Calendar:
 - calendar_list: List events in date range. Required: from, to (ISO 8601). Optional: calendar_id
@@ -369,9 +389,6 @@ Notes:
 Contacts:
 - contacts_search: Search contacts. Required: query
 - contacts_get: Get contact details. Required: id
-- contacts_create: Create contact. Required: given_name. Optional: family_name, organization, notes, phone_numbers, emails
-- contacts_update: Update contact. Required: id. Optional: given_name, family_name, organization, notes, phone_numbers, emails
-- contacts_delete: Delete contact. Required: id
 - contacts_groups: List contact groups"#;
 
     type Args = PimArgs;
@@ -388,59 +405,30 @@ Contacts:
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Check approval for write actions BEFORE touching the bridge.
+        // Check approval for write actions before attempting PIM execution.
         if let Some(out) = self.check_approval(&args.action).await {
             return Ok(out);
         }
 
-        // Prefer DesktopPlatform.pim() over legacy bridge
+        // Prefer DesktopPlatform.pim() for all supported PIM actions.
         if let Some(output) = self.call_via_platform(&args).await {
             return Ok(output);
         }
 
-        // Gracefully handle the case where the Desktop Bridge is not connected.
-        if !self.client.is_available() {
-            return Ok(PimOutput {
-                success: false,
-                data: None,
-                message: Some(
-                    "Desktop bridge not connected. PIM operations require the desktop bridge \
-                     for Calendar, Reminders, Notes, and Contacts access. Ensure the desktop \
-                     platform capability is available."
-                        .to_string(),
-                ),
-            });
+        if self.platform.is_none() {
+            return Ok(self.no_capability_output());
         }
 
-        let request = match build_pim_request(&args) {
-            Ok(r) => r,
-            Err(msg) => {
-                return Ok(PimOutput {
-                    success: false,
-                    data: None,
-                    message: Some(msg),
-                });
-            }
-        };
-
-        match self.client.send(request).await {
-            Ok(result) => Ok(PimOutput {
-                success: true,
-                data: Some(result),
-                message: None,
-            }),
-            Err(e) => Ok(PimOutput {
-                success: false,
-                data: None,
-                message: Some(e.to_string()),
-            }),
-        }
+        Ok(self.unsupported_action_output(&args))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+    use crate::sync_primitives::Arc;
+    use async_trait::async_trait;
 
     fn make_args(action: &str) -> PimArgs {
         PimArgs {
@@ -469,354 +457,6 @@ mod tests {
             phone_numbers: None,
             emails: None,
         }
-    }
-
-    // -- Calendar tests ------------------------------------------------------
-
-    #[test]
-    fn test_build_calendar_list() {
-        let mut args = make_args("calendar_list");
-        args.from = Some("2026-02-27T00:00:00Z".into());
-        args.to = Some("2026-02-28T00:00:00Z".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarList { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_calendar_list_missing_from() {
-        let mut args = make_args("calendar_list");
-        args.to = Some("2026-02-28T00:00:00Z".into());
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_calendar_list_missing_to() {
-        let mut args = make_args("calendar_list");
-        args.from = Some("2026-02-27T00:00:00Z".into());
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_calendar_get() {
-        let mut args = make_args("calendar_get");
-        args.id = Some("evt-123".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarGet { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_calendar_get_missing_id() {
-        let args = make_args("calendar_get");
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_calendar_create() {
-        let mut args = make_args("calendar_create");
-        args.title = Some("Meeting".into());
-        args.start = Some("2026-02-27T09:00:00Z".into());
-        args.end = Some("2026-02-27T10:00:00Z".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarCreate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_calendar_create_missing_title() {
-        let mut args = make_args("calendar_create");
-        args.start = Some("2026-02-27T09:00:00Z".into());
-        args.end = Some("2026-02-27T10:00:00Z".into());
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_calendar_update() {
-        let mut args = make_args("calendar_update");
-        args.id = Some("evt-123".into());
-        args.title = Some("Updated title".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarUpdate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_calendar_delete() {
-        let mut args = make_args("calendar_delete");
-        args.id = Some("evt-123".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarDelete { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_calendar_calendars() {
-        let args = make_args("calendar_calendars");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimCalendarCalendars
-        ));
-    }
-
-    // -- Reminders tests -----------------------------------------------------
-
-    #[test]
-    fn test_build_reminders_list() {
-        let args = make_args("reminders_list");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersList { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_reminders_get() {
-        let mut args = make_args("reminders_get");
-        args.id = Some("rem-456".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersGet { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_reminders_create() {
-        let mut args = make_args("reminders_create");
-        args.title = Some("Buy milk".into());
-        args.priority = Some(1);
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersCreate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_reminders_create_missing_title() {
-        let args = make_args("reminders_create");
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_reminders_complete() {
-        let mut args = make_args("reminders_complete");
-        args.id = Some("rem-456".into());
-        args.completed = Some(true);
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersComplete { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_reminders_complete_missing_completed() {
-        let mut args = make_args("reminders_complete");
-        args.id = Some("rem-456".into());
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_reminders_delete() {
-        let mut args = make_args("reminders_delete");
-        args.id = Some("rem-456".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersDelete { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_reminders_lists() {
-        let args = make_args("reminders_lists");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimRemindersLists
-        ));
-    }
-
-    // -- Notes tests ---------------------------------------------------------
-
-    #[test]
-    fn test_build_notes_list() {
-        let args = make_args("notes_list");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesList { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_notes_get() {
-        let mut args = make_args("notes_get");
-        args.id = Some("note-789".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesGet { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_notes_create() {
-        let mut args = make_args("notes_create");
-        args.title = Some("My note".into());
-        args.body = Some("Some content".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesCreate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_notes_create_missing_title() {
-        let args = make_args("notes_create");
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_notes_update() {
-        let mut args = make_args("notes_update");
-        args.id = Some("note-789".into());
-        args.body = Some("Updated content".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesUpdate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_notes_delete() {
-        let mut args = make_args("notes_delete");
-        args.id = Some("note-789".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesDelete { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_notes_folders() {
-        let args = make_args("notes_folders");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimNotesFolders
-        ));
-    }
-
-    // -- Contacts tests ------------------------------------------------------
-
-    #[test]
-    fn test_build_contacts_search() {
-        let mut args = make_args("contacts_search");
-        args.query = Some("John".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsSearch { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_contacts_search_missing_query() {
-        let args = make_args("contacts_search");
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_contacts_get() {
-        let mut args = make_args("contacts_get");
-        args.id = Some("ct-abc".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsGet { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_contacts_create() {
-        let mut args = make_args("contacts_create");
-        args.given_name = Some("Jane".into());
-        args.family_name = Some("Doe".into());
-        args.emails = Some(vec!["jane@example.com".into()]);
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsCreate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_contacts_create_missing_given_name() {
-        let args = make_args("contacts_create");
-        assert!(build_pim_request(&args).is_err());
-    }
-
-    #[test]
-    fn test_build_contacts_update() {
-        let mut args = make_args("contacts_update");
-        args.id = Some("ct-abc".into());
-        args.organization = Some("Acme Corp".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsUpdate { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_contacts_delete() {
-        let mut args = make_args("contacts_delete");
-        args.id = Some("ct-abc".into());
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsDelete { .. }
-        ));
-    }
-
-    #[test]
-    fn test_build_contacts_groups() {
-        let args = make_args("contacts_groups");
-        let req = build_pim_request(&args).unwrap();
-        assert!(matches!(
-            req,
-            crate::desktop::DesktopRequest::PimContactsGroups
-        ));
-    }
-
-    // -- Error tests ---------------------------------------------------------
-
-    #[test]
-    fn test_build_unknown_action() {
-        let args = make_args("invalid_action");
-        let err = build_pim_request(&args).unwrap_err();
-        assert!(
-            err.contains("invalid_action"),
-            "error should mention the unknown action"
-        );
     }
 
     // -- Write action classification tests -----------------------------------
@@ -852,11 +492,6 @@ mod tests {
         assert!(!PimTool::is_write_action("contacts_get"));
         assert!(!PimTool::is_write_action("contacts_groups"));
     }
-
-    // -- Approval policy tests -----------------------------------------------
-
-    use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
-
     /// A mock policy that returns a fixed decision for all checks.
     struct MockPolicy {
         decision: ApprovalDecision,
@@ -924,8 +559,8 @@ mod tests {
         args.from = Some("2026-02-27T00:00:00Z".into());
         args.to = Some("2026-02-28T00:00:00Z".into());
         let output = AlephTool::call(&tool, args).await.unwrap();
-        // Should NOT be "Action denied". It will fail on bridge not available,
-        // which is expected (approval gate was not triggered).
+        // Should NOT be "Action denied". It will fail because this plain test
+        // instance does not wire a platform capability.
         assert!(!output.success);
         let msg = output.message.as_deref().unwrap();
         assert!(
@@ -942,12 +577,45 @@ mod tests {
         let mut args = make_args("contacts_delete");
         args.id = Some("ct-123".into());
         let output = AlephTool::call(&tool, args).await.unwrap();
-        // Should fail on bridge not available, NOT on approval
+        // Should fail on missing PIM capability, NOT on approval.
         assert!(!output.success);
         let msg = output.message.as_deref().unwrap();
         assert!(
             !msg.contains("Action denied") && !msg.contains("Approval required"),
             "Without policy, should not hit approval gate, got: {msg}"
         );
+        assert!(msg.contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn test_pim_reports_missing_platform_capability() {
+        let tool = PimTool::new();
+
+        let mut args = make_args("notes_list");
+        args.folder = Some("Notes".into());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("not configured"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_pim_reports_legacy_contact_write_as_unsupported() {
+        let tool =
+            PimTool::new().with_platform(Arc::new(aleph_desktop_macos::MacOSPlatform::new()));
+
+        let mut args = make_args("contacts_delete");
+        args.id = Some("ct-123".into());
+        let output = AlephTool::call(&tool, args).await.unwrap();
+        assert!(!output.success);
+        assert!(output
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("not implemented"));
     }
 }

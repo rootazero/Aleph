@@ -1,7 +1,7 @@
 //! VerifyStopHook — triggers verification before allowing the agent loop to stop.
 
-use tokio_util::sync::CancellationToken;
 use super::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
+use tokio_util::sync::CancellationToken;
 
 /// Configuration for the verify stop hook.
 pub struct VerifyStopHookConfig {
@@ -25,7 +25,10 @@ pub struct VerifyStopHook {
 
 impl VerifyStopHook {
     pub fn new(current_agent_id: impl Into<String>, config: VerifyStopHookConfig) -> Self {
-        Self { config, current_agent_id: current_agent_id.into() }
+        Self {
+            config,
+            current_agent_id: current_agent_id.into(),
+        }
     }
 
     /// Check whether verification should block this stop attempt.
@@ -36,9 +39,15 @@ impl VerifyStopHook {
     /// - The task was trivial (below iteration threshold)
     /// - Verification output is already present in `final_text` (VERDICT: marker)
     fn should_verify(&self, ctx: &StopHookContext) -> bool {
-        if self.current_agent_id == "verify" { return false; }
-        if !self.config.trigger_for.contains(&self.current_agent_id) { return false; }
-        if ctx.iterations < self.config.min_iterations { return false; }
+        if self.current_agent_id == "verify" {
+            return false;
+        }
+        if !self.config.trigger_for.contains(&self.current_agent_id) {
+            return false;
+        }
+        if ctx.iterations < self.config.min_iterations {
+            return false;
+        }
 
         // If the agent's final output already contains a verification verdict,
         // verification has been completed — allow the stop.
@@ -54,9 +63,15 @@ impl VerifyStopHook {
 
 #[async_trait::async_trait]
 impl StopHookHandler for VerifyStopHook {
-    fn name(&self) -> &str { "verify" }
+    fn name(&self) -> &str {
+        "verify"
+    }
 
-    async fn evaluate(&self, ctx: &StopHookContext, _cancel: &CancellationToken) -> StopHookVerdict {
+    async fn evaluate(
+        &self,
+        ctx: &StopHookContext,
+        _cancel: &CancellationToken,
+    ) -> StopHookVerdict {
         if !self.should_verify(ctx) {
             return StopHookVerdict::Allow;
         }

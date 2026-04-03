@@ -2,8 +2,8 @@
 
 use serde::Deserialize;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 #[derive(Deserialize)]
 struct Command {
@@ -41,14 +41,13 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
     // Filter by category if specified
     if let Some(cat) = category {
         commands.retain(|c| {
-            c.source_type.contains(cat)
-                || c.key.contains(cat)
-                || c.command_type.contains(cat)
+            c.source_type.contains(cat) || c.key.contains(cat) || c.command_type.contains(cat)
         });
     }
 
     // Group by source type
-    let mut sources: std::collections::HashMap<String, Vec<&Command>> = std::collections::HashMap::new();
+    let mut sources: std::collections::HashMap<String, Vec<&Command>> =
+        std::collections::HashMap::new();
     for cmd in &commands {
         let src = if cmd.source_type.is_empty() {
             "other".to_string()

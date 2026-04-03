@@ -47,7 +47,10 @@ fn load_browse(
         let mut params = json!({ "sort": "downloads", "limit": 20 });
         if append {
             if let Some(c) = cursor.get_untracked() {
-                params.as_object_mut().unwrap().insert("cursor".into(), serde_json::Value::String(c));
+                params
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("cursor".into(), serde_json::Value::String(c));
             }
         }
         match state.rpc_call("clawhub.browse", params).await {
@@ -61,8 +64,18 @@ fn load_browse(
                         }
                     }
                 }
-                cursor.set(result.get("cursor").and_then(|v| v.as_str()).map(String::from));
-                has_more.set(result.get("hasMore").and_then(|v| v.as_bool()).unwrap_or(false));
+                cursor.set(
+                    result
+                        .get("cursor")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                );
+                has_more.set(
+                    result
+                        .get("hasMore")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                );
                 loading.set(false);
             }
             Err(e) => {
@@ -84,7 +97,10 @@ fn load_search(
     loading.set(true);
     error.set(None);
     spawn_local(async move {
-        match state.rpc_call("clawhub.search", json!({ "query": query })).await {
+        match state
+            .rpc_call("clawhub.search", json!({ "query": query }))
+            .await
+        {
             Ok(result) => {
                 if let Some(list) = result.get("skills") {
                     if let Ok(parsed) = serde_json::from_value::<Vec<ClawHubSkill>>(list.clone()) {
@@ -288,10 +304,7 @@ pub fn ClawHubView() -> impl IntoView {
 }
 
 #[component]
-fn ClawHubSkillCard(
-    skill: ClawHubSkill,
-    installed_slugs: RwSignal<Vec<String>>,
-) -> impl IntoView {
+fn ClawHubSkillCard(skill: ClawHubSkill, installed_slugs: RwSignal<Vec<String>>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
     let installing = RwSignal::new(false);
@@ -299,16 +312,17 @@ fn ClawHubSkillCard(
     let slug = StoredValue::new(skill.slug.clone());
     let slug_for_check = skill.slug.clone();
 
-    let is_installed = Memo::new(move |_| {
-        installed_slugs.get().contains(&slug_for_check)
-    });
+    let is_installed = Memo::new(move |_| installed_slugs.get().contains(&slug_for_check));
 
     let handle_install = move |_| {
         installing.set(true);
         install_error.set(None);
         let install_slug = slug.get_value();
         spawn_local(async move {
-            match state.rpc_call("clawhub.install", json!({ "slug": install_slug })).await {
+            match state
+                .rpc_call("clawhub.install", json!({ "slug": install_slug }))
+                .await
+            {
                 Ok(result) => {
                     installing.set(false);
                     // Add to installed list

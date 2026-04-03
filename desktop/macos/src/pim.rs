@@ -20,7 +20,6 @@ impl MacOSPim {
             bridge: SwiftBridge::default(),
         }
     }
-
 }
 
 #[async_trait]
@@ -140,11 +139,7 @@ impl PimCapability for MacOSPim {
         Ok(resp.id)
     }
 
-    async fn calendar_update_event(
-        &self,
-        event_id: &str,
-        event: NewCalendarEvent,
-    ) -> Result<()> {
+    async fn calendar_update_event(&self, event_id: &str, event: NewCalendarEvent) -> Result<()> {
         let mut args = vec![("id", event_id), ("title", event.title.as_str())];
         args.push(("start", event.start.as_str()));
         args.push(("end", event.end.as_str()));

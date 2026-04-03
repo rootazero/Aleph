@@ -1,9 +1,9 @@
 //
 // Dashboard mode sidebar — sub-navigation for dashboard views.
 //
-use leptos::prelude::*;
 use crate::components::sidebar::SidebarItem;
 use crate::i18n::*;
+use leptos::prelude::*;
 
 #[component]
 pub fn DashboardSidebar() -> impl IntoView {

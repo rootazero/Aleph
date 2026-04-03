@@ -28,7 +28,8 @@ End with a structured plan:
 - **Goal**: one-sentence summary of what the plan achieves.
 - **Steps**: numbered list with file paths, changes, and rationale.
 - **Risks**: potential issues and mitigations.
-- **Dependencies**: ordering constraints between steps."#.into(),
+- **Dependencies**: ordering constraints between steps."#
+            .into(),
     }
 }
 

@@ -397,8 +397,8 @@ impl StateDatabase {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task_id TEXT NOT NULL,
                 step_index INTEGER NOT NULL,
-                role TEXT NOT NULL,  -- assistant, tool
-                content_json TEXT NOT NULL,
+                event_kind TEXT NOT NULL,  -- turn_started, tool_call_completed, etc.
+                event_json TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 FOREIGN KEY(task_id) REFERENCES agent_tasks(id)
             );

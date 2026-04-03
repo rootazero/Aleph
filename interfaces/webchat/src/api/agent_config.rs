@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOpsConfig {
@@ -52,24 +52,38 @@ impl AgentConfigApi {
     }
 
     pub async fn get_file_ops(state: &DashboardState) -> Result<FileOpsConfig, String> {
-        let result = state.rpc_call("agent_config.get_file_ops", Value::Null).await?;
+        let result = state
+            .rpc_call("agent_config.get_file_ops", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn update_file_ops(state: &DashboardState, config: FileOpsConfig) -> Result<(), String> {
+    pub async fn update_file_ops(
+        state: &DashboardState,
+        config: FileOpsConfig,
+    ) -> Result<(), String> {
         let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
-        state.rpc_call("agent_config.update_file_ops", params).await?;
+        state
+            .rpc_call("agent_config.update_file_ops", params)
+            .await?;
         Ok(())
     }
 
     pub async fn get_code_exec(state: &DashboardState) -> Result<CodeExecConfig, String> {
-        let result = state.rpc_call("agent_config.get_code_exec", Value::Null).await?;
+        let result = state
+            .rpc_call("agent_config.get_code_exec", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn update_code_exec(state: &DashboardState, config: CodeExecConfig) -> Result<(), String> {
+    pub async fn update_code_exec(
+        state: &DashboardState,
+        config: CodeExecConfig,
+    ) -> Result<(), String> {
         let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
-        state.rpc_call("agent_config.update_code_exec", params).await?;
+        state
+            .rpc_call("agent_config.update_code_exec", params)
+            .await?;
         Ok(())
     }
 }

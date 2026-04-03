@@ -21,7 +21,9 @@ pub async fn send_notification(title: &str, body: &str) -> Result<()> {
         .arg(&script)
         .output()
         .await
-        .map_err(|e| DesktopError::InputFailed(format!("notification: failed to run osascript: {e}")))?;
+        .map_err(|e| {
+            DesktopError::InputFailed(format!("notification: failed to run osascript: {e}"))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

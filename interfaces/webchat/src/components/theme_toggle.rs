@@ -33,7 +33,12 @@ pub fn ThemeToggle() -> impl IntoView {
     let initial = {
         let window = web_sys::window().unwrap();
         let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
-        match storage.as_ref().and_then(|s: &web_sys::Storage| s.get_item("aleph-theme").ok()).flatten().as_deref() {
+        match storage
+            .as_ref()
+            .and_then(|s: &web_sys::Storage| s.get_item("aleph-theme").ok())
+            .flatten()
+            .as_deref()
+        {
             Some("light") => ThemeMode::Light,
             Some("dark") => ThemeMode::Dark,
             _ => ThemeMode::System,
@@ -56,19 +61,26 @@ pub fn ThemeToggle() -> impl IntoView {
         match next {
             ThemeMode::Light => {
                 let _ = class_list.add_1("light");
-                if let Some(s) = &storage { let _ = s.set_item("aleph-theme", "light"); }
+                if let Some(s) = &storage {
+                    let _ = s.set_item("aleph-theme", "light");
+                }
             }
             ThemeMode::Dark => {
                 let _ = class_list.add_1("dark");
-                if let Some(s) = &storage { let _ = s.set_item("aleph-theme", "dark"); }
+                if let Some(s) = &storage {
+                    let _ = s.set_item("aleph-theme", "dark");
+                }
             }
             ThemeMode::System => {
-                if let Some(s) = &storage { let _ = s.remove_item("aleph-theme"); }
+                if let Some(s) = &storage {
+                    let _ = s.remove_item("aleph-theme");
+                }
             }
         }
     };
 
-    let icon = move || match theme.get() {
+    let icon = move || {
+        match theme.get() {
         ThemeMode::System => view! {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
@@ -94,6 +106,7 @@ pub fn ThemeToggle() -> impl IntoView {
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
             </svg>
         }.into_any(),
+    }
     };
 
     view! {

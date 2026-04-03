@@ -9,10 +9,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{
-    MemoryConfigApi, MemoryConfig, FusionStrategy,
-    RetrieveWithTraceResponse,
-};
+use crate::api::{FusionStrategy, MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -113,9 +110,7 @@ pub fn MemoryView() -> impl IntoView {
 }
 
 #[component]
-fn BasicSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -206,9 +201,7 @@ fn BasicSettings(
 }
 
 #[component]
-fn AIRetrievalSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn AIRetrievalSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -288,9 +281,7 @@ fn AIRetrievalSettings(
 }
 
 #[component]
-fn CompressionSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn CompressionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -445,9 +436,7 @@ fn CompressionSettings(
 }
 
 #[component]
-fn FactDecaySettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn FactDecaySettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -546,9 +535,7 @@ fn FactDecaySettings(
 }
 
 #[component]
-fn GraphDecaySettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn GraphDecaySettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -626,9 +613,7 @@ fn GraphDecaySettings(
 }
 
 #[component]
-fn DreamingSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn DreamingSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -729,9 +714,7 @@ fn DreamingSettings(
 }
 
 #[component]
-fn StorageBackupSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn StorageBackupSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -802,9 +785,7 @@ fn StorageBackupSettings(
 // ============================================================================
 
 #[component]
-fn RetrievalPipelineSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn RetrievalPipelineSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -905,9 +886,7 @@ fn RetrievalPipelineSettings(
 // ============================================================================
 
 #[component]
-fn ReflectionSettings(
-    config: RwSignal<Option<MemoryConfig>>,
-) -> impl IntoView {
+fn ReflectionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -1052,16 +1031,14 @@ fn RetrievalDebugPanel() -> impl IntoView {
             trace_result.set(None);
             let params = serde_json::json!({ "query": q });
             match state.rpc_call("memory.retrieve_with_trace", params).await {
-                Ok(result) => {
-                    match serde_json::from_value::<RetrieveWithTraceResponse>(result) {
-                        Ok(resp) => {
-                            trace_result.set(Some(resp));
-                        }
-                        Err(e) => {
-                            trace_error.set(Some(format!("Parse error: {}", e)));
-                        }
+                Ok(result) => match serde_json::from_value::<RetrieveWithTraceResponse>(result) {
+                    Ok(resp) => {
+                        trace_result.set(Some(resp));
                     }
-                }
+                    Err(e) => {
+                        trace_error.set(Some(format!("Parse error: {}", e)));
+                    }
+                },
                 Err(e) => {
                     trace_error.set(Some(format!("RPC error: {}", e)));
                 }

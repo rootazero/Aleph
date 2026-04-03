@@ -1,13 +1,12 @@
-use leptos::*;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
 use crate::api::{
-    EmbeddingProvidersApi, EmbeddingProviderEntry, EmbeddingProviderConfig,
-    EmbeddingPresetEntry,
+    EmbeddingPresetEntry, EmbeddingProviderConfig, EmbeddingProviderEntry, EmbeddingProvidersApi,
 };
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use leptos::*;
 
 #[component]
 pub fn EmbeddingProvidersView() -> impl IntoView {
@@ -432,7 +431,11 @@ fn ProviderDetailPanel(
                 api_key_env: pkey_env.clone(),
                 api_key: {
                     let key = api_key.get();
-                    if key.is_empty() { None } else { Some(key) }
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some(key)
+                    }
                 },
                 model: form_model.get(),
                 dimensions: dimensions.get(),
@@ -484,7 +487,10 @@ fn ProviderDetailPanel(
                     set_saving.set(false);
                     set_save_success.set(true);
                     on_reload();
-                    set_timeout(move || set_save_success.set(false), std::time::Duration::from_secs(2));
+                    set_timeout(
+                        move || set_save_success.set(false),
+                        std::time::Duration::from_secs(2),
+                    );
                 }
                 Err(e) => {
                     set_saving.set(false);
@@ -809,17 +815,39 @@ fn ReembedMigrationCard() -> impl IntoView {
                         if let Some(error) = data.get("error").and_then(|v| v.as_str()) {
                             set_error_message.set(Some(format!("Migration failed: {}", error)));
                         } else {
-                            let facts_updated = data.get("facts_updated").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let facts_total = data.get("facts_total").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let memories_updated = data.get("memories_updated").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let memories_total = data.get("memories_total").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let errors = data.get("errors").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+                            let facts_updated = data
+                                .get("facts_updated")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let facts_total = data
+                                .get("facts_total")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let memories_updated = data
+                                .get("memories_updated")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let memories_total = data
+                                .get("memories_total")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let errors = data
+                                .get("errors")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(0);
 
                             let msg = format!(
                                 "Facts: {}/{} migrated, Memories: {}/{} migrated{}",
-                                facts_updated, facts_total,
-                                memories_updated, memories_total,
-                                if errors > 0 { format!(", {} errors", errors) } else { String::new() },
+                                facts_updated,
+                                facts_total,
+                                memories_updated,
+                                memories_total,
+                                if errors > 0 {
+                                    format!(", {} errors", errors)
+                                } else {
+                                    String::new()
+                                },
                             );
                             set_result_message.set(Some(msg));
                         }
@@ -976,7 +1004,11 @@ fn AddProviderPanel(
             api_key_env: None,
             api_key: {
                 let key = api_key.get();
-                if key.is_empty() { None } else { Some(key) }
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(key)
+                }
             },
             model: form_model.get(),
             dimensions: dimensions.get(),

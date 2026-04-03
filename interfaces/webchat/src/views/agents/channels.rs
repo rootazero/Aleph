@@ -1,9 +1,9 @@
 // Channels Tab — read-only binding display for an agent
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 #[component]
 pub fn ChannelsTab(agent_id: String) -> impl IntoView {
@@ -15,10 +15,15 @@ pub fn ChannelsTab(agent_id: String) -> impl IntoView {
 
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         let id = agent_id.get_value();
         spawn_local(async move {
-            if let Ok(result) = dash.rpc_call("agents.bindings", serde_json::Value::Null).await {
+            if let Ok(result) = dash
+                .rpc_call("agents.bindings", serde_json::Value::Null)
+                .await
+            {
                 if let Some(bindings) = result.get("bindings") {
                     if let Some(ch) = bindings.get(&id).and_then(|v| v.as_str()) {
                         bound_channel.set(Some(ch.to_string()));

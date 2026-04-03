@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 #[derive(Deserialize)]
 struct Session {
@@ -62,7 +62,12 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
 }
 
 /// Create a new session
-pub async fn create(server_url: &str, name: Option<&str>, config: &CliConfig, json: bool) -> CliResult<()> {
+pub async fn create(
+    server_url: &str,
+    name: Option<&str>,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     // Authenticate first
@@ -135,13 +140,62 @@ pub async fn usage(server_url: &str, key: &str, config: &CliConfig, json: bool) 
         output::print_json(&result);
     } else {
         let pairs = vec![
-            ("Session", result.get("session_key").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
-            ("Total Tokens", result.get("tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
-            ("Input Tokens", result.get("input_tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
-            ("Output Tokens", result.get("output_tokens").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
-            ("Messages", result.get("messages").and_then(|v| v.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".to_string())),
-            ("Created", result.get("created_at").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
-            ("Last Active", result.get("last_active_at").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
+            (
+                "Session",
+                result
+                    .get("session_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-")
+                    .to_string(),
+            ),
+            (
+                "Total Tokens",
+                result
+                    .get("tokens")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            (
+                "Input Tokens",
+                result
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            (
+                "Output Tokens",
+                result
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            (
+                "Messages",
+                result
+                    .get("messages")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            (
+                "Created",
+                result
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-")
+                    .to_string(),
+            ),
+            (
+                "Last Active",
+                result
+                    .get("last_active_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-")
+                    .to_string(),
+            ),
         ];
         output::print_detail(&pairs, false, &result);
     }
@@ -161,10 +215,22 @@ pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool
     if json {
         output::print_json(&result);
     } else {
-        let msg = result.get("message").and_then(|v| v.as_str()).unwrap_or("Compacted.");
-        let before = result.get("before_messages").and_then(|v| v.as_u64()).unwrap_or(0);
-        let after = result.get("after_messages").and_then(|v| v.as_u64()).unwrap_or(0);
-        let saved = result.get("tokens_saved").and_then(|v| v.as_u64()).unwrap_or(0);
+        let msg = result
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Compacted.");
+        let before = result
+            .get("before_messages")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let after = result
+            .get("after_messages")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let saved = result
+            .get("tokens_saved")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         println!("{}", msg);
         println!("  Before: {} messages", before);
         println!("  After:  {} messages", after);

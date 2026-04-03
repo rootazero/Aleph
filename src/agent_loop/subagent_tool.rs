@@ -114,7 +114,10 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     }
 
     // Otherwise, this is a run action — task is required
-    let task = task.ok_or_else(|| "missing required field: task (or provide request_id to check background status)".to_string())?;
+    let task = task.ok_or_else(|| {
+        "missing required field: task (or provide request_id to check background status)"
+            .to_string()
+    })?;
 
     if task.trim().is_empty() {
         return Err("task must not be empty".to_string());
@@ -320,7 +323,10 @@ impl LoopTool for SubagentTool {
                     }
                     None => {
                         return ToolResult::Error {
-                            error: format!("No background sub-agent found with request_id '{}'", request_id),
+                            error: format!(
+                                "No background sub-agent found with request_id '{}'",
+                                request_id
+                            ),
                             retryable: false,
                         };
                     }
@@ -383,11 +389,8 @@ impl LoopTool for SubagentTool {
             let request_id = uuid::Uuid::new_v4().to_string();
             let cancel_token = CancellationToken::new();
 
-            self.background_tracker.register(
-                request_id.clone(),
-                cancel_token,
-                args.task.clone(),
-            );
+            self.background_tracker
+                .register(request_id.clone(), cancel_token, args.task.clone());
 
             let provider = self.provider.clone();
             let factory = self.tool_registry_factory.clone();
@@ -646,8 +649,12 @@ mod tests {
         let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = super::super::chain_context::ChainContext::new();
         let tool = SubagentTool::new(
-            provider, factory, safety_factory, chain,
-            make_registry(), tracker,
+            provider,
+            factory,
+            safety_factory,
+            chain,
+            make_registry(),
+            tracker,
         );
 
         let result = tool.execute(json!({ "request_id": "test-id" })).await;

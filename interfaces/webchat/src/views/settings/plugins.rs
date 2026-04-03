@@ -340,9 +340,15 @@ fn InstallPluginDialog(
         dialog_error.set(None);
         let install_url = url.get().trim().to_string();
         spawn_local(async move {
-            match state.rpc_call("plugins.install", json!({
-                "url": install_url,
-            })).await {
+            match state
+                .rpc_call(
+                    "plugins.install",
+                    json!({
+                        "url": install_url,
+                    }),
+                )
+                .await
+            {
                 Ok(_) => {
                     installing.set(false);
                     load_plugins(state, plugins, loading, error);

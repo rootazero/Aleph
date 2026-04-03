@@ -73,7 +73,10 @@ pub fn list_running_apps() -> Result<Vec<AppInfo>> {
 
     let mut result = Vec::new();
     for app in apps.iter() {
-        let name = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
+        let name = app
+            .localizedName()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let bundle_id = app
             .bundleIdentifier()
             .map(|s| s.to_string())

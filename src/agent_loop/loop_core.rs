@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::context_budget::diagnostics::ContextDiagnostics;
@@ -24,14 +25,19 @@ use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
+use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
+use super::tool_pipeline::PipelineOutcome;
 use super::tool_pipeline::ToolPipeline;
+use super::trace::{
+    LoopTraceEvent, LoopTraceSessionOutcome, LoopTraceState, LoopTraceTextKind,
+    LoopTraceTurnMetrics, LoopTraceTurnOutcome, ToolCallEndEvent, ToolCallStartEvent,
+};
 use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::extension::HookEvent;
-use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
-use crate::providers::AiProvider;
-use crate::providers::adapter::StopReason;
+use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
 use futures::stream::BoxStream;
 
 // =============================================================================
@@ -65,6 +71,10 @@ const PTL_SAFETY_MARGIN: f64 = 1.2;
 const PTL_FALLBACK_DROP_RATIO: f64 = 0.20;
 /// Marker inserted at the beginning of the conversation after truncation.
 const PTL_TRUNCATION_MARKER: &str = "[earlier conversation truncated for recovery]";
+
+const MAX_CONSECUTIVE_ERRORS: usize = 10;
+const MAX_COMPLETION_NUDGES: usize = 3;
+const MAX_STOP_HOOK_BLOCKS: usize = 3;
 
 // =============================================================================
 // 413 emergency truncation helpers
@@ -292,6 +302,265 @@ pub struct LoopRunResult {
     pub depth: u32,
 }
 
+type SummaryHandle = JoinHandle<Option<String>>;
+type SkillPrefetchHandle = JoinHandle<Option<Vec<super::skill_prefetch::SkillInfo>>>;
+
+#[derive(Clone, Copy)]
+enum ActiveProvider {
+    Primary,
+    Fallback,
+}
+
+#[derive(Clone, Copy)]
+struct TurnBudgetState {
+    directive: super::context_budget::LoopDirective,
+    fresh_tail_count: usize,
+}
+
+struct LoopProgress {
+    final_text: Option<String>,
+    intermediate_texts: Vec<String>,
+    iterations: usize,
+    tool_calls_made: usize,
+    total_tokens: usize,
+    consecutive_errors: usize,
+    completion_nudge_count: usize,
+    current_max_tokens: Option<u32>,
+    stop_hook_blocks: usize,
+    pending_summary: Option<SummaryHandle>,
+    active_provider: ActiveProvider,
+}
+
+struct LoopRuntime {
+    messages: Vec<UnifiedMessage>,
+    system_prompt: String,
+    tool_defs: Vec<ToolDefinition>,
+}
+
+impl Default for LoopProgress {
+    fn default() -> Self {
+        Self {
+            final_text: None,
+            intermediate_texts: Vec::new(),
+            iterations: 0,
+            tool_calls_made: 0,
+            total_tokens: 0,
+            consecutive_errors: 0,
+            completion_nudge_count: 0,
+            current_max_tokens: None,
+            stop_hook_blocks: 0,
+            pending_summary: None,
+            active_provider: ActiveProvider::Primary,
+        }
+    }
+}
+
+impl LoopProgress {
+    fn cancelled_result(&self, chain: &super::chain_context::ChainContext) -> LoopRunResult {
+        LoopRunResult {
+            final_text: None,
+            iterations: self.iterations,
+            tool_calls_made: self.tool_calls_made,
+            total_tokens: self.total_tokens,
+            hit_limit: false,
+            cancelled: true,
+            chain_id: chain.chain_id.clone(),
+            depth: chain.depth,
+        }
+    }
+
+    fn finish(self, chain: &super::chain_context::ChainContext, hit_limit: bool) -> LoopRunResult {
+        LoopRunResult {
+            final_text: self.final_text,
+            iterations: self.iterations,
+            tool_calls_made: self.tool_calls_made,
+            total_tokens: self.total_tokens,
+            hit_limit,
+            cancelled: false,
+            chain_id: chain.chain_id.clone(),
+            depth: chain.depth,
+        }
+    }
+
+    fn apply_final_text_update(&mut self, update: FinalTextUpdate) {
+        match update {
+            FinalTextUpdate::None => {}
+            FinalTextUpdate::SetIfEmpty(text) => {
+                if self.final_text.is_none() {
+                    self.final_text = Some(text);
+                }
+            }
+            FinalTextUpdate::Replace(text) => {
+                self.final_text = Some(text);
+            }
+        }
+    }
+}
+
+struct TurnThinkingState {
+    budget: TurnBudgetState,
+    response: ProviderResponse,
+    prefetch_handle: Option<SkillPrefetchHandle>,
+    executor_handle: JoinHandle<Vec<PipelineOutcome>>,
+}
+
+struct TurnActState {
+    thinking: TurnThinkingState,
+    skip_tools: bool,
+}
+
+#[derive(Default)]
+enum FinalTextUpdate {
+    #[default]
+    None,
+    SetIfEmpty(String),
+    Replace(String),
+}
+
+#[derive(Clone, Copy, Default)]
+enum TurnExitRequest {
+    #[default]
+    None,
+    Stop,
+    HitLimit,
+}
+
+struct ToolTurnArtifacts {
+    requested_calls: usize,
+    executed_calls: usize,
+    skip_tools: bool,
+    next_error_streak: usize,
+    last_tool_name: Option<String>,
+    summary_handle: Option<SummaryHandle>,
+}
+
+impl ToolTurnArtifacts {
+    fn idle(current_error_streak: usize) -> Self {
+        Self {
+            requested_calls: 0,
+            executed_calls: 0,
+            skip_tools: false,
+            next_error_streak: current_error_streak,
+            last_tool_name: None,
+            summary_handle: None,
+        }
+    }
+
+    fn requested(requested_calls: usize, current_error_streak: usize, skip_tools: bool) -> Self {
+        Self {
+            requested_calls,
+            executed_calls: 0,
+            skip_tools,
+            next_error_streak: current_error_streak,
+            last_tool_name: None,
+            summary_handle: None,
+        }
+    }
+
+    fn productive(&self) -> bool {
+        self.requested_calls > 0
+            && self.executed_calls > 0
+            && !self.skip_tools
+            && self.next_error_streak == 0
+    }
+}
+
+struct TurnArtifacts {
+    response: ProviderResponse,
+    prefetch_handle: Option<SkillPrefetchHandle>,
+    tools: ToolTurnArtifacts,
+    exit_request: TurnExitRequest,
+    final_text_update: FinalTextUpdate,
+}
+
+enum ThinkTurnResult {
+    Ready(TurnThinkingState),
+    Cancelled,
+}
+
+enum TurnResolve {
+    Restart,
+    Act(TurnActState),
+    Finalize(TurnArtifacts),
+}
+
+enum TurnLoopDecision {
+    Continue,
+    Exit(LoopExitDecision),
+}
+
+#[derive(Default)]
+struct LoopExitDecision {
+    hit_limit: bool,
+    final_text_update: FinalTextUpdate,
+}
+
+enum TurnState {
+    Prepare,
+    Think(TurnBudgetState),
+    Resolve(TurnThinkingState),
+    Act(TurnActState),
+    Finalize(TurnArtifacts),
+}
+
+enum TurnAdvance {
+    Next(TurnState),
+    ContinueLoop,
+    ExitLoop(LoopExitDecision),
+    Cancelled,
+}
+
+enum TurnExecution {
+    Prepared(TurnBudgetState),
+    Thought(ThinkTurnResult),
+    Resolved(TurnResolve),
+    Acted(TurnArtifacts),
+    Finalized(TurnLoopDecision),
+}
+
+enum TurnRunOutcome {
+    Continue,
+    Exit(LoopExitDecision),
+    Cancelled,
+}
+
+#[derive(Default)]
+struct TurnTraceFrame {
+    requested_tool_calls: usize,
+    executed_tool_calls: usize,
+    productive: bool,
+}
+
+impl TurnTraceFrame {
+    fn observe_artifacts(&mut self, turn: &TurnArtifacts) {
+        self.requested_tool_calls = turn.tools.requested_calls;
+        self.executed_tool_calls = turn.tools.executed_calls;
+        self.productive = turn.tools.productive();
+    }
+
+    fn snapshot(&self, progress: &LoopProgress) -> LoopTraceTurnMetrics {
+        LoopTraceTurnMetrics {
+            requested_tool_calls: self.requested_tool_calls,
+            executed_tool_calls: self.executed_tool_calls,
+            productive: self.productive,
+            consecutive_errors: progress.consecutive_errors,
+            total_tokens: progress.total_tokens,
+        }
+    }
+}
+
+impl TurnState {
+    fn trace_state(&self) -> LoopTraceState {
+        match self {
+            Self::Prepare => LoopTraceState::Prepare,
+            Self::Think(_) => LoopTraceState::Think,
+            Self::Resolve(_) => LoopTraceState::Resolve,
+            Self::Act(_) => LoopTraceState::Act,
+            Self::Finalize(_) => LoopTraceState::Finalize,
+        }
+    }
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -333,12 +602,35 @@ fn strip_repeated_intermediate(text: &str, intermediates: &[String]) -> String {
 
 /// Callback for streaming events during the loop.
 pub trait LoopCallback: Send {
+    fn on_trace(&mut self, event: &LoopTraceEvent) {
+        match event {
+            LoopTraceEvent::TextEmitted { stream, text, .. } => match stream {
+                LoopTraceTextKind::Final => self.on_text(text),
+                LoopTraceTextKind::Intermediate => self.on_intermediate_text(text),
+            },
+            LoopTraceEvent::ToolCallStarted { call, .. } => self.on_tool_call_start(call),
+            LoopTraceEvent::ToolCallCompleted { call, result, .. } => {
+                self.on_tool_call_done(call, result)
+            }
+            LoopTraceEvent::ToolSummary { summary, .. } => self.on_tool_summary(summary),
+            LoopTraceEvent::TurnStarted { .. }
+            | LoopTraceEvent::TurnStateEntered { .. }
+            | LoopTraceEvent::TurnCompleted { .. }
+            | LoopTraceEvent::SessionCompleted { .. } => {}
+        }
+    }
     fn on_text(&mut self, _text: &str) {}
     /// Called when the LLM produces text alongside tool calls (intermediate progress).
     /// This text should be delivered to the user immediately, not buffered.
     fn on_intermediate_text(&mut self, _text: &str) {}
     fn on_tool_start(&mut self, _name: &str, _input: &Value) {}
     fn on_tool_done(&mut self, _name: &str, _result: &ToolResult) {}
+    fn on_tool_call_start(&mut self, event: &ToolCallStartEvent) {
+        self.on_tool_start(&event.tool_name, &event.input);
+    }
+    fn on_tool_call_done(&mut self, event: &ToolCallEndEvent, result: &ToolResult) {
+        self.on_tool_done(&event.tool_name, result);
+    }
     fn on_safety_block(&mut self, _error: &SafetyError) {}
     fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
     fn on_stop_hook_block(&mut self, _reason: &str) {}
@@ -446,9 +738,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             compaction_pipeline: pipeline,
             diagnostics: Mutex::new(ContextDiagnostics::new()),
             context_compactor: None,
-            truncation_recovery: Mutex::new(
-                super::truncation_recovery::TruncationRecovery::new(provider_max),
-            ),
+            truncation_recovery: Mutex::new(super::truncation_recovery::TruncationRecovery::new(
+                provider_max,
+            )),
             delta_sink: Box::new(NoopSink),
             cancel_token,
             stop_hooks: Vec::new(),
@@ -470,7 +762,10 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Attach a [`ContextCompactor`](super::context_compactor::ContextCompactor) for LLM-based compaction
     /// at elevated context pressure.
-    pub fn with_context_compactor(mut self, compactor: super::context_compactor::ContextCompactor) -> Self {
+    pub fn with_context_compactor(
+        mut self,
+        compactor: super::context_compactor::ContextCompactor,
+    ) -> Self {
         self.context_compactor = Some(compactor);
         self
     }
@@ -512,18 +807,25 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Attach a [`ChainContext`](super::chain_context::ChainContext) for subagent call chain tracking.
     pub fn with_chain(mut self, chain: super::chain_context::ChainContext) -> Self {
+        self.tool_pipeline.set_session_id(chain.chain_id.clone());
         self.chain = chain;
         self
     }
 
     /// Attach a [`ToolRefreshSource`](super::tool_refresh::ToolRefreshSource) for runtime tool hot-refresh.
-    pub fn with_tool_refresh(mut self, source: Arc<dyn super::tool_refresh::ToolRefreshSource>) -> Self {
+    pub fn with_tool_refresh(
+        mut self,
+        source: Arc<dyn super::tool_refresh::ToolRefreshSource>,
+    ) -> Self {
         self.tool_refresh = Some(source);
         self
     }
 
     /// Attach a [`SkillPrefetcher`](super::skill_prefetch::SkillPrefetcher) for async skill discovery.
-    pub fn with_skill_prefetcher(mut self, prefetcher: super::skill_prefetch::SkillPrefetcher) -> Self {
+    pub fn with_skill_prefetcher(
+        mut self,
+        prefetcher: super::skill_prefetch::SkillPrefetcher,
+    ) -> Self {
         self.skill_prefetcher = Some(prefetcher);
         self
     }
@@ -542,14 +844,1044 @@ impl<P: LoopProvider> AgentLoop<P> {
         self.tool_pipeline = Arc::new(ToolPipeline::new(
             hooks,
             Arc::clone(&self.safety_guard),
-            "", // session_id set at run time via chain_id
+            self.chain.chain_id.clone(),
         ));
         self
     }
 
     /// Get tool definitions from the registry (for inspection/testing).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions()
+        self.tool_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .tool_definitions()
+    }
+
+    async fn prepare_turn(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        system_prompt: &str,
+        tool_defs: &[ToolDefinition],
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) -> TurnBudgetState {
+        if let Some(handle) = progress.pending_summary.as_ref() {
+            if handle.is_finished() {
+                let handle = progress.pending_summary.take().unwrap();
+                if let Ok(Some(summary)) = handle.await {
+                    let iteration = progress.iterations.saturating_sub(1).max(1);
+                    Self::emit_tool_summary_trace(iteration, summary, callback);
+                }
+            }
+        }
+
+        let mut budget_directive = super::context_budget::LoopDirective::Continue;
+        let (budget_fresh_tail, budget_ratio) = {
+            let mut ctx_budget_ref = self
+                .context_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                budget_directive = ctx_budget.before_turn(messages, system_prompt, tool_defs);
+
+                match budget_directive {
+                    super::context_budget::LoopDirective::CompactAndContinue => {
+                        let result = {
+                            let sensor = self
+                                .pressure_sensor
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            self.compaction_pipeline.run(
+                                messages,
+                                &sensor,
+                                system_prompt,
+                                tool_defs,
+                                ctx_budget.token_budget(),
+                                ctx_budget.warning_threshold(),
+                                ctx_budget.fresh_tail_count(),
+                            )
+                        };
+                        if result.pressure_after.ratio < ctx_budget.warning_threshold()
+                            || result.tokens_freed > 500
+                        {
+                            ctx_budget.notify_compaction_success();
+                        }
+                        self.diagnostics
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .record_pipeline(result);
+                    }
+                    super::context_budget::LoopDirective::FinalReply => {
+                        let result = {
+                            let sensor = self
+                                .pressure_sensor
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            self.compaction_pipeline.run(
+                                messages,
+                                &sensor,
+                                system_prompt,
+                                tool_defs,
+                                ctx_budget.token_budget(),
+                                0.5,
+                                ctx_budget.fresh_tail_count(),
+                            )
+                        };
+                        self.diagnostics
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .record_pipeline(result);
+                        messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
+                    }
+                    super::context_budget::LoopDirective::StopDiminishing => {
+                        messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                    }
+                    super::context_budget::LoopDirective::Continue => {}
+                }
+                (
+                    ctx_budget.fresh_tail_count(),
+                    ctx_budget.token_estimate_ratio(),
+                )
+            } else {
+                let sensor = self
+                    .pressure_sensor
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let pressure = sensor.measure(
+                    messages,
+                    system_prompt,
+                    tool_defs,
+                    self.config.token_budget as u64,
+                );
+                if pressure.ratio >= 0.85 {
+                    self.compaction_pipeline.run(
+                        messages,
+                        &sensor,
+                        system_prompt,
+                        tool_defs,
+                        self.config.token_budget as u64,
+                        0.70,
+                        6,
+                    );
+                }
+                (6_usize, 3.5_f64)
+            }
+        };
+
+        if let Some(ref compactor) = self.context_compactor {
+            let should_llm_compact = {
+                let budget = self
+                    .context_budget
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                budget
+                    .as_ref()
+                    .and_then(|b| b.last_pressure())
+                    .map(|p| p.ratio >= 0.78)
+                    .unwrap_or(false)
+            };
+            if should_llm_compact {
+                match compactor.compact(messages, budget_fresh_tail).await {
+                    Ok(result) => {
+                        tracing::info!(
+                            strategy = ?result.strategy_used,
+                            tokens_before = result.tokens_before,
+                            tokens_after = result.tokens_after,
+                            "context compaction complete"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("context compaction failed: {e}");
+                    }
+                }
+            }
+        }
+
+        enforce_context_limit(
+            messages,
+            system_prompt,
+            tool_defs,
+            self.config.token_budget,
+            budget_fresh_tail,
+            budget_ratio,
+        );
+
+        TurnBudgetState {
+            directive: budget_directive,
+            fresh_tail_count: budget_fresh_tail,
+        }
+    }
+
+    async fn think_turn(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        system_prompt: &str,
+        tool_defs: &[ToolDefinition],
+        budget: TurnBudgetState,
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) -> anyhow::Result<ThinkTurnResult> {
+        let mut ptl_attempts: usize = 0;
+        let delta_stream = loop {
+            let active_provider = progress.active_provider;
+            match super::retry::retry_async(
+                || {
+                    let p: &dyn LoopProvider = match active_provider {
+                        ActiveProvider::Primary => &self.provider,
+                        ActiveProvider::Fallback => {
+                            self.fallback_provider.as_ref().unwrap().as_ref()
+                        }
+                    };
+                    p.stream(messages.as_slice(), system_prompt, tool_defs)
+                },
+                &self.cancel_token,
+                3,
+            )
+            .await
+            {
+                Ok(stream) => break stream,
+                Err(e) => {
+                    let verdict = super::retry::classify_exhausted_error(&e);
+                    match verdict {
+                        super::retry::RetryVerdict::CompactAndRetry { token_gap } => {
+                            ptl_attempts += 1;
+                            if ptl_attempts > MAX_PTL_RETRIES {
+                                return Err(e);
+                            }
+                            tracing::warn!(
+                                attempt = ptl_attempts,
+                                ?token_gap,
+                                "413 recovery: truncating messages"
+                            );
+                            emergency_truncate(messages, token_gap, budget.fresh_tail_count);
+                            continue;
+                        }
+                        super::retry::RetryVerdict::Fallback { reason }
+                            if self.fallback_provider.is_some()
+                                && matches!(progress.active_provider, ActiveProvider::Primary) =>
+                        {
+                            progress.active_provider = ActiveProvider::Fallback;
+                            let label = self.fallback_label.as_deref().unwrap_or("fallback");
+                            tracing::warn!(
+                                %reason,
+                                fallback = label,
+                                "Switching to fallback model"
+                            );
+                            callback.on_model_fallback(&reason, label);
+                            continue;
+                        }
+                        _ => return Err(e),
+                    }
+                }
+            }
+        };
+
+        let prefetch_handle = self.skill_prefetcher.as_ref().and_then(|p| p.start_scan());
+        let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
+            Arc::clone(&self.tool_registry.read().unwrap_or_else(|e| e.into_inner())),
+            Arc::clone(&self.tool_pipeline),
+            self.cancel_token.clone(),
+        );
+        let executor_handle = tokio::spawn(executor.run());
+
+        let mut collector = DeltaCollector::new();
+        futures::pin_mut!(delta_stream);
+        loop {
+            tokio::select! {
+                maybe_delta = delta_stream.next() => {
+                    match maybe_delta {
+                        Some(Ok(delta)) => {
+                            self.delta_sink.on_delta(&delta).await;
+                            bridge.feed(&delta);
+                            collector.push(delta);
+                        }
+                        Some(Err(e)) => {
+                            executor_handle.abort();
+                            return Err(e);
+                        }
+                        None => break,
+                    }
+                }
+                _ = self.cancel_token.cancelled() => {
+                    executor_handle.abort();
+                    return Ok(ThinkTurnResult::Cancelled);
+                }
+            }
+        }
+        bridge.finish();
+
+        Ok(ThinkTurnResult::Ready(TurnThinkingState {
+            budget,
+            response: collector.finish(),
+            prefetch_handle,
+            executor_handle,
+        }))
+    }
+
+    fn record_response_usage(
+        &self,
+        response: &ProviderResponse,
+        messages_len: usize,
+        progress: &mut LoopProgress,
+    ) {
+        if let Some(usage) = &response.usage {
+            progress.total_tokens += (usage.input_tokens + usage.output_tokens) as usize;
+            self.pressure_sensor
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .update_anchor(usage.input_tokens as usize, messages_len);
+        }
+    }
+
+    fn emit_text_trace(
+        iteration: usize,
+        stream: LoopTraceTextKind,
+        text: &str,
+        callback: &mut dyn LoopCallback,
+    ) {
+        callback.on_trace(&LoopTraceEvent::TextEmitted {
+            iteration,
+            stream,
+            text: text.to_string(),
+        });
+    }
+
+    fn emit_tool_summary_trace(iteration: usize, summary: String, callback: &mut dyn LoopCallback) {
+        callback.on_trace(&LoopTraceEvent::ToolSummary { iteration, summary });
+    }
+
+    fn process_response_text(
+        &self,
+        response: &ProviderResponse,
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) {
+        if let Some(text) = &response.text {
+            if response.has_tool_calls() {
+                Self::emit_text_trace(
+                    progress.iterations,
+                    LoopTraceTextKind::Intermediate,
+                    text,
+                    callback,
+                );
+                progress.intermediate_texts.push(text.clone());
+            } else {
+                let cleaned = strip_repeated_intermediate(text, &progress.intermediate_texts);
+                Self::emit_text_trace(
+                    progress.iterations,
+                    LoopTraceTextKind::Final,
+                    &cleaned,
+                    callback,
+                );
+                let is_recovering = {
+                    let recovery = self
+                        .truncation_recovery
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *recovery.phase() != super::truncation_recovery::RecoveryPhase::Idle
+                };
+                if let Some(ref mut existing) = progress.final_text {
+                    if is_recovering {
+                        existing.push_str(&cleaned);
+                    } else {
+                        *existing = cleaned;
+                    }
+                } else {
+                    progress.final_text = Some(cleaned);
+                }
+            }
+        }
+    }
+
+    async fn maybe_blocked_by_stop_hooks(
+        &self,
+        stop_reason: &str,
+        progress: &mut LoopProgress,
+        messages: &mut Vec<UnifiedMessage>,
+        callback: &mut dyn LoopCallback,
+    ) -> bool {
+        if self.stop_hooks.is_empty() || progress.stop_hook_blocks >= MAX_STOP_HOOK_BLOCKS {
+            return false;
+        }
+
+        let ctx = StopHookContext {
+            final_text: progress.final_text.clone(),
+            iterations: progress.iterations,
+            tool_calls_made: progress.tool_calls_made,
+            stop_reason: stop_reason.to_string(),
+        };
+        let hook_result =
+            stop_hooks::execute_stop_hooks(&self.stop_hooks, &ctx, &self.cancel_token).await;
+        for (name, msg) in hook_result.errors() {
+            callback.on_stop_hook_error(name, msg);
+        }
+        if let Some(reason) = hook_result.blocking_reason() {
+            progress.stop_hook_blocks += 1;
+            callback.on_stop_hook_block(reason);
+            messages.push(UnifiedMessage::user(format!(
+                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
+            )));
+            return true;
+        }
+
+        false
+    }
+
+    async fn resolve_turn_response(
+        &self,
+        thinking: TurnThinkingState,
+        messages: &mut Vec<UnifiedMessage>,
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) -> TurnResolve {
+        let TurnThinkingState {
+            budget,
+            response,
+            prefetch_handle,
+            executor_handle,
+        } = thinking;
+
+        let has_tool_calls = response.has_tool_calls();
+        if !has_tool_calls {
+            executor_handle.abort();
+        }
+
+        self.record_response_usage(&response, messages.len(), progress);
+        self.process_response_text(&response, progress, callback);
+        messages.push(UnifiedMessage::from_provider_response(&response));
+
+        if response.stop_reason != StopReason::MaxTokens {
+            let mut recovery = self
+                .truncation_recovery
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(original) = recovery.reset() {
+                progress.current_max_tokens = Some(original);
+            } else {
+                progress.current_max_tokens = None;
+            }
+        }
+
+        if !has_tool_calls && response.stop_reason == StopReason::EndTurn {
+            if progress.tool_calls_made == 0 {
+                return TurnResolve::Finalize(TurnArtifacts {
+                    response,
+                    prefetch_handle,
+                    tools: ToolTurnArtifacts::idle(progress.consecutive_errors),
+                    exit_request: TurnExitRequest::Stop,
+                    final_text_update: FinalTextUpdate::None,
+                });
+            }
+
+            let has_completion_tag = response
+                .text
+                .as_ref()
+                .is_some_and(|t| t.contains("<task-complete/>"));
+
+            if has_completion_tag {
+                if self
+                    .maybe_blocked_by_stop_hooks("end_turn", progress, messages, callback)
+                    .await
+                {
+                    return TurnResolve::Restart;
+                }
+                return TurnResolve::Finalize(TurnArtifacts {
+                    response,
+                    prefetch_handle,
+                    tools: ToolTurnArtifacts::idle(progress.consecutive_errors),
+                    exit_request: TurnExitRequest::Stop,
+                    final_text_update: FinalTextUpdate::None,
+                });
+            }
+
+            if progress.completion_nudge_count < MAX_COMPLETION_NUDGES {
+                progress.completion_nudge_count += 1;
+                tracing::info!(
+                    iteration = progress.iterations,
+                    nudge = progress.completion_nudge_count,
+                    "Completion protocol: LLM stopped without <task-complete/>, injecting nudge"
+                );
+
+                let nudge_msg = if progress.completion_nudge_count < MAX_COMPLETION_NUDGES {
+                    "[SYSTEM] You stopped but have not confirmed task completion. \
+                     Do NOT apologize or explain. Review your work against the original request: \
+                     is every requirement met? If not, try a different approach. \
+                     When fully done, output a <completion-check> block and <task-complete/>."
+                } else {
+                    "[SYSTEM] Final attempt. Summarize: (1) what approaches you tried, \
+                     (2) what succeeded and what failed, (3) what the user should do next. \
+                     Then output <task-complete/>."
+                };
+
+                messages.push(UnifiedMessage::user(nudge_msg));
+                return TurnResolve::Restart;
+            }
+
+            if self
+                .maybe_blocked_by_stop_hooks("nudge_exhausted", progress, messages, callback)
+                .await
+            {
+                return TurnResolve::Restart;
+            }
+
+            return TurnResolve::Finalize(TurnArtifacts {
+                response,
+                prefetch_handle,
+                tools: ToolTurnArtifacts::idle(progress.consecutive_errors),
+                exit_request: TurnExitRequest::Stop,
+                final_text_update: FinalTextUpdate::None,
+            });
+        }
+
+        if !has_tool_calls && response.stop_reason == StopReason::MaxTokens {
+            let action = {
+                let mut recovery = self
+                    .truncation_recovery
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                recovery.on_truncation(
+                    progress.current_max_tokens,
+                    response.text.as_deref().unwrap_or(""),
+                )
+            };
+            if action.should_continue {
+                if let Some(override_val) = action.max_tokens_override {
+                    progress.current_max_tokens = Some(override_val);
+                }
+                messages.push(UnifiedMessage::user(&action.continuation_prompt));
+                tracing::info!(
+                    iteration = progress.iterations,
+                    escalated = action.max_tokens_override.is_some(),
+                    "truncation recovery: continuing"
+                );
+                return TurnResolve::Restart;
+            }
+
+            let recovery = self
+                .truncation_recovery
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let assembled = recovery.assemble_output();
+            let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
+            Self::emit_text_trace(
+                progress.iterations,
+                LoopTraceTextKind::Final,
+                notice,
+                callback,
+            );
+            tracing::warn!(
+                iterations = progress.iterations,
+                "truncation recovery exhausted, assembling fragments"
+            );
+            return TurnResolve::Finalize(TurnArtifacts {
+                response,
+                prefetch_handle,
+                tools: ToolTurnArtifacts::idle(progress.consecutive_errors),
+                exit_request: TurnExitRequest::HitLimit,
+                final_text_update: FinalTextUpdate::Replace(format!("{assembled}{notice}")),
+            });
+        }
+
+        if !has_tool_calls {
+            return TurnResolve::Finalize(TurnArtifacts {
+                response,
+                prefetch_handle,
+                tools: ToolTurnArtifacts::idle(progress.consecutive_errors),
+                exit_request: TurnExitRequest::Stop,
+                final_text_update: FinalTextUpdate::None,
+            });
+        }
+
+        TurnResolve::Act(TurnActState {
+            thinking: TurnThinkingState {
+                budget,
+                response,
+                prefetch_handle,
+                executor_handle,
+            },
+            skip_tools: matches!(
+                budget.directive,
+                super::context_budget::LoopDirective::FinalReply
+                    | super::context_budget::LoopDirective::StopDiminishing
+            ),
+        })
+    }
+
+    async fn execute_turn_tools(
+        &self,
+        turn: TurnActState,
+        messages: &mut Vec<UnifiedMessage>,
+        iteration: usize,
+        current_error_streak: usize,
+        last_intermediate_text: Option<String>,
+        callback: &mut dyn LoopCallback,
+    ) -> TurnArtifacts {
+        let TurnActState {
+            thinking,
+            skip_tools,
+        } = turn;
+        let TurnThinkingState {
+            budget: _,
+            response,
+            prefetch_handle,
+            executor_handle,
+        } = thinking;
+
+        let mut tools = ToolTurnArtifacts::requested(
+            response.tool_calls.len(),
+            current_error_streak,
+            skip_tools,
+        );
+        let mut exit_request = TurnExitRequest::None;
+        let mut final_text_update = FinalTextUpdate::None;
+
+        if skip_tools {
+            executor_handle.abort();
+            for tc in &response.tool_calls {
+                messages.push(UnifiedMessage::tool_result(
+                    tc.id.clone(),
+                    tc.name.clone(),
+                    "[SYSTEM] Tool execution skipped — context budget exhausted. Provide your best response now.",
+                    true,
+                ));
+            }
+        } else {
+            let outcomes = match executor_handle.await {
+                Ok(results) => results,
+                Err(e) => {
+                    tracing::warn!("streaming tool executor panicked: {e}");
+                    vec![]
+                }
+            };
+
+            let tool_args_by_id: std::collections::HashMap<&str, &Value> = response
+                .tool_calls
+                .iter()
+                .map(|tc| (tc.id.as_str(), &tc.arguments))
+                .collect();
+
+            for outcome in &outcomes {
+                let o = &outcome.outcome;
+                tools.last_tool_name = Some(o.tool_name.clone());
+                let is_safety_denial = o.is_error
+                    && (o.output_text.starts_with("[BLOCKED]")
+                        || o.output_text.starts_with("[NEEDS_CONFIRMATION]")
+                        || o.output_text.starts_with("[DENIED]"));
+
+                if !is_safety_denial {
+                    let args = tool_args_by_id
+                        .get(o.tool_id.as_str())
+                        .copied()
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    callback.on_trace(&LoopTraceEvent::ToolCallStarted {
+                        iteration,
+                        call: ToolCallStartEvent {
+                            tool_id: o.tool_id.clone(),
+                            tool_name: o.tool_name.clone(),
+                            input: args,
+                        },
+                    });
+                }
+
+                let tool_result = if o.is_error {
+                    ToolResult::Error {
+                        error: o.output_text.clone(),
+                        retryable: o.retryable,
+                    }
+                } else if o.should_stop {
+                    ToolResult::SuccessAndStopLoop {
+                        output: Value::String(o.output_text.clone()),
+                    }
+                } else {
+                    ToolResult::Success {
+                        output: Value::String(o.output_text.clone()),
+                    }
+                };
+
+                if !is_safety_denial {
+                    let args = tool_args_by_id
+                        .get(o.tool_id.as_str())
+                        .copied()
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    callback.on_trace(&LoopTraceEvent::ToolCallCompleted {
+                        iteration,
+                        call: ToolCallEndEvent {
+                            tool_id: o.tool_id.clone(),
+                            tool_name: o.tool_name.clone(),
+                            input: args,
+                            duration_ms: o.duration_ms,
+                        },
+                        result: tool_result.clone(),
+                    });
+                }
+
+                if o.is_error {
+                    let is_non_counting =
+                        is_safety_denial || o.output_text.starts_with("[CANCELLED]");
+                    if is_non_counting {
+                        if o.output_text.starts_with("[BLOCKED]") {
+                            callback.on_safety_block(&SafetyError::Blocked {
+                                tool: o.tool_name.clone(),
+                                pattern: String::new(),
+                            });
+                        } else if o.output_text.starts_with("[NEEDS_CONFIRMATION]") {
+                            callback.on_safety_block(&SafetyError::NeedsConfirmation {
+                                tool: o.tool_name.clone(),
+                            });
+                        } else if o.output_text.starts_with("[DENIED]") {
+                            callback.on_safety_block(&SafetyError::PolicyDenied {
+                                tool: o.tool_name.clone(),
+                            });
+                        }
+                    } else if !o.retryable {
+                        tools.next_error_streak += 1;
+                    }
+                } else {
+                    tools.next_error_streak = 0;
+                }
+
+                messages.push(UnifiedMessage::tool_result(
+                    o.tool_id.clone(),
+                    o.tool_name.clone(),
+                    o.output_text.clone(),
+                    o.is_error,
+                ));
+
+                if o.should_stop {
+                    if matches!(final_text_update, FinalTextUpdate::None) {
+                        final_text_update = FinalTextUpdate::SetIfEmpty(o.output_text.clone());
+                    }
+                    exit_request = TurnExitRequest::Stop;
+                }
+
+                if outcome.prevent_continuation {
+                    exit_request = TurnExitRequest::Stop;
+                }
+            }
+
+            let mut hook_parts: Vec<String> = Vec::new();
+            for pipeline_outcome in &outcomes {
+                for ctx in &pipeline_outcome.additional_contexts {
+                    hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", ctx));
+                }
+                for msg in &pipeline_outcome.hook_messages {
+                    hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", msg));
+                }
+            }
+            if !hook_parts.is_empty() {
+                messages.push(UnifiedMessage::user(hook_parts.join("\n")));
+            }
+
+            tools.executed_calls = outcomes.len();
+
+            if let Some(ref sp) = self.summary_provider {
+                let inputs: Vec<super::tool_summary::ToolSummaryInput> = outcomes
+                    .iter()
+                    .map(|pipeline_outcome| {
+                        let o = &pipeline_outcome.outcome;
+                        let tool_input = tool_args_by_id
+                            .get(o.tool_id.as_str())
+                            .map(|v| serde_json::to_string(v).unwrap_or_default())
+                            .unwrap_or_default();
+                        super::tool_summary::ToolSummaryInput {
+                            tool_name: o.tool_name.clone(),
+                            tool_input,
+                            tool_output: o.output_text.clone(),
+                        }
+                    })
+                    .collect();
+                let sp = sp.clone();
+                tools.summary_handle = Some(tokio::spawn(async move {
+                    super::tool_summary::generate_tool_summary(
+                        &*sp,
+                        &inputs,
+                        last_intermediate_text.as_deref(),
+                    )
+                    .await
+                }));
+            }
+        }
+
+        TurnArtifacts {
+            response,
+            prefetch_handle,
+            tools,
+            exit_request,
+            final_text_update,
+        }
+    }
+
+    async fn finalize_turn(
+        &mut self,
+        turn: TurnArtifacts,
+        messages: &mut Vec<UnifiedMessage>,
+        system_prompt: &mut String,
+        tool_defs: &mut Vec<ToolDefinition>,
+        progress: &mut LoopProgress,
+    ) -> TurnLoopDecision {
+        let TurnArtifacts {
+            response,
+            prefetch_handle,
+            tools,
+            exit_request,
+            final_text_update,
+        } = turn;
+        let turn_productive = tools.productive();
+        let last_tool_name = tools.last_tool_name.clone();
+
+        if let Some(ref refresh_source) = self.tool_refresh {
+            if refresh_source.poll_changes() {
+                let new_tools = refresh_source.fetch_tools();
+                let new_registry = super::tool_refresh::build_refreshed_registry(new_tools);
+                *self
+                    .tool_registry
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = Arc::new(new_registry);
+                *tool_defs = self
+                    .tool_registry
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .tool_definitions();
+                tracing::info!(
+                    chain_id = %self.chain.chain_id,
+                    tools = tool_defs.len(),
+                    "tool registry refreshed"
+                );
+            }
+        }
+
+        if let Some(handle) = prefetch_handle {
+            match handle.await {
+                Ok(Some(new_skills)) => {
+                    self.prompt_builder.register(
+                        crate::agent_loop::prompt_sections::discovered_skills::render(&new_skills),
+                    );
+                    *system_prompt = self.prompt_builder.build().prompt;
+                    if let Some(ref prefetcher) = self.skill_prefetcher {
+                        prefetcher.commit(new_skills);
+                    }
+                    tracing::info!(
+                        chain_id = %self.chain.chain_id,
+                        "skill prefetch: new skills discovered"
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("skill prefetch task failed: {e}");
+                }
+            }
+        }
+
+        progress.consecutive_errors = tools.next_error_streak;
+        progress.tool_calls_made += tools.executed_calls;
+        if let Some(handle) = tools.summary_handle {
+            if let Some(previous) = progress.pending_summary.take() {
+                previous.abort();
+            }
+            progress.pending_summary = Some(handle);
+        }
+
+        {
+            let mut ctx_budget_ref = self
+                .context_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                let output_tokens = response
+                    .usage
+                    .as_ref()
+                    .map(|u| u.output_tokens as usize)
+                    .unwrap_or(0);
+                let post_directive = ctx_budget.after_turn(super::context_budget::TurnMetrics {
+                    output_tokens,
+                    tool_calls: response.tool_calls.len(),
+                    productive: turn_productive,
+                });
+                if post_directive == super::context_budget::LoopDirective::StopDiminishing {
+                    messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                }
+            }
+        }
+
+        if progress.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            return TurnLoopDecision::Exit(LoopExitDecision {
+                hit_limit: true,
+                final_text_update: FinalTextUpdate::Replace(format!(
+                    "Tool execution failed repeatedly ({} consecutive errors). The last error was for tool '{}'. Please try rephrasing your request.",
+                    progress.consecutive_errors,
+                    last_tool_name.as_deref().unwrap_or("unknown")
+                )),
+            });
+        }
+
+        match exit_request {
+            TurnExitRequest::Stop => {
+                return TurnLoopDecision::Exit(LoopExitDecision {
+                    hit_limit: false,
+                    final_text_update,
+                });
+            }
+            TurnExitRequest::HitLimit => {
+                return TurnLoopDecision::Exit(LoopExitDecision {
+                    hit_limit: true,
+                    final_text_update,
+                });
+            }
+            TurnExitRequest::None => {}
+        }
+
+        if progress.total_tokens >= self.config.token_budget {
+            return TurnLoopDecision::Exit(LoopExitDecision {
+                hit_limit: true,
+                final_text_update,
+            });
+        }
+
+        TurnLoopDecision::Continue
+    }
+
+    async fn execute_turn_state(
+        &mut self,
+        state: TurnState,
+        runtime: &mut LoopRuntime,
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) -> anyhow::Result<TurnExecution> {
+        Ok(match state {
+            TurnState::Prepare => TurnExecution::Prepared(
+                self.prepare_turn(
+                    &mut runtime.messages,
+                    &runtime.system_prompt,
+                    &runtime.tool_defs,
+                    progress,
+                    callback,
+                )
+                .await,
+            ),
+            TurnState::Think(budget) => TurnExecution::Thought(
+                self.think_turn(
+                    &mut runtime.messages,
+                    &runtime.system_prompt,
+                    &runtime.tool_defs,
+                    budget,
+                    progress,
+                    callback,
+                )
+                .await?,
+            ),
+            TurnState::Resolve(thinking) => TurnExecution::Resolved(
+                self.resolve_turn_response(thinking, &mut runtime.messages, progress, callback)
+                    .await,
+            ),
+            TurnState::Act(turn) => TurnExecution::Acted(
+                self.execute_turn_tools(
+                    turn,
+                    &mut runtime.messages,
+                    progress.iterations,
+                    progress.consecutive_errors,
+                    progress.intermediate_texts.last().cloned(),
+                    callback,
+                )
+                .await,
+            ),
+            TurnState::Finalize(turn) => TurnExecution::Finalized(
+                self.finalize_turn(
+                    turn,
+                    &mut runtime.messages,
+                    &mut runtime.system_prompt,
+                    &mut runtime.tool_defs,
+                    progress,
+                )
+                .await,
+            ),
+        })
+    }
+
+    fn reduce_turn_execution(execution: TurnExecution) -> TurnAdvance {
+        match execution {
+            TurnExecution::Prepared(budget) => TurnAdvance::Next(TurnState::Think(budget)),
+            TurnExecution::Thought(ThinkTurnResult::Ready(thinking)) => {
+                TurnAdvance::Next(TurnState::Resolve(thinking))
+            }
+            TurnExecution::Thought(ThinkTurnResult::Cancelled) => TurnAdvance::Cancelled,
+            TurnExecution::Resolved(TurnResolve::Restart) => TurnAdvance::ContinueLoop,
+            TurnExecution::Resolved(TurnResolve::Act(turn)) => {
+                TurnAdvance::Next(TurnState::Act(turn))
+            }
+            TurnExecution::Resolved(TurnResolve::Finalize(turn)) => {
+                TurnAdvance::Next(TurnState::Finalize(turn))
+            }
+            TurnExecution::Acted(turn) => TurnAdvance::Next(TurnState::Finalize(turn)),
+            TurnExecution::Finalized(TurnLoopDecision::Continue) => TurnAdvance::ContinueLoop,
+            TurnExecution::Finalized(TurnLoopDecision::Exit(decision)) => {
+                TurnAdvance::ExitLoop(decision)
+            }
+        }
+    }
+
+    async fn run_turn(
+        &mut self,
+        runtime: &mut LoopRuntime,
+        progress: &mut LoopProgress,
+        callback: &mut dyn LoopCallback,
+    ) -> anyhow::Result<TurnRunOutcome> {
+        let iteration = progress.iterations;
+        let mut trace = TurnTraceFrame::default();
+        callback.on_trace(&LoopTraceEvent::TurnStarted { iteration });
+        let mut state = TurnState::Prepare;
+        loop {
+            callback.on_trace(&LoopTraceEvent::TurnStateEntered {
+                iteration,
+                state: state.trace_state(),
+            });
+            let execution = self
+                .execute_turn_state(state, runtime, progress, callback)
+                .await?;
+            match &execution {
+                TurnExecution::Resolved(TurnResolve::Finalize(turn))
+                | TurnExecution::Acted(turn) => trace.observe_artifacts(turn),
+                TurnExecution::Prepared(_)
+                | TurnExecution::Thought(_)
+                | TurnExecution::Resolved(TurnResolve::Restart)
+                | TurnExecution::Resolved(TurnResolve::Act(_))
+                | TurnExecution::Finalized(_) => {}
+            }
+            match Self::reduce_turn_execution(execution) {
+                TurnAdvance::Next(next_state) => {
+                    state = next_state;
+                }
+                TurnAdvance::ContinueLoop => {
+                    callback.on_trace(&LoopTraceEvent::TurnCompleted {
+                        iteration,
+                        outcome: LoopTraceTurnOutcome::Continue,
+                        metrics: trace.snapshot(progress),
+                    });
+                    return Ok(TurnRunOutcome::Continue);
+                }
+                TurnAdvance::ExitLoop(decision) => {
+                    callback.on_trace(&LoopTraceEvent::TurnCompleted {
+                        iteration,
+                        outcome: if decision.hit_limit {
+                            LoopTraceTurnOutcome::HitLimit
+                        } else {
+                            LoopTraceTurnOutcome::Stop
+                        },
+                        metrics: trace.snapshot(progress),
+                    });
+                    return Ok(TurnRunOutcome::Exit(decision));
+                }
+                TurnAdvance::Cancelled => {
+                    callback.on_trace(&LoopTraceEvent::TurnCompleted {
+                        iteration,
+                        outcome: LoopTraceTurnOutcome::Cancelled,
+                        metrics: trace.snapshot(progress),
+                    });
+                    return Ok(TurnRunOutcome::Cancelled);
+                }
+            }
+        }
     }
 
     /// Run the agent loop with the given user input.
@@ -613,13 +1945,13 @@ impl<P: LoopProvider> AgentLoop<P> {
             })
             .collect();
         // Register tools and session guidance into prompt builder
-        self.prompt_builder.register(
-            crate::agent_loop::prompt_sections::tools::render(&tool_infos)
-        );
+        self.prompt_builder
+            .register(crate::agent_loop::prompt_sections::tools::render(
+                &tool_infos,
+            ));
         let tool_names: Vec<&str> = tool_infos.iter().map(|t| t.name.as_str()).collect();
-        self.prompt_builder.register(
-            crate::agent_loop::prompt_sections::session_guidance::render(&tool_names)
-        );
+        self.prompt_builder
+            .register(crate::agent_loop::prompt_sections::session_guidance::render(&tool_names));
         if let Some(ref ctx) = self.session_context {
             let env = crate::context::EnvironmentInfo {
                 cwd: ctx.cwd.clone(),
@@ -632,778 +1964,77 @@ impl<P: LoopProvider> AgentLoop<P> {
                 model_name: None,
                 knowledge_cutoff: None,
             };
-            self.prompt_builder.register(
-                crate::agent_loop::prompt_sections::environment::render(&env)
-            );
+            self.prompt_builder
+                .register(crate::agent_loop::prompt_sections::environment::render(
+                    &env,
+                ));
         }
         let prompt_result = self.prompt_builder.build();
         if !prompt_result.truncated_sections.is_empty() {
             tracing::warn!(truncated = ?prompt_result.truncated_sections, "prompt budget enforcement removed sections");
         }
-        let mut system_prompt = prompt_result.prompt;
+        let mut runtime = LoopRuntime {
+            messages,
+            system_prompt: prompt_result.prompt,
+            tool_defs: self
+                .tool_registry
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .tool_definitions(),
+        };
+        let mut progress = LoopProgress::default();
+        let mut exit_decision = LoopExitDecision::default();
 
-        // Get tool definitions for the provider
-        let mut tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
+        while progress.iterations < self.config.max_iterations {
+            progress.iterations += 1;
 
-        let mut messages = messages;
-
-        let mut final_text: Option<String> = None;
-        let mut intermediate_texts: Vec<String> = Vec::new();
-        let mut iterations: usize = 0;
-        let mut tool_calls_made: usize = 0;
-        let mut total_tokens: usize = 0;
-        let mut hit_limit = false;
-        let mut stop_requested = false;
-        let mut consecutive_errors: usize = 0;
-        let mut completion_nudge_count: usize = 0;
-        let mut current_max_tokens: Option<u32> = None;
-        const MAX_CONSECUTIVE_ERRORS: usize = 10;
-        const MAX_COMPLETION_NUDGES: usize = 3;
-        const MAX_STOP_HOOK_BLOCKS: usize = 3;
-        let mut stop_hook_blocks: usize = 0;
-        let mut pending_summary: Option<tokio::task::JoinHandle<Option<String>>> = None;
-
-        #[derive(Clone, Copy)]
-        enum ActiveProvider {
-            Primary,
-            Fallback,
+            match self.run_turn(&mut runtime, &mut progress, callback).await? {
+                TurnRunOutcome::Continue => {}
+                TurnRunOutcome::Exit(decision) => {
+                    exit_decision = decision;
+                    break;
+                }
+                TurnRunOutcome::Cancelled => {
+                    callback.on_trace(&LoopTraceEvent::SessionCompleted {
+                        outcome: LoopTraceSessionOutcome::Cancelled,
+                        iterations: progress.iterations,
+                        tool_calls_made: progress.tool_calls_made,
+                        total_tokens: progress.total_tokens,
+                        hit_limit: false,
+                        final_text: progress.final_text.clone(),
+                    });
+                    return Ok(progress.cancelled_result(&self.chain));
+                }
+            }
         }
-        let mut active_provider = ActiveProvider::Primary;
 
-        // === THE LOOP ===
-        while iterations < self.config.max_iterations {
-            iterations += 1;
+        if progress.iterations >= self.config.max_iterations {
+            exit_decision.hit_limit = true;
+        }
 
-            // Resolve pending tool summary if ready (non-blocking — summary is optional)
-            if let Some(handle) = pending_summary.as_ref() {
-                if handle.is_finished() {
-                    let handle = pending_summary.take().unwrap();
-                    if let Ok(Some(summary)) = handle.await {
-                        callback.on_tool_summary(&summary);
-                    }
-                }
-            }
-
-            // --- Context budget evaluation (single lock scope) ---
-            let mut budget_directive = super::context_budget::LoopDirective::Continue;
-            let (budget_fresh_tail, budget_ratio) = {
-                let mut ctx_budget_ref = self
-                    .context_budget
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
-                    budget_directive =
-                        ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
-
-                    match budget_directive {
-                        super::context_budget::LoopDirective::CompactAndContinue => {
-                            let result = {
-                                let sensor = self
-                                    .pressure_sensor
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
-                                self.compaction_pipeline.run(
-                                    &mut messages,
-                                    &sensor,
-                                    &system_prompt,
-                                    &tool_defs,
-                                    ctx_budget.token_budget(),
-                                    ctx_budget.warning_threshold(),
-                                    ctx_budget.fresh_tail_count(),
-                                )
-                            };
-                            if result.pressure_after.ratio < ctx_budget.warning_threshold()
-                                || result.tokens_freed > 500
-                            {
-                                ctx_budget.notify_compaction_success();
-                            }
-                            self.diagnostics
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .record_pipeline(result);
-                        }
-                        // NOTE: LLM-based compaction is handled below, outside this lock scope.
-                        super::context_budget::LoopDirective::FinalReply => {
-                            let result = {
-                                let sensor = self
-                                    .pressure_sensor
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
-                                self.compaction_pipeline.run(
-                                    &mut messages,
-                                    &sensor,
-                                    &system_prompt,
-                                    &tool_defs,
-                                    ctx_budget.token_budget(),
-                                    0.5,
-                                    ctx_budget.fresh_tail_count(),
-                                )
-                            };
-                            self.diagnostics
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .record_pipeline(result);
-                            messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
-                        }
-                        super::context_budget::LoopDirective::StopDiminishing => {
-                            messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
-                        }
-                        super::context_budget::LoopDirective::Continue => {}
-                    }
-                    (ctx_budget.fresh_tail_count(), ctx_budget.token_estimate_ratio())
-                } else {
-                    // No context budget configured — still enforce a hard limit
-                    // using the pipeline as a safety net against provider-side
-                    // context-length errors.
-                    let sensor = self
-                        .pressure_sensor
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let pressure = sensor.measure(
-                        &messages,
-                        &system_prompt,
-                        &tool_defs,
-                        self.config.token_budget as u64,
-                    );
-                    if pressure.ratio >= 0.85 {
-                        self.compaction_pipeline.run(
-                            &mut messages,
-                            &sensor,
-                            &system_prompt,
-                            &tool_defs,
-                            self.config.token_budget as u64,
-                            0.70,
-                            6, // default fresh tail
-                        );
-                    }
-                    (6_usize, 3.5_f64)
-                }
-            };
-
-            // LLM-based compaction at elevated pressure (ratio >= 0.78)
-            if let Some(ref compactor) = self.context_compactor {
-                let should_llm_compact = {
-                    let budget = self.context_budget.lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    budget.as_ref()
-                        .and_then(|b| b.last_pressure())
-                        .map(|p| p.ratio >= 0.78)
-                        .unwrap_or(false)
-                };
-                if should_llm_compact {
-                    match compactor.compact(&mut messages, budget_fresh_tail).await {
-                        Ok(result) => {
-                            tracing::info!(
-                                strategy = ?result.strategy_used,
-                                tokens_before = result.tokens_before,
-                                tokens_after = result.tokens_after,
-                                "context compaction complete"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("context compaction failed: {e}");
-                        }
-                    }
-                }
-            }
-
-            // Hard safety net: enforce context limit
-            enforce_context_limit(
-                &mut messages,
-                &system_prompt,
-                &tool_defs,
-                self.config.token_budget,
-                budget_fresh_tail,
-                budget_ratio,
-            );
-
-            // Think: stream deltas with retry, 413 recovery, and fallback
-            let mut ptl_attempts: usize = 0;
-            let delta_stream = loop {
-                match super::retry::retry_async(
-                    || {
-                        let p: &dyn LoopProvider = match active_provider {
-                            ActiveProvider::Primary => &self.provider,
-                            ActiveProvider::Fallback => {
-                                self.fallback_provider.as_ref().unwrap().as_ref()
-                            }
-                        };
-                        p.stream(&messages, &system_prompt, &tool_defs)
-                    },
-                    &self.cancel_token,
-                    3,
-                )
-                .await
-                {
-                    Ok(stream) => break stream,
-                    Err(e) => {
-                        let verdict = super::retry::classify_exhausted_error(&e);
-                        match verdict {
-                            super::retry::RetryVerdict::CompactAndRetry { token_gap } => {
-                                ptl_attempts += 1;
-                                if ptl_attempts > MAX_PTL_RETRIES {
-                                    return Err(e);
-                                }
-                                let fresh_tail = {
-                                    let ctx = self
-                                        .context_budget
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner());
-                                    ctx.as_ref()
-                                        .map(|b| b.fresh_tail_count())
-                                        .unwrap_or(6)
-                                };
-                                tracing::warn!(
-                                    attempt = ptl_attempts,
-                                    ?token_gap,
-                                    "413 recovery: truncating messages"
-                                );
-                                emergency_truncate(
-                                    &mut messages,
-                                    token_gap,
-                                    fresh_tail,
-                                );
-                                continue;
-                            }
-                            super::retry::RetryVerdict::Fallback { reason }
-                                if self.fallback_provider.is_some()
-                                    && matches!(
-                                        active_provider,
-                                        ActiveProvider::Primary
-                                    ) =>
-                            {
-                                active_provider = ActiveProvider::Fallback;
-                                let label = self
-                                    .fallback_label
-                                    .as_deref()
-                                    .unwrap_or("fallback");
-                                tracing::warn!(
-                                    %reason,
-                                    fallback = label,
-                                    "Switching to fallback model"
-                                );
-                                callback.on_model_fallback(&reason, label);
-                                continue;
-                            }
-                            _ => return Err(e),
-                        }
-                    }
-                }
-            };
-
-            // --- Skill prefetch: start async scan while model is thinking ---
-            let prefetch_handle = self.skill_prefetcher
-                .as_ref()
-                .and_then(|p| p.start_scan());
-
-            // The bridge+executor are created every iteration (even for pure text turns)
-            // because tools must start executing AS THEY STREAM — we cannot know whether
-            // tool calls will arrive until the stream completes. The overhead for non-tool
-            // turns is minimal: 1 mpsc channel + 1 tokio::spawn + 1 abort.
-            let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
-                Arc::clone(&self.tool_registry.read().unwrap_or_else(|e| e.into_inner())),
-                Arc::clone(&self.tool_pipeline),
-                self.cancel_token.clone(),
-            );
-            let executor_handle = tokio::spawn(executor.run());
-
-            let mut collector = DeltaCollector::new();
-            futures::pin_mut!(delta_stream);
-            loop {
-                tokio::select! {
-                    maybe_delta = delta_stream.next() => {
-                        match maybe_delta {
-                            Some(Ok(delta)) => {
-                                self.delta_sink.on_delta(&delta).await;
-                                bridge.feed(&delta);
-                                collector.push(delta);
-                            }
-                            Some(Err(e)) => return Err(e),
-                            None => break,
-                        }
-                    }
-                    _ = self.cancel_token.cancelled() => {
-                        return Ok(LoopRunResult {
-                            final_text: None,
-                            iterations,
-                            tool_calls_made,
-                            total_tokens,
-                            hit_limit: false,
-                            cancelled: true,
-                            chain_id: self.chain.chain_id.clone(),
-                            depth: self.chain.depth,
-                        });
-                    }
-                }
-            }
-            bridge.finish(); // close the channel so executor can drain
-            let response = collector.finish();
-
-            // Removed debug logging
-
-            // Track tokens
-            if let Some(usage) = &response.usage {
-                total_tokens += (usage.input_tokens + usage.output_tokens) as usize;
-                // Anchor pressure sensor to API-reported usage
-                self.pressure_sensor
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .update_anchor(usage.input_tokens as usize, messages.len());
-            }
-
-            // Process text output
-            if let Some(text) = &response.text {
-                if response.has_tool_calls() {
-                    // Intermediate: LLM said something AND requested tools → still working
-                    callback.on_intermediate_text(text);
-                    intermediate_texts.push(text.clone());
-                    // Don't accumulate into final_text — intermediate messages
-                    // are already delivered separately to channels
-                } else {
-                    // Final: LLM said something with no tool calls → done
-                    // Strip any intermediate text the LLM repeated at the start
-                    let cleaned = strip_repeated_intermediate(text, &intermediate_texts);
-                    callback.on_text(&cleaned);
-                    // Append text if recovering from truncation, otherwise replace
-                    let is_recovering = {
-                        let recovery = self.truncation_recovery.lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        *recovery.phase() != super::truncation_recovery::RecoveryPhase::Idle
-                    };
-                    if let Some(ref mut existing) = final_text {
-                        if is_recovering {
-                            existing.push_str(&cleaned);
-                        } else {
-                            *existing = cleaned;
-                        }
-                    } else {
-                        final_text = Some(cleaned);
-                    }
-                }
-            }
-
-            // Push complete assistant message from response
-            messages.push(UnifiedMessage::from_provider_response(&response));
-
-            // Reset truncation recovery on normal completion (not MaxTokens)
-            if response.stop_reason != StopReason::MaxTokens {
-                let mut recovery = self.truncation_recovery.lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(original) = recovery.reset() {
-                    current_max_tokens = Some(original);
-                } else {
-                    current_max_tokens = None;
-                }
-            }
-
-            // If no tool calls and EndTurn → check completion protocol before stopping
-            if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
-                // Simple Q&A (no tools used) → stop naturally, no completion protocol
-                if tool_calls_made == 0 {
-                    break;
-                }
-
-                // Complex task: check for completion tag in CURRENT response
-                let has_completion_tag = response
-                    .text
-                    .as_ref()
-                    .is_some_and(|t| t.contains("<task-complete/>"));
-
-                if has_completion_tag {
-                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
-                        let ctx = StopHookContext {
-                            final_text: final_text.clone(),
-                            iterations,
-                            tool_calls_made,
-                            stop_reason: "end_turn".to_string(),
-                        };
-                        let hook_result = stop_hooks::execute_stop_hooks(
-                            &self.stop_hooks,
-                            &ctx,
-                            &self.cancel_token,
-                        )
-                        .await;
-                        for (name, msg) in hook_result.errors() {
-                            callback.on_stop_hook_error(name, msg);
-                        }
-                        if let Some(reason) = hook_result.blocking_reason() {
-                            stop_hook_blocks += 1;
-                            callback.on_stop_hook_block(reason);
-                            messages.push(UnifiedMessage::user(format!(
-                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
-                            )));
-                            continue;
-                        }
-                    }
-                    break;
-                }
-
-                // No completion tag — nudge based on stage
-                if completion_nudge_count < MAX_COMPLETION_NUDGES {
-                    completion_nudge_count += 1;
-                    tracing::info!(
-                        iteration = iterations,
-                        nudge = completion_nudge_count,
-                        "Completion protocol: LLM stopped without <task-complete/>, injecting nudge"
-                    );
-
-                    let nudge_msg = if completion_nudge_count < MAX_COMPLETION_NUDGES {
-                        // Stage 1: challenge (first 2 nudges)
-                        "[SYSTEM] You stopped but have not confirmed task completion. \
-                         Do NOT apologize or explain. Review your work against the original request: \
-                         is every requirement met? If not, try a different approach. \
-                         When fully done, output a <completion-check> block and <task-complete/>."
-                    } else {
-                        // Stage 2: graceful exit (3rd nudge)
-                        "[SYSTEM] Final attempt. Summarize: (1) what approaches you tried, \
-                         (2) what succeeded and what failed, (3) what the user should do next. \
-                         Then output <task-complete/>."
-                    };
-
-                    messages.push(UnifiedMessage::user(nudge_msg));
-                    continue;
-                }
-
-                // Exhausted all nudges
-                {
-                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
-                        let ctx = StopHookContext {
-                            final_text: final_text.clone(),
-                            iterations,
-                            tool_calls_made,
-                            stop_reason: "nudge_exhausted".to_string(),
-                        };
-                        let hook_result = stop_hooks::execute_stop_hooks(
-                            &self.stop_hooks,
-                            &ctx,
-                            &self.cancel_token,
-                        )
-                        .await;
-                        for (name, msg) in hook_result.errors() {
-                            callback.on_stop_hook_error(name, msg);
-                        }
-                        if let Some(reason) = hook_result.blocking_reason() {
-                            stop_hook_blocks += 1;
-                            callback.on_stop_hook_block(reason);
-                            messages.push(UnifiedMessage::user(format!(
-                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
-                            )));
-                            continue;
-                        }
-                    }
-                    break;
-                }
-            }
-
-            // If no tool calls and MaxTokens → use TruncationRecovery state machine
-            if !response.has_tool_calls() && response.stop_reason == StopReason::MaxTokens {
-                let action = {
-                    let mut recovery = self.truncation_recovery.lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    recovery.on_truncation(
-                        current_max_tokens,
-                        response.text.as_deref().unwrap_or(""),
-                    )
-                };
-                if action.should_continue {
-                    if let Some(override_val) = action.max_tokens_override {
-                        current_max_tokens = Some(override_val);
-                    }
-                    messages.push(UnifiedMessage::user(&action.continuation_prompt));
-                    tracing::info!(
-                        iteration = iterations,
-                        escalated = action.max_tokens_override.is_some(),
-                        "truncation recovery: continuing"
-                    );
-                    continue;
-                } else {
-                    // Recovery exhausted — assemble all fragments
-                    let recovery = self.truncation_recovery.lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    let assembled = recovery.assemble_output();
-                    let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
-                    final_text = Some(format!("{assembled}{notice}"));
-                    callback.on_text(notice);
-                    tracing::warn!(iterations, "truncation recovery exhausted, assembling fragments");
-                    hit_limit = true;
-                    break;
-                }
-            }
-
-            // If no tool calls and not EndTurn/MaxTokens → done
-            if !response.has_tool_calls() {
-                break;
-            }
-
-            // Skip tool execution if context budget says to stop
-            let skip_tools = matches!(
-                budget_directive,
-                super::context_budget::LoopDirective::FinalReply
-                    | super::context_budget::LoopDirective::StopDiminishing
-            );
-
-            if skip_tools && response.has_tool_calls() {
-                // Abort the streaming executor — tools are being skipped.
-                executor_handle.abort();
-
-                // Inject a tool result telling the LLM tools were skipped
-                for tc in &response.tool_calls {
-                    messages.push(UnifiedMessage::tool_result(
-                        tc.id.clone(),
-                        tc.name.clone(),
-                        "[SYSTEM] Tool execution skipped — context budget exhausted. Provide your best response now.",
-                        true,
-                    ));
-                }
-            } else if response.has_tool_calls() {
-                // Act: collect tool results from the streaming executor.
-                // Tools started executing during delta streaming — now await completion.
-                let outcomes = match executor_handle.await {
-                    Ok(results) => results,
-                    Err(e) => {
-                        tracing::warn!("streaming tool executor panicked: {e}");
-                        vec![]
-                    }
-                };
-
-                // Fire main-loop callbacks and process outcomes.
-                // The bridge used a no-op callback, so we fire events here
-                // to preserve the callback contract for external consumers.
-                // Build a lookup from tool_id → arguments for on_tool_start.
-                let tool_args_by_id: std::collections::HashMap<&str, &Value> = response
-                    .tool_calls
-                    .iter()
-                    .map(|tc| (tc.id.as_str(), &tc.arguments))
-                    .collect();
-
-                for outcome in &outcomes {
-                    let o = &outcome.outcome;
-                    // Determine if this outcome was a safety denial (no execution happened).
-                    let is_safety_denial = o.is_error
-                        && (o.output_text.starts_with("[BLOCKED]")
-                            || o.output_text.starts_with("[NEEDS_CONFIRMATION]")
-                            || o.output_text.starts_with("[DENIED]"));
-
-                    // Fire on_tool_start only for tools that actually executed.
-                    if !is_safety_denial {
-                        let args = tool_args_by_id
-                            .get(o.tool_id.as_str())
-                            .copied()
-                            .unwrap_or(&Value::Null);
-                        callback.on_tool_start(&o.tool_name, args);
-                    }
-
-                    // Reconstruct a ToolResult for the callback.
-                    let tool_result = if o.is_error {
-                        ToolResult::Error {
-                            error: o.output_text.clone(),
-                            retryable: o.retryable,
-                        }
-                    } else if o.should_stop {
-                        ToolResult::SuccessAndStopLoop {
-                            output: Value::String(o.output_text.clone()),
-                        }
-                    } else {
-                        ToolResult::Success {
-                            output: Value::String(o.output_text.clone()),
-                        }
-                    };
-                    if !is_safety_denial {
-                        callback.on_tool_done(&o.tool_name, &tool_result);
-                    }
-
-                    if o.is_error {
-                        // Safety denials, cancellations, and retryable errors
-                        // don't count toward consecutive limit.
-                        let is_non_counting = is_safety_denial
-                            || o.output_text.starts_with("[CANCELLED]");
-                        if is_non_counting {
-                            // Fire safety block callback for denied tools
-                            if o.output_text.starts_with("[BLOCKED]") {
-                                callback.on_safety_block(&SafetyError::Blocked {
-                                    tool: o.tool_name.clone(),
-                                    pattern: String::new(),
-                                });
-                            } else if o.output_text.starts_with("[NEEDS_CONFIRMATION]") {
-                                callback.on_safety_block(&SafetyError::NeedsConfirmation {
-                                    tool: o.tool_name.clone(),
-                                });
-                            } else if o.output_text.starts_with("[DENIED]") {
-                                callback.on_safety_block(&SafetyError::PolicyDenied {
-                                    tool: o.tool_name.clone(),
-                                });
-                            }
-                        } else if !o.retryable {
-                            consecutive_errors += 1;
-                        }
-                    } else {
-                        consecutive_errors = 0;
-                    }
-
-                    messages.push(UnifiedMessage::tool_result(
-                        o.tool_id.clone(),
-                        o.tool_name.clone(),
-                        o.output_text.clone(),
-                        o.is_error,
-                    ));
-
-                    if o.should_stop {
-                        if final_text.is_none() {
-                            final_text = Some(o.output_text.clone());
-                        }
-                        stop_requested = true;
-                    }
-
-                    if outcome.prevent_continuation {
-                        stop_requested = true;
-                    }
-                }
-
-                // Inject hook-produced contexts and messages into conversation history
-                // so the LLM sees them in the next turn (as <system-reminder> tags).
-                {
-                    let mut hook_parts: Vec<String> = Vec::new();
-                    for po in &outcomes {
-                        for ctx in &po.additional_contexts {
-                            hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", ctx));
-                        }
-                        for msg in &po.hook_messages {
-                            hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", msg));
-                        }
-                    }
-                    if !hook_parts.is_empty() {
-                        messages.push(UnifiedMessage::user(hook_parts.join("\n")));
-                    }
-                }
-
-                tool_calls_made += outcomes.len();
-
-                // Fire-and-forget: generate tool summary in background
-                if let Some(ref sp) = self.summary_provider {
-                    let inputs: Vec<super::tool_summary::ToolSummaryInput> = outcomes
-                        .iter()
-                        .map(|pipeline_outcome| {
-                            let o = &pipeline_outcome.outcome;
-                            let tool_input = tool_args_by_id
-                                .get(o.tool_id.as_str())
-                                .map(|v| serde_json::to_string(v).unwrap_or_default())
-                                .unwrap_or_default();
-                            super::tool_summary::ToolSummaryInput {
-                                tool_name: o.tool_name.clone(),
-                                tool_input,
-                                tool_output: o.output_text.clone(),
-                            }
-                        })
-                        .collect();
-                    let sp = sp.clone();
-                    let last_text = intermediate_texts.last().cloned();
-                    pending_summary = Some(tokio::spawn(async move {
-                        super::tool_summary::generate_tool_summary(
-                            &*sp,
-                            &inputs,
-                            last_text.as_deref(),
-                        )
-                        .await
-                    }));
+        if let Some(handle) = progress.pending_summary.take() {
+            if handle.is_finished() {
+                if let Ok(Some(summary)) = handle.await {
+                    Self::emit_tool_summary_trace(progress.iterations.max(1), summary, callback);
                 }
             } else {
-                // No tool calls — abort the idle executor.
-                executor_handle.abort();
-            }
-
-            // --- Tool refresh: check if external sources signalled a change ---
-            if let Some(ref refresh_source) = self.tool_refresh {
-                if refresh_source.poll_changes() {
-                    let new_tools = refresh_source.fetch_tools();
-                    let new_registry = super::tool_refresh::build_refreshed_registry(new_tools);
-                    *self.tool_registry.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(new_registry);
-                    tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
-                    tracing::info!(
-                        chain_id = %self.chain.chain_id,
-                        tools = tool_defs.len(),
-                        "tool registry refreshed"
-                    );
-                }
-            }
-
-            // --- Skill prefetch: collect results ---
-            if let Some(handle) = prefetch_handle {
-                match handle.await {
-                    Ok(Some(new_skills)) => {
-                        self.prompt_builder.register(
-                            crate::agent_loop::prompt_sections::discovered_skills::render(&new_skills)
-                        );
-                        // Rebuild system prompt so the next stream() call
-                        // sees the newly discovered skills.
-                        system_prompt = self.prompt_builder.build().prompt;
-                        if let Some(ref prefetcher) = self.skill_prefetcher {
-                            prefetcher.commit(new_skills);
-                        }
-                        tracing::info!(
-                            chain_id = %self.chain.chain_id,
-                            "skill prefetch: new skills discovered"
-                        );
-                    }
-                    Ok(None) => {} // no changes
-                    Err(e) => {
-                        tracing::warn!("skill prefetch task failed: {e}");
-                    }
-                }
-            }
-
-            // --- After-turn: record metrics for diminishing returns detection ---
-            {
-                let mut ctx_budget_ref = self
-                    .context_budget
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
-                    let turn_productive = response.has_tool_calls()
-                        && !skip_tools
-                        && tool_calls_made > 0
-                        && consecutive_errors == 0;
-                    let output_tokens = response
-                        .usage
-                        .as_ref()
-                        .map(|u| u.output_tokens as usize)
-                        .unwrap_or(0);
-                    let post_directive =
-                        ctx_budget.after_turn(super::context_budget::TurnMetrics {
-                            output_tokens,
-                            tool_calls: response.tool_calls.len(),
-                            productive: turn_productive,
-                        });
-                    if post_directive == super::context_budget::LoopDirective::StopDiminishing {
-                        messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
-                    }
-                }
-            }
-
-            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                hit_limit = true;
-                final_text = Some(format!(
-                    "Tool execution failed repeatedly ({} consecutive errors). The last error was for tool '{}'. Please try rephrasing your request.",
-                    consecutive_errors,
-                    response.tool_calls.last().map(|tc| tc.name.as_str()).unwrap_or("unknown")
-                ));
-                break;
-            }
-
-            if stop_requested {
-                break;
-            }
-
-            // Check token budget
-            if total_tokens >= self.config.token_budget {
-                hit_limit = true;
-                break;
+                handle.abort();
             }
         }
 
-        // Check if we hit max iterations
-        if iterations >= self.config.max_iterations {
-            hit_limit = true;
-        }
+        progress.apply_final_text_update(exit_decision.final_text_update);
+        callback.on_trace(&LoopTraceEvent::SessionCompleted {
+            outcome: if exit_decision.hit_limit {
+                LoopTraceSessionOutcome::HitLimit
+            } else {
+                LoopTraceSessionOutcome::Completed
+            },
+            iterations: progress.iterations,
+            tool_calls_made: progress.tool_calls_made,
+            total_tokens: progress.total_tokens,
+            hit_limit: exit_decision.hit_limit,
+            final_text: progress.final_text.clone(),
+        });
 
         // Session-level hook: SessionEnd (observers only)
         if self.tool_pipeline.has_hooks() {
@@ -1414,16 +2045,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                 .await;
         }
 
-        Ok(LoopRunResult {
-            final_text,
-            iterations,
-            tool_calls_made,
-            total_tokens,
-            hit_limit,
-            cancelled: false,
-            chain_id: self.chain.chain_id.clone(),
-            depth: self.chain.depth,
-        })
+        Ok(progress.finish(&self.chain, exit_decision.hit_limit))
     }
 }
 
@@ -3151,17 +3773,17 @@ mod tests {
         // First message should be truncation marker
         assert!(messages[0].text_content().contains("truncated"));
         // Last message should be preserved
-        assert_eq!(
-            messages.last().unwrap().text_content(),
-            "current question"
-        );
+        assert_eq!(messages.last().unwrap().text_content(), "current question");
     }
 
     #[test]
     fn test_emergency_truncate_with_known_gap() {
         let mut messages = vec![];
         for i in 0..10 {
-            messages.push(UnifiedMessage::user(&format!("question {i} {}", "x".repeat(80))));
+            messages.push(UnifiedMessage::user(&format!(
+                "question {i} {}",
+                "x".repeat(80)
+            )));
             messages.push(UnifiedMessage::assistant(&format!(
                 "answer {i} {}",
                 "y".repeat(80)
@@ -3373,5 +3995,81 @@ mod tests {
         assert!(cb.stop_hook_block_fired);
         assert!(cb.stop_hook_error_fired);
         assert!(cb.summary_fired);
+    }
+
+    #[test]
+    fn test_trace_callback_defaults_bridge_legacy_callbacks() {
+        #[derive(Default)]
+        struct TraceCompatCallback {
+            texts: Vec<String>,
+            intermediates: Vec<String>,
+            tool_starts: Vec<String>,
+            tool_dones: Vec<String>,
+            summaries: Vec<String>,
+        }
+
+        impl LoopCallback for TraceCompatCallback {
+            fn on_text(&mut self, text: &str) {
+                self.texts.push(text.to_string());
+            }
+
+            fn on_intermediate_text(&mut self, text: &str) {
+                self.intermediates.push(text.to_string());
+            }
+
+            fn on_tool_start(&mut self, name: &str, _input: &Value) {
+                self.tool_starts.push(name.to_string());
+            }
+
+            fn on_tool_done(&mut self, name: &str, _result: &ToolResult) {
+                self.tool_dones.push(name.to_string());
+            }
+
+            fn on_tool_summary(&mut self, summary: &str) {
+                self.summaries.push(summary.to_string());
+            }
+        }
+
+        let mut callback = TraceCompatCallback::default();
+        callback.on_trace(&LoopTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: LoopTraceTextKind::Intermediate,
+            text: "thinking".to_string(),
+        });
+        callback.on_trace(&LoopTraceEvent::TextEmitted {
+            iteration: 1,
+            stream: LoopTraceTextKind::Final,
+            text: "done".to_string(),
+        });
+        callback.on_trace(&LoopTraceEvent::ToolCallStarted {
+            iteration: 1,
+            call: ToolCallStartEvent {
+                tool_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                input: json!({"path": "README.md"}),
+            },
+        });
+        callback.on_trace(&LoopTraceEvent::ToolCallCompleted {
+            iteration: 1,
+            call: ToolCallEndEvent {
+                tool_id: "call-1".to_string(),
+                tool_name: "read_file".to_string(),
+                input: json!({"path": "README.md"}),
+                duration_ms: 12,
+            },
+            result: ToolResult::Success {
+                output: json!({"ok": true}),
+            },
+        });
+        callback.on_trace(&LoopTraceEvent::ToolSummary {
+            iteration: 1,
+            summary: "Looked up the file".to_string(),
+        });
+
+        assert_eq!(callback.intermediates, vec!["thinking"]);
+        assert_eq!(callback.texts, vec!["done"]);
+        assert_eq!(callback.tool_starts, vec!["read_file"]);
+        assert_eq!(callback.tool_dones, vec!["read_file"]);
+        assert_eq!(callback.summaries, vec!["Looked up the file"]);
     }
 }

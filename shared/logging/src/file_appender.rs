@@ -43,16 +43,16 @@ pub fn init_component_logging(
     let default_filter = default_filter.to_owned();
     let mut result = Ok(());
 
-    INIT.call_once(|| {
-        match setup_logging(&component, retention_days, &default_filter) {
+    INIT.call_once(
+        || match setup_logging(&component, retention_days, &default_filter) {
             Ok(guard) => {
                 let _ = GUARD.set(guard);
             }
             Err(e) => {
                 result = Err(e);
             }
-        }
-    });
+        },
+    );
 
     result
 }
@@ -108,7 +108,12 @@ fn setup_logging(
     let component_prefix = format!("aleph-{}", component);
     match crate::retention::cleanup_old_logs(&log_dir, retention_days, Some(&component_prefix)) {
         Ok(count) if count > 0 => {
-            tracing::info!(deleted = count, retention_days, component, "Cleaned up old log files");
+            tracing::info!(
+                deleted = count,
+                retention_days,
+                component,
+                "Cleaned up old log files"
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, component, "Failed to cleanup old logs");

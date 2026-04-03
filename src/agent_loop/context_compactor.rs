@@ -198,7 +198,8 @@ impl ContextCompactor {
     /// Side-channel LLM call for summarization.
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
         let msgs = [UnifiedMessage::user(prompt)];
-        let system = "You are a precise conversation summarizer. Output only the summary, no preamble.";
+        let system =
+            "You are a precise conversation summarizer. Output only the summary, no preamble.";
         let payload = RequestPayload::new(&msgs).with_system(Some(system));
         let response: ProviderResponse = self.provider.process(payload).await?;
         Ok(response.text.unwrap_or_default())
@@ -220,7 +221,11 @@ fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
             UnifiedMessage::User { .. } => "user",
             UnifiedMessage::Assistant { .. } => "assistant",
             UnifiedMessage::ToolResult { tool_name, .. } => {
-                lines.push(format!("tool_result({}): {}", tool_name, msg.text_content()));
+                lines.push(format!(
+                    "tool_result({}): {}",
+                    tool_name,
+                    msg.text_content()
+                ));
                 continue;
             }
         };
@@ -270,7 +275,10 @@ mod tests {
             if i % 2 == 0 {
                 msgs.push(UnifiedMessage::user(format!("User message {}", i)));
             } else {
-                msgs.push(UnifiedMessage::assistant(format!("Assistant response {}", i)));
+                msgs.push(UnifiedMessage::assistant(format!(
+                    "Assistant response {}",
+                    i
+                )));
             }
         }
         msgs
@@ -315,9 +323,8 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_to_truncation_on_provider_failure() {
-        let provider = Arc::new(
-            MockProvider::new("ignored").with_error(MockError::Provider("fail".into())),
-        );
+        let provider =
+            Arc::new(MockProvider::new("ignored").with_error(MockError::Provider("fail".into())));
         let config = CompactorConfig {
             fallback_to_truncation: true,
             ..Default::default()

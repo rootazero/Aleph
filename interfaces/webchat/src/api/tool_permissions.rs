@@ -1,9 +1,9 @@
 //! Panel API for tool permission management (config.* and agent_config.* RPC calls)
 
-use std::collections::HashMap;
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::context::DashboardState;
+use std::collections::HashMap;
 
 // -- Types --
 
@@ -31,7 +31,9 @@ impl ToolPermissionsApi {
     // Global (Policies) API
 
     pub async fn get_global(state: &DashboardState) -> Result<ToolPermissionsResponse, String> {
-        let result = state.rpc_call("config.get_tool_permissions", Value::Null).await?;
+        let result = state
+            .rpc_call("config.get_tool_permissions", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
@@ -44,7 +46,9 @@ impl ToolPermissionsApi {
             "default": default,
             "overrides": overrides,
         });
-        state.rpc_call("config.update_tool_permissions", params).await?;
+        state
+            .rpc_call("config.update_tool_permissions", params)
+            .await?;
         Ok(())
     }
 
@@ -55,7 +59,9 @@ impl ToolPermissionsApi {
         agent_id: &str,
     ) -> Result<ToolPermissionsResponse, String> {
         let params = json!({ "agent_id": agent_id });
-        let result = state.rpc_call("agent_config.get_tool_permissions", params).await?;
+        let result = state
+            .rpc_call("agent_config.get_tool_permissions", params)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
@@ -70,7 +76,9 @@ impl ToolPermissionsApi {
             "default": default,
             "overrides": overrides,
         });
-        state.rpc_call("agent_config.update_tool_permissions", params).await?;
+        state
+            .rpc_call("agent_config.update_tool_permissions", params)
+            .await?;
         Ok(())
     }
 }

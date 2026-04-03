@@ -30,6 +30,9 @@ all: build
 # Build Swift bridge (macOS only)
 swift-bridge:
     cd desktop/macos/bridge && swift build -c release
+    mkdir -p {{release_dir}} {{debug_dir}}
+    ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{release_dir}}/aleph-bridge
+    ln -sf "$PWD/desktop/macos/bridge/.build/release/AlephBridge" {{debug_dir}}/aleph-bridge
     @echo "✓ Swift bridge: desktop/macos/bridge/.build/release/AlephBridge"
 
 # Build server (release)

@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 // ============================================================================
 // Security Config API
@@ -33,9 +33,13 @@ fn default_network_access() -> String {
     "localhost".to_string()
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
-fn default_max_redirects() -> u8 { 5 }
+fn default_max_redirects() -> u8 {
+    5
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -51,17 +55,16 @@ pub struct SecurityConfigApi;
 impl SecurityConfigApi {
     /// Get current security configuration
     pub async fn get(state: &DashboardState) -> Result<SecurityConfig, String> {
-        let result = state.rpc_call("security_config.get", serde_json::Value::Null).await?;
+        let result = state
+            .rpc_call("security_config.get", serde_json::Value::Null)
+            .await?;
 
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse security config: {}", e))
     }
 
     /// Update security configuration
-    pub async fn update(
-        state: &DashboardState,
-        config: SecurityConfig,
-    ) -> Result<(), String> {
+    pub async fn update(state: &DashboardState, config: SecurityConfig) -> Result<(), String> {
         let params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
@@ -71,10 +74,11 @@ impl SecurityConfigApi {
 
     /// List all paired devices
     pub async fn list_devices(state: &DashboardState) -> Result<Vec<DeviceInfo>, String> {
-        let result = state.rpc_call("security_config.list_devices", serde_json::Value::Null).await?;
+        let result = state
+            .rpc_call("security_config.list_devices", serde_json::Value::Null)
+            .await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse devices: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse devices: {}", e))
     }
 
     /// Revoke a device's access
@@ -83,7 +87,9 @@ impl SecurityConfigApi {
             "device_id": device_id,
         });
 
-        state.rpc_call("security_config.revoke_device", params).await?;
+        state
+            .rpc_call("security_config.revoke_device", params)
+            .await?;
         Ok(())
     }
 }
@@ -118,22 +124,19 @@ impl AuthTokenApi {
     /// Show current shared token
     pub async fn show_token(state: &DashboardState) -> Result<AuthTokenInfo, String> {
         let result = state.rpc_call("auth.show_token", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse token info: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {}", e))
     }
 
     /// Regenerate shared token
     pub async fn reset_token(state: &DashboardState) -> Result<AuthTokenInfo, String> {
         let result = state.rpc_call("auth.reset_token", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse token info: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse token info: {}", e))
     }
 
     /// List active HTTP sessions
     pub async fn list_sessions(state: &DashboardState) -> Result<SessionListResponse, String> {
         let result = state.rpc_call("auth.list_sessions", Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse sessions: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse sessions: {}", e))
     }
 
     /// Revoke a specific HTTP session

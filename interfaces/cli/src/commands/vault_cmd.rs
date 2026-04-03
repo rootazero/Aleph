@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 /// Show vault status
 pub async fn status(server_url: &str, json: bool) -> CliResult<()> {
@@ -39,15 +39,14 @@ pub async fn store(server_url: &str, json: bool) -> CliResult<()> {
     let master_key = if json {
         // In JSON mode, read from stdin
         let mut key = String::new();
-        std::io::stdin().read_line(&mut key).map_err(|e| {
-            CliError::Other(format!("Failed to read from stdin: {}", e))
-        })?;
+        std::io::stdin()
+            .read_line(&mut key)
+            .map_err(|e| CliError::Other(format!("Failed to read from stdin: {}", e)))?;
         key.trim().to_string()
     } else {
         // Interactive: prompt with hidden input
-        rpassword::prompt_password("Enter master key: ").map_err(|e| {
-            CliError::Other(format!("Failed to read password: {}", e))
-        })?
+        rpassword::prompt_password("Enter master key: ")
+            .map_err(|e| CliError::Other(format!("Failed to read password: {}", e)))?
     };
 
     if master_key.is_empty() {
@@ -119,10 +118,7 @@ pub async fn verify(server_url: &str, json: bool) -> CliResult<()> {
             .get("verified")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let message = result
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let message = result.get("message").and_then(|v| v.as_str()).unwrap_or("");
         if verified {
             println!("Vault verified: {}", message);
         } else {

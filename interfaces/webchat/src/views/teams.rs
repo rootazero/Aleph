@@ -3,12 +3,12 @@
 //! Displays all teams (active and disbanded) with collapsible cards.
 //! Each card shows summary info when collapsed and full detail when expanded.
 
+use crate::api::teams::{TeamDetail, TeamSummary, TeamsApi};
+use crate::components::ui::*;
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::teams::{TeamsApi, TeamSummary, TeamDetail};
-use crate::components::ui::*;
-use crate::i18n::*;
 
 // ============================================================================
 // TeamsView — top-level component

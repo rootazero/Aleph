@@ -2,11 +2,11 @@
 // SidebarItem component with real-time alert display.
 // Always renders in wide mode (icon + label).
 //
+use crate::components::ui::StatusBadge;
+use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_location;
-use crate::context::DashboardState;
-use crate::components::ui::StatusBadge;
 
 #[component]
 pub fn SidebarItem(
@@ -27,9 +27,7 @@ pub fn SidebarItem(
         }
     };
 
-    let alert = Signal::derive(move || {
-        alert_key.and_then(|key| state.get_alert(key))
-    });
+    let alert = Signal::derive(move || alert_key.and_then(|key| state.get_alert(key)));
 
     view! {
         <A href=href attr:class=move || {

@@ -1,7 +1,7 @@
 //! Server info command
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// Format bytes into a human-readable string (e.g., "4.2 GB")
 fn format_bytes(bytes: u64) -> String {
@@ -58,7 +58,9 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
         output::print_json(&combined);
     } else {
         println!("Aleph Info");
-        println!("\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\n");
+        println!(
+            "\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\n"
+        );
 
         // Status section
         println!(
@@ -91,13 +93,23 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
             let mem_used = system.get("memory_used_bytes").and_then(|v| v.as_u64());
             let mem_total = system.get("memory_total_bytes").and_then(|v| v.as_u64());
             if let (Some(used), Some(total)) = (mem_used, mem_total) {
-                println!("{:<14}{} / {}", "Memory:", format_bytes(used), format_bytes(total));
+                println!(
+                    "{:<14}{} / {}",
+                    "Memory:",
+                    format_bytes(used),
+                    format_bytes(total)
+                );
             }
 
             let disk_used = system.get("disk_used_bytes").and_then(|v| v.as_u64());
             let disk_total = system.get("disk_total_bytes").and_then(|v| v.as_u64());
             if let (Some(used), Some(total)) = (disk_used, disk_total) {
-                println!("{:<14}{} / {}", "Disk:", format_bytes(used), format_bytes(total));
+                println!(
+                    "{:<14}{} / {}",
+                    "Disk:",
+                    format_bytes(used),
+                    format_bytes(total)
+                );
             }
 
             if let Some(uptime) = system.get("uptime_secs").and_then(|v| v.as_u64()) {
@@ -109,7 +121,9 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
         if let Some(list) = providers.get("providers").and_then(|v| v.as_array()) {
             if !list.is_empty() {
                 println!("\nProviders");
-                println!("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+                println!(
+                    "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+                );
 
                 for provider in list {
                     if let Some(name) = provider.get("name").and_then(|v| v.as_str()) {

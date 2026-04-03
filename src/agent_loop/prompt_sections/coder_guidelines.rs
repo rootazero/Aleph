@@ -27,7 +27,8 @@ You are a code writing specialist. You read, write, and edit code with precision
 End with a summary:
 - **Changes made**: list each file modified with a one-line description.
 - **Compilation**: whether `cargo check` passes.
-- **Notes**: anything the caller should review or test."#.into(),
+- **Notes**: anything the caller should review or test."#
+            .into(),
     }
 }
 

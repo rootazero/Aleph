@@ -1,20 +1,20 @@
 //
 // Agent Management — 6-tab detail view with per-agent routing.
 
-pub mod overview;
 pub mod behavior;
-pub mod files;
-pub mod skills;
-pub mod tools;
 pub mod channels;
+pub mod files;
+pub mod overview;
+pub mod skills;
 pub mod teams;
+pub mod tools;
 
+use crate::api::agents::{AgentSummary, AgentsApi};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::{use_location, use_navigate};
-use crate::api::agents::{AgentsApi, AgentSummary};
-use crate::context::DashboardState;
-use crate::i18n::*;
 
 /// Parse agent_id and tab from a path like /agents/{id}/{tab}
 fn parse_agents_path(path: &str) -> (Option<String>, String) {
@@ -96,7 +96,9 @@ pub fn AgentsView() -> impl IntoView {
     let dash = state;
     Effect::new(move || {
         let id = agent_id.get();
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         is_loading.set(true);
         spawn_local(async move {
             match AgentsApi::list(&dash).await {

@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Send a message via RPC (non-interactive)
 pub async fn send(

@@ -2,10 +2,11 @@
 //!
 //! Core types for the Multi-Agent Resilience architecture:
 //! - AgentTask: Task state and recovery checkpoints
-//! - TaskTrace: Execution traces for Shadow Replay
+//! - TaskTrace: Structured execution traces for Shadow Replay
 //! - AgentEvent: Tiered event persistence (Skeleton & Pulse)
 //! - SubagentSession: Long-lived subagent session management
 
+use aleph_protocol::AgentTraceEvent;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -194,44 +195,6 @@ impl std::str::FromStr for SessionStatus {
     }
 }
 
-/// Role in task trace (message sender)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TraceRole {
-    /// Assistant message (including tool calls)
-    Assistant,
-    /// Tool result message
-    Tool,
-}
-
-impl fmt::Display for TraceRole {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TraceRole::Assistant => write!(f, "assistant"),
-            TraceRole::Tool => write!(f, "tool"),
-        }
-    }
-}
-
-impl TraceRole {
-    /// Parse role from database string with fallback to Assistant
-    pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(TraceRole::Assistant)
-    }
-}
-
-impl std::str::FromStr for TraceRole {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "assistant" => Ok(TraceRole::Assistant),
-            "tool" => Ok(TraceRole::Tool),
-            _ => Err(format!("Unknown trace role: {}", s)),
-        }
-    }
-}
-
 // =============================================================================
 // Agent Task
 // =============================================================================
@@ -351,8 +314,8 @@ impl AgentTask {
 
 /// Execution trace entry for Shadow Replay
 ///
-/// Records a single step in task execution, enabling deterministic
-/// replay without LLM re-inference.
+/// Records a single structured execution event in task execution,
+/// enabling deterministic replay without rebuilding semantics from flat logs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskTrace {
     /// Auto-incremented ID
@@ -364,11 +327,8 @@ pub struct TaskTrace {
     /// Step index within the task (0-based)
     pub step_index: u32,
 
-    /// Message role
-    pub role: TraceRole,
-
-    /// Full message content as JSON
-    pub content_json: String,
+    /// Structured agent trace event
+    pub event: AgentTraceEvent,
 
     /// Timestamp (Unix epoch seconds)
     pub timestamp: i64,
@@ -379,17 +339,20 @@ impl TaskTrace {
     pub fn new(
         task_id: impl Into<String>,
         step_index: u32,
-        role: TraceRole,
-        content_json: impl Into<String>,
+        event: impl Into<AgentTraceEvent>,
     ) -> Self {
         Self {
             id: 0, // Will be set by database
             task_id: task_id.into(),
             step_index,
-            role,
-            content_json: content_json.into(),
+            event: event.into(),
             timestamp: chrono::Utc::now().timestamp(),
         }
+    }
+
+    /// Stable event kind string for storage/indexing.
+    pub fn event_kind(&self) -> &'static str {
+        self.event.kind()
     }
 }
 
@@ -646,11 +609,19 @@ mod tests {
 
     #[test]
     fn test_task_trace_new() {
-        let trace = TaskTrace::new("task-1", 0, TraceRole::Assistant, r#"{"content":"hello"}"#);
+        let trace = TaskTrace::new(
+            "task-1",
+            0,
+            AgentTraceEvent::TextEmitted {
+                iteration: 0,
+                stream: aleph_protocol::AgentTraceTextKind::Final,
+                text: "hello".to_string(),
+            },
+        );
 
         assert_eq!(trace.task_id, "task-1");
         assert_eq!(trace.step_index, 0);
-        assert_eq!(trace.role, TraceRole::Assistant);
+        assert_eq!(trace.event.kind(), "text_emitted");
     }
 
     #[test]

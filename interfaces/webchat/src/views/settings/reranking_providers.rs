@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{RerankConfigApi, RerankConfig, RerankProviderType};
+use crate::api::{RerankConfig, RerankConfigApi, RerankProviderType};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -16,11 +16,41 @@ struct RerankPreset {
 }
 
 const RERANK_PRESETS: &[RerankPreset] = &[
-    RerankPreset { key: "jina",       name: "Jina AI",     icon_color: "#FF6B6B", default_api_base: "https://api.jina.ai/v1",          default_model: "jina-reranker-v2-base-multilingual" },
-    RerankPreset { key: "siliconflow", name: "SiliconFlow", icon_color: "#6C5CE7", default_api_base: "https://api.siliconflow.cn/v1",   default_model: "BAAI/bge-reranker-v2-m3" },
-    RerankPreset { key: "voyage",     name: "Voyage AI",   icon_color: "#00B4D8", default_api_base: "https://api.voyageai.com/v1",      default_model: "rerank-2" },
-    RerankPreset { key: "pinecone",   name: "Pinecone",    icon_color: "#1DB954", default_api_base: "https://api.pinecone.io",          default_model: "pinecone-rerank-v0" },
-    RerankPreset { key: "vllm",       name: "vLLM",        icon_color: "#FF9F1C", default_api_base: "http://localhost:8000/v1",         default_model: "BAAI/bge-reranker-v2-m3" },
+    RerankPreset {
+        key: "jina",
+        name: "Jina AI",
+        icon_color: "#FF6B6B",
+        default_api_base: "https://api.jina.ai/v1",
+        default_model: "jina-reranker-v2-base-multilingual",
+    },
+    RerankPreset {
+        key: "siliconflow",
+        name: "SiliconFlow",
+        icon_color: "#6C5CE7",
+        default_api_base: "https://api.siliconflow.cn/v1",
+        default_model: "BAAI/bge-reranker-v2-m3",
+    },
+    RerankPreset {
+        key: "voyage",
+        name: "Voyage AI",
+        icon_color: "#00B4D8",
+        default_api_base: "https://api.voyageai.com/v1",
+        default_model: "rerank-2",
+    },
+    RerankPreset {
+        key: "pinecone",
+        name: "Pinecone",
+        icon_color: "#1DB954",
+        default_api_base: "https://api.pinecone.io",
+        default_model: "pinecone-rerank-v0",
+    },
+    RerankPreset {
+        key: "vllm",
+        name: "vLLM",
+        icon_color: "#FF9F1C",
+        default_api_base: "http://localhost:8000/v1",
+        default_model: "BAAI/bge-reranker-v2-m3",
+    },
 ];
 
 #[component]
@@ -250,7 +280,11 @@ fn ProviderDetailPanel(
     let is_current_provider = rerank_cfg.provider.as_str() == provider_key;
 
     let enabled = RwSignal::new(true);
-    let api_base = RwSignal::new(if is_current_provider { rerank_cfg.api_base.clone() } else { String::new() });
+    let api_base = RwSignal::new(if is_current_provider {
+        rerank_cfg.api_base.clone()
+    } else {
+        String::new()
+    });
     let api_key = RwSignal::new(String::new());
 
     // Fetch this provider's API key from vault (each provider has its own key)
@@ -269,11 +303,21 @@ fn ProviderDetailPanel(
         if is_current_provider && !rerank_cfg.model.is_empty() {
             rerank_cfg.model.clone()
         } else {
-            preset.map(|p| p.default_model.to_string()).unwrap_or_default()
+            preset
+                .map(|p| p.default_model.to_string())
+                .unwrap_or_default()
         }
     });
-    let timeout_ms = RwSignal::new(if is_current_provider { rerank_cfg.timeout_ms } else { 5000 });
-    let rerank_weight = RwSignal::new(if is_current_provider { rerank_cfg.rerank_weight } else { 0.6 });
+    let timeout_ms = RwSignal::new(if is_current_provider {
+        rerank_cfg.timeout_ms
+    } else {
+        5000
+    });
+    let rerank_weight = RwSignal::new(if is_current_provider {
+        rerank_cfg.rerank_weight
+    } else {
+        0.6
+    });
 
     // Action states
     let (testing, set_testing) = signal(false);
@@ -313,15 +357,21 @@ fn ProviderDetailPanel(
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
                     if resp.success {
-                        set_test_result.set(Some((true, format!(
-                            "Success! {} results, top score: {:.3}",
-                            resp.results_count, resp.top_score
-                        ))));
+                        set_test_result.set(Some((
+                            true,
+                            format!(
+                                "Success! {} results, top score: {:.3}",
+                                resp.results_count, resp.top_score
+                            ),
+                        )));
                     } else {
-                        set_test_result.set(Some((false, format!(
-                            "Failed: {}",
-                            resp.error.unwrap_or_else(|| "Unknown error".to_string())
-                        ))));
+                        set_test_result.set(Some((
+                            false,
+                            format!(
+                                "Failed: {}",
+                                resp.error.unwrap_or_else(|| "Unknown error".to_string())
+                            ),
+                        )));
                     }
                 }
                 Err(e) => {
@@ -351,7 +401,10 @@ fn ProviderDetailPanel(
                     saved.api_key = String::new();
                     config.set(Some(saved));
                     set_save_success.set(true);
-                    set_timeout(move || set_save_success.set(false), std::time::Duration::from_secs(2));
+                    set_timeout(
+                        move || set_save_success.set(false),
+                        std::time::Duration::from_secs(2),
+                    );
                 }
                 Err(e) => {
                     set_action_error.set(Some(format!("Save failed: {}", e)));
@@ -605,15 +658,21 @@ fn AddCustomProviderPanel(
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
                     if resp.success {
-                        set_test_result.set(Some((true, format!(
-                            "Success! {} results, top score: {:.3}",
-                            resp.results_count, resp.top_score
-                        ))));
+                        set_test_result.set(Some((
+                            true,
+                            format!(
+                                "Success! {} results, top score: {:.3}",
+                                resp.results_count, resp.top_score
+                            ),
+                        )));
                     } else {
-                        set_test_result.set(Some((false, format!(
-                            "Failed: {}",
-                            resp.error.unwrap_or_else(|| "Unknown error".to_string())
-                        ))));
+                        set_test_result.set(Some((
+                            false,
+                            format!(
+                                "Failed: {}",
+                                resp.error.unwrap_or_else(|| "Unknown error".to_string())
+                            ),
+                        )));
                     }
                 }
                 Err(e) => {
@@ -630,7 +689,9 @@ fn AddCustomProviderPanel(
     let handle_save = move |_| {
         // Validate
         if api_base.get().is_empty() {
-            set_action_error.set(Some("API Base URL is required for custom providers".to_string()));
+            set_action_error.set(Some(
+                "API Base URL is required for custom providers".to_string(),
+            ));
             return;
         }
         if form_model.get().is_empty() {

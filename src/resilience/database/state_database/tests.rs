@@ -192,6 +192,34 @@ fn test_in_memory_database() {
 }
 
 #[test]
+fn test_task_traces_use_structured_agent_trace_schema() {
+    let db = StateDatabase::in_memory().unwrap();
+    let conn = db.conn.lock().unwrap();
+
+    let columns: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('task_traces') ORDER BY cid ASC")
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "task_id",
+            "step_index",
+            "event_kind",
+            "event_json",
+            "timestamp"
+        ]
+    );
+}
+
+#[test]
 fn test_namespace_required_in_search() {
     // This test verifies compiler enforcement of namespace parameter
     // The real test is compile-time: search_facts() requires NamespaceScope

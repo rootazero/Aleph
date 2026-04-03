@@ -4,13 +4,13 @@
 //! - Globally denied tools are greyed out and locked at Deny
 //! - Globally "ask" tools cannot be elevated to Allow
 
-use std::collections::HashMap;
-use leptos::prelude::*;
-use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
 use crate::api::tool_permissions::ToolPermissionsApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use std::collections::HashMap;
 
 /// Permission level constants
 const ALLOW: &str = "allow";
@@ -43,7 +43,9 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
     let id_for_load = agent_id.clone();
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         let id = id_for_load.clone();
         spawn_local(async move {
             // Load tool schema for group/tool structure
@@ -68,19 +70,21 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
 
             // Build the effective per-tool map
             let eff_default = perms.effective_default.as_deref().unwrap_or(&perms.default);
-            let effective_map: HashMap<String, String> = perms.effective
-                .clone()
-                .unwrap_or_default();
+            let effective_map: HashMap<String, String> =
+                perms.effective.clone().unwrap_or_default();
 
             // Collect all tool names from schema
-            let all_tools: Vec<String> = schema.groups.iter()
+            let all_tools: Vec<String> = schema
+                .groups
+                .iter()
                 .flat_map(|g| g.tools.iter().map(|t| t.name.clone()))
                 .collect();
 
             // Build current permission map from effective data
             let mut current = HashMap::new();
             for t in &all_tools {
-                let perm = effective_map.get(t)
+                let perm = effective_map
+                    .get(t)
                     .cloned()
                     .unwrap_or_else(|| eff_default.to_string());
                 current.insert(t.clone(), perm);
@@ -96,7 +100,9 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
                     // Build full global map
                     let mut gmap = HashMap::new();
                     for t in &all_tools {
-                        let gperm = gp.overrides.get(t)
+                        let gperm = gp
+                            .overrides
+                            .get(t)
                             .cloned()
                             .unwrap_or_else(|| gp.default.clone());
                         gmap.insert(t.clone(), gperm);
@@ -141,16 +147,17 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
         let gd = global_default.get();
         tool_perms.update(|map| {
             // If all non-restricted tools are Allow, switch to Deny; otherwise switch to Allow
-            let non_restricted: Vec<&String> = tool_names.iter()
+            let non_restricted: Vec<&String> = tool_names
+                .iter()
                 .filter(|t| {
                     let g = ge.get(*t).unwrap_or(&gd);
                     g != DENY
                 })
                 .collect();
 
-            let all_allowed = non_restricted.iter().all(|t| {
-                map.get(*t).map(|v| v == ALLOW).unwrap_or(false)
-            });
+            let all_allowed = non_restricted
+                .iter()
+                .all(|t| map.get(*t).map(|v| v == ALLOW).unwrap_or(false));
 
             if all_allowed {
                 // Switch non-restricted to Deny
@@ -189,7 +196,8 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
             let current_perms = tool_perms.get();
 
             // Build overrides: only tools that differ from the agent default
-            let overrides: HashMap<String, String> = current_perms.into_iter()
+            let overrides: HashMap<String, String> = current_perms
+                .into_iter()
                 .filter(|(_, v)| *v != current_default)
                 .collect();
 

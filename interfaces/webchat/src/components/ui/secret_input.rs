@@ -11,7 +11,7 @@ use leptos::prelude::*;
 /// with an eye icon button on the right side for toggling visibility.
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// let (api_key, set_api_key) = signal(String::new());
 /// view! {
 ///     <SecretInput

@@ -95,7 +95,7 @@ impl BuiltinToolRegistry {
             }
         };
 
-        // Desktop tool — screen ops via DesktopPlatform, IPC bridge for canvas/snapshot/ax_tree
+        // Desktop tool — platform-native desktop/screen capability only.
         let desktop_tool = DesktopTool::new().with_platform(Arc::clone(&desktop_platform));
 
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
@@ -103,7 +103,7 @@ impl BuiltinToolRegistry {
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
         let media_tool = MediaTool::new(Arc::clone(&desktop_platform));
 
-        // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
+        // PIM tool — platform-native notes/calendar/reminders/contacts capability.
         let pim_tool = PimTool::new().with_platform(Arc::clone(&desktop_platform));
 
         let scratchpad_tool = ScratchpadTool::new();

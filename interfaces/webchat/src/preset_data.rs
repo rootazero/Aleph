@@ -150,24 +150,23 @@ pub const PRESETS: &[ProviderPreset] = &[
     },
 ];
 
-pub const OAUTH_PRESETS: &[ProviderPreset] = &[
-    ProviderPreset {
-        name: "codex",
-        protocol: "chatgpt",
-        model: "gpt-5.4",
-        base_url: "https://chatgpt.com",
-        description: "OpenAI Codex via ChatGPT subscription",
-        api_key_placeholder: "",
-        icon_color: "#10A37F",
-        needs_api_key: false,
-        auth_type: "oauth",
-    },
-];
+pub const OAUTH_PRESETS: &[ProviderPreset] = &[ProviderPreset {
+    name: "codex",
+    protocol: "chatgpt",
+    model: "gpt-5.4",
+    base_url: "https://chatgpt.com",
+    description: "OpenAI Codex via ChatGPT subscription",
+    api_key_placeholder: "",
+    icon_color: "#10A37F",
+    needs_api_key: false,
+    auth_type: "oauth",
+}];
 
 pub fn find_preset(name: &str) -> Option<&'static ProviderPreset> {
-    PRESETS.iter().chain(OAUTH_PRESETS.iter()).find(|p| {
-        p.name == name || canonical_preset_name(p.name) == name
-    })
+    PRESETS
+        .iter()
+        .chain(OAUTH_PRESETS.iter())
+        .find(|p| p.name == name || canonical_preset_name(p.name) == name)
 }
 
 /// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").

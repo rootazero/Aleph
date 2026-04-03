@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 /// A workspace entry returned by workspace.list
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,8 @@ impl WorkspaceApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<WorkspaceEntry>, String> {
         let result = state.rpc_call("workspace.list", Value::Null).await?;
 
-        result.get("workspaces")
+        result
+            .get("workspaces")
             .ok_or_else(|| "Invalid response: missing workspaces".to_string())
             .and_then(|workspaces| {
                 serde_json::from_value(workspaces.clone())
@@ -47,7 +48,8 @@ impl WorkspaceApi {
         state: &DashboardState,
     ) -> Result<std::collections::HashMap<String, String>, String> {
         let result = state.rpc_call("agents.bindings", Value::Null).await?;
-        result.get("bindings")
+        result
+            .get("bindings")
             .ok_or_else(|| "Invalid response: missing bindings".to_string())
             .and_then(|b| {
                 serde_json::from_value(b.clone())

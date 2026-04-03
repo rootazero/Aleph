@@ -142,13 +142,13 @@ fn SharedTokenSection(
         if let Some(info) = token_info.get() {
             if let Some(token) = info.token {
                 // Use js_sys::eval for clipboard access to avoid extra web-sys features
-                let js = format!("navigator.clipboard.writeText('{}')", token.replace('\'', "\\'"));
+                let js = format!(
+                    "navigator.clipboard.writeText('{}')",
+                    token.replace('\'', "\\'")
+                );
                 let _ = js_sys::eval(&js);
                 copied.set(true);
-                set_timeout(
-                    move || copied.set(false),
-                    std::time::Duration::from_secs(2),
-                );
+                set_timeout(move || copied.set(false), std::time::Duration::from_secs(2));
             }
         }
     };
@@ -376,10 +376,7 @@ fn ActiveSessionsSection(
 }
 
 #[component]
-fn SessionCard<F>(
-    session: SessionInfo,
-    on_revoke: F,
-) -> impl IntoView
+fn SessionCard<F>(session: SessionInfo, on_revoke: F) -> impl IntoView
 where
     F: Fn() + 'static,
 {
@@ -387,7 +384,10 @@ where
     let created = format_timestamp(session.created_at);
     let expires = format_timestamp(session.expires_at);
     let last_used = format_timestamp(session.last_used_at);
-    let short_id = format!("{}...", session.session_id.get(..8).unwrap_or(&session.session_id));
+    let short_id = format!(
+        "{}...",
+        session.session_id.get(..8).unwrap_or(&session.session_id)
+    );
 
     view! {
         <div class="flex items-center justify-between p-4 bg-surface-sunken rounded-lg border border-border">

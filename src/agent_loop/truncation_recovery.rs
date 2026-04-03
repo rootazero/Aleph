@@ -254,18 +254,15 @@ fn has_unclosed_code_fence(text: &str) -> bool {
 /// `- `, `* `, or a numbered pattern like `1. `.
 fn has_truncated_list(text: &str) -> bool {
     // Check the last few lines for list item patterns.
-    text.lines()
-        .rev()
-        .take(5)
-        .any(|line| {
-            let trimmed = line.trim_start();
-            trimmed.starts_with("- ")
-                || trimmed.starts_with("* ")
-                || trimmed
-                    .split_once(". ")
-                    .map(|(num, _)| !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()))
-                    .unwrap_or(false)
-        })
+    text.lines().rev().take(5).any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed
+                .split_once(". ")
+                .map(|(num, _)| !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false)
+    })
 }
 
 /// Detect unbalanced `{` / `}` braces (heuristic for JSON truncation).
@@ -349,10 +346,7 @@ mod tests {
         let mut recovery = TruncationRecovery::new(16384);
         let action = recovery.on_truncation(Some(16384), "partial output");
 
-        assert_eq!(
-            *recovery.phase(),
-            RecoveryPhase::Continuing { count: 1 }
-        );
+        assert_eq!(*recovery.phase(), RecoveryPhase::Continuing { count: 1 });
         assert_eq!(action.max_tokens_override, None);
         assert!(action.should_continue);
     }
@@ -366,10 +360,7 @@ mod tests {
 
         // Second truncation → Continuing(1)
         let action = recovery.on_truncation(Some(16384), "part 2");
-        assert_eq!(
-            *recovery.phase(),
-            RecoveryPhase::Continuing { count: 1 }
-        );
+        assert_eq!(*recovery.phase(), RecoveryPhase::Continuing { count: 1 });
         assert!(action.should_continue);
         assert_eq!(recovery.attempts(), 2);
     }
@@ -407,8 +398,12 @@ mod tests {
     fn assemble_output_deduplicates_overlapping_fragments() {
         let mut recovery = TruncationRecovery::new(16384);
         // Simulate fragments with overlapping tails/heads.
-        recovery.fragments.push("Hello, world! This is a test".to_owned());
-        recovery.fragments.push("is a test of deduplication.".to_owned());
+        recovery
+            .fragments
+            .push("Hello, world! This is a test".to_owned());
+        recovery
+            .fragments
+            .push("is a test of deduplication.".to_owned());
 
         let assembled = recovery.assemble_output();
         assert_eq!(assembled, "Hello, world! This is a test of deduplication.");
@@ -469,10 +464,7 @@ mod tests {
         let mut recovery = TruncationRecovery::new(16384);
         let action = recovery.on_truncation(None, "partial");
 
-        assert_eq!(
-            *recovery.phase(),
-            RecoveryPhase::Continuing { count: 1 }
-        );
+        assert_eq!(*recovery.phase(), RecoveryPhase::Continuing { count: 1 });
         assert_eq!(action.max_tokens_override, None);
         assert!(action.should_continue);
     }

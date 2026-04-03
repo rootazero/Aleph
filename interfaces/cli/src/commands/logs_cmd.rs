@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// Get current log level
 pub async fn level(server_url: &str, json: bool) -> CliResult<()> {
@@ -30,10 +30,7 @@ pub async fn set_level(server_url: &str, level: &str, json: bool) -> CliResult<(
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     let result: Value = client
-        .call(
-            "logs.setLevel",
-            Some(serde_json::json!({"level": level})),
-        )
+        .call("logs.setLevel", Some(serde_json::json!({"level": level})))
         .await?;
 
     if json {

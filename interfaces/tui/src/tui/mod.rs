@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tui_textarea::{Input, TextArea};
 
-use aleph_protocol::StreamEvent;
+use aleph_protocol::{AgentTraceReplay, AgentTraceTaskSummary, StreamEvent};
 
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
@@ -68,16 +68,13 @@ pub async fn run(
                 .as_array()
                 .and_then(|arr| arr.first())
                 .and_then(|first| {
-                    first
-                        .as_str()
-                        .map(|s| s.to_string())
-                        .or_else(|| {
-                            first
-                                .get("name")
-                                .or_else(|| first.get("id"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
+                    first.as_str().map(|s| s.to_string()).or_else(|| {
+                        first
+                            .get("name")
+                            .or_else(|| first.get("id"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
                 })
                 // Also try object format: {"models": [...]}
                 .or_else(|| {
@@ -86,16 +83,13 @@ pub async fn run(
                         .and_then(|v| v.as_array())
                         .and_then(|arr| arr.first())
                         .and_then(|first| {
-                            first
-                                .as_str()
-                                .map(|s| s.to_string())
-                                .or_else(|| {
-                                    first
-                                        .get("name")
-                                        .or_else(|| first.get("id"))
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                })
+                            first.as_str().map(|s| s.to_string()).or_else(|| {
+                                first
+                                    .get("name")
+                                    .or_else(|| first.get("id"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
                         })
                 })
                 .unwrap_or_else(|| "unknown".to_string())
@@ -198,7 +192,7 @@ async fn main_loop(
                 }
             }
             Action::LocalCommand(cmd) => {
-                execute_local_command(state, textarea, cmd);
+                execute_local_command(state, textarea, client, cmd).await;
             }
             Action::GatewayCommand(text) => {
                 // Send slash command to Gateway as a regular message
@@ -281,7 +275,7 @@ async fn main_loop(
                         // Parse through our unified parser
                         match slash::parse_input(&cmd_str) {
                             ParsedInput::Local(cmd) => {
-                                execute_local_command(state, textarea, cmd);
+                                execute_local_command(state, textarea, client, cmd).await;
                             }
                             ParsedInput::Gateway(text) => {
                                 // Send gateway command as chat message
@@ -331,7 +325,6 @@ async fn main_loop(
                 }
                 state.close_overlay();
             }
-
         }
 
         // Check quit flag
@@ -648,10 +641,9 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
             if let Some(palette) = &state.palette {
                 if palette.namespace_stack.is_empty() {
                     let input = palette.input.clone();
-                    if let Some(ns) = command_tree::CommandEntry::find_namespace(
-                        &state.gateway_commands,
-                        &input,
-                    ) {
+                    if let Some(ns) =
+                        command_tree::CommandEntry::find_namespace(&state.gateway_commands, &input)
+                    {
                         let ns_name = ns.name.clone();
                         state.palette_enter_namespace(&ns_name);
                         return Action::None;
@@ -738,9 +730,10 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
 // ---------------------------------------------------------------------------
 
 /// Execute a local slash command (TUI-only, no Gateway RPC needed).
-fn execute_local_command(
+async fn execute_local_command(
     state: &mut AppState,
     textarea: &mut TextArea<'_>,
+    client: &AlephClient,
     cmd: LocalCommand,
 ) {
     match cmd {
@@ -759,10 +752,64 @@ fn execute_local_command(
             let help_text = build_help_text(state);
             state.add_system_message(help_text);
         }
+        LocalCommand::ReplayList => {
+            let params = json!({ "limit": 10 });
+            match client
+                .call::<_, Vec<AgentTraceTaskSummary>>("trace.list", Some(params))
+                .await
+            {
+                Ok(tasks) => state.add_system_message(format_replay_list(&tasks)),
+                Err(e) => state.add_system_message(format!("Replay list error: {}", e)),
+            }
+        }
+        LocalCommand::ReplayShow { task_id } => {
+            let params = json!({ "task_id": task_id });
+            match client
+                .call::<_, AgentTraceReplay>("trace.get", Some(params))
+                .await
+            {
+                Ok(replay) => state.load_trace_replay(replay),
+                Err(e) => state.add_system_message(format!("Replay load error: {}", e)),
+            }
+        }
     }
 
     // Ensure textarea still has focus hint after command execution
     let _ = textarea;
+}
+
+fn format_replay_list(tasks: &[AgentTraceTaskSummary]) -> String {
+    if tasks.is_empty() {
+        return "Recent replays:\n  (none)\n\nUse /replay <task_id> after traces are persisted."
+            .to_string();
+    }
+
+    let mut lines = vec!["Recent replays:".to_string()];
+    for task in tasks {
+        lines.push(format!(
+            "  {} [{}] {} traces  {}",
+            task.task_id,
+            task.status,
+            task.trace_count,
+            truncate_text(&task.prompt_preview, 72)
+        ));
+    }
+    lines.push(String::new());
+    lines.push("Use /replay <task_id> to load one.".to_string());
+    lines.join("\n")
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let end = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    format!("{}...", &text[..end])
 }
 
 // ---------------------------------------------------------------------------
@@ -847,4 +894,3 @@ async fn fetch_gateway_commands(client: &AlephClient) -> Vec<command_tree::Comma
         }
     }
 }
-

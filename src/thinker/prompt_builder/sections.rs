@@ -520,12 +520,14 @@ impl PromptBuilder {
         prompt.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
         prompt
             .push_str("- Check configuration validity: read config files and validate structure\n");
-        prompt.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
+        prompt.push_str(
+            "- Check desktop capability availability: inspect startup logs, platform support, and OS permissions\n",
+        );
         prompt.push_str("- Check LanceDB health: verify database file accessibility\n\n");
 
         prompt.push_str("### When You Detect Issues\n");
         prompt.push_str(
-            "If you notice configuration conflicts, database issues, disconnected bridges,\n",
+            "If you notice configuration conflicts, database issues, unavailable desktop capabilities,\n",
         );
         prompt.push_str("abnormal resource usage, or runtime capability degradation:\n\n");
         prompt.push_str("**Action**: Report to the user with:\n");

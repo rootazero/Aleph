@@ -1,11 +1,11 @@
 // Overview Tab — identity, model config, and inference parameters editor
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use serde_json::json;
 use crate::api::agents::AgentsApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
+use serde_json::json;
 
 #[component]
 pub fn OverviewTab(agent_id: String) -> impl IntoView {
@@ -30,23 +30,56 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let id_for_load = agent_id.clone();
     let dash = state;
     Effect::new(move || {
-        if !dash.is_connected.get() { return; }
+        if !dash.is_connected.get() {
+            return;
+        }
         let id = id_for_load.clone();
         spawn_local(async move {
             if let Ok(detail) = AgentsApi::get(&dash, &id).await {
                 let def = &detail.definition;
-                name.set(def.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                name.set(
+                    def.get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                );
 
                 if let Some(identity) = def.get("identity") {
-                    emoji.set(identity.get("emoji").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    description.set(identity.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string());
-                    theme.set(identity.get("theme").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                    emoji.set(
+                        identity
+                            .get("emoji")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    description.set(
+                        identity
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                    theme.set(
+                        identity
+                            .get("theme")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
                 }
 
                 if let Some(mc) = def.get("model_config") {
-                    primary_model.set(mc.get("primary").and_then(|v| v.as_str()).unwrap_or("").to_string());
+                    primary_model.set(
+                        mc.get("primary")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
                     if let Some(fb) = mc.get("fallbacks").and_then(|v| v.as_array()) {
-                        let fbs: Vec<String> = fb.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                        let fbs: Vec<String> = fb
+                            .iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
                         fallbacks.set(fbs.join(", "));
                     }
                 } else if let Some(model) = def.get("model").and_then(|v| v.as_str()) {
@@ -79,7 +112,8 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
         let id = id_for_save.clone();
         let dash = state;
 
-        let fb_list: Vec<String> = fallbacks.get()
+        let fb_list: Vec<String> = fallbacks
+            .get()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -121,7 +155,10 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
 
         spawn_local(async move {
             match AgentsApi::update(&dash, &id, patch).await {
-                Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.overview.saved).to_string()))),
+                Ok(()) => save_message.set(Some((
+                    true,
+                    t_string!(i18n, agents.overview.saved).to_string(),
+                ))),
                 Err(e) => save_message.set(Some((false, e))),
             }
             is_saving.set(false);

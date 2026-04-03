@@ -146,6 +146,14 @@ impl ExtensionManager {
         self.hook_executor.read().await.hook_count()
     }
 
+    /// Get a stable snapshot of the current hook executor.
+    ///
+    /// The snapshot is cheap to clone and lets callers execute hooks without
+    /// holding the extension manager's internal lock for the full agent run.
+    pub async fn hook_executor_snapshot(&self) -> super::hooks::HookExecutor {
+        self.hook_executor.read().await.clone()
+    }
+
     // ── Configuration Access ──────────────────────────────────────────────────
 
     /// Get all MCP server configurations from config

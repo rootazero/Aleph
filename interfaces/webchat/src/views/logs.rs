@@ -1,8 +1,8 @@
-use leptos::prelude::*;
+use crate::api::{LogsApi, LogsResponse};
 use crate::components::ui::*;
 use crate::context::DashboardState;
-use crate::api::{LogsApi, LogsResponse};
 use crate::i18n::*;
+use leptos::prelude::*;
 
 /// Return a Tailwind text color class based on the log level found in the line.
 fn log_line_color(line: &str) -> &'static str {
@@ -38,7 +38,11 @@ pub fn Logs() -> impl IntoView {
 
             let level = {
                 let l = selected_level.get_untracked();
-                if l == "all" { None } else { Some(l) }
+                if l == "all" {
+                    None
+                } else {
+                    Some(l)
+                }
             };
             let lines = selected_lines.get_untracked();
 

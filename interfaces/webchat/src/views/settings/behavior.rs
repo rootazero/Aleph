@@ -2,11 +2,11 @@
 //!
 //! Provides UI for managing behavior configuration (output mode, typing speed).
 
+use crate::api::{BehaviorConfig, BehaviorConfigApi};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::{BehaviorConfig, BehaviorConfigApi};
-use crate::i18n::*;
 
 #[component]
 pub fn BehaviorView() -> impl IntoView {

@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{AcpApi, AcpHarnessInfo, AcpHarnessConfig};
+use crate::api::{AcpApi, AcpHarnessConfig, AcpHarnessInfo};
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -13,9 +13,21 @@ struct HarnessPreset {
 }
 
 const HARNESS_PRESETS: &[HarnessPreset] = &[
-    HarnessPreset { id: "claude-code",  name: "Claude Code", icon_color: "#F97316" },
-    HarnessPreset { id: "codex",        name: "Codex",       icon_color: "#3B82F6" },
-    HarnessPreset { id: "gemini",       name: "Gemini CLI",  icon_color: "#10B981" },
+    HarnessPreset {
+        id: "claude-code",
+        name: "Claude Code",
+        icon_color: "#F97316",
+    },
+    HarnessPreset {
+        id: "codex",
+        name: "Codex",
+        icon_color: "#3B82F6",
+    },
+    HarnessPreset {
+        id: "gemini",
+        name: "Gemini CLI",
+        icon_color: "#10B981",
+    },
 ];
 
 /// ACP Harnesses settings page — manages external CLI tools
@@ -373,7 +385,8 @@ fn HarnessDetailPanel(
             <div class="flex items-center justify-center h-full text-text-tertiary">
                 {t!(i18n, settings.acp.harness_not_found)}
             </div>
-        }.into_any();
+        }
+        .into_any();
     };
 
     let preset = HARNESS_PRESETS.iter().find(|p| p.id == harness_id);
@@ -389,14 +402,19 @@ fn HarnessDetailPanel(
     let args_text = RwSignal::new(info.config.args.join(", "));
     let output_format_type = RwSignal::new({
         if let Some(obj) = info.config.output_format.as_object() {
-            if obj.contains_key("json") { "json".to_string() }
-            else { "plain_text".to_string() }
+            if obj.contains_key("json") {
+                "json".to_string()
+            } else {
+                "plain_text".to_string()
+            }
         } else {
             "plain_text".to_string()
         }
     });
     let json_field_name = RwSignal::new({
-        info.config.output_format.as_object()
+        info.config
+            .output_format
+            .as_object()
             .and_then(|obj| obj.get("json"))
             .and_then(|v| v.as_object())
             .and_then(|obj| obj.get("field"))
@@ -405,9 +423,11 @@ fn HarnessDetailPanel(
             .to_string()
     });
     let env_pairs = RwSignal::new(
-        info.config.env.iter()
+        info.config
+            .env
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<(String, String)>>()
+            .collect::<Vec<(String, String)>>(),
     );
     let cwd = RwSignal::new(info.config.cwd.clone().unwrap_or_default());
     let enabled = RwSignal::new(info.enabled);
@@ -427,7 +447,8 @@ fn HarnessDetailPanel(
 
     // Build config from form state
     let build_config = move || -> AcpHarnessConfig {
-        let args: Vec<String> = args_text.get()
+        let args: Vec<String> = args_text
+            .get()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -439,19 +460,28 @@ fn HarnessDetailPanel(
             serde_json::json!("plain_text")
         };
 
-        let env: std::collections::HashMap<String, String> = env_pairs.get()
+        let env: std::collections::HashMap<String, String> = env_pairs
+            .get()
             .into_iter()
             .filter(|(k, _)| !k.is_empty())
             .collect();
 
         let cwd_val = {
             let c = cwd.get();
-            if c.is_empty() { None } else { Some(c) }
+            if c.is_empty() {
+                None
+            } else {
+                Some(c)
+            }
         };
 
         let exe_val = {
             let e = executable.get();
-            if e.is_empty() { None } else { Some(e) }
+            if e.is_empty() {
+                None
+            } else {
+                Some(e)
+            }
         };
 
         AcpHarnessConfig {
@@ -464,7 +494,11 @@ fn HarnessDetailPanel(
             cwd: cwd_val,
             timeout_seconds: timeout_seconds.get(),
             enabled: enabled.get(),
-            preset: if is_preset { Some(hid_for_preset.clone()) } else { None },
+            preset: if is_preset {
+                Some(hid_for_preset.clone())
+            } else {
+                None
+            },
         }
     };
 
@@ -481,10 +515,10 @@ fn HarnessDetailPanel(
             match AcpApi::test(&state, &id).await {
                 Ok(resp) => {
                     if resp.success {
-                        set_test_result.set(Some((true, format!(
-                            "Success! {} ({}ms)",
-                            resp.message, resp.duration_ms
-                        ))));
+                        set_test_result.set(Some((
+                            true,
+                            format!("Success! {} ({}ms)", resp.message, resp.duration_ms),
+                        )));
                     } else {
                         set_test_result.set(Some((false, resp.message)));
                     }
@@ -518,7 +552,10 @@ fn HarnessDetailPanel(
                         }
                     });
                     set_save_success.set(true);
-                    set_timeout(move || set_save_success.set(false), std::time::Duration::from_secs(2));
+                    set_timeout(
+                        move || set_save_success.set(false),
+                        std::time::Duration::from_secs(2),
+                    );
                 }
                 Err(e) => {
                     set_action_error.set(Some(format!("Save failed: {}", e)));
@@ -928,7 +965,10 @@ fn AddHarnessPanel(
 
     // ID validation
     let validate_id = move |val: &str| -> bool {
-        !val.is_empty() && val.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        !val.is_empty()
+            && val
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     };
 
     let handle_save = move |_| {
@@ -939,7 +979,9 @@ fn AddHarnessPanel(
             return;
         }
         if !validate_id(&id_val) {
-            set_id_error.set(Some("ID must only contain lowercase letters, digits, and hyphens".to_string()));
+            set_id_error.set(Some(
+                "ID must only contain lowercase letters, digits, and hyphens".to_string(),
+            ));
             return;
         }
         set_id_error.set(None);
@@ -956,7 +998,8 @@ fn AddHarnessPanel(
         set_saving.set(true);
         set_action_error.set(None);
 
-        let args: Vec<String> = args_text.get()
+        let args: Vec<String> = args_text
+            .get()
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -968,14 +1011,19 @@ fn AddHarnessPanel(
             serde_json::json!("plain_text")
         };
 
-        let env: std::collections::HashMap<String, String> = env_pairs.get()
+        let env: std::collections::HashMap<String, String> = env_pairs
+            .get()
             .into_iter()
             .filter(|(k, _)| !k.is_empty())
             .collect();
 
         let cwd_val = {
             let c = cwd.get();
-            if c.is_empty() { None } else { Some(c) }
+            if c.is_empty() {
+                None
+            } else {
+                Some(c)
+            }
         };
 
         let config = AcpHarnessConfig {

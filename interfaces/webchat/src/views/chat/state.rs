@@ -18,7 +18,7 @@ pub struct ModelInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
-    pub role: String, // "user" | "assistant"
+    pub role: String,    // "user" | "assistant"
     pub content: String, // final or accumulated text
     #[serde(default)]
     pub tool_calls: Vec<ToolCallEntry>,

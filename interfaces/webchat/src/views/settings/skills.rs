@@ -173,7 +173,10 @@ pub fn SkillsView() -> impl IntoView {
             let state = state;
             spawn_local(async move {
                 match state
-                    .rpc_call("skills.update", json!({ "skill_id": id, "enabled": enabled }))
+                    .rpc_call(
+                        "skills.update",
+                        json!({ "skill_id": id, "enabled": enabled }),
+                    )
                     .await
                 {
                     Ok(_) => load_skills(state, skills, loading, error),
@@ -295,13 +298,25 @@ fn SkillTabBar(
 ) -> impl IntoView {
     let count_all = Memo::new(move |_| skills.get().len());
     let count_ready = Memo::new(move |_| {
-        skills.get().iter().filter(|s| skill_status(s) == "Ready").count()
+        skills
+            .get()
+            .iter()
+            .filter(|s| skill_status(s) == "Ready")
+            .count()
     });
     let count_needs = Memo::new(move |_| {
-        skills.get().iter().filter(|s| skill_status(s) == "Needs Setup").count()
+        skills
+            .get()
+            .iter()
+            .filter(|s| skill_status(s) == "Needs Setup")
+            .count()
     });
     let count_disabled = Memo::new(move |_| {
-        skills.get().iter().filter(|s| skill_status(s) == "Disabled").count()
+        skills
+            .get()
+            .iter()
+            .filter(|s| skill_status(s) == "Disabled")
+            .count()
     });
 
     let tab_class = |tab: SkillTab| {
@@ -367,11 +382,17 @@ fn SkillList(
     // Group by source_label (pre-rendered display string from core)
     let mut groups: Vec<SkillGroup> = Vec::new();
     for skill in skills {
-        if let Some(group) = groups.iter_mut().find(|g| g.source_label == skill.source_label) {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|g| g.source_label == skill.source_label)
+        {
             group.skills.push(skill);
         } else {
             let label = skill.source_label.clone();
-            groups.push(SkillGroup { source_label: label, skills: vec![skill] });
+            groups.push(SkillGroup {
+                source_label: label,
+                skills: vec![skill],
+            });
         }
     }
 
@@ -962,7 +983,10 @@ fn AddSkillDialog(
         adding.set(true);
         dialog_error.set(None);
         spawn_local(async move {
-            match state.rpc_call("skills.add", json!({ "url": trimmed })).await {
+            match state
+                .rpc_call("skills.add", json!({ "url": trimmed }))
+                .await
+            {
                 Ok(_) => {
                     adding.set(false);
                     on_success();

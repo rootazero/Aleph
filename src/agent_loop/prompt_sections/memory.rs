@@ -68,7 +68,9 @@ mod tests {
             past_conversations: Vec::new(),
         };
         let section = render(&ctx);
-        assert!(section.content.contains("[preference] User prefers dark mode"));
+        assert!(section
+            .content
+            .contains("[preference] User prefers dark mode"));
         assert!(section.content.contains("Relevant Facts"));
     }
 

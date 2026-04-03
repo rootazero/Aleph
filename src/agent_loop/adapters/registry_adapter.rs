@@ -114,12 +114,12 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 ///
 /// `default_working_dir` is injected into bash/code_exec tools when the LLM
 /// doesn't specify a working_dir (defaults to agent workspace).
-pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
+pub fn build_tool_adapters_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
     default_working_dir: Option<String>,
-) -> LoopToolRegistry {
-    let mut registry = LoopToolRegistry::new();
+) -> Vec<Box<dyn LoopTool>> {
+    let mut adapters: Vec<Box<dyn LoopTool>> = Vec::new();
 
     for tool in unified_tools {
         if !tool.is_active {
@@ -131,7 +131,7 @@ pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
             .clone()
             .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
 
-        registry.register(Box::new(RegistryToolAdapter {
+        adapters.push(Box::new(RegistryToolAdapter {
             name: tool.name.clone(),
             description: tool.description.clone(),
             schema,
@@ -140,6 +140,19 @@ pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
         }));
     }
 
+    adapters
+}
+
+pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
+    tool_registry: Arc<R>,
+    unified_tools: &[UnifiedTool],
+    default_working_dir: Option<String>,
+) -> LoopToolRegistry {
+    let mut registry = LoopToolRegistry::new();
+    for adapter in build_tool_adapters_from_tools(tool_registry, unified_tools, default_working_dir)
+    {
+        registry.register(adapter);
+    }
     registry
 }
 

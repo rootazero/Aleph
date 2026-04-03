@@ -55,6 +55,21 @@ Create a milestone summary from these session summaries. Preserve:\n\
 \n\
 Omit: individual operation details, file-level changes, resolved errors.";
 
+const IDENTIFIER_PRESERVATION: &str = "\n\n\
+## Identifier Preservation (MANDATORY)\n\
+When summarizing, you MUST preserve the following identifiers EXACTLY as they appear \
+in the original text — do not shorten, paraphrase, or reconstruct them:\n\
+- File paths (e.g., src/memory/store/lance/mod.rs)\n\
+- UUIDs and hashes (e.g., a1b2c3d4-...)\n\
+- URLs and endpoints (e.g., https://api.example.com/v1/...)\n\
+- Commit references (e.g., 0949c9fc)\n\
+- Version numbers (e.g., v2026.04.02)\n\
+- Configuration keys and environment variables\n\
+- Error codes and status codes\n\
+\n\
+If an identifier is not relevant to the summary's core meaning, omit it entirely \
+rather than abbreviating it.";
+
 /// Select the correct prompt template for a given depth.
 fn depth_prompt(depth: u32) -> &'static str {
     match depth {
@@ -113,6 +128,7 @@ pub fn build_summary_prompt(
 
     // System-level instruction and target length hint.
     prompt.push_str(instruction);
+    prompt.push_str(IDENTIFIER_PRESERVATION);
     prompt.push_str(&format!("\n\nTarget summary length: ~{} tokens.", target));
 
     // Inject previous context as a reminder if available.
@@ -466,5 +482,17 @@ mod tests {
         let input = "Just a plain summary with no analysis block.";
         let stripped = strip_analysis_block(input);
         assert_eq!(stripped, input);
+    }
+
+    #[test]
+    fn test_all_prompts_contain_identifier_preservation() {
+        for depth in 0..=2 {
+            let messages = msgs(&[("user", "Fix src/auth.rs commit 0949c9fc")]);
+            let prompt = build_summary_prompt(&messages, depth, None, FallbackLevel::Normal);
+            assert!(
+                prompt.contains("Identifier Preservation"),
+                "depth {depth} prompt should contain identifier preservation directive"
+            );
+        }
     }
 }

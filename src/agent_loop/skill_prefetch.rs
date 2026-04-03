@@ -146,7 +146,9 @@ mod tests {
         let source = Arc::new(MockSource::new(vec![make_skill("alpha")]));
         let prefetcher = SkillPrefetcher::new(source, Duration::from_secs(30));
 
-        let handle = prefetcher.start_scan().expect("first scan should not be throttled");
+        let handle = prefetcher
+            .start_scan()
+            .expect("first scan should not be throttled");
         let result = handle.await.unwrap();
         assert!(result.is_some(), "first scan should return Some(skills)");
         assert_eq!(result.unwrap().len(), 1);
@@ -159,7 +161,10 @@ mod tests {
 
         let _handle = prefetcher.start_scan().expect("first scan should fire");
         let second = prefetcher.start_scan();
-        assert!(second.is_none(), "second scan within interval should be throttled");
+        assert!(
+            second.is_none(),
+            "second scan within interval should be throttled"
+        );
     }
 
     #[tokio::test]
@@ -186,7 +191,10 @@ mod tests {
     #[tokio::test]
     async fn scan_detects_new_skills() {
         let source = Arc::new(MockSource::new(vec![make_skill("alpha")]));
-        let prefetcher = SkillPrefetcher::new(Arc::clone(&source) as Arc<dyn SkillDiscoverySource>, Duration::ZERO);
+        let prefetcher = SkillPrefetcher::new(
+            Arc::clone(&source) as Arc<dyn SkillDiscoverySource>,
+            Duration::ZERO,
+        );
 
         // First scan + commit
         let handle = prefetcher.start_scan().unwrap();

@@ -84,7 +84,10 @@ use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use crate::sync_primitives::Arc;
 use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock as StdRwLock;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 
@@ -149,6 +152,15 @@ pub struct ExtensionManager {
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 
+    /// Active plugin tools keyed by short tool name.
+    ///
+    /// This is a sync snapshot so runtime systems like the agent loop can
+    /// cheaply read tool metadata and revision state without awaiting locks.
+    active_plugin_tools: Arc<StdRwLock<HashMap<String, ToolRegistration>>>,
+
+    /// Monotonic revision for active plugin tool snapshot changes.
+    plugin_tool_revision: Arc<AtomicU64>,
+
     /// Guard to serialize concurrent load_all() calls
     load_guard: Mutex<()>,
 }
@@ -177,6 +189,8 @@ impl ExtensionManager {
             service_manager,
             adapter_registry,
             skill_system: crate::skill::SkillSystem::new(),
+            active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
+            plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
         })
     }
@@ -265,6 +279,8 @@ impl ExtensionManager {
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
         }
+
+        self.refresh_active_plugin_tools().await;
 
         let mut cache = self.cache_state.write().await;
         cache.loaded = true;
@@ -381,6 +397,85 @@ impl ExtensionManager {
         }
     }
 
+    fn build_active_plugin_tool_index(
+        registry: &PluginRegistry,
+    ) -> HashMap<String, ToolRegistration> {
+        let mut active_plugins: Vec<String> = registry
+            .list_active_plugins()
+            .into_iter()
+            .map(|plugin| plugin.id.clone())
+            .collect();
+        active_plugins.sort();
+
+        let mut active_tools = HashMap::new();
+        for plugin_id in active_plugins {
+            let mut plugin_tools: Vec<ToolRegistration> = registry
+                .list_tools_for_plugin(&plugin_id)
+                .into_iter()
+                .cloned()
+                .collect();
+            plugin_tools.sort_by(|a, b| a.name.cmp(&b.name));
+
+            for tool in plugin_tools {
+                active_tools.entry(tool.name.clone()).or_insert(tool);
+            }
+        }
+
+        active_tools
+    }
+
+    async fn refresh_active_plugin_tools(&self) {
+        let active_tools = {
+            let registry = self.plugin_registry.read().await;
+            Self::build_active_plugin_tool_index(&registry)
+        };
+
+        *self
+            .active_plugin_tools
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = active_tools;
+        self.plugin_tool_revision.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Refresh sync runtime caches derived from the async plugin registry.
+    pub async fn sync_runtime_snapshots(&self) {
+        self.refresh_active_plugin_tools().await;
+    }
+
+    /// Monotonic revision for active plugin tool metadata.
+    pub fn plugin_tool_revision(&self) -> u64 {
+        self.plugin_tool_revision.load(Ordering::SeqCst)
+    }
+
+    /// Snapshot of active plugin tools keyed by short tool name.
+    pub fn active_plugin_tools_snapshot(&self) -> Vec<ToolRegistration> {
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut snapshot: Vec<ToolRegistration> = tools.values().cloned().collect();
+        snapshot.sort_by(|a, b| a.name.cmp(&b.name).then(a.plugin_id.cmp(&b.plugin_id)));
+        snapshot
+    }
+
+    /// Resolve an active plugin tool by short name or `plugin_id:name`.
+    pub fn resolve_active_plugin_tool(&self, name: &str) -> Option<ToolRegistration> {
+        let tools = self
+            .active_plugin_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+
+        if let Some(tool) = tools.get(name) {
+            return Some(tool.clone());
+        }
+
+        let (plugin_id, short_name) = name.split_once(':')?;
+        tools
+            .get(short_name)
+            .filter(|tool| tool.plugin_id == plugin_id)
+            .cloned()
+    }
+
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
@@ -424,6 +519,9 @@ impl ExtensionManager {
         let mut api =
             registrar::CapabilityApi::new(&mut registry, output.plugin_id.clone(), permissions);
         api.reload(record, output.capabilities)?;
+        drop(registry);
+
+        self.refresh_active_plugin_tools().await;
 
         tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
         Ok(())

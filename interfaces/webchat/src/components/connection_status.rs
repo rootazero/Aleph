@@ -1,11 +1,10 @@
+use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
-use crate::context::DashboardState;
 
 #[component]
 pub fn ConnectionStatus() -> impl IntoView {
-    let state = use_context::<DashboardState>()
-        .expect("DashboardState not provided");
+    let state = use_context::<DashboardState>().expect("DashboardState not provided");
 
     let i18n = use_i18n();
     let is_connected = state.is_connected;

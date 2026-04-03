@@ -5,8 +5,8 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliError, CliResult};
 
 /// Download a file via curl to a local path
 fn download_file(url: &str, dest: &std::path::Path) -> CliResult<()> {
@@ -81,11 +81,14 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         let (owner, repo, _plugin_name) = parse_github_source(source)?;
 
         // Fetch latest release from GitHub API
-        let api_url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-        );
+        let api_url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
         let output = Command::new("curl")
-            .args(["-sSfL", "-H", "Accept: application/vnd.github+json", &api_url])
+            .args([
+                "-sSfL",
+                "-H",
+                "Accept: application/vnd.github+json",
+                &api_url,
+            ])
             .output()
             .map_err(|e| CliError::Other(format!("Failed to run curl: {e}")))?;
 
@@ -129,10 +132,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         // Download to temp file
         let tmp_dir = std::env::temp_dir().join("aleph-plugin-download");
         let _ = fs::create_dir_all(&tmp_dir);
-        let filename = download_url
-            .rsplit('/')
-            .next()
-            .unwrap_or("plugin.zip");
+        let filename = download_url.rsplit('/').next().unwrap_or("plugin.zip");
         let zip_path = tmp_dir.join(filename);
 
         if !json {
@@ -144,9 +144,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         let zip_str = zip_path.to_string_lossy();
         let (client, _events) = AlephClient::connect(server_url).await?;
         let params = serde_json::json!({ "path": &*zip_str });
-        let result: Value = client
-            .call("plugins.installFromZip", Some(params))
-            .await?;
+        let result: Value = client.call("plugins.installFromZip", Some(params)).await?;
 
         if json {
             output::print_json(&result);
@@ -163,7 +161,10 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     let (method, params) = if source.ends_with(".zip") {
-        ("plugins.installFromZip", serde_json::json!({ "path": source }))
+        (
+            "plugins.installFromZip",
+            serde_json::json!({ "path": source }),
+        )
     } else {
         ("plugins.install", serde_json::json!({ "source": source }))
     };
@@ -309,9 +310,19 @@ pub async fn update(server_url: &str, json: bool) -> CliResult<()> {
         if let Some(updates) = result.as_array() {
             for u in updates {
                 let name = u.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                let current = u.get("current_version").and_then(|v| v.as_str()).unwrap_or("-");
-                let latest = u.get("latest_version").and_then(|v| v.as_str()).unwrap_or("-");
-                rows.push(vec![name.to_string(), current.to_string(), latest.to_string()]);
+                let current = u
+                    .get("current_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                let latest = u
+                    .get("latest_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                rows.push(vec![
+                    name.to_string(),
+                    current.to_string(),
+                    latest.to_string(),
+                ]);
             }
         }
         if rows.is_empty() {
@@ -362,9 +373,8 @@ pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
             if json {
                 output::print_json(&p);
             } else {
-                let get_str = |key: &str| -> &str {
-                    p.get(key).and_then(|v| v.as_str()).unwrap_or("-")
-                };
+                let get_str =
+                    |key: &str| -> &str { p.get(key).and_then(|v| v.as_str()).unwrap_or("-") };
                 let get_count = |key: &str| -> usize {
                     p.get(key)
                         .and_then(|v| v.as_array())
@@ -385,7 +395,9 @@ pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
         }
         None => {
             if json {
-                output::print_json(&serde_json::json!({ "error": format!("Plugin '{}' not found", name) }));
+                output::print_json(
+                    &serde_json::json!({ "error": format!("Plugin '{}' not found", name) }),
+                );
             } else {
                 println!("Plugin '{}' not found.", name);
             }

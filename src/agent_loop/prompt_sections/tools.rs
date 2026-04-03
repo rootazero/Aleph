@@ -36,8 +36,16 @@ mod tests {
     #[test]
     fn renders_tool_list() {
         let tools = vec![
-            ToolInfo { name: "read".into(), description: "Read a file".into(), parameters_schema: None },
-            ToolInfo { name: "write".into(), description: "Write a file".into(), parameters_schema: None },
+            ToolInfo {
+                name: "read".into(),
+                description: "Read a file".into(),
+                parameters_schema: None,
+            },
+            ToolInfo {
+                name: "write".into(),
+                description: "Write a file".into(),
+                parameters_schema: None,
+            },
         ];
         let section = render(&tools);
         assert!(section.content.contains("**read**: Read a file"));

@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingRuleInfo {
@@ -48,7 +48,8 @@ impl RoutingRulesApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<RoutingRuleInfo>, String> {
         let result = state.rpc_call("routing_rules.list", Value::Null).await?;
 
-        result.get("rules")
+        result
+            .get("rules")
             .ok_or_else(|| "Invalid response: missing rules".to_string())
             .and_then(|rules| {
                 serde_json::from_value(rules.clone())
@@ -64,7 +65,8 @@ impl RoutingRulesApi {
 
         let result = state.rpc_call("routing_rules.get", params).await?;
 
-        result.get("rule")
+        result
+            .get("rule")
             .ok_or_else(|| "Invalid response: missing rule".to_string())
             .and_then(|rule| {
                 serde_json::from_value(rule.clone())
@@ -73,10 +75,7 @@ impl RoutingRulesApi {
     }
 
     /// Create a new routing rule
-    pub async fn create(
-        state: &DashboardState,
-        rule: RoutingRuleConfig,
-    ) -> Result<(), String> {
+    pub async fn create(state: &DashboardState, rule: RoutingRuleConfig) -> Result<(), String> {
         let params = serde_json::json!({
             "rule": rule,
         });

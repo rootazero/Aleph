@@ -44,7 +44,9 @@ mod tests {
         assert_eq!(section.priority, 1600);
         assert!(section.protected);
 
-        assert!(section.content.contains("Working directory: /test/workspace"));
+        assert!(section
+            .content
+            .contains("Working directory: /test/workspace"));
         assert!(section.content.contains("Is git repository: true"));
         assert!(section.content.contains("Git branch: main"));
         assert!(section.content.contains("Platform: macos"));

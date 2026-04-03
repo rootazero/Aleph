@@ -1,8 +1,8 @@
 //! Panel API for team management (teams.* RPC calls)
 
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::context::DashboardState;
 
 // -- Types --
 
@@ -63,22 +63,33 @@ impl TeamsApi {
     }
 
     pub async fn get(state: &DashboardState, team_id: &str) -> Result<TeamDetail, String> {
-        let result = state.rpc_call("teams.get", json!({"team_id": team_id})).await?;
+        let result = state
+            .rpc_call("teams.get", json!({"team_id": team_id}))
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
     pub async fn disband(state: &DashboardState, team_id: &str) -> Result<(), String> {
-        state.rpc_call("teams.disband", json!({"team_id": team_id})).await?;
+        state
+            .rpc_call("teams.disband", json!({"team_id": team_id}))
+            .await?;
         Ok(())
     }
 
     pub async fn delete(state: &DashboardState, team_id: &str) -> Result<(), String> {
-        state.rpc_call("teams.delete", json!({"team_id": team_id})).await?;
+        state
+            .rpc_call("teams.delete", json!({"team_id": team_id}))
+            .await?;
         Ok(())
     }
 
-    pub async fn agent_teams(state: &DashboardState, agent_id: &str) -> Result<Vec<TeamSummary>, String> {
-        let result = state.rpc_call("agents.teams", json!({"agent_id": agent_id})).await?;
+    pub async fn agent_teams(
+        state: &DashboardState,
+        agent_id: &str,
+    ) -> Result<Vec<TeamSummary>, String> {
+        let result = state
+            .rpc_call("agents.teams", json!({"agent_id": agent_id}))
+            .await?;
         // Server returns {"teams": [...]}, extract the inner array
         let teams_value = result.get("teams").cloned().unwrap_or(Value::Array(vec![]));
         serde_json::from_value(teams_value).map_err(|e| e.to_string())

@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliResult};
 
 /// List all configured AI providers
 pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
@@ -139,7 +139,10 @@ pub async fn test(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+        let success = result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if success {
             println!("Provider '{}' is reachable.", name);
         } else {

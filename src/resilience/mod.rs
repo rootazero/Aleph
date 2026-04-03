@@ -9,7 +9,6 @@ pub mod types;
 
 pub use types::{
     AgentEvent, AgentTask, Lane, RiskLevel, SessionStatus, SubagentSession, TaskStatus, TaskTrace,
-    TraceRole,
 };
 
 pub use database::{MemoryStats, StateDatabase, DEFAULT_EMBEDDING_DIM};

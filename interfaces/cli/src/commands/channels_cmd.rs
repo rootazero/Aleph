@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Deserialized from JSON-RPC response
 #[derive(Debug, Deserialize)]
@@ -27,10 +27,9 @@ pub async fn list(server_url: &str, config: &CliConfig, json: bool) -> CliResult
     if json {
         output::print_json(&result);
     } else {
-        let channels: Vec<ChannelInfo> = serde_json::from_value(
-            result.get("channels").cloned().unwrap_or(result.clone()),
-        )
-        .unwrap_or_default();
+        let channels: Vec<ChannelInfo> =
+            serde_json::from_value(result.get("channels").cloned().unwrap_or(result.clone()))
+                .unwrap_or_default();
 
         if channels.is_empty() {
             println!("No channels configured");

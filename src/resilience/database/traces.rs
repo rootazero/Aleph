@@ -5,19 +5,33 @@
 
 use super::StateDatabase;
 use crate::error::AlephError;
-use crate::resilience::{TaskTrace, TraceRole};
+use crate::resilience::TaskTrace;
+use aleph_protocol::AgentTraceEvent;
 use rusqlite::params;
+use rusqlite::types::Type;
 use rusqlite::OptionalExtension;
 
 /// Construct TaskTrace from a rusqlite row.
-/// Expected column order: id, task_id, step_index, role, content_json, timestamp
+/// Expected column order: id, task_id, step_index, event_kind, event_json, timestamp
 fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
+    let event_kind: String = row.get(3)?;
+    let event_json: String = row.get(4)?;
+    let event = serde_json::from_str::<AgentTraceEvent>(&event_json)
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err)))?;
+
+    if event.kind() != event_kind {
+        tracing::warn!(
+            stored_kind = %event_kind,
+            parsed_kind = event.kind(),
+            "task_traces row has mismatched event_kind and event_json"
+        );
+    }
+
     Ok(TaskTrace {
         id: row.get(0)?,
         task_id: row.get(1)?,
         step_index: row.get(2)?,
-        role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
-        content_json: row.get(4)?,
+        event,
         timestamp: row.get(5)?,
     })
 }
@@ -30,16 +44,18 @@ impl StateDatabase {
     /// Insert a single trace entry
     pub async fn insert_trace(&self, trace: &TaskTrace) -> Result<i64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let event_json = serde_json::to_string(&trace.event)
+            .map_err(|e| AlephError::config(format!("Failed to serialize trace event: {}", e)))?;
         conn.execute(
             r#"
-            INSERT INTO task_traces (task_id, step_index, role, content_json, timestamp)
+            INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
             VALUES (?1, ?2, ?3, ?4, ?5)
             "#,
             params![
                 trace.task_id,
                 trace.step_index,
-                trace.role.to_string(),
-                trace.content_json,
+                trace.event_kind(),
+                event_json,
                 trace.timestamp,
             ],
         )
@@ -58,18 +74,21 @@ impl StateDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-                INSERT INTO task_traces (task_id, step_index, role, content_json, timestamp)
+                INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
                 VALUES (?1, ?2, ?3, ?4, ?5)
                 "#,
             )
             .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
 
         for trace in traces {
+            let event_json = serde_json::to_string(&trace.event).map_err(|e| {
+                AlephError::config(format!("Failed to serialize trace event: {}", e))
+            })?;
             stmt.execute(params![
                 trace.task_id,
                 trace.step_index,
-                trace.role.to_string(),
-                trace.content_json,
+                trace.event_kind(),
+                event_json,
                 trace.timestamp,
             ])
             .map_err(|e| AlephError::config(format!("Failed to insert trace: {}", e)))?;
@@ -84,7 +103,7 @@ impl StateDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, task_id, step_index, role, content_json, timestamp
+                SELECT id, task_id, step_index, event_kind, event_json, timestamp
                 FROM task_traces
                 WHERE task_id = ?1
                 ORDER BY step_index ASC
@@ -107,7 +126,7 @@ impl StateDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, task_id, step_index, role, content_json, timestamp
+                SELECT id, task_id, step_index, event_kind, event_json, timestamp
                 FROM task_traces
                 WHERE task_id = ?1
                 ORDER BY step_index DESC
@@ -134,7 +153,7 @@ impl StateDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, task_id, step_index, role, content_json, timestamp
+                SELECT id, task_id, step_index, event_kind, event_json, timestamp
                 FROM task_traces
                 WHERE task_id = ?1 AND step_index >= ?2
                 ORDER BY step_index ASC
@@ -174,5 +193,50 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::config(format!("Failed to count traces: {}", e)))?;
         Ok(count as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resilience::{AgentTask, RiskLevel};
+    use aleph_protocol::{AgentTraceEvent, AgentTraceTextKind};
+
+    #[tokio::test]
+    async fn test_insert_and_get_structured_trace() {
+        let db = StateDatabase::in_memory().unwrap();
+        db.insert_agent_task(&AgentTask::new(
+            "task-1",
+            "session-1",
+            "coder",
+            "replay trace",
+            RiskLevel::Low,
+        ))
+        .await
+        .unwrap();
+
+        let trace = TaskTrace::new(
+            "task-1",
+            0,
+            AgentTraceEvent::TextEmitted {
+                iteration: 0,
+                stream: AgentTraceTextKind::Final,
+                text: "hello".to_string(),
+            },
+        );
+
+        db.insert_trace(&trace).await.unwrap();
+
+        let traces = db.get_traces_by_task("task-1").await.unwrap();
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].event.kind(), "text_emitted");
+        assert_eq!(
+            traces[0].event,
+            AgentTraceEvent::TextEmitted {
+                iteration: 0,
+                stream: AgentTraceTextKind::Final,
+                text: "hello".to_string(),
+            }
+        );
     }
 }

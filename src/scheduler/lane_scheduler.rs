@@ -10,8 +10,8 @@ use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tokio::sync::Semaphore;
 
-use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
 use super::Lane;
+use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
 
 /// RAII guard for scheduled run permits.
 ///

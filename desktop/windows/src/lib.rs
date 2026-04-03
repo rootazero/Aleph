@@ -4,8 +4,8 @@ use aleph_desktop::traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
     SystemCapability,
 };
-use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
+use aleph_desktop::NativeScreen;
 
 /// Windows platform with shared `NativeScreen` for screen capabilities.
 pub struct WindowsPlatform {

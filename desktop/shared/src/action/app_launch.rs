@@ -114,7 +114,7 @@ pub fn quit_app(app_name: &str) -> Result<()> {
         let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(
             &NSString::from_str(app_name),
         );
-        if apps.len() == 0 {
+        if apps.is_empty() {
             return Err(DesktopError::InputFailed(format!(
                 "No running application found with identifier '{app_name}'"
             )));

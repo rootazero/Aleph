@@ -78,7 +78,9 @@ pub async fn generate_tool_summary(
     }
 
     let user_prompt = build_prompt(tools, last_assistant_text);
-    let messages = vec![crate::providers::message::UnifiedMessage::user(&user_prompt)];
+    let messages = vec![crate::providers::message::UnifiedMessage::user(
+        &user_prompt,
+    )];
 
     let payload = RequestPayload {
         messages: &messages,

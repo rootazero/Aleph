@@ -3,10 +3,10 @@
 //! Provides UI for managing browser configuration: driver mode, engine,
 //! headless, DevTools profile, and security settings.
 
+use crate::api::{BrowserConfig, BrowserConfigApi};
+use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use crate::context::DashboardState;
-use crate::api::{BrowserConfig, BrowserConfigApi};
 
 // ============================================================================
 // Macro for per-section save logic (avoids Box<dyn Fn()> Send+Sync issues)
@@ -29,7 +29,10 @@ macro_rules! section_save {
                     Ok(_) => {
                         saving.set(false);
                         save_success.set(true);
-                        set_timeout(move || save_success.set(false), std::time::Duration::from_secs(2));
+                        set_timeout(
+                            move || save_success.set(false),
+                            std::time::Duration::from_secs(2),
+                        );
                     }
                     Err(e) => {
                         saving.set(false);

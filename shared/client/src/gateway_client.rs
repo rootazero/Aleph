@@ -56,25 +56,17 @@ impl GatewayClient {
         params: Option<Value>,
     ) -> Result<T, CliError> {
         let result = self.call_raw(method, params).await?;
-        serde_json::from_value(result).map_err(|e| {
-            CliError::Other(format!("Invalid response: {}", e))
-        })
+        serde_json::from_value(result)
+            .map_err(|e| CliError::Other(format!("Invalid response: {}", e)))
     }
 
     /// Call an RPC method and return the raw JSON value.
-    pub async fn call_raw(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, CliError> {
+    pub async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, CliError> {
         // Connect to Gateway
-        let (ws_stream, _) = timeout(
-            Duration::from_millis(5000),
-            connect_async(&self.url),
-        )
-        .await
-        .map_err(|_| CliError::Timeout)?
-        .map_err(|e| CliError::Connection(e.to_string()))?;
+        let (ws_stream, _) = timeout(Duration::from_millis(5000), connect_async(&self.url))
+            .await
+            .map_err(|_| CliError::Timeout)?
+            .map_err(|e| CliError::Connection(e.to_string()))?;
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -108,10 +100,7 @@ impl GatewayClient {
 
         // Check for RPC error
         if let Some(error) = json.get("error") {
-            let code = error
-                .get("code")
-                .and_then(|c| c.as_i64())
-                .unwrap_or(-1) as i32;
+            let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) as i32;
             let message = error
                 .get("message")
                 .and_then(|m| m.as_str())

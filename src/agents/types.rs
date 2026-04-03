@@ -146,12 +146,11 @@ mod tests {
 
     #[test]
     fn test_with_prompt_sections() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_prompt_sections(vec![
-                "core_identity".into(),
-                "tool_usage".into(),
-                "safety".into(),
-            ]);
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_prompt_sections(vec![
+            "core_identity".into(),
+            "tool_usage".into(),
+            "safety".into(),
+        ]);
         assert_eq!(agent.prompt_sections.len(), 3);
         assert_eq!(agent.prompt_sections[0], "core_identity");
         assert_eq!(agent.prompt_sections[1], "tool_usage");
@@ -212,22 +211,20 @@ mod tests {
 
     #[test]
     fn test_with_context_mode() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_context_mode(ContextMode::Summary);
+        let agent =
+            AgentDef::new("test", AgentMode::SubAgent).with_context_mode(ContextMode::Summary);
         assert_eq!(agent.context_mode, ContextMode::Summary);
     }
 
     #[test]
     fn test_with_token_budget() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_token_budget(50_000);
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_token_budget(50_000);
         assert_eq!(agent.token_budget, Some(50_000));
     }
 
     #[test]
     fn test_with_model_hint() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_model_hint("fast");
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_model_hint("fast");
         assert_eq!(agent.model_hint.as_deref(), Some("fast"));
     }
 }

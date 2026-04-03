@@ -1,8 +1,8 @@
-use leptos::prelude::*;
+use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
 use crate::components::ui::*;
 use crate::context::DashboardState;
-use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
 use crate::i18n::*;
+use leptos::prelude::*;
 
 fn format_uptime(secs: u64) -> String {
     let days = secs / 86400;
@@ -62,15 +62,23 @@ pub fn Home() -> impl IntoView {
 
                 // Measure gateway latency via health ping
                 let start = js_sys::Date::now();
-                if state_clone.rpc_call("health", serde_json::Value::Null).await.is_ok() {
+                if state_clone
+                    .rpc_call("health", serde_json::Value::Null)
+                    .await
+                    .is_ok()
+                {
                     let elapsed = (js_sys::Date::now() - start) as u64;
                     gateway_latency_ms.set(Some(elapsed));
                 }
 
                 // Fetch active task count (agent runs + coordination tasks)
-                match state_clone.rpc_call("activity.stats", serde_json::Value::Null).await {
+                match state_clone
+                    .rpc_call("activity.stats", serde_json::Value::Null)
+                    .await
+                {
                     Ok(result) => {
-                        let count = result.get("active_total")
+                        let count = result
+                            .get("active_total")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0);
                         active_tasks.set(Some(count));
@@ -468,10 +476,7 @@ fn StatCard(
 }
 
 #[component]
-fn QuickAction(
-    label: Signal<String>,
-    children: Children,
-) -> impl IntoView {
+fn QuickAction(label: Signal<String>, children: Children) -> impl IntoView {
     view! {
         <button class="flex items-center justify-between p-4 rounded-xl bg-surface-raised border border-border hover:bg-surface-sunken hover:border-primary/30 transition-all group text-left w-full">
             <div class="flex items-center gap-3">
@@ -486,10 +491,7 @@ fn QuickAction(
 }
 
 #[component]
-fn ServiceCard(
-    name: &'static str,
-    status: RwSignal<&'static str>,
-) -> impl IntoView {
+fn ServiceCard(name: &'static str, status: RwSignal<&'static str>) -> impl IntoView {
     let badge_variant = move || match status.get() {
         "Healthy" => BadgeVariant::Emerald,
         "Degraded" => BadgeVariant::Amber,

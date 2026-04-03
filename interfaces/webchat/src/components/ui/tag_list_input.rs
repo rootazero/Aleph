@@ -13,7 +13,7 @@ use leptos::prelude::*;
 /// Prevents duplicate tags (case-sensitive).
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// let tags = RwSignal::new(vec!["tag1".to_string(), "tag2".to_string()]);
 /// view! {
 ///     <TagListInput

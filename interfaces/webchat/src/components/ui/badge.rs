@@ -1,6 +1,6 @@
+use crate::components::sidebar::AlertLevel;
 use leptos::prelude::*;
 use tailwind_fuse::*;
-use crate::components::sidebar::AlertLevel;
 
 #[derive(TwVariant, PartialEq)]
 pub enum BadgeVariant {
@@ -23,7 +23,7 @@ pub fn Badge(
     children: Children,
 ) -> impl IntoView {
     let base_class = "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest border transition-all";
-    
+
     view! {
         <span class=format!("{} {} {}", base_class, variant.as_class(), class)>
             {children()}
@@ -32,15 +32,14 @@ pub fn Badge(
 }
 
 #[component]
-pub fn StatusBadge(
-    level: AlertLevel,
-    #[prop(optional)] count: Option<u32>,
-) -> impl IntoView {
+pub fn StatusBadge(level: AlertLevel, #[prop(optional)] count: Option<u32>) -> impl IntoView {
     let (bg_class, animation_class) = match level {
-        AlertLevel::None => return {
-            let _: () = view! {};
-            ().into_any()
-        },
+        AlertLevel::None => {
+            return {
+                let _: () = view! {};
+                ().into_any()
+            }
+        }
         AlertLevel::Info => ("bg-info", ""),
         AlertLevel::Warning => ("bg-warning", ""),
         AlertLevel::Critical => ("bg-danger", "animate-pulse"),

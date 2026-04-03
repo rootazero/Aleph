@@ -386,7 +386,10 @@ mod tests {
             .with_tool_name("Write")
             .with_tool_output("File written successfully")
             .with_tool_error(false);
-        assert_eq!(ctx.tool_output, Some("File written successfully".to_string()));
+        assert_eq!(
+            ctx.tool_output,
+            Some("File written successfully".to_string())
+        );
         assert_eq!(ctx.tool_error, Some(false));
     }
 
@@ -570,7 +573,10 @@ mod tests {
     fn test_parse_command_output_update_input() {
         let mut result = HookResult::default();
         parse_command_output(r#"update_input: {"path": "/safe"}"#, &mut result);
-        assert_eq!(result.updated_input, Some(serde_json::json!({"path": "/safe"})));
+        assert_eq!(
+            result.updated_input,
+            Some(serde_json::json!({"path": "/safe"}))
+        );
     }
 
     #[test]
@@ -583,8 +589,14 @@ mod tests {
     #[test]
     fn test_parse_command_output_context() {
         let mut result = HookResult::default();
-        parse_command_output("context: File auto-formatted\ncontext: Lint passed", &mut result);
-        assert_eq!(result.additional_contexts, vec!["File auto-formatted", "Lint passed"]);
+        parse_command_output(
+            "context: File auto-formatted\ncontext: Lint passed",
+            &mut result,
+        );
+        assert_eq!(
+            result.additional_contexts,
+            vec!["File auto-formatted", "Lint passed"]
+        );
     }
 
     #[test]

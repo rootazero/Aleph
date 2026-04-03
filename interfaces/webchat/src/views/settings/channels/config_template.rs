@@ -66,7 +66,9 @@ pub fn ChannelConfigTemplate(
         let channel_id_for_load = channel_id.clone();
         let channel_id_for_status = channel_id.clone();
         Effect::new(move || {
-            if !state.is_connected.get() { return; }
+            if !state.is_connected.get() {
+                return;
+            }
             let section = section.clone();
             let sub_key = sub_key.clone();
             let channel_id_for_load = channel_id_for_load.clone();
@@ -224,10 +226,7 @@ pub fn ChannelConfigTemplate(
 
         let id = channel_id_sig.get_value();
         spawn_local(async move {
-            match state
-                .rpc_call("channel.delete", json!({ "id": id }))
-                .await
-            {
+            match state.rpc_call("channel.delete", json!({ "id": id })).await {
                 Ok(_) => {
                     if let Some(cb) = on_deleted {
                         cb.run(());
@@ -404,7 +403,11 @@ fn render_field(
 
     // For #[prop(optional)] fields we pass owned String.
     // Empty strings are treated as "no value" by the components.
-    let help: Option<String> = if field.help.is_empty() { None } else { Some(field.help.to_string()) };
+    let help: Option<String> = if field.help.is_empty() {
+        None
+    } else {
+        Some(field.help.to_string())
+    };
     let placeholder: &'static str = field.placeholder;
 
     // Shared setter
@@ -619,27 +622,23 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
         let ch_id = channel_id.get_value();
         spawn_local(async move {
             if let Ok(val) = state
-                .rpc_call(
-                    "channel.pairing.approved",
-                    json!({ "channel": ch_id }),
-                )
-                .await {
+                .rpc_call("channel.pairing.approved", json!({ "channel": ch_id }))
+                .await
+            {
                 if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
                     let senders: Vec<ApprovedSenderInfo> = arr
                         .iter()
-                        .map(|v| {
-                            ApprovedSenderInfo {
-                                sender_id: v
-                                    .get("sender_id")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                approved_at: v
-                                    .get("approved_at")
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                            }
+                        .map(|v| ApprovedSenderInfo {
+                            sender_id: v
+                                .get("sender_id")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            approved_at: v
+                                .get("approved_at")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                         })
                         .collect();
                     approved_senders.set(senders);

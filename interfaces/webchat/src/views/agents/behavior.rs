@@ -1,11 +1,11 @@
 // Behavior Tab — migrated from settings/agent.rs
 // Reuses existing AgentConfigApi for file ops, code exec, and general settings.
 
-use leptos::prelude::*;
-use leptos::task::spawn_local;
-use crate::api::{AgentConfig, AgentConfigApi, FileOpsConfig, CodeExecConfig};
+use crate::api::{AgentConfig, AgentConfigApi, CodeExecConfig, FileOpsConfig};
 use crate::context::DashboardState;
 use crate::i18n::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 #[component]
 pub fn BehaviorTab() -> impl IntoView {

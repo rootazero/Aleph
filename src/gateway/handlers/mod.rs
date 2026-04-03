@@ -101,6 +101,7 @@ pub mod skills;
 pub mod supervisor;
 pub mod system_info;
 pub mod teams;
+pub mod trace_replay;
 pub mod tools_visibility;
 pub mod version;
 pub mod wizard;
@@ -473,6 +474,8 @@ impl HandlerRegistry {
         // Daemon control handlers
         // daemon.logs is stateless (reads from filesystem) — register directly
         registry.register("daemon.logs", daemon_control::handle_logs);
+        registry.register("trace.list", trace_replay::handle_list_stub);
+        registry.register("trace.get", trace_replay::handle_get_stub);
         // daemon.status and daemon.shutdown need runtime state — placeholders
         registry.register("daemon.status", |req| async move {
             JsonRpcResponse::error(

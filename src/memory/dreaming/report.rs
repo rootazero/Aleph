@@ -1,5 +1,7 @@
 //! DreamReport and run metadata for the dream pipeline.
 
+use crate::memory::graph::GraphDecayReport;
+use super::stages::decay::MemoryDecayReport;
 use serde::{Deserialize, Serialize};
 
 /// The type of dream run (daily vs weekly).
@@ -31,6 +33,8 @@ pub struct DreamReport {
     pub new_facts_count: usize,
     pub drift_resolutions_count: usize,
     pub synthesis_insights_count: usize,
+    pub graph_decay_report: Option<GraphDecayReport>,
+    pub memory_decay_report: Option<MemoryDecayReport>,
 }
 
 /// Status of a completed dream pipeline run.
@@ -56,6 +60,8 @@ impl DreamReport {
             new_facts_count: ctx.new_facts.len(),
             drift_resolutions_count: ctx.drift_resolutions.len(),
             synthesis_insights_count: ctx.synthesis_insights_count,
+            graph_decay_report: ctx.graph_decay_report.clone(),
+            memory_decay_report: ctx.memory_decay_report.clone(),
         }
     }
 
@@ -72,6 +78,8 @@ impl DreamReport {
             new_facts_count: ctx.new_facts.len(),
             drift_resolutions_count: ctx.drift_resolutions.len(),
             synthesis_insights_count: ctx.synthesis_insights_count,
+            graph_decay_report: ctx.graph_decay_report.clone(),
+            memory_decay_report: ctx.memory_decay_report.clone(),
         }
     }
 }

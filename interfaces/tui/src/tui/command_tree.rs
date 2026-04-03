@@ -43,7 +43,9 @@ impl CommandEntry {
     }
 
     fn parse_one(val: &serde_json::Value) -> Option<CommandEntry> {
-        let name = val.get("name").and_then(|v| v.as_str())
+        let name = val
+            .get("name")
+            .and_then(|v| v.as_str())
             // Fallback: old format uses "key" field
             .or_else(|| val.get("key").and_then(|v| v.as_str()))?;
         let hint = val
@@ -169,7 +171,10 @@ mod tests {
         assert_eq!(entries[0].name, "session");
         assert_eq!(entries[0].children.len(), 2);
         assert_eq!(entries[0].children[0].name, "new");
-        assert_eq!(entries[0].children[0].param_hint, Some("[topic]".to_string()));
+        assert_eq!(
+            entries[0].children[0].param_hint,
+            Some("[topic]".to_string())
+        );
 
         assert!(!entries[1].is_namespace);
         assert_eq!(entries[1].name, "search");

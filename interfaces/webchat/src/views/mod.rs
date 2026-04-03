@@ -1,11 +1,11 @@
-pub mod agents;
-pub mod home;
 pub mod agent_trace;
-pub mod memory;
-pub mod settings;
+pub mod agent_trace_model;
+pub mod agents;
 pub mod chat;
 pub mod cron;
+pub mod home;
 pub mod logs;
+pub mod memory;
+pub mod settings;
 pub mod tasks;
 pub mod teams;
-

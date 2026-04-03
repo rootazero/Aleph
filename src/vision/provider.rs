@@ -7,7 +7,7 @@ use super::types::{ImageInput, OcrResult, VisionCapabilities, VisionResult};
 ///
 /// Implementations may delegate to:
 /// - A multimodal LLM (e.g. Claude, GPT-4V) for image understanding
-/// - A platform-native OCR engine (e.g. macOS Vision framework via Desktop Bridge)
+/// - A platform-native OCR engine (e.g. macOS Vision framework via `desktop/*`)
 /// - A local or remote object-detection model
 ///
 /// The [`VisionPipeline`](super::VisionPipeline) orchestrates multiple providers,

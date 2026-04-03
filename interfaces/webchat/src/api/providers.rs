@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInfo {
@@ -26,8 +26,12 @@ pub struct ProviderInfo {
     pub verified: bool,
 }
 
-fn default_provider_color() -> String { "#808080".to_string() }
-fn default_timeout() -> u64 { 300 }
+fn default_provider_color() -> String {
+    "#808080".to_string()
+}
+fn default_timeout() -> u64 {
+    300
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -79,7 +83,8 @@ impl ProvidersApi {
         let result = state.rpc_call("providers.list", Value::Null).await?;
 
         // Extract providers array from result
-        result.get("providers")
+        result
+            .get("providers")
             .ok_or_else(|| "Invalid response: missing providers".to_string())
             .and_then(|providers| {
                 serde_json::from_value(providers.clone())
@@ -96,7 +101,8 @@ impl ProvidersApi {
         let result = state.rpc_call("providers.get", params).await?;
 
         // Extract provider from result
-        result.get("provider")
+        result
+            .get("provider")
             .ok_or_else(|| "Invalid response: missing provider".to_string())
             .and_then(|provider| {
                 serde_json::from_value(provider.clone())
@@ -173,16 +179,17 @@ impl ProvidersApi {
 
         let result = state.rpc_call("providers.test", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse test result: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse test result: {}", e))
     }
 
     /// Trigger OAuth browser login for a subscription provider
-    pub async fn oauth_login(state: &DashboardState, provider: String) -> Result<OAuthStatus, String> {
+    pub async fn oauth_login(
+        state: &DashboardState,
+        provider: String,
+    ) -> Result<OAuthStatus, String> {
         let params = serde_json::json!({ "provider": provider });
         let result = state.rpc_call("providers.oauthLogin", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse OAuth status: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {}", e))
     }
 
     /// Clear OAuth token for a subscription provider
@@ -193,10 +200,12 @@ impl ProvidersApi {
     }
 
     /// Get OAuth connection status
-    pub async fn oauth_status(state: &DashboardState, provider: String) -> Result<OAuthStatus, String> {
+    pub async fn oauth_status(
+        state: &DashboardState,
+        provider: String,
+    ) -> Result<OAuthStatus, String> {
         let params = serde_json::json!({ "provider": provider });
         let result = state.rpc_call("providers.oauthStatus", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse OAuth status: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse OAuth status: {}", e))
     }
 }

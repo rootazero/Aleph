@@ -34,9 +34,8 @@ impl DesktopTool {
 
     /// Attach a desktop platform for in-process execution via capability traits.
     ///
-    /// When set, supported screen actions are dispatched through
-    /// `platform.screen()` (the `ScreenCapability` trait) before falling back
-    /// to the in-process `DesktopCapability` path.
+    /// When set, all screen actions are dispatched through
+    /// `platform.screen()` (the `ScreenCapability` trait).
     pub fn with_platform(mut self, platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
         self.platform = Some(platform);
         self

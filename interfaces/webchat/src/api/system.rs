@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemInfo {
@@ -29,7 +29,6 @@ impl SystemApi {
     pub async fn info(state: &DashboardState) -> Result<SystemInfo, String> {
         let result = state.rpc_call("system.info", Value::Null).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse system info: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse system info: {}", e))
     }
 }

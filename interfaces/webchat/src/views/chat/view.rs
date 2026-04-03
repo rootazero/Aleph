@@ -1,14 +1,14 @@
 //! Main Chat view — message list + input area.
 
+use super::events::subscribe_run_events;
+use super::state::{ChatMessage, ChatPhase, ChatState};
+use crate::api::chat::{ChatApi, ChatAttachment};
+use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
+use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
-use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
-use crate::context::DashboardState;
-use crate::api::chat::{ChatApi, ChatAttachment};
-use crate::i18n::*;
-use super::state::{ChatState, ChatPhase, ChatMessage};
-use super::events::subscribe_run_events;
 
 /// A file attachment pending upload.
 #[derive(Clone, Debug)]
@@ -36,7 +36,9 @@ pub fn ChatView() -> impl IntoView {
     spawn_local(async move {
         // Poll until connected (max ~5s)
         for _ in 0..50 {
-            if dash_for_sub.is_connected.get_untracked() { break; }
+            if dash_for_sub.is_connected.get_untracked() {
+                break;
+            }
             gloo_timers::future::TimeoutFuture::new(100).await;
         }
         if let Err(e) = dash_for_sub.subscribe_topic("stream.*").await {
@@ -108,7 +110,11 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     let has_error = message.error.is_some();
     let has_tools = !message.tool_calls.is_empty();
 
-    let bubble_align = if is_user { "flex justify-end" } else { "flex justify-start" };
+    let bubble_align = if is_user {
+        "flex justify-end"
+    } else {
+        "flex justify-start"
+    };
     let bubble_style = if is_user {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-white"
     } else if has_error {
@@ -168,8 +174,10 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
         None
     };
 
-    let error_view = error.map(|err| view! {
-        <div class="mt-2 text-xs text-danger/80">{err}</div>
+    let error_view = error.map(|err| {
+        view! {
+            <div class="mt-2 text-xs text-danger/80">{err}</div>
+        }
     });
 
     // Model info indicator (shows fallback when applicable)
@@ -183,13 +191,15 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                         <span class="text-text-tertiary">{"\u{2192}"}</span>
                         <span style="color: #fde047;">{info.model}</span>
                     </div>
-                }.into_any()
+                }
+                .into_any()
             } else {
                 view! {
                     <div class="mt-1.5 text-[10px] leading-tight font-mono text-text-tertiary">
                         {info.model}
                     </div>
-                }.into_any()
+                }
+                .into_any()
             }
         })
     } else {
@@ -254,15 +264,26 @@ struct CommandInfo {
 
 /// Parse a single command from JSON (recursive for children).
 fn parse_command_info(item: &serde_json::Value) -> Option<CommandInfo> {
-    let name = item.get("name").and_then(|v| v.as_str())
+    let name = item
+        .get("name")
+        .and_then(|v| v.as_str())
         // Fallback: legacy flat format uses "key"
         .or_else(|| item.get("key").and_then(|v| v.as_str()))?;
-    let hint = item.get("hint").and_then(|v| v.as_str())
+    let hint = item
+        .get("hint")
+        .and_then(|v| v.as_str())
         .or_else(|| item.get("description").and_then(|v| v.as_str()))
         .unwrap_or("");
-    let is_namespace = item.get("is_namespace").and_then(|v| v.as_bool()).unwrap_or(false);
-    let param_hint = item.get("param_hint").and_then(|v| v.as_str()).map(String::from);
-    let children = item.get("children")
+    let is_namespace = item
+        .get("is_namespace")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let param_hint = item
+        .get("param_hint")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let children = item
+        .get("children")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(parse_command_info).collect())
         .unwrap_or_default();
@@ -313,10 +334,14 @@ fn InputArea() -> impl IntoView {
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
     let send_message = move || {
-        if is_sending.get_untracked() { return; }
+        if is_sending.get_untracked() {
+            return;
+        }
         let text = input_text.get_untracked().trim().to_string();
         let files = attachments.get_untracked();
-        if text.is_empty() && files.is_empty() { return; }
+        if text.is_empty() && files.is_empty() {
+            return;
+        }
 
         is_sending.set(true);
         input_text.set(String::new());
@@ -354,74 +379,78 @@ fn InputArea() -> impl IntoView {
     };
 
     // Build palette entries from commands based on current namespace and query
-    let build_palette_entries = move |cmds: &[CommandInfo], namespace: &Option<String>, query: &str| -> Vec<PaletteEntry> {
-        let mut entries = Vec::new();
-        if let Some(ns) = namespace {
-            // Inside a namespace — show "back" + children
-            entries.push(PaletteEntry {
-                label: t_string!(i18n, chat.back).to_string(),
-                full_command: "/".to_string(),
-                description: t_string!(i18n, chat.back_desc).to_string(),
-                is_namespace: false,
-                is_back: true,
-            });
-            if let Some(parent) = cmds.iter().find(|c| &c.key == ns) {
-                for child in &parent.children {
-                    let full_cmd = format!("/{} {} ", ns, child.key);
-                    let desc = if let Some(ref ph) = child.param_hint {
-                        format!("{} {}", child.description, ph)
-                    } else {
-                        child.description.clone()
-                    };
-                    if query.is_empty() || child.key.to_lowercase().contains(&query.to_lowercase())
-                        || desc.to_lowercase().contains(&query.to_lowercase())
-                    {
-                        entries.push(PaletteEntry {
-                            label: child.key.clone(),
-                            full_command: full_cmd,
-                            description: desc,
-                            is_namespace: false,
-                            is_back: false,
-                        });
+    let build_palette_entries =
+        move |cmds: &[CommandInfo], namespace: &Option<String>, query: &str| -> Vec<PaletteEntry> {
+            let mut entries = Vec::new();
+            if let Some(ns) = namespace {
+                // Inside a namespace — show "back" + children
+                entries.push(PaletteEntry {
+                    label: t_string!(i18n, chat.back).to_string(),
+                    full_command: "/".to_string(),
+                    description: t_string!(i18n, chat.back_desc).to_string(),
+                    is_namespace: false,
+                    is_back: true,
+                });
+                if let Some(parent) = cmds.iter().find(|c| &c.key == ns) {
+                    for child in &parent.children {
+                        let full_cmd = format!("/{} {} ", ns, child.key);
+                        let desc = if let Some(ref ph) = child.param_hint {
+                            format!("{} {}", child.description, ph)
+                        } else {
+                            child.description.clone()
+                        };
+                        if query.is_empty()
+                            || child.key.to_lowercase().contains(&query.to_lowercase())
+                            || desc.to_lowercase().contains(&query.to_lowercase())
+                        {
+                            entries.push(PaletteEntry {
+                                label: child.key.clone(),
+                                full_command: full_cmd,
+                                description: desc,
+                                is_namespace: false,
+                                is_back: false,
+                            });
+                        }
                     }
                 }
-            }
-        } else {
-            // Root level — show namespaces and independent commands
-            let q = query.to_lowercase();
-            for cmd in cmds {
-                let desc = if let Some(ref ph) = cmd.param_hint {
-                    format!("{} {}", cmd.description, ph)
-                } else {
-                    cmd.description.clone()
-                };
-                if !query.is_empty()
-                    && !cmd.key.to_lowercase().contains(&q)
-                    && !desc.to_lowercase().contains(&q)
-                {
-                    continue;
-                }
-                let indicator = if cmd.is_namespace { " \u{25B8}" } else { "" };
-                entries.push(PaletteEntry {
-                    label: cmd.key.clone(),
-                    full_command: if cmd.is_namespace {
-                        // Clicking a namespace drills into it (handled separately)
-                        String::new()
+            } else {
+                // Root level — show namespaces and independent commands
+                let q = query.to_lowercase();
+                for cmd in cmds {
+                    let desc = if let Some(ref ph) = cmd.param_hint {
+                        format!("{} {}", cmd.description, ph)
                     } else {
-                        format!("/{} ", cmd.key)
-                    },
-                    description: format!("{}{}", desc, indicator),
-                    is_namespace: cmd.is_namespace,
-                    is_back: false,
-                });
+                        cmd.description.clone()
+                    };
+                    if !query.is_empty()
+                        && !cmd.key.to_lowercase().contains(&q)
+                        && !desc.to_lowercase().contains(&q)
+                    {
+                        continue;
+                    }
+                    let indicator = if cmd.is_namespace { " \u{25B8}" } else { "" };
+                    entries.push(PaletteEntry {
+                        label: cmd.key.clone(),
+                        full_command: if cmd.is_namespace {
+                            // Clicking a namespace drills into it (handled separately)
+                            String::new()
+                        } else {
+                            format!("/{} ", cmd.key)
+                        },
+                        description: format!("{}{}", desc, indicator),
+                        is_namespace: cmd.is_namespace,
+                        is_back: false,
+                    });
+                }
             }
-        }
-        entries
-    };
+            entries
+        };
 
     // Fetch commands from Gateway (once), then refresh the palette
     let fetch_commands = move || {
-        if commands_loaded.get_untracked() { return; }
+        if commands_loaded.get_untracked() {
+            return;
+        }
         let dash = dashboard;
         spawn_local(async move {
             match dash.rpc_call("commands.list", serde_json::json!({})).await {
@@ -469,10 +498,12 @@ fn InputArea() -> impl IntoView {
                 if parts.len() == 2 {
                     let maybe_ns = parts[0];
                     let sub_query = parts[1];
-                    if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace) {
+                    if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
+                    {
                         // User typed "/session ..." — auto-enter namespace context
                         current_namespace.set(Some(parent.key.clone()));
-                        let entries = build_palette_entries(&cmds, &Some(parent.key.clone()), sub_query);
+                        let entries =
+                            build_palette_entries(&cmds, &Some(parent.key.clone()), sub_query);
                         palette_entries.set(entries);
                         selected_index.set(0);
                         show_palette.set(true);
@@ -621,12 +652,16 @@ fn InputArea() -> impl IntoView {
 
     // Handle file selection
     let on_file_change = move |_ev: web_sys::Event| {
-        let Some(input) = file_input_ref.get() else { return };
+        let Some(input) = file_input_ref.get() else {
+            return;
+        };
         let el: &web_sys::HtmlInputElement = &input;
         let Some(file_list) = el.files() else { return };
 
         for i in 0..file_list.length() {
-            let Some(file) = file_list.get(i) else { continue };
+            let Some(file) = file_list.get(i) else {
+                continue;
+            };
             let name = file.name();
             let mime_type = file.type_();
             let size = file.size() as u64;
@@ -649,11 +684,7 @@ fn InputArea() -> impl IntoView {
                 if let Ok(result) = reader_clone.result() {
                     if let Some(data_url) = result.as_string() {
                         // data URL format: "data:<mime>;base64,<data>"
-                        let base64_data = data_url
-                            .split(',')
-                            .nth(1)
-                            .unwrap_or("")
-                            .to_string();
+                        let base64_data = data_url.split(',').nth(1).unwrap_or("").to_string();
 
                         let attachment = FileAttachment {
                             name: file_name.clone(),

@@ -1,7 +1,7 @@
 //! Component modules
 
-pub mod api_key_input;
 pub mod agents_sidebar;
+pub mod api_key_input;
 pub mod bottom_bar;
 pub mod chat_sidebar;
 pub mod connection_status;
@@ -18,8 +18,8 @@ pub mod ui;
 
 // Re-export layout components
 pub use bottom_bar::{BottomBar, PanelMode};
-pub use top_bar::TopBar;
 pub use mode_sidebar::ModeSidebar;
+pub use top_bar::TopBar;
 
 // Re-export commonly used form components
 pub use forms::{

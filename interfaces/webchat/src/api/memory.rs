@@ -1,6 +1,6 @@
+use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::context::DashboardState;
 
 /// Raw memory entry (Layer 1 — user_input + ai_output conversation records)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,39 +99,40 @@ impl MemoryApi {
             .map_err(|e| format!("Failed to parse search results: {}", e))?;
 
         // Map backend entries to RawMemory
-        let facts = response.memories.into_iter().map(|entry| {
-            // Combine user_input and ai_output for display
-            let content = if !entry.user_input.is_empty() && !entry.ai_output.is_empty() {
-                format!("Q: {}\nA: {}", entry.user_input, entry.ai_output)
-            } else if !entry.user_input.is_empty() {
-                entry.user_input
-            } else {
-                entry.ai_output
-            };
+        let facts = response
+            .memories
+            .into_iter()
+            .map(|entry| {
+                // Combine user_input and ai_output for display
+                let content = if !entry.user_input.is_empty() && !entry.ai_output.is_empty() {
+                    format!("Q: {}\nA: {}", entry.user_input, entry.ai_output)
+                } else if !entry.user_input.is_empty() {
+                    entry.user_input
+                } else {
+                    entry.ai_output
+                };
 
-            // Format timestamp
-            let created_at = if entry.timestamp > 0 {
-                Some(format_timestamp_secs(entry.timestamp))
-            } else {
-                None
-            };
+                // Format timestamp
+                let created_at = if entry.timestamp > 0 {
+                    Some(format_timestamp_secs(entry.timestamp))
+                } else {
+                    None
+                };
 
-            RawMemory {
-                id: entry.id,
-                agent_id: entry.agent_id,
-                content,
-                created_at,
-            }
-        }).collect();
+                RawMemory {
+                    id: entry.id,
+                    agent_id: entry.agent_id,
+                    content,
+                    created_at,
+                }
+            })
+            .collect();
 
         Ok(facts)
     }
 
     /// Delete a memory
-    pub async fn delete(
-        state: &DashboardState,
-        memory_id: String,
-    ) -> Result<(), String> {
+    pub async fn delete(state: &DashboardState, memory_id: String) -> Result<(), String> {
         let params = serde_json::json!({
             "id": memory_id,
         });
@@ -151,8 +152,8 @@ impl MemoryApi {
 
         let result = state.rpc_call("memory.listFacts", params).await?;
 
-        let response: BackendListFactsResponse = serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse facts: {}", e))?;
+        let response: BackendListFactsResponse =
+            serde_json::from_value(result).map_err(|e| format!("Failed to parse facts: {}", e))?;
 
         Ok(response.facts)
     }
@@ -161,8 +162,7 @@ impl MemoryApi {
     pub async fn stats(state: &DashboardState) -> Result<MemoryStats, String> {
         let result = state.rpc_call("memory.stats", Value::Null).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse stats: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse stats: {}", e))
     }
 }
 

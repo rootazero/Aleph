@@ -687,9 +687,8 @@ impl SessionManager {
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let results: Vec<SessionSearchResult> = match stmt.query_map(
-            params![&sanitized_query, max_results as i64],
-            |row| {
+        let results: Vec<SessionSearchResult> =
+            match stmt.query_map(params![&sanitized_query, max_results as i64], |row| {
                 let metadata_json: Option<String> = row.get(6)?;
                 let topic = metadata_json
                     .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
@@ -704,14 +703,13 @@ impl SessionManager {
                     agent_id: row.get(5)?,
                     topic,
                 })
-            },
-        ) {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => {
-                // Graceful degradation: malformed FTS5 query returns empty results
-                return Ok(Vec::new());
-            }
-        };
+            }) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(_) => {
+                    // Graceful degradation: malformed FTS5 query returns empty results
+                    return Ok(Vec::new());
+                }
+            };
 
         Ok(results)
     }

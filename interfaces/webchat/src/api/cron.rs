@@ -141,10 +141,7 @@ impl CronApi {
     }
 
     /// Create a new cron job
-    pub async fn create(
-        state: &DashboardState,
-        job: CreateCronJob,
-    ) -> Result<CronJobInfo, String> {
+    pub async fn create(state: &DashboardState, job: CreateCronJob) -> Result<CronJobInfo, String> {
         let params =
             serde_json::to_value(&job).map_err(|e| format!("Failed to serialize job: {}", e))?;
 

@@ -1,9 +1,9 @@
-pub mod i18n;
-pub mod app;
 pub mod api;
+pub mod app;
 pub mod components;
 pub mod context;
 pub mod generation;
+pub mod i18n;
 pub mod models;
 pub mod preset_data;
 pub mod preset_providers;

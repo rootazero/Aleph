@@ -9,7 +9,6 @@ use std::sync::Arc;
 use crate::cli::Args;
 use crate::daemon::{expand_path, remove_pid_file};
 
-use alephcore::gateway::bridge::DesktopBridgeManager;
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::GatewayServer;
@@ -1100,16 +1099,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     start_webchat_server(args, &final_bind, final_port).await;
 
-    // Start desktop bridge (non-blocking — server runs headless if bridge not found)
-    let run_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph")
-        .join("run");
-    let mut bridge_manager = DesktopBridgeManager::new(run_dir, final_port);
-    if let Err(e) = bridge_manager.start().await {
-        tracing::warn!("Desktop bridge not started: {e} — running headless");
-    }
-
     if !args.daemon {
         println!();
         println!("Aleph Server:");
@@ -1122,9 +1111,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let shutdown_rx = setup_graceful_shutdown(args);
     server.run_until_shutdown(shutdown_rx).await?;
 
-    // Graceful shutdown: stop desktop bridge, heartbeat, ACP harnesses, and mDNS
-    bridge_manager.stop().await;
-
+    // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS
     if let Some(ref hb_svc) = heartbeat_service {
         let svc = hb_svc.lock().await;
         svc.request_shutdown();

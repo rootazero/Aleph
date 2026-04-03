@@ -31,7 +31,13 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "memory_knowledge",
         name: "记忆与知识",
-        tools: &["memory_search", "memory_browse", "session_search", "skill_list", "skill_read"],
+        tools: &[
+            "memory_search",
+            "memory_browse",
+            "session_search",
+            "skill_list",
+            "skill_read",
+        ],
     },
     ToolCategory {
         id: "content_gen",
@@ -88,11 +94,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "spawn",
         name: "子 Agent 派发",
-        tools: &[
-            "subagent_spawn",
-            "subagent_steer",
-            "subagent_kill",
-        ],
+        tools: &["subagent_spawn", "subagent_steer", "subagent_kill"],
     },
     ToolCategory {
         id: "delegate",

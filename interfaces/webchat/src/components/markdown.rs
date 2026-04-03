@@ -35,11 +35,7 @@ fn render_markdown(content: &str) -> String {
                     CodeBlockKind::Fenced(lang) => {
                         let lang_str = lang.as_ref().trim();
                         // Take only the first word (ignore metadata after space)
-                        lang_str
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
+                        lang_str.split_whitespace().next().unwrap_or("").to_string()
                     }
                     CodeBlockKind::Indented => String::new(),
                 };
@@ -118,7 +114,11 @@ fn render_streaming(content: &str) -> String {
             } else {
                 // Open fence
                 fence_lang = line.trim_start_matches('`').trim().to_string();
-                let lang_label = if fence_lang.is_empty() { "code" } else { &fence_lang };
+                let lang_label = if fence_lang.is_empty() {
+                    "code"
+                } else {
+                    &fence_lang
+                };
                 html.push_str(&format!(
                     r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>"#,
                 ));

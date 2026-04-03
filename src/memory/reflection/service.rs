@@ -173,7 +173,11 @@ mod tests {
         }
 
         // Verify slug generation in paths
-        assert!(skill_facts.iter().any(|f| f.path.contains("cross-session-fts5-search")));
-        assert!(skill_facts.iter().any(|f| f.path.contains("atomic-file-writes")));
+        assert!(skill_facts
+            .iter()
+            .any(|f| f.path.contains("cross-session-fts5-search")));
+        assert!(skill_facts
+            .iter()
+            .any(|f| f.path.contains("atomic-file-writes")));
     }
 }

@@ -88,11 +88,12 @@ impl SwiftBridge {
 }
 
 impl Default for SwiftBridge {
-    /// Locate `aleph-bridge` using a three-step search:
+    /// Locate `aleph-bridge` using a four-step search:
     ///
     /// 1. Next to the current executable (side-by-side deployment).
-    /// 2. `~/.aleph/bin/aleph-bridge` (user-local install).
-    /// 3. Bare `"aleph-bridge"` (rely on `PATH`).
+    /// 2. The repo-local Swift build artifact used during development.
+    /// 3. `~/.aleph/bin/aleph-bridge` (user-local install).
+    /// 4. Bare `"aleph-bridge"` (rely on `PATH`).
     fn default() -> Self {
         // 1. Sibling to the current exe.
         if let Ok(exe) = std::env::current_exe() {
@@ -101,10 +102,33 @@ impl Default for SwiftBridge {
                 if candidate.exists() {
                     return Self::new(candidate);
                 }
+
+                let candidate = dir.join("AlephBridge");
+                if candidate.exists() {
+                    return Self::new(candidate);
+                }
+            }
+
+            // 2. Repo-local dev build:
+            //    <repo>/target/{debug,release}/aleph-server
+            //      -> <repo>/desktop/macos/bridge/.build/release/AlephBridge
+            if let Some(target_dir) = exe.parent().and_then(|p| p.parent()) {
+                if let Some(repo_root) = target_dir.parent() {
+                    let candidate = repo_root
+                        .join("desktop")
+                        .join("macos")
+                        .join("bridge")
+                        .join(".build")
+                        .join("release")
+                        .join("AlephBridge");
+                    if candidate.exists() {
+                        return Self::new(candidate);
+                    }
+                }
             }
         }
 
-        // 2. ~/.aleph/bin/aleph-bridge
+        // 3. ~/.aleph/bin/aleph-bridge
         if let Some(home) = dirs::home_dir() {
             let candidate = home.join(".aleph").join("bin").join("aleph-bridge");
             if candidate.exists() {
@@ -112,7 +136,7 @@ impl Default for SwiftBridge {
             }
         }
 
-        // 3. Bare name — rely on PATH.
+        // 4. Bare name — rely on PATH.
         Self::new(PathBuf::from("aleph-bridge"))
     }
 }
@@ -124,7 +148,10 @@ mod tests {
     #[test]
     fn test_new_stores_path() {
         let bridge = SwiftBridge::new(PathBuf::from("/usr/local/bin/aleph-bridge"));
-        assert_eq!(bridge.binary_path, PathBuf::from("/usr/local/bin/aleph-bridge"));
+        assert_eq!(
+            bridge.binary_path,
+            PathBuf::from("/usr/local/bin/aleph-bridge")
+        );
     }
 
     #[test]
