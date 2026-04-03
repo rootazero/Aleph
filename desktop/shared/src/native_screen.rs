@@ -11,7 +11,10 @@
 use async_trait::async_trait;
 
 use crate::traits::ScreenCapability;
-use crate::{action, perception, DesktopError, MouseButton, OcrResult, Result, ScreenRegion, Screenshot, WindowInfo};
+use crate::{
+    action, perception, DesktopError, MouseButton, OcrResult, PressAction, Result, ScreenRegion,
+    Screenshot, WindowInfo,
+};
 
 /// Cross-platform `ScreenCapability` implementation.
 ///
@@ -45,11 +48,9 @@ impl ScreenCapability for NativeScreen {
     async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
         let png_bytes = match image_png {
             Some(bytes) => bytes.to_vec(),
-            None => {
-                tokio::task::spawn_blocking(perception::capture_screen_png)
-                    .await
-                    .map_err(|e| DesktopError::OcrFailed(format!("task join error: {e}")))??
-            }
+            None => tokio::task::spawn_blocking(perception::capture_screen_png)
+                .await
+                .map_err(|e| DesktopError::OcrFailed(format!("task join error: {e}")))??,
         };
         tokio::task::spawn_blocking(move || perception::perform_ocr(&png_bytes))
             .await
@@ -120,6 +121,71 @@ impl ScreenCapability for NativeScreen {
                 "screen recording not available on this platform".into(),
             ))
         }
+    }
+
+    async fn double_click(&self, x: f64, y: f64, button: MouseButton) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::double_click(x, y, button))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn drag(
+        &self,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        duration_ms: Option<u64>,
+    ) -> Result<()> {
+        tokio::task::spawn_blocking(move || {
+            action::drag(start_x, start_y, end_x, end_y, duration_ms)
+        })
+        .await
+        .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn hover(&self, x: f64, y: f64) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::hover(x, y))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn cursor_position(&self) -> Result<(f64, f64)> {
+        tokio::task::spawn_blocking(action::cursor_position)
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn mouse_button(
+        &self,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+        press_action: PressAction,
+    ) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::mouse_button(x, y, button, press_action))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn quit_app(&self, app_name: &str) -> Result<()> {
+        let app_name = app_name.to_string();
+        tokio::task::spawn_blocking(move || action::quit_app(&app_name))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn clipboard_read(&self) -> Result<String> {
+        tokio::task::spawn_blocking(action::clipboard_read)
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
+    async fn clipboard_write(&self, text: &str) -> Result<()> {
+        let text = text.to_string();
+        tokio::task::spawn_blocking(move || action::clipboard_write(&text))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 }
 
