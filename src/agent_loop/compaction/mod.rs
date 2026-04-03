@@ -10,6 +10,7 @@
 
 pub mod constraint_injector;
 pub mod micro_compactor;
+pub mod orchestrator;
 pub mod tool_aware_chunker;
 pub mod types;
 
@@ -21,6 +22,7 @@ pub use micro_compactor::{
 pub use tool_aware_chunker::{
     parse_semantic_units, SemanticChunk, SemanticUnit, ToolAwareChunker,
 };
+pub use orchestrator::{CompactionOrchestrator, OrchestratorBuilder};
 pub use types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
     TokenEstimate,
