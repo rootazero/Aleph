@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::agent_loop::compaction::types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
@@ -122,10 +122,13 @@ impl CompactionOrchestrator {
                     total_compacted += result.compacted_count;
                     last_strategy_name = result.strategy_name.clone();
 
-                    // Update simulated pressure ratio based on freed tokens.
-                    let freed_ratio = result.freed_tokens as f64
+                    // Update simulated pressure — keep used_tokens and ratio in sync.
+                    ctx.pressure.used_tokens = ctx
+                        .pressure
+                        .used_tokens
+                        .saturating_sub(result.freed_tokens);
+                    ctx.pressure.ratio = ctx.pressure.used_tokens as f64
                         / ctx.pressure.budget_tokens.max(1) as f64;
-                    ctx.pressure.ratio = (ctx.pressure.ratio - freed_ratio).max(0.0);
                     ctx.pressure_level = PressureLevel::from_ratio(ctx.pressure.ratio);
                 }
                 Err(e) => {
@@ -150,12 +153,20 @@ impl CompactionOrchestrator {
     }
 
     /// Run all cleanup hooks sorted by `cleanup_order()` ascending.
+    ///
+    /// Each cleanup is wrapped in `catch_unwind` so a panicking hook cannot
+    /// prevent subsequent hooks from running.
     fn run_cleanups(&self, result: &CompactionResult) {
         let mut ordered: Vec<&Arc<dyn PostCompactCleanup>> = self.cleanups.iter().collect();
         ordered.sort_by_key(|c| c.cleanup_order());
 
         for cleanup in ordered {
-            cleanup.on_compact_complete(result);
+            let call = std::panic::AssertUnwindSafe(|| {
+                cleanup.on_compact_complete(result);
+            });
+            if let Err(e) = std::panic::catch_unwind(call) {
+                error!("post-compaction cleanup panicked: {:?}", e);
+            }
         }
     }
 }

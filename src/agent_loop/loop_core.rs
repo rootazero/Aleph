@@ -1008,9 +1008,12 @@ impl<P: LoopProvider> AgentLoop<P> {
                         token_estimate_ratio: budget_ratio,
                         fresh_tail_count: budget_fresh_tail,
                     };
-                    match orchestrator.execute(&mut ctx).await {
+                    let execute_result = orchestrator.execute(&mut ctx).await;
+                    // ALWAYS restore messages before inspecting the result so
+                    // that a panic or early-return can never leave `messages` empty.
+                    *messages = ctx.messages;
+                    match execute_result {
                         Ok(result) => {
-                            *messages = ctx.messages;
                             if result.pressure_reduced() {
                                 let mut budget =
                                     self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
@@ -1020,7 +1023,6 @@ impl<P: LoopProvider> AgentLoop<P> {
                             }
                         }
                         Err(e) => {
-                            *messages = ctx.messages;
                             tracing::warn!("compaction orchestrator failed: {e}");
                         }
                     }
