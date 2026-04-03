@@ -673,8 +673,9 @@ pub struct AgentLoop<P: LoopProvider> {
     /// escalating token limits, generating continuation prompts, and assembling
     /// fragmented outputs. Wrapped in `Mutex` for interior mutability.
     truncation_recovery: Mutex<super::truncation_recovery::TruncationRecovery>,
-    /// Optional LLM-based context compactor for elevated pressure.
-    context_compactor: Option<super::context_compactor::ContextCompactor>,
+    /// Orchestrator that dispatches MicroCompactor → LLM summary in priority
+    /// order when context pressure reaches the warning threshold.
+    compaction_orchestrator: Option<Arc<super::compaction::CompactionOrchestrator>>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
@@ -737,7 +738,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             pressure_sensor: Mutex::new(PressureSensor::new(3.5)),
             compaction_pipeline: pipeline,
             diagnostics: Mutex::new(ContextDiagnostics::new()),
-            context_compactor: None,
+            compaction_orchestrator: None,
             truncation_recovery: Mutex::new(super::truncation_recovery::TruncationRecovery::new(
                 provider_max,
             )),
@@ -762,11 +763,25 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Attach a [`ContextCompactor`](super::context_compactor::ContextCompactor) for LLM-based compaction
     /// at elevated context pressure.
+    ///
+    /// This also builds a [`CompactionOrchestrator`](super::compaction::CompactionOrchestrator)
+    /// that chains `MicroCompactor` (zero-LLM-cost) before the LLM-based compactor so that
+    /// cheap pruning is always attempted first.
     pub fn with_context_compactor(
         mut self,
         compactor: super::context_compactor::ContextCompactor,
     ) -> Self {
-        self.context_compactor = Some(compactor);
+        let micro = Arc::new(super::compaction::MicroCompactor::new(
+            super::compaction::MicroCompactorConfig::default(),
+        ));
+        let llm = Arc::new(compactor) as Arc<dyn super::compaction::CompactionStrategy>;
+        let orchestrator = Arc::new(
+            super::compaction::CompactionOrchestrator::builder()
+                .strategy(micro)
+                .strategy(llm)
+                .build(),
+        );
+        self.compaction_orchestrator = Some(orchestrator);
         self
     }
 
@@ -968,30 +983,46 @@ impl<P: LoopProvider> AgentLoop<P> {
             }
         };
 
-        if let Some(ref compactor) = self.context_compactor {
-            let should_llm_compact = {
+        if let Some(ref orchestrator) = self.compaction_orchestrator {
+            let (pressure, pressure_level) = {
                 let budget = self
                     .context_budget
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                budget
+                let pressure = budget
                     .as_ref()
                     .and_then(|b| b.last_pressure())
-                    .map(|p| p.ratio >= 0.78)
-                    .unwrap_or(false)
+                    .cloned();
+                let level = pressure
+                    .as_ref()
+                    .map(|p| super::compaction::PressureLevel::from_ratio(p.ratio))
+                    .unwrap_or(super::compaction::PressureLevel::Calm);
+                (pressure, level)
             };
-            if should_llm_compact {
-                match compactor.compact(messages, budget_fresh_tail).await {
-                    Ok(result) => {
-                        tracing::info!(
-                            strategy = ?result.strategy_used,
-                            tokens_before = result.tokens_before,
-                            tokens_after = result.tokens_after,
-                            "context compaction complete"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("context compaction failed: {e}");
+            if pressure_level >= super::compaction::PressureLevel::Warning {
+                if let Some(pressure) = pressure {
+                    let mut ctx = super::compaction::CompactionContext {
+                        messages: std::mem::take(messages),
+                        pressure,
+                        pressure_level,
+                        token_estimate_ratio: budget_ratio,
+                        fresh_tail_count: budget_fresh_tail,
+                    };
+                    match orchestrator.execute(&mut ctx).await {
+                        Ok(result) => {
+                            *messages = ctx.messages;
+                            if result.pressure_reduced() {
+                                let mut budget =
+                                    self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                                if let Some(ref mut b) = *budget {
+                                    b.notify_compaction_success();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            *messages = ctx.messages;
+                            tracing::warn!("compaction orchestrator failed: {e}");
+                        }
                     }
                 }
             }
