@@ -12,8 +12,11 @@ pub mod input;
 pub mod key_parse;
 pub mod window;
 
-pub use app_launch::launch_app;
-pub use input::{click, key_combo, scroll, type_text};
+pub use app_launch::{launch_app, quit_app};
+pub use input::{
+    click, clipboard_read, clipboard_write, cursor_position, double_click, drag, hover,
+    key_combo, mouse_button, scroll, type_text,
+};
 pub use window::{focus_window, window_list};
 
 use enigo::{Button, Enigo, Settings};

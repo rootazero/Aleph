@@ -94,3 +94,66 @@ pub fn launch_app(app_name: &str) -> Result<()> {
         ))
     }
 }
+
+/// Quit/close an application by name or bundle ID.
+///
+/// - **macOS**: Uses `NSRunningApplication` to find and terminate the app by bundle ID.
+/// - **Linux**: Uses `pkill -f <app_name>`.
+/// - **Windows**: Not yet implemented.
+///
+/// # Errors
+///
+/// - [`DesktopError::InputFailed`] if the application cannot be found or terminated.
+/// - [`DesktopError::NotImplemented`] on unsupported platforms.
+pub fn quit_app(app_name: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSRunningApplication;
+        use objc2_foundation::NSString;
+
+        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(app_name),
+        );
+        if apps.len() == 0 {
+            return Err(DesktopError::InputFailed(format!(
+                "No running application found with identifier '{app_name}'"
+            )));
+        }
+        for app in apps.iter() {
+            app.terminate();
+        }
+        info!(app_name, "App quit requested (macOS)");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::process::Command::new("pkill")
+            .args(["-f", app_name])
+            .status()
+            .map_err(|e| DesktopError::InputFailed(format!("Failed to quit app: {e}")))?;
+        if !status.success() {
+            return Err(DesktopError::InputFailed(format!(
+                "Failed to quit '{app_name}'"
+            )));
+        }
+        info!(app_name, "App quit requested (Linux)");
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app_name;
+        Err(DesktopError::NotImplemented(
+            "quit_app not yet implemented for Windows".into(),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = app_name;
+        Err(DesktopError::NotImplemented(
+            "quit_app not implemented on this platform".into(),
+        ))
+    }
+}

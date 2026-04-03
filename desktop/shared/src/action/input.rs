@@ -136,6 +136,240 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
     Ok(())
 }
 
+/// Double-click at (x, y).
+pub fn double_click(x: f64, y: f64, button: MouseButton) -> Result<()> {
+    let ix = validate_coordinate(x, "x")?;
+    let iy = validate_coordinate(y, "y")?;
+    let btn = to_enigo_button(button);
+    let mut enigo = new_enigo()?;
+    enigo
+        .move_mouse(ix, iy, Coordinate::Abs)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    enigo
+        .button(btn, Direction::Click)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to click: {e}")))?;
+    enigo
+        .button(btn, Direction::Click)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to double-click: {e}")))?;
+    info!(x, y, button = ?button, "Double-click performed");
+    Ok(())
+}
+
+/// Drag from (start_x, start_y) to (end_x, end_y) with optional animation.
+pub fn drag(
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    duration_ms: Option<u64>,
+) -> Result<()> {
+    use std::time::Duration;
+
+    let sx = validate_coordinate(start_x, "start_x")?;
+    let sy = validate_coordinate(start_y, "start_y")?;
+    let ex = validate_coordinate(end_x, "end_x")?;
+    let ey = validate_coordinate(end_y, "end_y")?;
+
+    let mut enigo = new_enigo()?;
+
+    enigo
+        .move_mouse(sx, sy, Coordinate::Abs)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to move to start: {e}")))?;
+    enigo
+        .button(enigo::Button::Left, Direction::Press)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to press for drag: {e}")))?;
+
+    match duration_ms {
+        Some(ms) if ms > 0 => {
+            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().max(1.0) as u64;
+            let step_delay = Duration::from_millis(ms / steps.max(1));
+            for i in 1..=steps {
+                let t = i as f64 / steps as f64;
+                let eased = 1.0 - (1.0 - t).powi(3);
+                let cx = sx as f64 + (ex as f64 - sx as f64) * eased;
+                let cy = sy as f64 + (ey as f64 - sy as f64) * eased;
+                enigo
+                    .move_mouse(cx as i32, cy as i32, Coordinate::Abs)
+                    .map_err(|e| {
+                        DesktopError::InputFailed(format!("Failed to move during drag: {e}"))
+                    })?;
+                std::thread::sleep(step_delay);
+            }
+        }
+        _ => {
+            enigo
+                .move_mouse(ex, ey, Coordinate::Abs)
+                .map_err(|e| {
+                    DesktopError::InputFailed(format!("Failed to move to end: {e}"))
+                })?;
+        }
+    }
+
+    enigo
+        .button(enigo::Button::Left, Direction::Release)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to release after drag: {e}")))?;
+
+    info!(start_x, start_y, end_x, end_y, ?duration_ms, "Drag performed");
+    Ok(())
+}
+
+/// Move mouse to (x, y) without clicking.
+pub fn hover(x: f64, y: f64) -> Result<()> {
+    let ix = validate_coordinate(x, "x")?;
+    let iy = validate_coordinate(y, "y")?;
+    let mut enigo = new_enigo()?;
+    enigo
+        .move_mouse(ix, iy, Coordinate::Abs)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    info!(x, y, "Hover performed");
+    Ok(())
+}
+
+/// Get current mouse cursor position.
+pub fn cursor_position() -> Result<(f64, f64)> {
+    let enigo = new_enigo()?;
+    let (x, y) = enigo
+        .location()
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to get cursor position: {e}")))?;
+    Ok((x as f64, y as f64))
+}
+
+/// Press, release, or click a mouse button at (x, y).
+pub fn mouse_button(
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    action: crate::PressAction,
+) -> Result<()> {
+    let ix = validate_coordinate(x, "x")?;
+    let iy = validate_coordinate(y, "y")?;
+    let btn = to_enigo_button(button);
+    let dir = match action {
+        crate::PressAction::Press => Direction::Press,
+        crate::PressAction::Release => Direction::Release,
+        crate::PressAction::Click => Direction::Click,
+    };
+    let mut enigo = new_enigo()?;
+    enigo
+        .move_mouse(ix, iy, Coordinate::Abs)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to move mouse: {e}")))?;
+    enigo
+        .button(btn, dir)
+        .map_err(|e| DesktopError::InputFailed(format!("Failed mouse button action: {e}")))?;
+    info!(x, y, button = ?button, action = ?action, "Mouse button action performed");
+    Ok(())
+}
+
+/// Read text from system clipboard.
+pub fn clipboard_read() -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+
+        let pb = NSPasteboard::generalPasteboard();
+        let pasteboard_type = unsafe { NSPasteboardTypeString };
+        match pb.stringForType(pasteboard_type) {
+            Some(s) => Ok(s.to_string()),
+            None => Ok(String::new()),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()
+            .or_else(|_| {
+                std::process::Command::new("xsel")
+                    .args(["--clipboard", "--output"])
+                    .output()
+            })
+            .map_err(|e| {
+                DesktopError::InputFailed(format!(
+                    "Failed to read clipboard (install xclip or xsel): {e}"
+                ))
+            })?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Err(DesktopError::NotImplemented(
+            "clipboard_read not yet implemented for Windows".into(),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Err(DesktopError::NotImplemented(
+            "clipboard_read not implemented on this platform".into(),
+        ))
+    }
+}
+
+/// Write text to system clipboard.
+pub fn clipboard_write(text: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+        use objc2_foundation::NSString;
+
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        let ns_string = NSString::from_str(text);
+        let pasteboard_type = unsafe { NSPasteboardTypeString };
+        pb.setString_forType(&ns_string, pasteboard_type);
+        info!("Clipboard write performed");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("xsel")
+                    .args(["--clipboard", "--input"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            })
+            .map_err(|e| {
+                DesktopError::InputFailed(format!(
+                    "Failed to write clipboard (install xclip or xsel): {e}"
+                ))
+            })?;
+        if let Some(ref mut stdin) = child.stdin {
+            stdin.write_all(text.as_bytes()).map_err(|e| {
+                DesktopError::InputFailed(format!("Failed to write to clipboard: {e}"))
+            })?;
+        }
+        child
+            .wait()
+            .map_err(|e| DesktopError::InputFailed(format!("Clipboard process failed: {e}")))?;
+        info!("Clipboard write performed");
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = text;
+        Err(DesktopError::NotImplemented(
+            "clipboard_write not yet implemented for Windows".into(),
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = text;
+        Err(DesktopError::NotImplemented(
+            "clipboard_write not implemented on this platform".into(),
+        ))
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
