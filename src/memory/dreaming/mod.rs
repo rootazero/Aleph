@@ -4,6 +4,7 @@
 //! Each stage implements the `DreamStage` trait and operates on a shared
 //! `DreamContext` that flows through the pipeline.
 
+pub mod gate;
 pub mod report;
 pub mod stages;
 
@@ -33,6 +34,9 @@ pub use stages::{
     DriftDetectStage, SummarizeStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster, MetadataGroupKey};
+
+// Re-export gate types
+pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
 
 // Re-export report types
 pub use report::{DreamReport, DreamReportStatus, DreamRunMetadata, DreamRunType};
