@@ -74,20 +74,18 @@ impl PresetProviders {
 
     // Video Providers
     pub fn video_providers() -> Vec<PresetProvider> {
-        vec![
-            PresetProvider {
-                id: "google-veo".to_string(),
-                name: "Google Veo".to_string(),
-                icon: "🎬".to_string(),
-                color: "#4285F4".to_string(),
-                provider_type: "google_veo".to_string(),
-                capabilities: vec![GenerationType::Video],
-                default_model: "veo-2.0-generate-001".to_string(),
-                description: "Google's Veo video generation".to_string(),
-                base_url: None,
-                is_unsupported: false,
-            },
-        ]
+        vec![PresetProvider {
+            id: "google-veo".to_string(),
+            name: "Google Veo".to_string(),
+            icon: "🎬".to_string(),
+            color: "#4285F4".to_string(),
+            provider_type: "google_veo".to_string(),
+            capabilities: vec![GenerationType::Video],
+            default_model: "veo-2.0-generate-001".to_string(),
+            description: "Google's Veo video generation".to_string(),
+            base_url: None,
+            is_unsupported: false,
+        }]
     }
 
     // Speech Providers (TTS)
@@ -122,20 +120,34 @@ impl PresetProviders {
 
     // Audio Providers (music generation)
     pub fn audio_providers() -> Vec<PresetProvider> {
-        vec![
-            PresetProvider {
-                id: "suno".to_string(),
-                name: "Suno".to_string(),
-                icon: "🎵".to_string(),
-                color: "#FF6B35".to_string(),
-                provider_type: "openai_compat".to_string(),
-                capabilities: vec![GenerationType::Audio],
-                default_model: "suno_music".to_string(),
-                description: "AI music generation by Suno".to_string(),
-                base_url: None,
-                is_unsupported: false,
-            },
-        ]
+        vec![PresetProvider {
+            id: "suno".to_string(),
+            name: "Suno".to_string(),
+            icon: "🎵".to_string(),
+            color: "#FF6B35".to_string(),
+            provider_type: "openai_compat".to_string(),
+            capabilities: vec![GenerationType::Audio],
+            default_model: "suno_music".to_string(),
+            description: "AI music generation by Suno".to_string(),
+            base_url: None,
+            is_unsupported: false,
+        }]
+    }
+
+    // Transcription Providers (STT)
+    pub fn transcription_providers() -> Vec<PresetProvider> {
+        vec![PresetProvider {
+            id: "openai-whisper".to_string(),
+            name: "OpenAI Whisper".to_string(),
+            icon: "🎤".to_string(),
+            color: "#10a37f".to_string(),
+            provider_type: "openai_compat".to_string(),
+            capabilities: vec![GenerationType::Transcription],
+            default_model: "whisper-1".to_string(),
+            description: "OpenAI Whisper speech-to-text transcription".to_string(),
+            base_url: Some("https://api.openai.com".to_string()),
+            is_unsupported: false,
+        }]
     }
 
     // Get all providers
@@ -145,6 +157,7 @@ impl PresetProviders {
         all.extend(Self::video_providers());
         all.extend(Self::speech_providers());
         all.extend(Self::audio_providers());
+        all.extend(Self::transcription_providers());
         all
     }
 
@@ -155,6 +168,7 @@ impl PresetProviders {
             GenerationType::Video => Self::video_providers(),
             GenerationType::Audio => Self::audio_providers(),
             GenerationType::Speech => Self::speech_providers(),
+            GenerationType::Transcription => Self::transcription_providers(),
         }
     }
 

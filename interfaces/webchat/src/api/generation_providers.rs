@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Default parameters for generation requests (mirrors server-side GenerationDefaults)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -92,6 +92,7 @@ impl GenerationProviderEntry {
                 "video" => Some(GenerationType::Video),
                 "audio" => Some(GenerationType::Audio),
                 "speech" => Some(GenerationType::Speech),
+                "transcription" => Some(GenerationType::Transcription),
                 _ => self.config.capabilities.first().copied(),
             }
         } else {
@@ -110,11 +111,16 @@ pub struct GenerationProvidersApi;
 
 impl GenerationProvidersApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<GenerationProviderEntry>, String> {
-        let result = state.rpc_call("generation_providers.list", Value::Null).await?;
+        let result = state
+            .rpc_call("generation_providers.list", Value::Null)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn get(state: &DashboardState, name: &str) -> Result<GenerationProviderEntry, String> {
+    pub async fn get(
+        state: &DashboardState,
+        name: &str,
+    ) -> Result<GenerationProviderEntry, String> {
         let params = serde_json::json!({ "name": name });
         let result = state.rpc_call("generation_providers.get", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
@@ -131,7 +137,9 @@ impl GenerationProvidersApi {
             "config": config,
             "generation_type": generation_type,
         });
-        state.rpc_call("generation_providers.create", params).await?;
+        state
+            .rpc_call("generation_providers.create", params)
+            .await?;
         Ok(())
     }
 
@@ -144,13 +152,17 @@ impl GenerationProvidersApi {
             "name": name,
             "config": config,
         });
-        state.rpc_call("generation_providers.update", params).await?;
+        state
+            .rpc_call("generation_providers.update", params)
+            .await?;
         Ok(())
     }
 
     pub async fn delete(state: &DashboardState, name: &str) -> Result<(), String> {
         let params = serde_json::json!({ "name": name });
-        state.rpc_call("generation_providers.delete", params).await?;
+        state
+            .rpc_call("generation_providers.delete", params)
+            .await?;
         Ok(())
     }
 
@@ -163,7 +175,9 @@ impl GenerationProvidersApi {
             "name": name,
             "generation_type": generation_type,
         });
-        state.rpc_call("generation_providers.setDefault", params).await?;
+        state
+            .rpc_call("generation_providers.setDefault", params)
+            .await?;
         Ok(())
     }
 
@@ -193,7 +207,9 @@ impl GenerationProvidersApi {
         provider_id: &str,
     ) -> Result<Vec<VoiceInfo>, String> {
         let params = serde_json::json!({ "provider_id": provider_id });
-        let result = state.rpc_call("generation_providers.voices", params).await?;
+        let result = state
+            .rpc_call("generation_providers.voices", params)
+            .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }
