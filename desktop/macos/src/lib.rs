@@ -1,12 +1,14 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod escape_listener;
 pub mod hotkey;
 mod media;
 mod permission;
 mod pim;
 mod system;
 
+use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
     SystemCapability,
@@ -15,6 +17,7 @@ use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
 
 use automation::MacOSAutomation;
+use escape_listener::EscapeListener;
 use media::MacOSMedia;
 use permission::MacOSPermission;
 use pim::MacOSPim;
@@ -24,6 +27,7 @@ use system::MacOSSystem;
 pub struct MacOSPlatform {
     screen: NativeScreen,
     automation: MacOSAutomation,
+    escape: EscapeListener,
     media: MacOSMedia,
     permission: MacOSPermission,
     pim: MacOSPim,
@@ -36,6 +40,7 @@ impl MacOSPlatform {
         Self {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
+            escape: EscapeListener::new(),
             media: MacOSMedia::new(),
             permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
@@ -77,6 +82,10 @@ impl DesktopPlatform for MacOSPlatform {
 
     fn media(&self) -> Option<&dyn MediaCapability> {
         Some(&self.media)
+    }
+
+    fn escape_listener(&self) -> Option<&dyn EscapeAbort> {
+        Some(&self.escape)
     }
 }
 

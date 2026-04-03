@@ -5,6 +5,20 @@ use crate::traits::{
     SystemCapability,
 };
 
+/// Cross-platform escape abort interface.
+///
+/// Allows the user to press Escape to abort AI desktop control.
+pub trait EscapeAbort: Send + Sync {
+    /// Start listening for Escape key presses.
+    fn start(&self) -> crate::Result<()>;
+    /// Stop listening and clean up.
+    fn stop(&self);
+    /// Check if the user has pressed Escape since the last reset.
+    fn is_aborted(&self) -> bool;
+    /// Reset the abort flag (prepare for next action).
+    fn reset(&self);
+}
+
 /// Aggregator that provides access to all desktop capabilities on a given platform.
 ///
 /// Each capability returns `Option<&dyn XCapability>` because not every platform
@@ -41,4 +55,9 @@ pub trait DesktopPlatform: Send + Sync {
 
     /// Media capture (camera, audio devices), if available.
     fn media(&self) -> Option<&dyn MediaCapability>;
+
+    /// Escape key abort listener, if available on this platform.
+    fn escape_listener(&self) -> Option<&dyn EscapeAbort> {
+        None
+    }
 }

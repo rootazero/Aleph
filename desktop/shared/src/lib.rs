@@ -32,7 +32,7 @@ pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;
 
 // Re-export new capability traits.
-pub use platform::DesktopPlatform;
+pub use platform::{DesktopPlatform, EscapeAbort};
 pub use traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
     SystemCapability,
