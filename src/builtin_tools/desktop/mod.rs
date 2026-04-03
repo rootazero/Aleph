@@ -2,6 +2,7 @@
 //! `desktop/*` capability layer.
 
 mod native;
+pub mod session_lock;
 mod types;
 
 #[cfg(test)]
