@@ -44,7 +44,10 @@ pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
     let after_tokens = &lower[tokens_idx..];
     let gt_idx = after_tokens.find('>')?;
     let after_gt = after_tokens[gt_idx + 1..].trim_start();
-    let limit_str: String = after_gt.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let limit_str: String = after_gt
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if limit_str.is_empty() {
         return None;
     }
@@ -68,6 +71,11 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
     }
 
     let msg = err.to_string().to_lowercase();
+
+    // 429 rate limit → classify as model-specific (Fallback) vs account-wide (Fatal).
+    if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
+        return classify_rate_limit(err);
+    }
 
     // 400 → Fatal (request is malformed, fallback won't help)
     if msg.contains("400") && (msg.contains("bad request") || msg.contains("invalid")) {
@@ -103,6 +111,50 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
     RetryVerdict::Fatal
 }
 
+/// Extract a Retry-After delay from an error message.
+///
+/// Providers embed "Retry after N seconds" in the suggestion/message field.
+/// We parse this to use server-guided delays instead of hardcoded values.
+fn extract_retry_after(err: &anyhow::Error) -> Option<Duration> {
+    let msg = err.to_string().to_lowercase();
+    // Match patterns like "retry after 30 seconds" or "retry-after: 60"
+    let after_idx = msg.find("retry after ").or_else(|| msg.find("retry-after: "))?;
+    let start = msg[after_idx..]
+        .find(|c: char| c.is_ascii_digit())?
+        + after_idx;
+    let num_str: String = msg[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let secs: u64 = num_str.parse().ok()?;
+    Some(Duration::from_secs(secs))
+}
+
+/// Classify a 429 rate limit error into Fallback or Fatal.
+///
+/// - Model-specific rate limits (error mentions a model name or per-model quota)
+///   → `Fallback` — switching to a different provider/model may succeed.
+/// - Account-wide rate limits ("account", "organization", "quota")
+///   → `Fatal` — switching models won't help, propagate to user.
+/// - Default 429 → `Fallback` (conservative: try switching provider).
+fn classify_rate_limit(err: &anyhow::Error) -> RetryVerdict {
+    let msg = err.to_string().to_lowercase();
+
+    // Account-wide / org-level → Fatal (switching won't help)
+    let account_patterns = ["account", "organization", "billing", "quota exceeded"];
+    if account_patterns.iter().any(|p| msg.contains(p)) {
+        return RetryVerdict::Fatal;
+    }
+
+    // Default: treat as model-specific → Fallback with server-guided delay
+    let reason = if let Some(delay) = extract_retry_after(err) {
+        format!("rate limited (retry after {}s)", delay.as_secs())
+    } else {
+        "rate limited".to_string()
+    };
+    RetryVerdict::Fallback { reason }
+}
+
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
     let msg = err.to_string().to_lowercase();
@@ -118,16 +170,17 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
         };
     }
 
-    // Rate-limit / overloaded → 500 ms base
-    if msg.contains("429") || msg.contains("rate limit") {
-        return RetryVerdict::Retry {
-            delay: Duration::from_millis(500),
-        };
+    // Rate-limit (429) → classify as model-specific vs account-wide.
+    // Model-specific limits benefit from switching providers (Fallback);
+    // account-wide limits propagate immediately (Fatal).
+    if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate_limit") {
+        return classify_rate_limit(err);
     }
+
+    // Overloaded (529) → retryable with server-guided or default 2s backoff
     if msg.contains("529") || msg.contains("overloaded") {
-        return RetryVerdict::Retry {
-            delay: Duration::from_millis(500),
-        };
+        let delay = extract_retry_after(err).unwrap_or(Duration::from_secs(2));
+        return RetryVerdict::Retry { delay };
     }
 
     // Transient network errors → 300 ms base
@@ -217,14 +270,41 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_classify_rate_limit() {
+    fn test_classify_rate_limit_model_specific_fallback() {
+        // Default 429 → Fallback (try switching provider)
         let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
-        assert_eq!(
-            classify_error(&err),
-            RetryVerdict::Retry {
-                delay: Duration::from_millis(500)
-            }
-        );
+        assert!(matches!(classify_error(&err), RetryVerdict::Fallback { .. }));
+    }
+
+    #[test]
+    fn test_classify_rate_limit_message_fallback() {
+        let err = anyhow::anyhow!("Rate limit exceeded: 4500 requests per minute");
+        assert!(matches!(classify_error(&err), RetryVerdict::Fallback { .. }));
+    }
+
+    #[test]
+    fn test_classify_rate_limit_account_wide_fatal() {
+        let err = anyhow::anyhow!("429 account quota exceeded");
+        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
+    fn test_classify_rate_limit_org_fatal() {
+        let err = anyhow::anyhow!("429 organization rate limit");
+        assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
+    fn test_extract_retry_after_from_error() {
+        let err = anyhow::anyhow!("Rate limited. Retry after 30 seconds.");
+        let delay = extract_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_extract_retry_after_none() {
+        let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
+        assert_eq!(extract_retry_after(&err), None);
     }
 
     #[test]
@@ -233,7 +313,7 @@ mod tests {
         assert_eq!(
             classify_error(&err),
             RetryVerdict::Retry {
-                delay: Duration::from_millis(500)
+                delay: Duration::from_secs(2)
             }
         );
     }
@@ -414,6 +494,34 @@ mod tests {
     // --- classify_exhausted_error tests ---
 
     #[test]
+    fn test_classify_exhausted_rate_limit_fallback() {
+        // Default 429 → Fallback (model-specific, try another provider)
+        let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_rate_limit_chinese_fallback() {
+        // Chinese provider error: model-specific rate limit → Fallback
+        let err = anyhow::anyhow!(
+            "Rate limit error: OpenAI Chat API rate limited (429): 请求频率达到限制：1分钟内最多4500次"
+        );
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_account_rate_limit_is_fatal() {
+        let err = anyhow::anyhow!("429 account quota exceeded");
+        assert_eq!(classify_exhausted_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
     fn test_classify_exhausted_overloaded() {
         let err = anyhow::anyhow!("HTTP 529 overloaded");
         assert!(matches!(
@@ -465,7 +573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_exhausted() {
+    async fn test_retry_exhausted_rate_limit() {
         let counter = Arc::new(AtomicUsize::new(0));
         let cancel = CancellationToken::new();
 
@@ -484,7 +592,31 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        // 1 initial + 2 retries = 3 attempts
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        // 429 is now Fallback — not retried by retry_async, only 1 attempt
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhausted_account_rate_limit() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+
+        let c = counter.clone();
+        let result: anyhow::Result<i32> = retry_async(
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(anyhow::anyhow!("429 account quota exceeded"))
+                }
+            },
+            &cancel,
+            2,
+        )
+        .await;
+
+        assert!(result.is_err());
+        // Account-wide 429 is Fatal — no retries, only 1 attempt
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }

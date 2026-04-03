@@ -124,11 +124,34 @@ impl Default for FailoverConfig {
     }
 }
 
-/// Health state for a provider
+/// Circuit breaker state for a provider.
+///
+/// Three-state model:
+/// - `Closed`: healthy, accepting requests.
+/// - `Open`: unhealthy, rejecting requests until cooldown expires.
+/// - `HalfOpen`: cooldown expired, allowing one probe request.
+///   - Probe success → `Closed`
+///   - Probe failure → `Open` with doubled cooldown (max 10 min)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Normal operation — requests flow through.
+    Closed,
+    /// Broken — reject requests until cooldown expires.
+    Open,
+    /// Cooldown expired — allow exactly one probe request.
+    HalfOpen,
+}
+
+/// Default failure threshold before the circuit opens.
+const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
+/// Maximum cooldown duration (10 minutes).
+const MAX_COOLDOWN: Duration = Duration::from_secs(600);
+
+/// Health state for a provider with three-state circuit breaker.
 #[derive(Debug, Clone)]
 pub struct HealthState {
-    /// Whether the provider is currently healthy
-    pub healthy: bool,
+    /// Current circuit breaker state.
+    pub circuit: CircuitState,
     /// Last time the provider was checked
     pub last_check: Instant,
     /// Last time the provider failed
@@ -137,16 +160,26 @@ pub struct HealthState {
     pub failure_count: u32,
     /// Last error message
     pub last_error: Option<String>,
+    /// Current cooldown duration (doubles on HalfOpen failure, resets on success)
+    pub cooldown: Duration,
+}
+
+impl HealthState {
+    /// Whether the provider is considered healthy (Closed or HalfOpen).
+    pub fn healthy(&self) -> bool {
+        self.circuit != CircuitState::Open
+    }
 }
 
 impl Default for HealthState {
     fn default() -> Self {
         Self {
-            healthy: true, // Assume healthy until proven otherwise
+            circuit: CircuitState::Closed,
             last_check: Instant::now(),
             last_failure: None,
             failure_count: 0,
             last_error: None,
+            cooldown: Duration::from_secs(300), // initial: 5 minutes
         }
     }
 }
@@ -281,53 +314,107 @@ impl FailoverProvider {
         }
     }
 
-    /// Check if a provider is currently healthy
+    /// Check if a provider is currently healthy, transitioning Open → HalfOpen when cooldown expires.
     async fn is_provider_healthy(&self, index: usize) -> bool {
-        let providers = self.providers.read().await;
-        if let Some(state) = providers.get(index) {
-            // Check if provider is marked healthy
-            if !state.health.healthy {
-                // Check if cooldown has passed
+        let mut providers = self.providers.write().await;
+        let Some(state) = providers.get_mut(index) else {
+            return false;
+        };
+
+        match state.health.circuit {
+            CircuitState::Closed | CircuitState::HalfOpen => true,
+            CircuitState::Open => {
+                // Check if cooldown has passed → transition to HalfOpen (allow one probe)
                 if let Some(last_failure) = state.health.last_failure {
-                    let cooldown = Duration::from_secs(self.config.unhealthy_cooldown_secs);
-                    if last_failure.elapsed() < cooldown {
-                        return false;
+                    if last_failure.elapsed() >= state.health.cooldown {
+                        tracing::info!(
+                            "Provider '{}' circuit breaker: Open → HalfOpen (probe allowed)",
+                            state.entry.name
+                        );
+                        state.health.circuit = CircuitState::HalfOpen;
+                        return true;
                     }
                 }
+                false
             }
-            true
-        } else {
-            false
         }
     }
 
-    /// Mark a provider as unhealthy
+    /// Mark a provider as unhealthy, transitioning the circuit breaker.
+    ///
+    /// - From `Closed`: increment failure count, open circuit after threshold.
+    /// - From `HalfOpen`: probe failed → back to `Open` with doubled cooldown.
     async fn mark_unhealthy(&self, index: usize, error: String) {
         let mut providers = self.providers.write().await;
         if let Some(state) = providers.get_mut(index) {
-            state.health.healthy = false;
             state.health.last_failure = Some(Instant::now());
             state.health.failure_count += 1;
             state.health.last_error = Some(error.clone());
             state.metrics.record_failure();
 
-            tracing::warn!(
-                "Provider '{}' marked unhealthy (failure #{}: {})",
-                state.entry.name,
-                state.health.failure_count,
-                error
-            );
+            match state.health.circuit {
+                CircuitState::HalfOpen => {
+                    // Probe failed → back to Open with doubled cooldown
+                    let new_cooldown =
+                        (state.health.cooldown * 2).min(MAX_COOLDOWN);
+                    state.health.cooldown = new_cooldown;
+                    state.health.circuit = CircuitState::Open;
+                    tracing::warn!(
+                        "Provider '{}' probe failed, circuit: HalfOpen → Open (cooldown: {}s, failure #{}: {})",
+                        state.entry.name,
+                        new_cooldown.as_secs(),
+                        state.health.failure_count,
+                        error
+                    );
+                }
+                CircuitState::Closed => {
+                    if state.health.failure_count >= CIRCUIT_OPEN_THRESHOLD {
+                        state.health.circuit = CircuitState::Open;
+                        tracing::warn!(
+                            "Provider '{}' circuit breaker opened after {} consecutive failures: {}",
+                            state.entry.name,
+                            state.health.failure_count,
+                            error
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Provider '{}' failure #{}: {}",
+                            state.entry.name,
+                            state.health.failure_count,
+                            error
+                        );
+                    }
+                }
+                CircuitState::Open => {
+                    // Already open, just update stats
+                    tracing::debug!(
+                        "Provider '{}' already open, recording failure: {}",
+                        state.entry.name,
+                        error
+                    );
+                }
+            }
         }
     }
 
-    /// Mark a provider as healthy
+    /// Mark a provider as healthy — close the circuit breaker and reset cooldown.
     async fn mark_healthy(&self, index: usize, latency_ms: u64) {
         let mut providers = self.providers.write().await;
         if let Some(state) = providers.get_mut(index) {
-            state.health.healthy = true;
+            if state.health.circuit != CircuitState::Closed {
+                tracing::info!(
+                    "Provider '{}' circuit breaker: {:?} → Closed (latency: {}ms)",
+                    state.entry.name,
+                    state.health.circuit,
+                    latency_ms
+                );
+            }
+            state.health.circuit = CircuitState::Closed;
             state.health.last_check = Instant::now();
             state.health.failure_count = 0;
             state.health.last_error = None;
+            // Reset cooldown to default on success
+            state.health.cooldown = Duration::from_secs(self.config.unhealthy_cooldown_secs);
             state.metrics.record_success(latency_ms);
         }
     }
@@ -351,7 +438,7 @@ impl FailoverProvider {
         let providers = self.providers.read().await;
         providers
             .iter()
-            .map(|p| (p.entry.name.clone(), p.health.healthy))
+            .map(|p| (p.entry.name.clone(), p.health.healthy()))
             .collect()
     }
 
@@ -543,9 +630,22 @@ mod tests {
     #[test]
     fn test_health_state_default() {
         let state = HealthState::default();
-        assert!(state.healthy);
+        assert_eq!(state.circuit, CircuitState::Closed);
+        assert!(state.healthy());
         assert_eq!(state.failure_count, 0);
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn test_circuit_state_healthy() {
+        let mut state = HealthState::default();
+        assert!(state.healthy()); // Closed is healthy
+
+        state.circuit = CircuitState::HalfOpen;
+        assert!(state.healthy()); // HalfOpen is healthy (probe allowed)
+
+        state.circuit = CircuitState::Open;
+        assert!(!state.healthy()); // Open is unhealthy
     }
 
     #[tokio::test]

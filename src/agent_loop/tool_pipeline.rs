@@ -10,17 +10,24 @@
 //! 7. Failure hooks (observers): fire on error outcomes
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
 use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
 use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::extension::HookEvent;
 use crate::tool_output::compressor::compress_tool_output;
+
+/// Maximum tool result size in estimated tokens. Results exceeding this are truncated
+/// to prevent a single tool call from consuming a disproportionate share of the context window.
+const MAX_TOOL_RESULT_TOKENS: usize = 8_000;
+
+const TRUNCATION_SUFFIX: &str = "\n... [output truncated, showing first ~8000 tokens]";
 
 // =============================================================================
 // PipelineOutcome
@@ -47,7 +54,7 @@ pub struct PipelineOutcome {
 pub struct ToolPipeline {
     hooks: Arc<HookExecutor>,
     safety: Arc<SafetyGuard>,
-    session_id: String,
+    session_id: RwLock<String>,
     working_dir: Option<PathBuf>,
 }
 
@@ -61,7 +68,7 @@ impl ToolPipeline {
         Self {
             hooks,
             safety,
-            session_id: session_id.into(),
+            session_id: RwLock::new(session_id.into()),
             working_dir: None,
         }
     }
@@ -70,6 +77,12 @@ impl ToolPipeline {
     pub fn with_working_dir(mut self, dir: PathBuf) -> Self {
         self.working_dir = Some(dir);
         self
+    }
+
+    /// Update the session identifier used for hook contexts.
+    pub fn set_session_id(&self, session_id: impl Into<String>) {
+        let mut current = self.session_id.write().unwrap_or_else(|e| e.into_inner());
+        *current = session_id.into();
     }
 
     /// Access the underlying safety guard.
@@ -125,6 +138,7 @@ impl ToolPipeline {
                     outcome: ToolOutcome {
                         tool_id: id.to_string(),
                         tool_name: name.to_string(),
+                        duration_ms: 0,
                         output_text: format!("[VALIDATION_ERROR] {}", msg),
                         is_error: true,
                         should_stop: false,
@@ -164,6 +178,7 @@ impl ToolPipeline {
                     outcome: ToolOutcome {
                         tool_id: id.to_string(),
                         tool_name: name.to_string(),
+                        duration_ms: 0,
                         output_text: format!("[HOOK_DENIED] {}", reason),
                         is_error: true,
                         should_stop: false,
@@ -216,6 +231,7 @@ impl ToolPipeline {
                 outcome: ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
+                    duration_ms: 0,
                     output_text: msg,
                     is_error: true,
                     should_stop: false,
@@ -241,6 +257,7 @@ impl ToolPipeline {
                     outcome: ToolOutcome {
                         tool_id: id.to_string(),
                         tool_name: name.to_string(),
+                        duration_ms: 0,
                         output_text: "[CANCELLED] Tool execution was cancelled".to_string(),
                         is_error: true,
                         should_stop: false,
@@ -334,8 +351,13 @@ impl ToolPipeline {
     /// Build a `HookContext` from tool call parameters.
     fn build_context(&self, name: &str, arguments: &Value) -> HookContext {
         let args_str = arguments.to_string();
+        let session_id = self
+            .session_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
-        let mut ctx = HookContext::new(&self.session_id)
+        let mut ctx = HookContext::new(session_id)
             .with_tool_name(name)
             .with_arguments(&args_str);
 
@@ -355,16 +377,23 @@ impl ToolPipeline {
         ctx
     }
 
-    /// Map a `ToolResult` to a `ToolOutcome`.
+    /// Map a `ToolResult` to a `ToolOutcome`, applying compression and truncation.
+    ///
+    /// Successful results are compressed (domain-specific summarization) then
+    /// truncated if they still exceed `MAX_TOOL_RESULT_TOKENS`. Error results
+    /// are passed through unchanged (error messages are typically short and
+    /// their completeness matters for debugging).
     fn map_result(id: &str, name: &str, result: &ToolResult) -> ToolOutcome {
         match result {
             ToolResult::Success { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
+                let final_text = truncate_tool_result(&compressed);
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
-                    output_text: compressed,
+                    duration_ms: 0,
+                    output_text: final_text,
                     is_error: false,
                     should_stop: false,
                     retryable: false,
@@ -373,6 +402,7 @@ impl ToolPipeline {
             ToolResult::Error { error, retryable } => ToolOutcome {
                 tool_id: id.to_string(),
                 tool_name: name.to_string(),
+                duration_ms: 0,
                 output_text: error.clone(),
                 is_error: true,
                 should_stop: false,
@@ -381,10 +411,12 @@ impl ToolPipeline {
             ToolResult::SuccessAndStopLoop { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
+                let final_text = truncate_tool_result(&compressed);
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
-                    output_text: compressed,
+                    duration_ms: 0,
+                    output_text: final_text,
                     is_error: false,
                     should_stop: true,
                     retryable: false,
@@ -399,6 +431,7 @@ impl ToolPipeline {
             outcome: ToolOutcome {
                 tool_id: id.to_string(),
                 tool_name: name.to_string(),
+                duration_ms: 0,
                 output_text: message,
                 is_error: true,
                 should_stop: false,
@@ -409,7 +442,6 @@ impl ToolPipeline {
             hook_messages: Vec::new(),
         }
     }
-
 }
 
 // =============================================================================
@@ -470,6 +502,39 @@ fn value_to_text(v: &Value) -> String {
     }
 }
 
+/// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_TOKENS`.
+///
+/// Truncates at a safe boundary (last newline before the byte limit) to avoid
+/// splitting lines or breaking JSON structure mid-object.
+fn truncate_tool_result(text: &str) -> String {
+    let estimated = estimate_tokens_smart(text);
+    if estimated <= MAX_TOOL_RESULT_TOKENS {
+        return text.to_string();
+    }
+
+    // Estimate how many characters correspond to the token limit.
+    // estimate_tokens_smart uses chars/ratio, so we reverse: chars = tokens * ratio.
+    // Use a conservative ratio (2.5 — code-like, since tool output is often structured).
+    let max_chars = MAX_TOOL_RESULT_TOKENS * 25 / 10; // 2.5 chars/token
+
+    // Find the byte offset at max_chars, then search backwards for a newline.
+    let byte_limit = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+
+    // Search backwards from byte_limit for a newline to make a clean cut.
+    let cut_point = text[..byte_limit]
+        .rfind('\n')
+        .map(|i| i + 1) // include the newline itself
+        .unwrap_or(byte_limit);
+
+    // Safe UTF-8 slice
+    let truncated = text.get(..cut_point).unwrap_or(text);
+    format!("{}{}", truncated, TRUNCATION_SUFFIX)
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -479,7 +544,9 @@ mod tests {
     use super::*;
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
-    use crate::extension::{HookAction, HookConfig, HookEvent, HookKind, HookPriority, PermissionAction};
+    use crate::extension::{
+        HookAction, HookConfig, HookEvent, HookKind, HookPriority, PermissionAction,
+    };
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -665,12 +732,16 @@ mod tests {
         assert!(!outcome.outcome.is_error);
         assert!(outcome.outcome.output_text.contains("test"));
         assert!(
-            outcome.additional_contexts.contains(&"pre-hook fired".to_string()),
+            outcome
+                .additional_contexts
+                .contains(&"pre-hook fired".to_string()),
             "expected pre-hook fired in contexts: {:?}",
             outcome.additional_contexts
         );
         assert!(
-            outcome.additional_contexts.contains(&"post-hook fired".to_string()),
+            outcome
+                .additional_contexts
+                .contains(&"post-hook fired".to_string()),
             "expected post-hook fired in contexts: {:?}",
             outcome.additional_contexts
         );
@@ -750,12 +821,21 @@ mod tests {
         let pipeline = empty_pipeline();
 
         let outcome = pipeline
-            .execute("c1", "strict", &json!({"other": "value"}), &registry, &cancel)
+            .execute(
+                "c1",
+                "strict",
+                &json!({"other": "value"}),
+                &registry,
+                &cancel,
+            )
             .await;
 
         assert!(outcome.outcome.is_error);
         assert!(
-            outcome.outcome.output_text.contains("missing required field"),
+            outcome
+                .outcome
+                .output_text
+                .contains("missing required field"),
             "expected validation error, got: {}",
             outcome.outcome.output_text
         );
@@ -828,10 +908,7 @@ mod tests {
             "expected HOOK_DENIED, got: {}",
             outcome.outcome.output_text
         );
-        assert!(
-            !outcome.outcome.retryable,
-            "deny should not be retryable"
-        );
+        assert!(!outcome.outcome.retryable, "deny should not be retryable");
     }
 
     #[tokio::test]
@@ -869,6 +946,43 @@ mod tests {
             outcome.outcome.output_text, "[REDACTED]",
             "post-hook should have replaced output"
         );
+    }
+
+    #[test]
+    fn truncate_short_result_unchanged() {
+        let short = "Hello, this is a short result.";
+        assert_eq!(truncate_tool_result(short), short);
+    }
+
+    #[test]
+    fn truncate_large_result_truncated() {
+        // Generate a string that's clearly over 8000 tokens
+        // At ~2.5 chars/token, 8000 tokens ≈ 20000 chars. Use 30000 chars.
+        let large = "x".repeat(30_000);
+        let result = truncate_tool_result(&large);
+        assert!(result.len() < large.len(), "result should be truncated");
+        assert!(
+            result.ends_with(TRUNCATION_SUFFIX),
+            "should end with truncation suffix"
+        );
+    }
+
+    #[test]
+    fn truncate_preserves_newline_boundary() {
+        // Build a string with newlines, large enough to trigger truncation
+        let mut lines = String::new();
+        for i in 0..1000 {
+            lines.push_str(&format!("Line {}: some content here to fill up space\n", i));
+        }
+        let result = truncate_tool_result(&lines);
+        if result.len() < lines.len() {
+            // The text before the suffix should end at a newline
+            let before_suffix = result.trim_end_matches(TRUNCATION_SUFFIX);
+            assert!(
+                before_suffix.ends_with('\n'),
+                "should truncate at newline boundary"
+            );
+        }
     }
 
     #[tokio::test]
@@ -924,7 +1038,9 @@ mod tests {
 
         assert!(outcome.outcome.is_error);
         assert!(
-            outcome.additional_contexts.contains(&"failure observed".to_string()),
+            outcome
+                .additional_contexts
+                .contains(&"failure observed".to_string()),
             "expected failure observed in contexts: {:?}",
             outcome.additional_contexts
         );

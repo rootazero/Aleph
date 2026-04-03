@@ -282,6 +282,8 @@ mod tests {
             used_tokens: 100,
             budget_tokens: 1000,
             ratio: 0.1,
+            overhead_tokens: 50,
+            available_for_messages: 950,
         };
         let result = PipelineResult {
             pressure_before: pressure.clone(),

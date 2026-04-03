@@ -208,6 +208,8 @@ impl PressureSensor {
             } else {
                 used_tokens as f64 / budget as f64
             },
+            overhead_tokens: overhead,
+            available_for_messages: budget.saturating_sub(overhead),
         }
     }
 

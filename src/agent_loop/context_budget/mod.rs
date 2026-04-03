@@ -19,13 +19,22 @@ use crate::providers::message::UnifiedMessage;
 /// Snapshot of context window utilization at a point in time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContextPressure {
-    /// Estimated tokens currently consumed by messages.
+    /// Estimated tokens currently consumed (overhead + messages).
     pub used_tokens: usize,
     /// Total token budget for the model.
     pub budget_tokens: usize,
     /// Ratio of used / budget (0.0 .. 1.0+).
     pub ratio: f64,
+    /// Tokens consumed by system prompt + tool definitions (the "bootstrap" cost).
+    pub overhead_tokens: usize,
+    /// Tokens available for conversation messages (budget - overhead).
+    pub available_for_messages: usize,
 }
+
+/// Threshold at which bootstrap overhead triggers a warning log.
+const OVERHEAD_WARNING_RATIO: f64 = 0.30;
+/// Threshold at which bootstrap overhead triggers a critical warning.
+const OVERHEAD_CRITICAL_RATIO: f64 = 0.50;
 
 impl ContextPressure {
     pub(crate) fn compute(
@@ -44,8 +53,9 @@ impl ContextPressure {
                     + estimate_tokens(&td.parameters.to_string(), ratio)
             })
             .sum();
+        let overhead = prompt_tokens + tool_tokens;
         let msg_tokens = estimate_total_tokens(messages, ratio);
-        let used = prompt_tokens + tool_tokens + msg_tokens;
+        let used = overhead + msg_tokens;
         let budget = token_budget as usize;
         Self {
             used_tokens: used,
@@ -55,6 +65,8 @@ impl ContextPressure {
             } else {
                 used as f64 / budget as f64
             },
+            overhead_tokens: overhead,
+            available_for_messages: budget.saturating_sub(overhead),
         }
     }
 }
@@ -272,6 +284,29 @@ impl ContextBudget {
         );
         self.last_pressure = Some(pressure);
 
+        // Bootstrap overhead warnings (system prompt + tool definitions)
+        if pressure.budget_tokens > 0 {
+            let overhead_ratio =
+                pressure.overhead_tokens as f64 / pressure.budget_tokens as f64;
+            if overhead_ratio >= OVERHEAD_CRITICAL_RATIO {
+                tracing::warn!(
+                    target: "context_budget",
+                    overhead = pressure.overhead_tokens,
+                    budget = pressure.budget_tokens,
+                    overhead_pct = format!("{:.0}%", overhead_ratio * 100.0),
+                    "Bootstrap overhead consuming >50% of context budget — consider reducing tools or system prompt"
+                );
+            } else if overhead_ratio >= OVERHEAD_WARNING_RATIO {
+                tracing::info!(
+                    target: "context_budget",
+                    overhead = pressure.overhead_tokens,
+                    budget = pressure.budget_tokens,
+                    overhead_pct = format!("{:.0}%", overhead_ratio * 100.0),
+                    "Bootstrap overhead consuming >30% of context budget"
+                );
+            }
+        }
+
         if pressure.ratio >= self.critical_threshold {
             // Critical — force final reply regardless of circuit breaker
             tracing::warn!(
@@ -355,6 +390,30 @@ mod tests {
         assert!(pressure.ratio < 1.0);
         assert!(pressure.used_tokens > 0);
         assert_eq!(pressure.budget_tokens, 1000);
+        // Overhead should include system prompt tokens
+        assert!(pressure.overhead_tokens > 0);
+        assert!(pressure.available_for_messages < 1000);
+        assert_eq!(
+            pressure.available_for_messages,
+            1000 - pressure.overhead_tokens
+        );
+    }
+
+    #[test]
+    fn test_context_pressure_overhead_with_tools() {
+        let msgs = vec![UnifiedMessage::user("hi")];
+        let tools = vec![ToolDefinition {
+            name: "bash_exec".to_string(),
+            description: "Execute a shell command and return output".to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+        }];
+        let pressure = ContextPressure::compute(&msgs, "system", &tools, 10_000, 3.5);
+        // Overhead should include system prompt + tool definitions
+        let pressure_no_tools = ContextPressure::compute(&msgs, "system", &[], 10_000, 3.5);
+        assert!(
+            pressure.overhead_tokens > pressure_no_tools.overhead_tokens,
+            "tools should increase overhead"
+        );
     }
 
     #[test]
