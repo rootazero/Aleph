@@ -544,14 +544,7 @@ fn ProviderDetailView(
             .clone()
             .unwrap_or_else(|| "mp3".to_string()),
     );
-    let form_stt_model = RwSignal::new(
-        provider
-            .config
-            .defaults
-            .stt_model
-            .clone()
-            .unwrap_or_else(|| "whisper-1".to_string()),
-    );
+    let form_voices_url = RwSignal::new(provider.config.voices_url.clone().unwrap_or_default());
     let voices_list: RwSignal<Vec<VoiceInfo>> = RwSignal::new(Vec::new());
     let voices_loading = RwSignal::new(false);
 
@@ -601,9 +594,6 @@ fn ProviderDetailView(
             defaults.speed = Some(form_speed.get());
             let fmt = form_audio_format.get();
             defaults.format = if fmt.is_empty() { None } else { Some(fmt) };
-            let stt = form_stt_model.get();
-            defaults.stt_model = if stt.is_empty() { None } else { Some(stt) };
-
             GenerationProviderConfig {
                 provider_type: config_provider_type.clone(),
                 api_key: {
@@ -625,6 +615,14 @@ fn ProviderDetailView(
                 },
                 edit_url: {
                     let url = form_edit_url.get();
+                    if url.is_empty() {
+                        None
+                    } else {
+                        Some(url)
+                    }
+                },
+                voices_url: {
+                    let url = form_voices_url.get();
                     if url.is_empty() {
                         None
                     } else {
@@ -956,17 +954,17 @@ fn ProviderDetailView(
                             </select>
                         </div>
 
-                        // STT Model
+                        // Voices URL
                         <div>
-                            <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.stt_model)}</label>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">"Voices URL"</label>
                             <input
                                 type="text"
-                                prop:value=move || form_stt_model.get()
-                                on:input=move |ev| form_stt_model.set(event_target_value(&ev))
-                                placeholder=t_string!(i18n, settings.generation.stt_model_placeholder).to_string()
+                                prop:value=move || form_voices_url.get()
+                                on:input=move |ev| form_voices_url.set(event_target_value(&ev))
+                                placeholder="https://example.com/v1/audio/voices"
                                 class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
-                            <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.stt_model_hint)}</p>
+                            <p class="mt-1 text-xs text-text-tertiary">"Optional. Auto-derived from base URL if empty."</p>
                         </div>
 
                         // Derived Endpoints (read-only info)
@@ -980,16 +978,6 @@ fn ProviderDetailView(
                                             let base = form_base_url.get();
                                             let base = extract_base_url(&base);
                                             format!("{}/v1/audio/speech", base)
-                                        }}
-                                    </span>
-                                </div>
-                                <div class="flex gap-2">
-                                    <span class="text-text-tertiary w-8 shrink-0">"STT"</span>
-                                    <span class="text-text-secondary break-all">
-                                        {move || {
-                                            let base = form_base_url.get();
-                                            let base = extract_base_url(&base);
-                                            format!("{}/v1/audio/transcriptions", base)
                                         }}
                                     </span>
                                 </div>
@@ -1151,6 +1139,7 @@ fn PresetSetupPanel(
                     }
                 },
                 edit_url: None,
+                voices_url: None,
                 models: {
                     let m = form_model.get();
                     if m.is_empty() {
@@ -1394,6 +1383,7 @@ fn AddCustomProviderPanel(
                     Some(url)
                 }
             },
+            voices_url: None,
             models: if form_model.get().is_empty() {
                 vec![]
             } else {
