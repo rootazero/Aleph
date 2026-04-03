@@ -8,10 +8,12 @@
 //! - [`types::PostCompactCleanup`] — hooks that run after each compaction pass
 //! - [`types::CompactionContext`] / [`types::CompactionResult`] — data carriers
 
+pub mod constraint_injector;
 pub mod micro_compactor;
 pub mod tool_aware_chunker;
 pub mod types;
 
+pub use constraint_injector::{Constraint, ConstraintCategory, ConstraintInjector, ConstraintSource};
 pub use micro_compactor::{
     classify_importance, format_compact_placeholder, Importance, MicroCompactor,
     MicroCompactorConfig, ToolOutputEntry,
