@@ -111,13 +111,23 @@ impl BrowserSsrfGuard {
 
     /// Validate a URL against the SSRF policy.
     pub fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
-        // Build core policy from browser config
-        let core_policy = CoreSsrfPolicy {
-            enabled: true,
-            allow_private_network: !self.config.block_private,
-            allowed_hosts: self.config.allowed_domains.clone(),
-            blocked_hosts: self.config.blocked_domains.clone(),
-            ..CoreSsrfPolicy::default()
+        // Build core policy from browser config.
+        // When block_private is false, disable SSRF protection entirely so that
+        // loopback, localhost, and private ranges are all reachable (useful for
+        // local development and self-hosted deployments).
+        let core_policy = if !self.config.block_private
+            && self.config.blocked_domains.is_empty()
+            && self.config.allowed_domains.is_empty()
+        {
+            CoreSsrfPolicy::disabled()
+        } else {
+            CoreSsrfPolicy {
+                enabled: true,
+                allow_private_network: !self.config.block_private,
+                allowed_hosts: self.config.allowed_domains.clone(),
+                blocked_hosts: self.config.blocked_domains.clone(),
+                ..CoreSsrfPolicy::default()
+            }
         };
 
         // Delegate to core engine (sync validation)

@@ -203,13 +203,12 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 
     parts.push(format!("[Cron Task: {}]", snapshot.id));
 
-    if snapshot.source_channel_id.is_some() {
-        parts.push(
+    if let Some(ref channel_id) = snapshot.source_channel_id {
+        parts.push(format!(
             "You are executing a scheduled task. \
-             Just produce the result directly — the system will automatically deliver your response \
-             to the user who created this task. Do NOT try to use a message tool for delivery."
-                .to_string(),
-        );
+             When finished, use the message tool to deliver your response to channel {channel_id}. \
+             The result will be sent directly to the user who created this task."
+        ));
     }
 
     parts.push(String::new()); // blank line separator

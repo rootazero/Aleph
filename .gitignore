@@ -92,6 +92,8 @@ platforms/
 Scripts/
 examples/*
 !examples/plugins/
+!examples/protocols/
+!examples/protocols/**
 
 # UI node artifacts
 core/ui/

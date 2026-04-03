@@ -511,8 +511,8 @@ DQIDAQAB
         let app_id = "my-bot-app-id";
         let validator = make_validator_with_test_key(app_id);
 
-        // exp = 1 second in the past
-        let claims = make_claims(app_id, "https://api.botframework.com", -1);
+        // exp = 60 seconds in the past (well beyond the 30-second leeway)
+        let claims = make_claims(app_id, "https://api.botframework.com", -60);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
 
         assert!(

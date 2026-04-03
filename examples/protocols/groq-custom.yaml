@@ -1,0 +1,12 @@
+# Example: Groq with custom authentication header
+# Extends OpenAI protocol with Groq-specific auth and endpoint.
+name: groq-custom
+extends: openai
+base_url: https://api.groq.com/openai/v1
+
+differences:
+  auth:
+    header: X-API-Key
+    prefix: ""
+  request_fields:
+    model: llama3-8b-8192
