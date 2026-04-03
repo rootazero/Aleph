@@ -112,6 +112,30 @@ pub struct DesktopArgs {
     /// Include system audio (for screen_record, default: false).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_audio: Option<bool>,
+
+    /// Target display ID for screenshot (from display_list). If absent, uses primary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_id: Option<u32>,
+
+    /// Screenshot format: "png" (default) or "jpeg".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+
+    /// JPEG quality 0.0-1.0 (only when format="jpeg", default 0.75).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<f64>,
+
+    /// Max screenshot width in pixels (scale down if wider).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<u32>,
+
+    /// Max screenshot height in pixels (scale down if taller).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<u32>,
+
+    /// Batch action list (only for action="batch").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<serde_json::Value>>,
 }
 
 /// Output from desktop operations.

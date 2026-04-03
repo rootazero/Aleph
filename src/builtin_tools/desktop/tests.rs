@@ -29,6 +29,12 @@ fn make_args(action: &str) -> DesktopArgs {
         duration: None,
         fps: None,
         with_audio: None,
+        display_id: None,
+        format: None,
+        quality: None,
+        max_width: None,
+        max_height: None,
+        actions: None,
     }
 }
 
