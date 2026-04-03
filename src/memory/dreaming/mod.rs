@@ -1,4 +1,11 @@
 //! DreamDaemon: background memory consolidation and graph decay.
+//!
+//! This module implements a staged dream pipeline architecture.
+//! Each stage implements the `DreamStage` trait and operates on a shared
+//! `DreamContext` that flows through the pipeline.
+
+pub mod report;
+pub mod stages;
 
 use crate::config::{
     DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy,
@@ -18,6 +25,110 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{info, warn};
+
+// Re-export stage types for backward compatibility
+pub use stages::decay::MemoryDecayReport;
+pub use stages::{
+    ClusterStage, CollectStage, ConsolidateStage, DecayStage, DeepSynthesisStage,
+    DriftDetectStage, SummarizeStage,
+};
+pub use stages::{DreamStage, DriftAction, MemoryCluster, MetadataGroupKey};
+
+// Re-export report types
+pub use report::{DreamReport, DreamReportStatus, DreamRunMetadata, DreamRunType};
+
+// ---------------------------------------------------------------------------
+// DreamContext — shared state flowing through the pipeline
+// ---------------------------------------------------------------------------
+
+/// Shared context passed between dream pipeline stages.
+pub struct DreamContext {
+    pub memories: Vec<MemoryEntry>,
+    pub clusters: Vec<MemoryCluster>,
+    pub new_facts: Vec<MemoryFact>,
+    pub drift_resolutions: Vec<DriftAction>,
+    pub config: ConfigDreamingConfig,
+    pub run_metadata: DreamRunMetadata,
+    pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub synthesis_insights_count: usize,
+    pub database: MemoryBackend,
+    pub graph_store: GraphStore,
+    pub graph_decay_config: GraphDecayConfig,
+    pub memory_decay_config: DecayConfig,
+    pub command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
+}
+
+// ---------------------------------------------------------------------------
+// DreamPipeline — stage executor
+// ---------------------------------------------------------------------------
+
+/// Executes a sequence of `DreamStage` implementations.
+pub struct DreamPipeline {
+    stages: Vec<Box<dyn DreamStage>>,
+}
+
+impl DreamPipeline {
+    pub fn new() -> Self {
+        Self {
+            stages: Vec::new(),
+        }
+    }
+
+    /// Append a stage to the pipeline (builder pattern).
+    pub fn stage<S: DreamStage + 'static>(mut self, stage: S) -> Self {
+        self.stages.push(Box::new(stage));
+        self
+    }
+
+    /// Build the standard daily pipeline (6 stages).
+    pub fn daily() -> Self {
+        Self::new()
+            .stage(CollectStage)
+            .stage(ClusterStage)
+            .stage(SummarizeStage)
+            .stage(DriftDetectStage)
+            .stage(ConsolidateStage)
+            .stage(DecayStage)
+    }
+
+    /// Build the weekly pipeline (daily + deep synthesis).
+    pub fn weekly() -> Self {
+        Self::daily().stage(DeepSynthesisStage)
+    }
+
+    /// Run the pipeline, returning a `DreamReport`.
+    pub async fn run(&self, mut ctx: DreamContext) -> Result<DreamReport, AlephError> {
+        let mut executed: Vec<String> = Vec::new();
+
+        for stage in &self.stages {
+            if !stage.should_run(&ctx).await {
+                continue;
+            }
+            // Check for user activity before each stage
+            if (ctx.activity_checker)() {
+                let mut report = DreamReport::interrupted(&ctx, stage.name());
+                report.stages_executed = executed;
+                return Ok(report);
+            }
+            ctx = stage.execute(ctx).await?;
+            executed.push(stage.name().to_string());
+        }
+
+        let mut report = DreamReport::completed_default(&ctx);
+        report.stages_executed = executed;
+        Ok(report)
+    }
+}
+
+impl Default for DreamPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Original DreamDaemon code (preserved unchanged)
+// ---------------------------------------------------------------------------
 
 const DEFAULT_LOOKBACK_HOURS: i64 = 24;
 const DEFAULT_MAX_MEMORIES: u32 = 500;
@@ -110,13 +221,6 @@ pub struct DreamStatus {
     pub last_run_at: Option<i64>,
     pub last_status: Option<String>,
     pub last_duration_ms: Option<u64>,
-}
-
-/// Memory decay summary.
-#[derive(Debug, Clone, Default)]
-pub struct MemoryDecayReport {
-    pub updated_facts: u64,
-    pub pruned_facts: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -515,7 +619,7 @@ impl DreamDaemon {
     }
 }
 
-/// Configuration for the STM→LTM consolidation pipeline.
+/// Configuration for the STM->LTM consolidation pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidationPipelineConfig {
     /// Whether consolidation is enabled
@@ -704,6 +808,18 @@ mod tests {
         let early = NaiveTime::from_hms_opt(4, 0, 0).unwrap();
         assert!(late >= start || late <= end);
         assert!(early >= start || early <= end);
+    }
+
+    #[test]
+    fn test_pipeline_builder() {
+        let pipeline = DreamPipeline::daily();
+        assert_eq!(pipeline.stages.len(), 6);
+    }
+
+    #[test]
+    fn test_pipeline_weekly_has_seven_stages() {
+        let pipeline = DreamPipeline::weekly();
+        assert_eq!(pipeline.stages.len(), 7);
     }
 }
 
