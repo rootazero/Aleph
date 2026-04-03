@@ -21,13 +21,13 @@ pub mod action;
 pub mod automation_types;
 pub mod bridge;
 pub mod error;
+pub mod media_types;
 pub mod native_screen;
 pub mod perception;
-pub mod media_types;
 pub mod permission_types;
 pub mod pim_types;
-pub mod screen_types;
 pub mod platform;
+pub mod screen_types;
 pub mod system_types;
 pub mod traits;
 
@@ -36,7 +36,10 @@ pub use native_screen::NativeScreen;
 
 // Re-export new capability traits.
 pub use platform::DesktopPlatform;
-pub use traits::{AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
+pub use traits::{
+    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
+    SystemCapability,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -112,6 +115,18 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+}
+
+/// Mouse/keyboard press action type.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PressAction {
+    /// Hold button/key down without releasing.
+    Press,
+    /// Release a previously pressed button/key.
+    Release,
+    /// Press and immediately release (standard click).
+    Click,
 }
 
 /// Information about an on-screen window.
@@ -220,11 +235,9 @@ impl DesktopCapability for NativeDesktop {
     async fn ocr(&self, image_png: Option<&[u8]>) -> Result<OcrResult> {
         let png_bytes = match image_png {
             Some(bytes) => bytes.to_vec(),
-            None => {
-                tokio::task::spawn_blocking(perception::capture_screen_png)
-                    .await
-                    .map_err(|e| DesktopError::OcrFailed(format!("Task join error: {e}")))??
-            }
+            None => tokio::task::spawn_blocking(perception::capture_screen_png)
+                .await
+                .map_err(|e| DesktopError::OcrFailed(format!("Task join error: {e}")))??,
         };
         tokio::task::spawn_blocking(move || perception::perform_ocr(&png_bytes))
             .await
@@ -310,7 +323,7 @@ mod tests {
         {
             let result = desktop.window_list().await;
             match result {
-                Ok(_) => {} // success
+                Ok(_) => {}                              // success
                 Err(DesktopError::WindowFailed(_)) => {} // acceptable in CI
                 Err(other) => panic!("Unexpected error: {other:?}"),
             }
