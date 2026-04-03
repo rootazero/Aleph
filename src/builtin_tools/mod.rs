@@ -61,6 +61,7 @@ pub mod memory_search;
 pub mod meta_tools;
 pub mod pdf_generate;
 pub mod permission_tool;
+pub mod recall_context;
 pub mod pim;
 pub mod scratchpad;
 pub mod search;
@@ -135,6 +136,7 @@ pub use meta_tools::{
     ListToolsTool,
 };
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
+pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTool};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
