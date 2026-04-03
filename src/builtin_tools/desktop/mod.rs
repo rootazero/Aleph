@@ -363,7 +363,7 @@ Examples:
 
         // 4. Handle batch at this level (needs recursive self.call())
         if args.action == "batch" {
-            return Ok(self.execute_batch(&args).await?);
+            return self.execute_batch(&args).await;
         }
 
         // 5. Execute via platform

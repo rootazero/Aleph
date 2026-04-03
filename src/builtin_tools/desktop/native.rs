@@ -68,17 +68,83 @@ impl super::DesktopTool {
                     }
                     None => None,
                 };
-                match screen.screenshot(region).await {
-                    Ok(s) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({
-                            "image_base64": s.image_base64,
-                            "width": s.width,
-                            "height": s.height,
-                            "format": s.format,
-                        })),
-                        message: None,
-                    })),
+
+                // Extract post-processing params before moving region
+                let fmt = args.format.clone();
+                let quality = args.quality;
+                let max_w = args.max_width;
+                let max_h = args.max_height;
+                let display_id = args.display_id;
+                let needs_processing =
+                    fmt.is_some() || max_w.is_some() || max_h.is_some();
+
+                // Capture: specific display or primary
+                let screenshot_result = if let Some(did) = display_id {
+                    let region_clone = region;
+                    tokio::task::spawn_blocking(move || {
+                        aleph_desktop::perception::take_screenshot_display(
+                            did,
+                            region_clone.as_ref(),
+                        )
+                    })
+                    .await
+                    .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
+                } else {
+                    screen.screenshot(region).await
+                };
+
+                match screenshot_result {
+                    Ok(s) => {
+                        if needs_processing {
+                            use base64::Engine;
+                            let raw_bytes = base64::engine::general_purpose::STANDARD
+                                .decode(&s.image_base64)
+                                .map_err(|e| {
+                                    crate::error::AlephError::other(format!("base64 decode: {e}"))
+                                })?;
+                            let out_fmt = fmt.unwrap_or_else(|| "png".to_string());
+                            let quality_u8 =
+                                (quality.unwrap_or(0.75).clamp(0.0, 1.0) * 100.0) as u8;
+                            match tokio::task::spawn_blocking(move || {
+                                aleph_desktop::perception::process_screenshot(
+                                    &raw_bytes, max_w, max_h, &out_fmt, quality_u8,
+                                )
+                            })
+                            .await
+                            .map_err(|e| {
+                                crate::error::AlephError::other(format!("task join: {e}"))
+                            })? {
+                                Ok(processed) => Ok(Some(DesktopOutput {
+                                    success: true,
+                                    data: Some(serde_json::json!({
+                                        "image_base64": processed.image_base64,
+                                        "width": processed.width,
+                                        "height": processed.height,
+                                        "format": processed.format,
+                                    })),
+                                    message: None,
+                                })),
+                                Err(e) => Ok(Some(DesktopOutput {
+                                    success: false,
+                                    data: None,
+                                    message: Some(format!(
+                                        "Screenshot processing error: {e}"
+                                    )),
+                                })),
+                            }
+                        } else {
+                            Ok(Some(DesktopOutput {
+                                success: true,
+                                data: Some(serde_json::json!({
+                                    "image_base64": s.image_base64,
+                                    "width": s.width,
+                                    "height": s.height,
+                                    "format": s.format,
+                                })),
+                                message: None,
+                            }))
+                        }
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -460,6 +526,78 @@ impl super::DesktopTool {
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
+            }
+            "display_list" => match screen.display_list().await {
+                Ok(displays) => {
+                    let data: Vec<serde_json::Value> = displays
+                        .iter()
+                        .map(|d| {
+                            serde_json::json!({
+                                "id": d.id,
+                                "name": d.name,
+                                "width": d.width,
+                                "height": d.height,
+                                "scale_factor": d.scale_factor,
+                                "is_primary": d.is_primary,
+                                "origin_x": d.origin_x,
+                                "origin_y": d.origin_y,
+                            })
+                        })
+                        .collect();
+                    Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"displays": data})),
+                        message: None,
+                    }))
+                }
+                Err(e) => Ok(Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Screen capability error: {e}")),
+                })),
+            },
+            "paste" => {
+                let text = args.text.as_deref().unwrap_or("");
+
+                // Save current clipboard (best effort)
+                let saved = screen.clipboard_read().await.ok();
+
+                // Write target text to clipboard
+                if let Err(e) = screen.clipboard_write(text).await {
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Failed to write to clipboard: {e}")),
+                    }));
+                }
+
+                // Cmd+V to paste
+                if let Err(e) = screen.key_combo(&["meta".into()], "v").await {
+                    if let Some(ref original) = saved {
+                        let _ = screen.clipboard_write(original).await;
+                    }
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Failed to paste: {e}")),
+                    }));
+                }
+
+                // Wait for paste to take effect
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                // Restore original clipboard (best effort)
+                if let Some(original) = saved {
+                    let _ = screen.clipboard_write(&original).await;
+                }
+
+                Ok(Some(DesktopOutput {
+                    success: true,
+                    data: Some(
+                        serde_json::json!({"pasted": true, "chars": text.chars().count()}),
+                    ),
+                    message: None,
+                }))
             }
             _ => Ok(None),
         }
