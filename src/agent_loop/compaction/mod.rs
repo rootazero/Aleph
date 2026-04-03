@@ -8,8 +8,13 @@
 //! - [`types::PostCompactCleanup`] — hooks that run after each compaction pass
 //! - [`types::CompactionContext`] / [`types::CompactionResult`] — data carriers
 
+pub mod micro_compactor;
 pub mod types;
 
+pub use micro_compactor::{
+    classify_importance, format_compact_placeholder, Importance, MicroCompactor,
+    MicroCompactorConfig, ToolOutputEntry,
+};
 pub use types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
     TokenEstimate,
