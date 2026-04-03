@@ -88,6 +88,11 @@ pub struct GenerationProviderConfig {
     /// Optional explicit edit endpoint URL (for openai_compat providers with non-standard edit paths)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_url: Option<String>,
+
+    /// Optional explicit voices endpoint URL (for fetching available TTS voices)
+    /// When omitted, auto-derived as {base_url}/v1/audio/voices
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voices_url: Option<String>,
 }
 
 fn default_enabled() -> bool {
@@ -117,6 +122,7 @@ impl Default for GenerationProviderConfig {
             model_aliases: HashMap::new(),
             verified: false,
             edit_url: None,
+            voices_url: None,
         }
     }
 }
