@@ -110,8 +110,6 @@ pub struct OpenAiTtsProvider {
     model: String,
     /// Default voice to use
     default_voice: String,
-    /// Resolved URL for deriving secondary endpoints (e.g., STT)
-    resolved: ResolvedUrl,
 }
 
 impl OpenAiTtsProvider {
@@ -202,19 +200,12 @@ impl OpenAiTtsProvider {
             endpoint,
             model,
             default_voice: voice,
-            resolved,
         })
     }
 
     /// Get the full URL for the audio/speech endpoint
     fn speech_url(&self) -> String {
         self.endpoint.clone()
-    }
-
-    /// Get the STT (speech-to-text / transcription) endpoint URL.
-    /// Returns None for custom URLs or when secondary endpoint is unavailable.
-    pub fn stt_url(&self) -> Option<String> {
-        self.resolved.secondary_endpoint(GenerationType::Speech)
     }
 
     /// Build the API request body from a GenerationRequest
