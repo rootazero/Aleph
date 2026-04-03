@@ -26,12 +26,6 @@ use super::{DreamContext, DreamStage};
 /// DBSCAN epsilon for synthesis clustering (cosine distance threshold).
 const SYNTHESIS_EPS: f32 = 0.35;
 
-/// Minimum cluster size needed to produce a synthesis insight.
-const MIN_CLUSTER_SIZE: usize = 3;
-
-/// Maximum number of insights produced per run.
-const MAX_INSIGHTS_PER_RUN: usize = 10;
-
 // ---------------------------------------------------------------------------
 // PatternInsight
 // ---------------------------------------------------------------------------
@@ -63,6 +57,9 @@ impl DreamStage for DeepSynthesisStage {
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+        let min_cluster_size = ctx.config.synthesis_min_cluster_size();
+        let max_insights = ctx.config.synthesis_max_insights();
+
         // 1. Fetch all valid LTM facts
         let all_facts = ctx.database.get_all_facts(false, None).await?;
         let ltm_facts: Vec<MemoryFact> = all_facts
@@ -100,7 +97,7 @@ impl DreamStage for DeepSynthesisStage {
                 .filter_map(|(i, f)| f.embedding.as_ref().map(|e| (i, e)))
                 .collect();
 
-            if with_emb.len() < MIN_CLUSTER_SIZE {
+            if with_emb.len() < min_cluster_size {
                 continue;
             }
 
@@ -108,7 +105,7 @@ impl DreamStage for DeepSynthesisStage {
                 with_emb.iter().map(|(_, e)| (*e).clone()).collect();
             let emb_to_idx: Vec<usize> = with_emb.iter().map(|(i, _)| *i).collect();
 
-            let labels = dbscan(&embeddings, SYNTHESIS_EPS, MIN_CLUSTER_SIZE);
+            let labels = dbscan(&embeddings, SYNTHESIS_EPS, min_cluster_size);
 
             // Group by cluster label (skip noise = -1)
             let mut cluster_groups: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -122,7 +119,7 @@ impl DreamStage for DeepSynthesisStage {
             }
 
             for (_label, member_indices) in cluster_groups {
-                if member_indices.len() < MIN_CLUSTER_SIZE {
+                if member_indices.len() < min_cluster_size {
                     continue;
                 }
 
@@ -155,12 +152,12 @@ impl DreamStage for DeepSynthesisStage {
                     confidence: avg_confidence,
                 });
 
-                if insights.len() >= MAX_INSIGHTS_PER_RUN {
+                if insights.len() >= max_insights {
                     break;
                 }
             }
 
-            if insights.len() >= MAX_INSIGHTS_PER_RUN {
+            if insights.len() >= max_insights {
                 break;
             }
         }
@@ -355,5 +352,129 @@ mod tests {
         assert_eq!(insight.source_fact_ids.len(), 3);
         assert_eq!(insight.frequency, 3);
         assert!((insight.confidence - 0.85).abs() < f32::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // should_run via DreamStage trait with real DreamContext
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn should_run_false_for_daily_via_trait() {
+        use crate::memory::decay::DecayConfig;
+        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::sync_primitives::Arc;
+        use super::DreamContext;
+        use crate::memory::dreaming::stages::drift::DriftAction;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
+            .await
+            .expect("lance backend");
+        let database = Arc::new(database);
+
+        let ctx = DreamContext {
+            memories: Vec::new(),
+            clusters: Vec::new(),
+            new_facts: Vec::new(),
+            drift_resolutions: Vec::<DriftAction>::new(),
+            config: crate::config::DreamingConfig::default(),
+            run_metadata: make_run_metadata(DreamRunType::Daily),
+            activity_checker: Arc::new(|| false),
+            synthesis_insights_count: 0,
+            database: database.clone(),
+            graph_store: GraphStore::new(database),
+            graph_decay_config: GraphDecayConfig::default(),
+            memory_decay_config: DecayConfig::default(),
+            command_handler: None,
+            provider: None,
+            graph_decay_report: None,
+            memory_decay_report: None,
+        };
+
+        let stage = DeepSynthesisStage;
+        assert!(!stage.should_run(&ctx).await, "Daily runs should skip deep synthesis");
+    }
+
+    #[tokio::test]
+    async fn should_run_true_for_weekly_via_trait() {
+        use crate::memory::decay::DecayConfig;
+        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::sync_primitives::Arc;
+        use super::DreamContext;
+        use crate::memory::dreaming::stages::drift::DriftAction;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
+            .await
+            .expect("lance backend");
+        let database = Arc::new(database);
+
+        let ctx = DreamContext {
+            memories: Vec::new(),
+            clusters: Vec::new(),
+            new_facts: Vec::new(),
+            drift_resolutions: Vec::<DriftAction>::new(),
+            config: crate::config::DreamingConfig::default(),
+            run_metadata: make_run_metadata(DreamRunType::Weekly),
+            activity_checker: Arc::new(|| false),
+            synthesis_insights_count: 0,
+            database: database.clone(),
+            graph_store: GraphStore::new(database),
+            graph_decay_config: GraphDecayConfig::default(),
+            memory_decay_config: DecayConfig::default(),
+            command_handler: None,
+            provider: None,
+            graph_decay_report: None,
+            memory_decay_report: None,
+        };
+
+        let stage = DeepSynthesisStage;
+        assert!(stage.should_run(&ctx).await, "Weekly runs should execute deep synthesis");
+    }
+
+    // -----------------------------------------------------------------------
+    // execute skips when too few LTM facts
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_skips_when_too_few_ltm_facts() {
+        use crate::memory::decay::DecayConfig;
+        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::sync_primitives::Arc;
+        use super::DreamContext;
+        use crate::memory::dreaming::stages::drift::DriftAction;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
+            .await
+            .expect("lance backend");
+        let database = Arc::new(database);
+
+        // The empty database has zero LTM facts — fewer than min_cluster_size (3).
+        let ctx = DreamContext {
+            memories: Vec::new(),
+            clusters: Vec::new(),
+            new_facts: Vec::new(),
+            drift_resolutions: Vec::<DriftAction>::new(),
+            config: crate::config::DreamingConfig::default(),
+            run_metadata: make_run_metadata(DreamRunType::Weekly),
+            activity_checker: Arc::new(|| false),
+            synthesis_insights_count: 0,
+            database: database.clone(),
+            graph_store: GraphStore::new(database),
+            graph_decay_config: GraphDecayConfig::default(),
+            memory_decay_config: DecayConfig::default(),
+            command_handler: None,
+            provider: None,
+            graph_decay_report: None,
+            memory_decay_report: None,
+        };
+
+        let stage = DeepSynthesisStage;
+        let result = stage.execute(ctx).await.unwrap();
+        assert_eq!(
+            result.synthesis_insights_count, 0,
+            "Should produce zero insights when database has no LTM facts"
+        );
     }
 }
