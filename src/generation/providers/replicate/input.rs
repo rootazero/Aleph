@@ -60,6 +60,9 @@ pub fn build_input(request: &GenerationRequest) -> serde_json::Value {
                 input.insert("speed".to_string(), serde_json::json!(speed));
             }
         }
+        GenerationType::Transcription => {
+            // Transcription requests are handled via dedicated STT pipeline, not Replicate
+        }
     }
 
     // Add any extra parameters

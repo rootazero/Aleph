@@ -347,6 +347,7 @@ pub async fn handle_create(
                 GenerationType::Video => "video",
                 GenerationType::Speech => "speech",
                 GenerationType::Audio => "audio",
+                GenerationType::Transcription => "transcription",
             })
         })
         .unwrap_or("image");
@@ -676,6 +677,9 @@ pub async fn handle_set_default(
             }
             GenerationType::Speech => {
                 cfg.generation.default_speech_provider = Some(params.name.clone());
+            }
+            GenerationType::Transcription => {
+                cfg.generation.default_transcription_provider = Some(params.name.clone());
             }
         }
 

@@ -384,46 +384,56 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire STT config for voice transcription (reuse speech provider credentials for Whisper API)
+    // Wire STT config from dedicated transcription provider
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
-        // Find first enabled speech provider with API key for STT
-        let speech_provider =
-            cfg.generation
-                .merged_providers()
-                .into_iter()
-                .find(|(_, pcfg, gen_type)| {
-                    *gen_type == alephcore::generation::GenerationType::Speech
-                        && pcfg.enabled
-                        && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+        let gen_cfg = &cfg.generation;
+        {
+            let transcription_provider = gen_cfg
+                .transcription_providers
+                .iter()
+                .find(|(name, pcfg)| {
+                    if let Some(ref default_name) = gen_cfg.default_transcription_provider {
+                        name.as_str() == default_name.as_str() && pcfg.enabled
+                    } else {
+                        pcfg.enabled
+                            && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                    }
+                })
+                .or_else(|| {
+                    gen_cfg.transcription_providers.iter().find(|(_, pcfg)| {
+                        pcfg.enabled
+                            && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                    })
                 });
-        if let Some((_name, pcfg, _)) = speech_provider {
-            if let Some(ref key) = pcfg.api_key {
-                let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
-                let resolved =
-                    alephcore::generation::providers::url_normalize::resolve_base_url(base);
-                let stt_endpoint = resolved
-                    .secondary_endpoint(alephcore::generation::GenerationType::Speech)
-                    .unwrap_or_else(|| {
-                        format!("{}/v1/audio/transcriptions", base.trim_end_matches('/'))
-                    });
-                // Derive base_url for SttConfig: strip the /audio/transcriptions suffix
-                let stt_base = stt_endpoint
-                    .trim_end_matches("/audio/transcriptions")
-                    .to_string();
-                let stt_model = pcfg
-                    .defaults
-                    .stt_model
-                    .clone()
-                    .unwrap_or_else(|| "whisper-1".to_string());
-                let stt = alephcore::gateway::voice::inbound::SttConfig {
-                    api_key: key.clone(),
-                    base_url: stt_base,
-                    model: stt_model,
-                };
-                inbound_router = inbound_router.with_stt_config(stt);
-                if !daemon {
-                    println!("  Inbound router: voice STT transcription enabled");
+
+            if let Some((_name, pcfg)) = transcription_provider {
+                if let Some(ref key) = pcfg.api_key {
+                    let base = pcfg
+                        .base_url
+                        .as_deref()
+                        .unwrap_or("https://api.openai.com");
+                    let resolved =
+                        alephcore::generation::providers::url_normalize::resolve_base_url(base);
+                    let stt_endpoint =
+                        resolved.primary_endpoint(alephcore::generation::GenerationType::Transcription);
+                    let stt_base = stt_endpoint
+                        .trim_end_matches("/audio/transcriptions")
+                        .to_string();
+                    let stt_model = pcfg
+                        .models
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "whisper-1".to_string());
+                    let stt = alephcore::gateway::voice::inbound::SttConfig {
+                        api_key: key.clone(),
+                        base_url: stt_base,
+                        model: stt_model,
+                    };
+                    inbound_router = inbound_router.with_stt_config(stt);
+                    if !daemon {
+                        println!("  Inbound router: voice STT transcription enabled (from transcription provider)");
+                    }
                 }
             }
         }

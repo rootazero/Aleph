@@ -487,6 +487,9 @@ impl GenerationProvider for MockGenerationProvider {
                 GenerationType::Speech => {
                     format!("https://mock.example.com/{}/speech.mp3", name)
                 }
+                GenerationType::Transcription => {
+                    format!("https://mock.example.com/{}/transcription.json", name)
+                }
             };
 
             let data = GenerationData::url(url);
