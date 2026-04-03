@@ -929,7 +929,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let tcfg = gen_cfg
                     .default_transcription_provider
                     .as_ref()
-                    .and_then(|name| gen_cfg.transcription_providers.get(name))
+                    .and_then(|name| {
+                        gen_cfg.transcription_providers.get(name).filter(|pcfg| {
+                            pcfg.enabled
+                                && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                        })
+                    })
                     .or_else(|| {
                         gen_cfg.transcription_providers.values().find(|pcfg| {
                             pcfg.enabled

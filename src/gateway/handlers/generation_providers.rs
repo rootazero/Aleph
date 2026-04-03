@@ -814,13 +814,9 @@ pub async fn handle_voices(
         .into_iter()
         .find(|(name, _, _)| name == &params.provider_id);
 
-    let (provider_type, _base_url, models) = match &provider_info {
-        Some((_, pcfg, _)) => (
-            pcfg.provider_type.to_lowercase(),
-            pcfg.base_url.clone(),
-            pcfg.models.clone(),
-        ),
-        None => (params.provider_id.to_lowercase(), None, vec![]),
+    let (provider_type, models) = match &provider_info {
+        Some((_, pcfg, _)) => (pcfg.provider_type.to_lowercase(), pcfg.models.clone()),
+        None => (params.provider_id.to_lowercase(), vec![]),
     };
 
     // Resolve API key from vault

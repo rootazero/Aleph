@@ -390,15 +390,15 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         let gen_cfg = &cfg.generation;
         {
             let transcription_provider = gen_cfg
-                .transcription_providers
-                .iter()
-                .find(|(name, pcfg)| {
-                    if let Some(ref default_name) = gen_cfg.default_transcription_provider {
-                        name.as_str() == default_name.as_str() && pcfg.enabled
-                    } else {
-                        pcfg.enabled
-                            && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
-                    }
+                .default_transcription_provider
+                .as_ref()
+                .and_then(|default_name| {
+                    gen_cfg.transcription_providers.get_key_value(default_name).filter(
+                        |(_, pcfg)| {
+                            pcfg.enabled
+                                && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                        },
+                    )
                 })
                 .or_else(|| {
                     gen_cfg.transcription_providers.iter().find(|(_, pcfg)| {
