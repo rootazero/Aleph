@@ -12,7 +12,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::config::types::policies::tool_safety::ToolSafetyPolicy;
 use crate::config::types::policies::ToolPermissionsConfig;
 use crate::extension::PermissionAction;
 
@@ -205,11 +204,11 @@ fn default_blocked_patterns() -> Vec<String> {
 /// Uses `ToolSafetyPolicy::default()` high-risk keywords to identify tools
 /// that should require confirmation by default. This bridges the existing
 /// safety inference system into the permission enforcement layer.
+/// Build default permission overrides for high-risk tools.
+///
+/// Known builtin tools whose names contain high-risk keywords
+/// (see `ToolSafetyPolicy::default().high_risk_keywords`) are mapped to `Ask`.
 fn default_high_risk_permissions() -> HashMap<String, PermissionAction> {
-    let policy = ToolSafetyPolicy::default();
-    // Map common builtin tool names that contain high-risk keywords to Ask.
-    // The high_risk_keywords are: delete, remove, drop, shell, execute,
-    // run_command, bash, terminal, destroy, erase, purge
     let high_risk_tools = [
         "bash_exec",
         "file_delete",
@@ -217,17 +216,10 @@ fn default_high_risk_permissions() -> HashMap<String, PermissionAction> {
         "code_exec",
     ];
 
-    let mut perms = HashMap::new();
-    for tool in &high_risk_tools {
-        perms.insert(tool.to_string(), PermissionAction::Ask);
-    }
-
-    // Also check any tool name that matches high-risk keywords dynamically.
-    // This is stored as a reference for from_permissions() to apply.
-    // The policy is kept as a static for use in check_dynamic_permission().
-    let _ = policy; // Used above conceptually; the static list covers known builtins.
-
-    perms
+    high_risk_tools
+        .iter()
+        .map(|t| (t.to_string(), PermissionAction::Ask))
+        .collect()
 }
 
 // =============================================================================

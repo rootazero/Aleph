@@ -227,11 +227,16 @@ fn strip_trailing_incomplete(text: &str) -> String {
     }
 
     // Strip trailing incomplete opening tag (e.g. "<completion-check" without ">")
+    // Only strip if it looks like a tag start (<letter or </), not math like "< 10"
     if let Some(last_lt) = s.rfind('<') {
         let tail = &s[last_lt..];
-        // If there's no closing '>' after the last '<', it's incomplete
         if !tail.contains('>') {
-            s.truncate(last_lt);
+            let after_lt = tail.as_bytes().get(1);
+            let looks_like_tag = after_lt
+                .is_some_and(|&b| b.is_ascii_alphabetic() || b == b'/');
+            if looks_like_tag {
+                s.truncate(last_lt);
+            }
         }
     }
 
@@ -1600,5 +1605,13 @@ mod tests {
         let input = "Done.\n<completion-check";
         let result = sanitize_llm_output(input);
         assert_eq!(&*result, "Done.");
+    }
+
+    #[test]
+    fn sanitize_preserves_less_than_in_text() {
+        // "< 10" should NOT be stripped — it's math, not a tag
+        let input = "if x < 10 then stop";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "if x < 10 then stop");
     }
 }
