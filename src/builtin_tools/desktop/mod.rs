@@ -1,10 +1,7 @@
-//! Desktop Bridge tool — sees and controls the desktop via the Desktop Bridge.
-//!
-//! Requires the Aleph Desktop Bridge to be connected. When the bridge is absent,
-//! all operations return a friendly message instead of an error.
+//! Desktop tool — sees and controls the desktop via the platform-native
+//! `desktop/*` capability layer.
 
 mod native;
-mod request;
 mod types;
 
 #[cfg(test)]
@@ -17,46 +14,29 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
-use crate::desktop::DesktopBridgeClient;
 use crate::error::Result;
 use crate::tools::AlephTool;
 
-/// Desktop Bridge tool — gives the AI agent eyes and hands on the desktop.
+/// Desktop tool — gives the AI agent eyes and hands on the desktop.
 #[derive(Clone)]
 pub struct DesktopTool {
-    pub(super) client: DesktopBridgeClient,
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
-    pub(super) native: Option<Arc<dyn aleph_desktop::DesktopCapability>>,
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
 }
 
 impl DesktopTool {
     pub fn new() -> Self {
         Self {
-            client: DesktopBridgeClient::new(),
             approval_policy: None,
-            native: None,
             platform: None,
         }
-    }
-
-    /// Attach a native desktop capability for in-process execution.
-    ///
-    /// When set, supported actions (screenshot, ocr, click, type_text,
-    /// key_combo, scroll, window_list, focus_window, launch_app) use the
-    /// native in-process path instead of IPC to the Desktop Bridge.
-    /// Unsupported actions (canvas_*, snapshot, PIM, etc.) fall through
-    /// to the IPC bridge automatically.
-    pub fn with_native(mut self, native: Arc<dyn aleph_desktop::DesktopCapability>) -> Self {
-        self.native = Some(native);
-        self
     }
 
     /// Attach a desktop platform for in-process execution via capability traits.
     ///
     /// When set, supported screen actions are dispatched through
     /// `platform.screen()` (the `ScreenCapability` trait) before falling back
-    /// to the legacy `DesktopCapability` path or the IPC bridge.
+    /// to the in-process `DesktopCapability` path.
     pub fn with_platform(mut self, platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
         self.platform = Some(platform);
         self
@@ -116,6 +96,53 @@ impl DesktopTool {
             }
         }
     }
+
+    fn no_capability_output(&self) -> DesktopOutput {
+        DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(
+                "Desktop platform capability is not configured for this server build.".to_string(),
+            ),
+        }
+    }
+
+    fn unsupported_action_output(&self, args: &DesktopArgs) -> DesktopOutput {
+        let message = match args.action.as_str() {
+            "click" if args.ref_id.is_some() => {
+                "Ref-based desktop click is not available in the current `desktop/*` platform capability layer. Use explicit x/y coordinates.".to_string()
+            }
+            "type_text" if args.ref_id.is_some() => {
+                "Ref-based desktop typing is not available in the current `desktop/*` platform capability layer. Focus the target first, then call `type_text`.".to_string()
+            }
+            "scroll" if args.ref_id.is_some() => {
+                "Ref-based desktop scrolling is not available in the current `desktop/*` platform capability layer. Use delta_x/delta_y without ref targeting.".to_string()
+            }
+            "click" => "Desktop action 'click' requires explicit x/y coordinates in the current `desktop/*` platform capability layer.".to_string(),
+            "snapshot" | "ax_tree" | "canvas_show" | "canvas_hide" | "canvas_update" => {
+                format!(
+                    "Desktop action '{}' is a legacy desktop bridge feature and is not implemented by the current `desktop/*` platform capability layer.",
+                    args.action
+                )
+            }
+            "double_click" | "drag" | "hover" | "paste" => {
+                format!(
+                    "Desktop action '{}' is not implemented by the current `desktop/*` platform capability layer.",
+                    args.action
+                )
+            }
+            _ => format!(
+                "Desktop action '{}' is not supported on this platform/build.",
+                args.action
+            ),
+        };
+
+        DesktopOutput {
+            success: false,
+            data: None,
+            message: Some(message),
+        }
+    }
 }
 
 impl Default for DesktopTool {
@@ -127,52 +154,35 @@ impl Default for DesktopTool {
 #[async_trait]
 impl AlephTool for DesktopTool {
     const NAME: &'static str = "desktop";
-    const DESCRIPTION: &'static str = r#"Control the desktop: screenshot, OCR, UI snapshot with element refs, keyboard/mouse, canvas overlays.
+    const DESCRIPTION: &'static str = r#"Control the desktop via platform-native `desktop/*` capabilities.
 
-Requires the Aleph Desktop Bridge (starts automatically with the server).
-
-Perception:
-- snapshot: Capture UI structure with element refs. Returns tree (text), refs map, interactive list. Use BEFORE click/scroll/drag to target elements by ref.
+Currently supported:
 - screenshot: Capture screen as base64 PNG. Optional region: {x,y,width,height}
-- ocr: Extract text from screen (or provided image_base64). Returns {text, lines[]}
-- ax_tree: Raw accessibility tree (for debugging, prefer snapshot)
-
-Actions (support ref OR x/y targeting):
-- click: Click element. ref="e3" (from snapshot) or x/y coordinates. Optional button.
-- double_click: Double-click element. Same targeting as click.
-- scroll: Scroll at element. ref or x/y + delta_x/delta_y (pixels, negative=up/left).
-- drag: Drag between elements. start_ref/end_ref or start_x,y/end_x,y + duration_ms.
-- hover: Move mouse to element without clicking. ref or x/y.
-- type_text: Type text string. Optional ref to focus element first.
+- ocr: Extract text from screen or a provided image_base64
+- click: Click explicit x/y coordinates. Optional button.
+- scroll: Scroll via delta_x/delta_y
+- type_text: Type text at the current focus target
 - key_combo: Press key combo, e.g. keys=["cmd","c"]
-- paste: Write text to clipboard and paste (Cmd+V).
 - launch_app: Launch by bundle_id
 - window_list: List open windows
-- focus_window: Bring window to front
-- screen_record: Record screen as MP4. Optional: duration (secs, default 5), fps (default 30), with_audio (default false)
+- focus_window: Bring a window to front
+- screen_record: Record screen as MP4. Optional duration/fps/with_audio
 
-Canvas:
-- canvas_show/canvas_hide/canvas_update: HTML overlay with A2UI patches.
+Legacy bridge-only actions such as snapshot, ax_tree, canvas_*, ref-based targeting,
+double_click, drag, hover, and paste are not implemented by the current platform layer.
 
 Examples:
-{"action":"snapshot"}
-{"action":"click","ref":"e3"}
 {"action":"click","x":500,"y":300}
-{"action":"scroll","ref":"e7","delta_y":-300}
-{"action":"double_click","ref":"e1"}
-{"action":"drag","start_ref":"e5","end_ref":"e12"}
-{"action":"hover","ref":"e3"}
-{"action":"type_text","ref":"e1","text":"Hello"}
-{"action":"paste","text":"clipboard content"}"#;
+{"action":"scroll","delta_y":-300}
+{"action":"type_text","text":"Hello"}
+{"action":"screen_record","duration":3.0,"fps":30}"#;
 
     type Args = DesktopArgs;
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Check approval for sensitive (mutating) actions BEFORE touching
-        // the bridge. A denied action should be rejected immediately
-        // regardless of bridge availability. Read-only actions (screenshot,
-        // ocr, ax_tree, window_list, focus_window, canvas_*) skip approval.
+        // Check approval for sensitive (mutating) actions before attempting
+        // desktop execution. Read-only actions skip approval.
         let approval_check = match args.action.as_str() {
             "click" => Some((
                 ActionType::DesktopClick,
@@ -227,58 +237,17 @@ Examples:
             }
         }
 
-        // Prefer DesktopPlatform.screen() for screen operations (new path).
-        // If the action is not handled (returns Ok(None)), fall through.
+        // Execute via platform (single path).
         if let Some(ref platform) = self.platform {
             if let Some(output) = self.call_via_platform(platform, &args).await? {
                 return Ok(output);
             }
         }
 
-        // Legacy fallback: try the DesktopCapability in-process path.
-        // If the action is not supported natively (call_native returns
-        // Ok(None)), fall through to the IPC bridge below.
-        if let Some(ref native) = self.native {
-            if let Some(output) = self.call_native(native, &args).await? {
-                return Ok(output);
-            }
+        if self.platform.is_none() {
+            return Ok(self.no_capability_output());
         }
 
-        // Gracefully handle the case where the Desktop Bridge is not connected.
-        if !self.client.is_available() {
-            return Ok(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some(
-                    "Desktop bridge not connected. Some advanced features (canvas overlays, \
-                     UI snapshots) require the desktop bridge."
-                        .to_string(),
-                ),
-            });
-        }
-
-        let request = match request::build_request(&args) {
-            Ok(r) => r,
-            Err(msg) => {
-                return Ok(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some(msg),
-                });
-            }
-        };
-
-        match self.client.send(request).await {
-            Ok(result) => Ok(DesktopOutput {
-                success: true,
-                data: Some(result),
-                message: None,
-            }),
-            Err(e) => Ok(DesktopOutput {
-                success: false,
-                data: None,
-                message: Some(e.to_string()),
-            }),
-        }
+        Ok(self.unsupported_action_output(&args))
     }
 }
