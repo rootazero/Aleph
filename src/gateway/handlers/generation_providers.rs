@@ -827,20 +827,29 @@ pub async fn handle_voices(
     let api_key = resolve_api_key(&params.provider_id, &vault);
 
     // Step 1: Try dynamic fetch from provider API
-    if let (Some(ref base), Some(ref key)) = (&base_url, &api_key) {
-        // Normalize: strip trailing slash and /v1 so we always get {base}/v1/audio/voices
-        let base = base.trim_end_matches('/');
-        let base = base
-            .strip_suffix("/v1")
-            .unwrap_or(base)
-            .trim_end_matches('/');
-        let voices_url = format!("{}/v1/audio/voices", base);
-        if let Ok(voices) = fetch_voices_from_api(&voices_url, key).await {
-            if !voices.is_empty() {
-                return JsonRpcResponse::success(
-                    request.id,
-                    serde_json::to_value(voices).unwrap_or_default(),
-                );
+    if let (Some(ref key), Some((_, pcfg, _))) = (&api_key, &provider_info) {
+        // Use explicit voices_url if configured, otherwise derive from base_url
+        let voices_url = if let Some(ref explicit_url) = pcfg.voices_url {
+            explicit_url.clone()
+        } else if let Some(ref base) = pcfg.base_url {
+            let base = base.trim_end_matches('/');
+            let base = base
+                .strip_suffix("/v1")
+                .unwrap_or(base)
+                .trim_end_matches('/');
+            format!("{}/v1/audio/voices", base)
+        } else {
+            String::new()
+        };
+
+        if !voices_url.is_empty() {
+            if let Ok(voices) = fetch_voices_from_api(&voices_url, key).await {
+                if !voices.is_empty() {
+                    return JsonRpcResponse::success(
+                        request.id,
+                        serde_json::to_value(voices).unwrap_or_default(),
+                    );
+                }
             }
         }
     }
