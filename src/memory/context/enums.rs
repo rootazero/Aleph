@@ -145,6 +145,8 @@ pub enum FactSource {
     Manual,
     /// Compressed summary produced by SessionCompactor during an active session
     SessionCompressed,
+    /// Synthesized from cross-session pattern extraction during weekly dream cycles
+    Synthesis,
 }
 
 impl FactSource {
@@ -155,6 +157,7 @@ impl FactSource {
             Self::Document => "document",
             Self::Manual => "manual",
             Self::SessionCompressed => "session_compressed",
+            Self::Synthesis => "synthesis",
         }
     }
 
@@ -165,6 +168,7 @@ impl FactSource {
             "document" => Self::Document,
             "manual" => Self::Manual,
             "session_compressed" => Self::SessionCompressed,
+            "synthesis" => Self::Synthesis,
             _ => Self::Extracted,
         }
     }
@@ -180,6 +184,7 @@ impl std::str::FromStr for FactSource {
             "document" => Ok(Self::Document),
             "manual" => Ok(Self::Manual),
             "session_compressed" => Ok(Self::SessionCompressed),
+            "synthesis" => Ok(Self::Synthesis),
             _ => Err(format!("Unknown fact source: {}", s)),
         }
     }
@@ -420,6 +425,8 @@ impl std::fmt::Display for MemoryScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FactSpecificity {
+    /// Abstract level: cross-session synthesized insight
+    Abstract,
     /// Principle level: "User prefers functional programming"
     Principle,
     /// Pattern level: "User uses Result instead of panic for error handling"
@@ -432,6 +439,7 @@ pub enum FactSpecificity {
 impl FactSpecificity {
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Abstract => "abstract",
             Self::Principle => "principle",
             Self::Pattern => "pattern",
             Self::Instance => "instance",
@@ -449,6 +457,7 @@ impl std::str::FromStr for FactSpecificity {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "abstract" => Ok(Self::Abstract),
             "principle" => Ok(Self::Principle),
             "pattern" => Ok(Self::Pattern),
             "instance" => Ok(Self::Instance),

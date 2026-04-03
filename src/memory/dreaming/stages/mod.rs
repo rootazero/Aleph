@@ -37,6 +37,6 @@ pub use cluster::{ClusterStage, MemoryCluster, MetadataGroupKey};
 pub use collect::CollectStage;
 pub use consolidate::ConsolidateStage;
 pub use decay::{DecayStage, MemoryDecayReport};
-pub use drift::{DriftAction, DriftDetectStage};
+pub use drift::{DriftAction, DriftCandidate, DriftDetectStage};
 pub use summarize::SummarizeStage;
-pub use synthesis::DeepSynthesisStage;
+pub use synthesis::{DeepSynthesisStage, PatternInsight};
