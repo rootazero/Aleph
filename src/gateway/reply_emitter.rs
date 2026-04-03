@@ -74,61 +74,84 @@ fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     Cow::Owned(collapsed.trim().to_string())
 }
 
-/// Tag names that should be stripped (case-insensitive matching done manually).
+/// Tag names that should be stripped (all ASCII, case-insensitive).
 const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 const OTHER_STRIP_TAGS: &[&str] = &["completion-check"];
 
 /// Strip tags while respecting code block boundaries.
 ///
-/// Tracks whether we're inside a fenced code block (```) or inline code (`),
-/// and only strips tags when outside code regions.
+/// Operates on `&[u8]` byte slices (all tag names are ASCII) to avoid the
+/// `Vec<char>` allocation of the previous implementation. Supports fenced
+/// code blocks (```) and multi-backtick inline code spans (`` ` ``, ``` `` ```).
 fn strip_tags_code_aware(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len);
     let mut i = 0;
     let mut in_fenced_code = false;
-    let mut in_inline_code = false;
+    // For inline code: 0 = not in code, N = need N backticks to close
+    let mut inline_backtick_count: usize = 0;
 
     while i < len {
-        // Track fenced code blocks (```)
-        if !in_inline_code && i + 2 < len && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
+        // Track fenced code blocks (3+ backticks at line start or after whitespace)
+        if inline_backtick_count == 0 && i + 2 < len
+            && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`'
+        {
+            // Count consecutive backticks
+            let fence_start = i;
+            while i < len && bytes[i] == b'`' {
+                i += 1;
+            }
+            result.push_str(&text[fence_start..i]);
             in_fenced_code = !in_fenced_code;
-            result.push('`');
-            result.push('`');
-            result.push('`');
-            i += 3;
             continue;
         }
 
-        // Track inline code (single `)
-        if !in_fenced_code && chars[i] == '`' {
-            in_inline_code = !in_inline_code;
-            result.push('`');
-            i += 1;
+        // Track inline code spans (1 or 2 backticks)
+        if !in_fenced_code && bytes[i] == b'`' {
+            let bt_start = i;
+            let mut bt_count = 0;
+            while i < len && bytes[i] == b'`' && bt_count < 3 {
+                bt_count += 1;
+                i += 1;
+            }
+            // 3+ backticks handled above; here we have 1-2 backticks
+            result.push_str(&text[bt_start..i]);
+            if inline_backtick_count == 0 {
+                // Opening: need matching count to close
+                inline_backtick_count = bt_count;
+            } else if bt_count == inline_backtick_count {
+                // Closing: matched
+                inline_backtick_count = 0;
+            }
+            // else: different count inside span, just content
             continue;
         }
 
         // Inside code — pass through unchanged
-        if in_fenced_code || in_inline_code {
-            result.push(chars[i]);
-            i += 1;
+        if in_fenced_code || inline_backtick_count > 0 {
+            // Fast: copy to next backtick or end
+            let start = i;
+            while i < len && bytes[i] != b'`' {
+                i += 1;
+            }
+            result.push_str(&text[start..i]);
             continue;
         }
 
         // Outside code — check for tags to strip
-        if chars[i] == '<' {
+        if bytes[i] == b'<' {
             // Try self-closing: <task-complete /> or <task-complete/>
-            if let Some(skip) = try_match_self_closing(&chars, i, "task-complete") {
-                i += skip;
+            if let Some(end) = try_match_self_closing_bytes(bytes, i, b"task-complete") {
+                i = end;
                 continue;
             }
 
-            // Try paired tags: <think>...</think>, <thinking>...</thinking>, etc.
+            // Try paired tags
             let mut matched = false;
             for tag in THINKING_TAGS.iter().chain(OTHER_STRIP_TAGS.iter()) {
-                if let Some(skip) = try_skip_paired_tag(&chars, i, tag) {
-                    i += skip;
+                if let Some(end) = try_skip_paired_tag_bytes(bytes, i, tag.as_bytes()) {
+                    i = end;
                     matched = true;
                     break;
                 }
@@ -138,83 +161,83 @@ fn strip_tags_code_aware(text: &str) -> String {
             }
         }
 
-        result.push(chars[i]);
-        i += 1;
+        // Copy one UTF-8 character (may be multi-byte)
+        let ch_len = utf8_char_len(bytes[i]);
+        let end = (i + ch_len).min(len);
+        result.push_str(&text[i..end]);
+        i = end;
     }
 
     result
 }
 
-/// Try to match `<tag_name>…</tag_name>` starting at position `pos`.
-/// Returns the number of characters to skip if matched, None otherwise.
-fn try_skip_paired_tag(chars: &[char], pos: usize, tag_name: &str) -> Option<usize> {
-    let tag_chars: Vec<char> = tag_name.chars().collect();
-    let open_len = 1 + tag_chars.len() + 1; // < + tag + >
-
-    // Check opening: <tag_name>
-    if pos + open_len > chars.len() {
+/// Try to match `<tag_name>…</tag_name>` at byte position `pos`.
+/// Returns the byte position after the closing tag, or None.
+fn try_skip_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<usize> {
+    let open_len = 1 + tag.len() + 1; // < + tag + >
+    if pos + open_len > bytes.len() || bytes[pos] != b'<' {
         return None;
     }
-    if chars[pos] != '<' {
+    // Match opening tag (case-insensitive)
+    if !bytes[pos + 1..pos + 1 + tag.len()]
+        .iter()
+        .zip(tag.iter())
+        .all(|(a, b)| a.to_ascii_lowercase() == *b)
+    {
         return None;
     }
-    for (j, &tc) in tag_chars.iter().enumerate() {
-        let c = chars[pos + 1 + j];
-        if c.to_ascii_lowercase() != tc {
-            return None;
-        }
-    }
-    if chars[pos + 1 + tag_chars.len()] != '>' {
+    if bytes[pos + 1 + tag.len()] != b'>' {
         return None;
     }
 
-    // Find closing: </tag_name>
-    let close_pattern: Vec<char> = format!("</{}>", tag_name).chars().collect();
-    let close_len = close_pattern.len();
+    // Find closing </tag>
+    let close_tag_len = 2 + tag.len() + 1; // </ + tag + >
     let search_start = pos + open_len;
-
-    for k in search_start..chars.len() {
-        if k + close_len <= chars.len() {
-            let mut found = true;
-            for (j, &pc) in close_pattern.iter().enumerate() {
-                if chars[k + j].to_ascii_lowercase() != pc {
-                    found = false;
-                    break;
-                }
-            }
-            if found {
-                return Some(k + close_len - pos);
-            }
+    for k in search_start..bytes.len().saturating_sub(close_tag_len - 1) {
+        if bytes[k] == b'<' && bytes[k + 1] == b'/'
+            && k + close_tag_len <= bytes.len()
+            && bytes[k + 2..k + 2 + tag.len()]
+                .iter()
+                .zip(tag.iter())
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+            && bytes[k + 2 + tag.len()] == b'>'
+        {
+            return Some(k + close_tag_len);
         }
     }
-
-    // No closing tag found — don't strip (avoid eating content)
-    None
+    None // No closing tag — don't strip
 }
 
-/// Try to match `<tag_name />` or `<tag_name/>` starting at position `pos`.
-fn try_match_self_closing(chars: &[char], pos: usize, tag_name: &str) -> Option<usize> {
-    let tag_chars: Vec<char> = tag_name.chars().collect();
-
-    if chars[pos] != '<' {
+/// Try to match `<tag_name/>` or `<tag_name />` at byte position `pos`.
+fn try_match_self_closing_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<usize> {
+    if bytes[pos] != b'<' {
         return None;
     }
     let mut j = pos + 1;
-    for &tc in &tag_chars {
-        if j >= chars.len() || chars[j].to_ascii_lowercase() != tc {
+    for &t in tag {
+        if j >= bytes.len() || bytes[j].to_ascii_lowercase() != t {
             return None;
         }
         j += 1;
     }
-    // Skip optional whitespace
-    while j < chars.len() && chars[j] == ' ' {
+    // Skip optional spaces
+    while j < bytes.len() && bytes[j] == b' ' {
         j += 1;
     }
     // Must end with />
-    if j + 1 < chars.len() && chars[j] == '/' && chars[j + 1] == '>' {
-        return Some(j + 2 - pos);
+    if j + 1 < bytes.len() && bytes[j] == b'/' && bytes[j + 1] == b'>' {
+        Some(j + 2)
+    } else {
+        None
     }
-    None
+}
+
+/// Length of a UTF-8 character from its leading byte.
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0x80 { 1 }
+    else if b < 0xE0 { 2 }
+    else if b < 0xF0 { 3 }
+    else { 4 }
 }
 
 /// Strip trailing incomplete directives that LLMs sometimes emit at stream end.
@@ -657,13 +680,21 @@ impl ReplyEmitter {
 
     const MAX_MESSAGE_LENGTH: usize = 4000;
 
-    /// Send content to the channel, splitting into chunks if too long (instant mode)
+    /// Send content to the channel, sanitizing first and splitting into chunks.
     async fn send_to_channel(&self, content: &str) {
         if content.is_empty() {
             return;
         }
 
         let content = sanitize_llm_output(content);
+        self.send_to_channel_sanitized(&content).await;
+    }
+
+    /// Send pre-sanitized content to the channel, splitting into chunks if too long.
+    ///
+    /// Callers that have already called `sanitize_llm_output` should use this
+    /// to avoid redundant sanitization passes.
+    async fn send_to_channel_sanitized(&self, content: &str) {
         if content.is_empty() {
             return;
         }

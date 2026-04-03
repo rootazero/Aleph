@@ -314,14 +314,22 @@ impl FailoverProvider {
         }
     }
 
-    /// Check if a provider is currently healthy, transitioning Open → HalfOpen when cooldown expires.
-    async fn is_provider_healthy(&self, index: usize) -> bool {
+    /// Atomically check health, transition circuit state, and acquire provider reference.
+    ///
+    /// Combines the health check and provider extraction into a single write-lock
+    /// acquisition, preventing TOCTOU races where multiple concurrent requests
+    /// could both see a provider as HalfOpen and send duplicate probe requests.
+    ///
+    /// Returns `Some((provider, name))` if the provider is available for requests,
+    /// `None` if the circuit is Open and cooldown hasn't expired.
+    async fn try_acquire_provider(
+        &self,
+        index: usize,
+    ) -> Option<(Arc<dyn AiProvider>, String)> {
         let mut providers = self.providers.write().await;
-        let Some(state) = providers.get_mut(index) else {
-            return false;
-        };
+        let state = providers.get_mut(index)?;
 
-        match state.health.circuit {
+        let available = match state.health.circuit {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
                 // Check if cooldown has passed → transition to HalfOpen (allow one probe)
@@ -332,11 +340,20 @@ impl FailoverProvider {
                             state.entry.name
                         );
                         state.health.circuit = CircuitState::HalfOpen;
-                        return true;
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
                 }
-                false
             }
+        };
+
+        if available {
+            Some((state.provider.clone(), state.entry.name.clone()))
+        } else {
+            None
         }
     }
 
@@ -450,9 +467,8 @@ impl FailoverProvider {
         };
 
         for i in 0..provider_count {
-            if self.is_provider_healthy(i).await {
-                let providers = self.providers.read().await;
-                return providers.get(i).map(|p| p.entry.name.clone());
+            if let Some((_, name)) = self.try_acquire_provider(i).await {
+                return Some(name);
             }
         }
         None
@@ -481,19 +497,11 @@ impl AiProvider for FailoverProvider {
             let mut last_error = None;
 
             for i in 0..provider_count {
-                if !self.is_provider_healthy(i).await {
+                // Atomically check health + acquire provider in one lock operation.
+                // Prevents TOCTOU race where multiple concurrent requests could
+                // both see a HalfOpen provider and send duplicate probe requests.
+                let Some((provider, name)) = self.try_acquire_provider(i).await else {
                     tracing::debug!("Skipping unhealthy provider at index {}", i);
-                    continue;
-                }
-
-                let provider = {
-                    let providers = self.providers.read().await;
-                    providers
-                        .get(i)
-                        .map(|p| (p.provider.clone(), p.entry.name.clone()))
-                };
-
-                let Some((provider, name)) = provider else {
                     continue;
                 };
 
