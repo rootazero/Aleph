@@ -94,14 +94,14 @@ pub struct CompactionResult {
     pub compacted_count: usize,
     /// Human-readable name of the strategy that produced this result.
     pub strategy_name: String,
-    /// Pressure level before compaction.
-    pub pressure_before: PressureLevel,
-    /// Pressure level after compaction (caller updates this).
-    pub pressure_after: PressureLevel,
+    /// Fill ratio before compaction (e.g. 0.82).
+    pub pressure_before: f64,
+    /// Fill ratio after compaction (e.g. 0.65); caller updates this.
+    pub pressure_after: f64,
 }
 
 impl CompactionResult {
-    /// Returns `true` if compaction actually reduced the pressure level.
+    /// Returns `true` if compaction actually reduced the pressure ratio.
     pub fn pressure_reduced(&self) -> bool {
         self.pressure_after < self.pressure_before
     }
@@ -137,12 +137,12 @@ pub trait CompactionStrategy: Send + Sync {
     /// `freed_tokens == 0`.
     fn execute<'a>(
         &'a self,
-        ctx: &'a CompactionContext,
+        ctx: &'a mut CompactionContext,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<CompactionResult>> + Send + 'a>>;
 
-    /// Whether this strategy is applicable given the current pressure level.
+    /// Whether this strategy is applicable given the current compaction context.
     /// Callers use this to skip strategies that are not relevant.
-    fn is_applicable(&self, level: PressureLevel) -> bool;
+    fn is_applicable(&self, ctx: &CompactionContext) -> bool;
 }
 
 // =============================================================================
@@ -192,8 +192,8 @@ mod tests {
             freed_tokens: 500,
             compacted_count: 3,
             strategy_name: "test_strategy".to_string(),
-            pressure_before: PressureLevel::Warning,
-            pressure_after: PressureLevel::Calm,
+            pressure_before: 0.82,
+            pressure_after: 0.65,
         };
         assert!(reduced.pressure_reduced());
 
@@ -201,8 +201,8 @@ mod tests {
             freed_tokens: 10,
             compacted_count: 1,
             strategy_name: "test_strategy".to_string(),
-            pressure_before: PressureLevel::Warning,
-            pressure_after: PressureLevel::Warning,
+            pressure_before: 0.75,
+            pressure_after: 0.75,
         };
         assert!(!not_reduced.pressure_reduced());
 
@@ -210,8 +210,8 @@ mod tests {
             freed_tokens: 0,
             compacted_count: 0,
             strategy_name: "test_strategy".to_string(),
-            pressure_before: PressureLevel::Calm,
-            pressure_after: PressureLevel::High,
+            pressure_before: 0.50,
+            pressure_after: 0.82,
         };
         assert!(!worsened.pressure_reduced());
     }
