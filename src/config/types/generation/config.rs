@@ -54,6 +54,10 @@ pub struct GenerationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_speech_provider: Option<String>,
 
+    /// Default provider for transcription/STT
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_transcription_provider: Option<String>,
+
     /// Output directory for generated files
     /// Supports ~ for home directory expansion.
     /// When None, the workspace ToolContext fallback is used.
@@ -93,6 +97,10 @@ pub struct GenerationConfig {
     /// Audio/music generation providers (typed format)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub audio_providers: HashMap<String, GenerationProviderConfig>,
+
+    /// Transcription/STT providers (typed format)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub transcription_providers: HashMap<String, GenerationProviderConfig>,
 }
 
 fn default_auto_paste_threshold_mb() -> u32 {
@@ -114,6 +122,7 @@ impl Default for GenerationConfig {
             default_video_provider: None,
             default_audio_provider: None,
             default_speech_provider: None,
+            default_transcription_provider: None,
             output_dir: None,
             auto_paste_threshold_mb: default_auto_paste_threshold_mb(),
             background_task_threshold_seconds: default_background_task_threshold_seconds(),
@@ -123,6 +132,7 @@ impl Default for GenerationConfig {
             video_providers: HashMap::new(),
             speech_providers: HashMap::new(),
             audio_providers: HashMap::new(),
+            transcription_providers: HashMap::new(),
         }
     }
 }
@@ -140,6 +150,7 @@ impl GenerationConfig {
             GenerationType::Video => self.default_video_provider.as_deref(),
             GenerationType::Audio => self.default_audio_provider.as_deref(),
             GenerationType::Speech => self.default_speech_provider.as_deref(),
+            GenerationType::Transcription => self.default_transcription_provider.as_deref(),
         }
     }
 
@@ -150,6 +161,7 @@ impl GenerationConfig {
             .or_else(|| self.video_providers.get(name))
             .or_else(|| self.speech_providers.get(name))
             .or_else(|| self.audio_providers.get(name))
+            .or_else(|| self.transcription_providers.get(name))
             .or_else(|| self.providers.get(name))
     }
 
@@ -163,6 +175,7 @@ impl GenerationConfig {
             &self.video_providers,
             &self.speech_providers,
             &self.audio_providers,
+            &self.transcription_providers,
         ];
 
         for map in typed_maps {
@@ -195,6 +208,7 @@ impl GenerationConfig {
             GenerationType::Video => &self.video_providers,
             GenerationType::Speech => &self.speech_providers,
             GenerationType::Audio => &self.audio_providers,
+            GenerationType::Transcription => &self.transcription_providers,
         };
 
         let mut result: Vec<(&str, &GenerationProviderConfig)> = typed_map
@@ -249,6 +263,12 @@ impl GenerationConfig {
             cfg.capabilities = vec![GenerationType::Audio];
             result.push((name.clone(), cfg, GenerationType::Audio));
         }
+        for (name, cfg) in &self.transcription_providers {
+            seen.insert(name.clone());
+            let mut cfg = cfg.clone();
+            cfg.capabilities = vec![GenerationType::Transcription];
+            result.push((name.clone(), cfg, GenerationType::Transcription));
+        }
 
         // Legacy format: map by capabilities[0], skip if already seen
         for (name, cfg) in &self.providers {
@@ -278,6 +298,9 @@ impl GenerationConfig {
         if let Some(ref provider) = self.default_speech_provider {
             self.validate_provider_reference(provider, "default_speech_provider")?;
         }
+        if let Some(ref provider) = self.default_transcription_provider {
+            self.validate_provider_reference(provider, "default_transcription_provider")?;
+        }
 
         // Validate each provider configuration
         for (name, config) in &self.providers {
@@ -295,6 +318,9 @@ impl GenerationConfig {
         for (name, config) in &self.audio_providers {
             config.validate(name)?;
         }
+        for (name, config) in &self.transcription_providers {
+            config.validate(name)?;
+        }
 
         Ok(())
     }
@@ -306,6 +332,7 @@ impl GenerationConfig {
             &self.video_providers,
             &self.speech_providers,
             &self.audio_providers,
+            &self.transcription_providers,
             &self.providers,
         ];
 
