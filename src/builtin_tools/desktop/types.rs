@@ -4,16 +4,33 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::desktop::types::{CanvasPosition, MouseButton, ScreenRegion};
+/// A rectangular region on screen (pixels).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ScreenRegion {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Mouse button used by desktop input actions.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
 
 /// Arguments for the desktop tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct DesktopArgs {
     /// The desktop operation to perform.
     ///
-    /// Perception: "screenshot", "ocr", "ax_tree"
-    /// Action:     "click", "type_text", "key_combo", "launch_app", "window_list", "focus_window"
-    /// Canvas:     "canvas_show", "canvas_hide", "canvas_update"
+    /// Supported actions: "screenshot", "ocr", "click", "double_click", "drag",
+    /// "hover", "cursor_position", "mouse_button", "type_text", "key_combo",
+    /// "scroll", "launch_app", "quit_app", "window_list", "focus_window",
+    /// "clipboard_read", "clipboard_write", "screen_record".
     pub action: String,
 
     /// Screen region for screenshot {"x":0,"y":0,"width":1920,"height":1080}. Optional.
@@ -23,10 +40,6 @@ pub struct DesktopArgs {
     /// Base64 image for OCR. If absent, captures current screen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_base64: Option<String>,
-
-    /// App bundle ID for ax_tree. Example: "com.apple.Safari"
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub app_bundle_id: Option<String>,
 
     /// X coordinate for click (pixels).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,34 +61,13 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<Vec<String>>,
 
-    /// App bundle ID to launch. Example: "com.apple.safari"
+    /// App bundle ID to launch or quit. Example: "com.apple.safari"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
 
     /// Window ID to focus (from window_list results).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
-
-    /// HTML content for canvas_show.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub html: Option<String>,
-
-    /// Canvas overlay position {"x":100,"y":100,"width":800,"height":600}.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<CanvasPosition>,
-
-    /// A2UI patch for canvas_update (JSON array of patch operations).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub patch: Option<Value>,
-
-    /// Element ref from snapshot (alternative to x/y coordinates).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "ref")]
-    pub ref_id: Option<String>,
-
-    /// Start element ref for drag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_ref: Option<String>,
 
     /// Start X for drag.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,10 +76,6 @@ pub struct DesktopArgs {
     /// Start Y for drag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_y: Option<f64>,
-
-    /// End element ref for drag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_ref: Option<String>,
 
     /// End X for drag.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,13 +97,9 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
 
-    /// Max AX tree depth for snapshot (default: 5).
+    /// Press action for mouse_button: "press", "release", "click".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_depth: Option<u32>,
-
-    /// Include non-interactive elements in snapshot refs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_non_interactive: Option<bool>,
+    pub press_action: Option<String>,
 
     /// Recording duration in seconds (for screen_record, default: 5.0).
     #[serde(skip_serializing_if = "Option::is_none")]

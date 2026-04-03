@@ -5,6 +5,15 @@ use crate::sync_primitives::Arc;
 use super::types::{DesktopArgs, DesktopOutput, MouseButton};
 use crate::error::Result;
 
+/// Convert tool-level `MouseButton` to desktop-level `MouseButton`.
+fn to_desktop_button(button: Option<&MouseButton>) -> aleph_desktop::MouseButton {
+    match button.unwrap_or(&MouseButton::Left) {
+        MouseButton::Left => aleph_desktop::MouseButton::Left,
+        MouseButton::Right => aleph_desktop::MouseButton::Right,
+        MouseButton::Middle => aleph_desktop::MouseButton::Middle,
+    }
+}
+
 /// Platform execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
     /// Execute a desktop action via `DesktopPlatform.screen()`.
@@ -119,9 +128,6 @@ impl super::DesktopTool {
                 }
             }
             "click" => {
-                if args.ref_id.is_some() {
-                    return Ok(None);
-                }
                 let x = match args.x {
                     Some(v) => v,
                     None => return Ok(None),
@@ -130,11 +136,7 @@ impl super::DesktopTool {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let button = match args.button.as_ref().unwrap_or(&MouseButton::Left) {
-                    MouseButton::Left => aleph_desktop::MouseButton::Left,
-                    MouseButton::Right => aleph_desktop::MouseButton::Right,
-                    MouseButton::Middle => aleph_desktop::MouseButton::Middle,
-                };
+                let button = to_desktop_button(args.button.as_ref());
                 match screen.click(x, y, button).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
@@ -149,9 +151,6 @@ impl super::DesktopTool {
                 }
             }
             "type_text" => {
-                if args.ref_id.is_some() {
-                    return Ok(None);
-                }
                 let text = args.text.as_deref().unwrap_or("");
                 match screen.type_text(text).await {
                     Ok(()) => Ok(Some(DesktopOutput {
@@ -194,9 +193,6 @@ impl super::DesktopTool {
                 }
             }
             "scroll" => {
-                if args.ref_id.is_some() {
-                    return Ok(None);
-                }
                 let delta_y = args.delta_y.unwrap_or(0.0);
                 let delta_x = args.delta_x.unwrap_or(0.0);
                 if delta_x == 0.0 && delta_y == 0.0 {
@@ -330,8 +326,141 @@ impl super::DesktopTool {
                     })),
                 }
             }
-            // Actions not handled via ScreenCapability: snapshot, ax_tree,
-            // double_click, drag, hover, paste, canvas_*, ref-based actions.
+            "double_click" => {
+                let x = args.x.unwrap_or(0.0);
+                let y = args.y.unwrap_or(0.0);
+                let button = to_desktop_button(args.button.as_ref());
+                match screen.double_click(x, y, button).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"double_clicked": true, "x": x, "y": y})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "drag" => {
+                let sx = args.start_x.unwrap_or(0.0);
+                let sy = args.start_y.unwrap_or(0.0);
+                let ex = args.end_x.unwrap_or(0.0);
+                let ey = args.end_y.unwrap_or(0.0);
+                match screen.drag(sx, sy, ex, ey, args.duration_ms).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"dragged": true})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "hover" => {
+                let x = args.x.unwrap_or(0.0);
+                let y = args.y.unwrap_or(0.0);
+                match screen.hover(x, y).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"hovered": true, "x": x, "y": y})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "cursor_position" => {
+                match screen.cursor_position().await {
+                    Ok((x, y)) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"x": x, "y": y})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "mouse_button" => {
+                let x = args.x.unwrap_or(0.0);
+                let y = args.y.unwrap_or(0.0);
+                let button = to_desktop_button(args.button.as_ref());
+                let press_action = match args.press_action.as_deref() {
+                    Some("press") => aleph_desktop::PressAction::Press,
+                    Some("release") => aleph_desktop::PressAction::Release,
+                    Some("click") | None => aleph_desktop::PressAction::Click,
+                    Some(other) => return Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!(
+                            "Invalid press_action '{other}'. Use 'press', 'release', or 'click'."
+                        )),
+                    })),
+                };
+                match screen.mouse_button(x, y, button, press_action).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"x": x, "y": y})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "quit_app" => {
+                let bundle_id = match args.bundle_id.as_deref() {
+                    Some(id) if !id.is_empty() => id,
+                    _ => return Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some("quit_app requires 'bundle_id'".to_string()),
+                    })),
+                };
+                match screen.quit_app(bundle_id).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"quit": true, "bundle_id": bundle_id})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "clipboard_read" => {
+                match screen.clipboard_read().await {
+                    Ok(text) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"text": text})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "clipboard_write" => {
+                let text = args.text.as_deref().unwrap_or("");
+                match screen.clipboard_write(text).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"written": true})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false, data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
             _ => Ok(None),
         }
     }
