@@ -449,6 +449,10 @@ impl ToolPipeline {
 // =============================================================================
 
 /// Map a `SafetyError` to a human-readable error string.
+///
+/// `NeedsConfirmation` is downgraded to a denial with explanation when no
+/// interactive confirmation handler is available (the common case for automated
+/// agent runs). This prevents the LLM from retrying indefinitely.
 fn map_safety_error(e: &SafetyError) -> String {
     match e {
         SafetyError::Blocked { tool, pattern } => {
@@ -458,8 +462,12 @@ fn map_safety_error(e: &SafetyError) -> String {
             )
         }
         SafetyError::NeedsConfirmation { tool } => {
+            // No interactive confirmation handler → downgrade to denied with explanation.
+            // The LLM sees a clear reason and won't retry.
             format!(
-                "[NEEDS_CONFIRMATION] Tool '{}' requires user confirmation",
+                "[DENIED] Tool '{}' is classified as high-risk and requires user confirmation. \
+                 No confirmation handler is available in this session. \
+                 Use a safer alternative or ask the user to grant permission for this tool.",
                 tool
             )
         }

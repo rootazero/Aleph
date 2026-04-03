@@ -13,11 +13,14 @@
 //!
 //! Mode is controlled by `BehaviorConfig.output_mode` in config.toml.
 
+use std::borrow::Cow;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use async_trait::async_trait;
+use regex::Regex;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -29,6 +32,211 @@ use super::inbound_context::ReplyRoute;
 use crate::gateway::media::PendingMedia;
 use crate::gateway::streaming::{StreamAction, StreamingConfig, StreamingController};
 use crate::media::cache::MediaCache;
+
+// ── LLM output sanitization ────────────────────────────────────────────────
+
+/// Strip LLM-internal tags that should never reach the user or TTS engine.
+///
+/// Removes:
+/// - `<think|thinking|thought|antthinking>…</…>` — chain-of-thought reasoning
+/// - `<completion-check>…</completion-check>` — agent loop completion markers
+/// - `<task-complete/>` — agent loop task boundary
+/// - Trailing incomplete tags (e.g. `[[`, `<completion-check`)
+///
+/// **Code-block aware**: tags inside backtick spans or fenced code blocks are
+/// preserved, preventing accidental stripping of example/documentation code.
+///
+/// Returns `Cow::Borrowed` when no tags are found (zero-alloc fast path).
+fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
+    // Fast path: quick probe for any tag-like pattern before doing real work.
+    static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"<(?:think|thinking|thought|antthinking|completion-check|task-complete)[\s/>]")
+            .expect("quick probe regex")
+    });
+    static BLANK_LINES_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\n{3,}").expect("blank-lines regex"));
+
+    let has_tags = QUICK_PROBE.is_match(text);
+    let has_trailing = text.ends_with("[[") || text.ends_with('[');
+    // Check for trailing incomplete tag: last '<' has no closing '>'
+    let has_incomplete_tag = text.rfind('<').is_some_and(|pos| !text[pos..].contains('>'));
+
+    if !has_tags && !has_trailing && !has_incomplete_tag {
+        return Cow::Borrowed(text);
+    }
+
+    let stripped = strip_tags_code_aware(text);
+
+    // Clean trailing incomplete directives (e.g. "answer text[[" or "<completion-check")
+    let cleaned = strip_trailing_incomplete(&stripped);
+
+    let collapsed = BLANK_LINES_RE.replace_all(&cleaned, "\n\n");
+    Cow::Owned(collapsed.trim().to_string())
+}
+
+/// Tag names that should be stripped (case-insensitive matching done manually).
+const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
+const OTHER_STRIP_TAGS: &[&str] = &["completion-check"];
+
+/// Strip tags while respecting code block boundaries.
+///
+/// Tracks whether we're inside a fenced code block (```) or inline code (`),
+/// and only strips tags when outside code regions.
+fn strip_tags_code_aware(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_fenced_code = false;
+    let mut in_inline_code = false;
+
+    while i < len {
+        // Track fenced code blocks (```)
+        if !in_inline_code && i + 2 < len && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
+            in_fenced_code = !in_fenced_code;
+            result.push('`');
+            result.push('`');
+            result.push('`');
+            i += 3;
+            continue;
+        }
+
+        // Track inline code (single `)
+        if !in_fenced_code && chars[i] == '`' {
+            in_inline_code = !in_inline_code;
+            result.push('`');
+            i += 1;
+            continue;
+        }
+
+        // Inside code — pass through unchanged
+        if in_fenced_code || in_inline_code {
+            result.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        // Outside code — check for tags to strip
+        if chars[i] == '<' {
+            // Try self-closing: <task-complete /> or <task-complete/>
+            if let Some(skip) = try_match_self_closing(&chars, i, "task-complete") {
+                i += skip;
+                continue;
+            }
+
+            // Try paired tags: <think>...</think>, <thinking>...</thinking>, etc.
+            let mut matched = false;
+            for tag in THINKING_TAGS.iter().chain(OTHER_STRIP_TAGS.iter()) {
+                if let Some(skip) = try_skip_paired_tag(&chars, i, tag) {
+                    i += skip;
+                    matched = true;
+                    break;
+                }
+            }
+            if matched {
+                continue;
+            }
+        }
+
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Try to match `<tag_name>…</tag_name>` starting at position `pos`.
+/// Returns the number of characters to skip if matched, None otherwise.
+fn try_skip_paired_tag(chars: &[char], pos: usize, tag_name: &str) -> Option<usize> {
+    let tag_chars: Vec<char> = tag_name.chars().collect();
+    let open_len = 1 + tag_chars.len() + 1; // < + tag + >
+
+    // Check opening: <tag_name>
+    if pos + open_len > chars.len() {
+        return None;
+    }
+    if chars[pos] != '<' {
+        return None;
+    }
+    for (j, &tc) in tag_chars.iter().enumerate() {
+        let c = chars[pos + 1 + j];
+        if c.to_ascii_lowercase() != tc {
+            return None;
+        }
+    }
+    if chars[pos + 1 + tag_chars.len()] != '>' {
+        return None;
+    }
+
+    // Find closing: </tag_name>
+    let close_pattern: Vec<char> = format!("</{}>", tag_name).chars().collect();
+    let close_len = close_pattern.len();
+    let search_start = pos + open_len;
+
+    for k in search_start..chars.len() {
+        if k + close_len <= chars.len() {
+            let mut found = true;
+            for (j, &pc) in close_pattern.iter().enumerate() {
+                if chars[k + j].to_ascii_lowercase() != pc {
+                    found = false;
+                    break;
+                }
+            }
+            if found {
+                return Some(k + close_len - pos);
+            }
+        }
+    }
+
+    // No closing tag found — don't strip (avoid eating content)
+    None
+}
+
+/// Try to match `<tag_name />` or `<tag_name/>` starting at position `pos`.
+fn try_match_self_closing(chars: &[char], pos: usize, tag_name: &str) -> Option<usize> {
+    let tag_chars: Vec<char> = tag_name.chars().collect();
+
+    if chars[pos] != '<' {
+        return None;
+    }
+    let mut j = pos + 1;
+    for &tc in &tag_chars {
+        if j >= chars.len() || chars[j].to_ascii_lowercase() != tc {
+            return None;
+        }
+        j += 1;
+    }
+    // Skip optional whitespace
+    while j < chars.len() && chars[j] == ' ' {
+        j += 1;
+    }
+    // Must end with />
+    if j + 1 < chars.len() && chars[j] == '/' && chars[j + 1] == '>' {
+        return Some(j + 2 - pos);
+    }
+    None
+}
+
+/// Strip trailing incomplete directives that LLMs sometimes emit at stream end.
+fn strip_trailing_incomplete(text: &str) -> String {
+    let mut s = text.to_string();
+
+    // Strip trailing "[[" or "[" (incomplete wiki-link / directive)
+    while s.ends_with("[[") || s.ends_with('[') {
+        s.pop();
+    }
+
+    // Strip trailing incomplete opening tag (e.g. "<completion-check" without ">")
+    if let Some(last_lt) = s.rfind('<') {
+        let tail = &s[last_lt..];
+        // If there's no closing '>' after the last '<', it's incomplete
+        if !tail.contains('>') {
+            s.truncate(last_lt);
+        }
+    }
+
+    s
+}
 
 /// Configuration for ReplyEmitter behavior
 #[derive(Debug, Clone)]
@@ -279,6 +487,11 @@ impl ReplyEmitter {
     /// On failure it records the failure on `voice_state` and falls back to
     /// plain text via `send_to_channel`.
     async fn send_as_voice(&self, text: &str) {
+        let sanitized = sanitize_llm_output(text);
+        let text: &str = &sanitized;
+        if text.is_empty() {
+            return;
+        }
         debug!(
             "send_as_voice called, text_len={}, has_gen_registry={}",
             text.len(),
@@ -445,10 +658,15 @@ impl ReplyEmitter {
             return;
         }
 
+        let content = sanitize_llm_output(content);
+        if content.is_empty() {
+            return;
+        }
+
         let is_first_send = !self.has_sent.load(Ordering::SeqCst);
         self.has_sent.store(true, Ordering::SeqCst);
 
-        let content = self.format_content(content, is_first_send);
+        let content = self.format_content(&content, is_first_send);
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();
@@ -680,6 +898,7 @@ impl EventEmitter for ReplyEmitter {
                                 let mut ctrl = self.streaming.lock().await;
                                 match ctrl.finalize() {
                                     StreamAction::EditFinal(text) => {
+                                        let text = sanitize_llm_output(&text);
                                         if let Some(msg_id) = ctrl.message_id().cloned() {
                                             let _ = self
                                                 .channel_registry
@@ -757,6 +976,7 @@ impl EventEmitter for ReplyEmitter {
                         ctrl.push_chunk(&content);
                         match ctrl.poll_action() {
                             StreamAction::SendInitial(text) => {
+                                let text = sanitize_llm_output(&text).into_owned();
                                 let message = OutboundMessage {
                                     conversation_id: self.route.conversation_id.clone(),
                                     text,
@@ -775,6 +995,7 @@ impl EventEmitter for ReplyEmitter {
                                 }
                             }
                             StreamAction::Edit(text) => {
+                                let text = sanitize_llm_output(&text);
                                 if let Some(msg_id) = ctrl.message_id() {
                                     let msg_id = msg_id.clone();
                                     if self
@@ -800,9 +1021,10 @@ impl EventEmitter for ReplyEmitter {
                     // Native streaming: forward chunks in real-time
                     if !self.native_disabled.load(Ordering::SeqCst) {
                         if let Some(ref handler) = self.native_handler {
-                            let buffer = self.buffer.lock().await;
-                            let accumulated = buffer.clone();
-                            drop(buffer);
+                            let accumulated = {
+                                let buffer = self.buffer.lock().await;
+                                sanitize_llm_output(&buffer).into_owned()
+                            };
 
                             let mut state = self.native_stream_state.lock().await;
                             if state.is_none() && accumulated.chars().count() >= 20 {
@@ -876,7 +1098,8 @@ impl EventEmitter for ReplyEmitter {
                         if let Some(s) = state {
                             let text = {
                                 let mut buffer = self.buffer.lock().await;
-                                std::mem::take(&mut *buffer)
+                                let raw = std::mem::take(&mut *buffer);
+                                sanitize_llm_output(&raw).into_owned()
                             };
                             if !text.is_empty() {
                                 let message = OutboundMessage::text(
@@ -943,6 +1166,7 @@ impl EventEmitter for ReplyEmitter {
                                 }
                             }
                             StreamAction::EditFinal(final_text) => {
+                                let final_text = sanitize_llm_output(&final_text);
                                 let msg_id = ctrl.message_id().cloned();
                                 drop(ctrl);
                                 if let Some(msg_id) = msg_id {
@@ -1061,6 +1285,7 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::ToolStart { .. }
             | StreamEvent::ToolUpdate { .. }
             | StreamEvent::ToolEnd { .. }
+            | StreamEvent::AgentTrace { .. }
             | StreamEvent::ReasoningBlock { .. }
             | StreamEvent::UncertaintySignal { .. }
             | StreamEvent::SessionUpdated { .. } => {
@@ -1245,5 +1470,135 @@ mod tests {
                 chunk
             );
         }
+    }
+
+    // ── sanitize_llm_output tests ──────────────────────────────────────
+
+    #[test]
+    fn sanitize_no_tags_returns_borrowed() {
+        let input = "Hello, this is a normal response.";
+        let result = sanitize_llm_output(input);
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(&*result, input);
+    }
+
+    #[test]
+    fn sanitize_strips_think_block() {
+        let input = "<think>\nLet me analyze this...\n</think>\nThe answer is 42.";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "The answer is 42.");
+    }
+
+    #[test]
+    fn sanitize_strips_completion_check() {
+        let input = "Here is the result.\n<completion-check>\n• Task done\n</completion-check>";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Here is the result.");
+    }
+
+    #[test]
+    fn sanitize_strips_task_complete() {
+        let input = "Done.\n<task-complete/>";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Done.");
+    }
+
+    #[test]
+    fn sanitize_strips_all_tags_combined() {
+        let input = "<think>\nthinking...\n</think>\nHere is the answer.\n<completion-check>\n• ok\n</completion-check>\n<task-complete/>";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Here is the answer.");
+    }
+
+    #[test]
+    fn sanitize_collapses_blank_lines() {
+        let input = "<think>x</think>\n\n\n\nActual response.";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Actual response.");
+    }
+
+    #[test]
+    fn sanitize_self_closing_with_space() {
+        let input = "Done.\n<task-complete />";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Done.");
+    }
+
+    // ── Code-block awareness tests ────────────────────────────────────
+
+    #[test]
+    fn sanitize_preserves_think_in_fenced_code() {
+        let input = "Example:\n```\n<think>code here</think>\n```\nDone.";
+        let result = sanitize_llm_output(input);
+        assert!(
+            result.contains("<think>code here</think>"),
+            "think tag inside fenced code should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn sanitize_preserves_think_in_inline_code() {
+        let input = "Use `<think>` tags for reasoning. The answer is 42.";
+        let result = sanitize_llm_output(input);
+        assert!(
+            result.contains("<think>"),
+            "think tag inside inline code should be preserved, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_think_outside_but_preserves_inside_code() {
+        let input = "<think>reasoning</think>\nHere is code:\n```\n<think>example</think>\n```\nDone.";
+        let result = sanitize_llm_output(input);
+        assert!(
+            !result.starts_with("<think>"),
+            "think outside code should be stripped"
+        );
+        assert!(
+            result.contains("<think>example</think>"),
+            "think inside code should be preserved, got: {}",
+            result
+        );
+    }
+
+    // ── Multi-format thinking tag tests ───────────────────────────────
+
+    #[test]
+    fn sanitize_strips_thinking_tag() {
+        let input = "<thinking>\nAnalyzing...\n</thinking>\nResult here.";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Result here.");
+    }
+
+    #[test]
+    fn sanitize_strips_thought_tag() {
+        let input = "<thought>internal</thought>Answer.";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Answer.");
+    }
+
+    #[test]
+    fn sanitize_strips_antthinking_tag() {
+        let input = "<antthinking>\nplanning...\n</antthinking>\nHere you go.";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Here you go.");
+    }
+
+    // ── Trailing incomplete directive tests ────────────────────────────
+
+    #[test]
+    fn sanitize_strips_trailing_brackets() {
+        let input = "The answer is 42.[[";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "The answer is 42.");
+    }
+
+    #[test]
+    fn sanitize_strips_trailing_incomplete_tag() {
+        let input = "Done.\n<completion-check";
+        let result = sanitize_llm_output(input);
+        assert_eq!(&*result, "Done.");
     }
 }
