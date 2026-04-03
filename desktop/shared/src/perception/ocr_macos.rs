@@ -38,7 +38,9 @@ pub(super) fn macos_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         &empty_opts,
     );
 
-    // VNRecognizeTextRequest inherits from VNRequest — use ProtocolObject or direct cast
+    // SAFETY: VNRecognizeTextRequest inherits from VNRequest in the Objective-C class
+    // hierarchy, so the pointer cast from *mut VNRecognizeTextRequest to *mut VNRequest
+    // is valid and preserves the object's retain count and memory layout.
     let requests: objc2::rc::Retained<NSArray<VNRequest>> = unsafe {
         let ptr = objc2::rc::Retained::into_raw(objc2::rc::Retained::clone(&request));
         let vn_req = objc2::rc::Retained::from_raw(ptr as *mut VNRequest).ok_or_else(|| {

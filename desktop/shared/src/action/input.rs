@@ -181,7 +181,9 @@ pub fn drag(
 
     match duration_ms {
         Some(ms) if ms > 0 => {
-            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().max(1.0) as u64;
+            // Cap at 600 steps (10 seconds at 60fps) to prevent excessive iteration
+            // from malicious or erroneous duration values.
+            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().min(600.0).max(1.0) as u64;
             let step_delay = Duration::from_millis(ms / steps.max(1));
             for i in 1..=steps {
                 let t = i as f64 / steps as f64;
@@ -267,6 +269,8 @@ pub fn clipboard_read() -> Result<String> {
         use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 
         let pb = NSPasteboard::generalPasteboard();
+        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
+        // always initialized and thread-safe.
         let pasteboard_type = unsafe { NSPasteboardTypeString };
         match pb.stringForType(pasteboard_type) {
             Some(s) => Ok(s.to_string()),
@@ -317,6 +321,8 @@ pub fn clipboard_write(text: &str) -> Result<()> {
         let pb = NSPasteboard::generalPasteboard();
         pb.clearContents();
         let ns_string = NSString::from_str(text);
+        // SAFETY: NSPasteboardTypeString is a static Objective-C constant,
+        // always initialized and thread-safe.
         let pasteboard_type = unsafe { NSPasteboardTypeString };
         pb.setString_forType(&ns_string, pasteboard_type);
         info!("Clipboard write performed");

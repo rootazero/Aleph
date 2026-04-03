@@ -79,6 +79,8 @@ impl EscapeListener {
     fn build_global_block(flag: &Arc<AtomicBool>) -> RcBlock<dyn Fn(NonNull<NSEvent>)> {
         let flag = Arc::clone(flag);
         RcBlock::new(move |event_ptr: NonNull<NSEvent>| {
+            // SAFETY: NSEvent monitor handlers are guaranteed to receive a valid
+            // NSEvent pointer from the system for the lifetime of the closure invocation.
             let event = unsafe { event_ptr.as_ref() };
             if event.r#type() == NSEventType::KeyDown && event.keyCode() == ESCAPE_KEY_CODE {
                 flag.store(true, Ordering::Release);
@@ -93,6 +95,8 @@ impl EscapeListener {
     ) -> RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> {
         let flag = Arc::clone(flag);
         RcBlock::new(move |event_ptr: NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: NSEvent monitor handlers are guaranteed to receive a valid
+            // NSEvent pointer from the system for the lifetime of the closure invocation.
             let event = unsafe { event_ptr.as_ref() };
             if event.r#type() == NSEventType::KeyDown && event.keyCode() == ESCAPE_KEY_CODE {
                 flag.store(true, Ordering::Release);
@@ -106,6 +110,9 @@ impl EscapeListener {
 
 impl EscapeAbort for EscapeListener {
     fn start(&self) -> aleph_desktop::Result<()> {
+        // Hold the lock across the entire check-and-install sequence to prevent
+        // a race where another thread calls stop() between the emptiness check
+        // and monitor installation.
         let mut monitors = self.monitors.lock().unwrap_or_else(|e| e.into_inner());
 
         // Re-entrant: if already active, return immediately.

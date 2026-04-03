@@ -69,7 +69,10 @@ impl DesktopTool {
     /// Acquire session lock for mutating actions.
     fn acquire_lock(&self) -> std::result::Result<(), DesktopOutput> {
         if let Some(ref lock) = self.session_lock {
-            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = lock.lock().unwrap_or_else(|e| {
+                tracing::warn!("Recovering from poisoned computer-use lock");
+                e.into_inner()
+            });
             if let Err(msg) = guard.acquire() {
                 return Err(DesktopOutput {
                     success: false,
@@ -87,11 +90,11 @@ impl DesktopTool {
             if let Some(listener) = platform.escape_listener() {
                 if !self
                     .escape_started
-                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .load(std::sync::atomic::Ordering::Acquire)
                 {
                     let _ = listener.start();
                     self.escape_started
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                        .store(true, std::sync::atomic::Ordering::Release);
                 }
                 if listener.is_aborted() {
                     return Err(DesktopOutput {
