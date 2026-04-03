@@ -627,7 +627,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture embedder before it's moved into tool_config
         embedder_out = embedder.clone();
 
-
         // Get extension manager for plugin tool execution
         let extension_manager = {
             use alephcore::gateway::handlers::plugins::get_extension_manager;
@@ -828,6 +827,26 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             default_timeout_secs: app_config.execution.default_timeout_secs,
             ..Default::default()
         };
+        let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
+            use alephcore::utils::paths::get_data_dir;
+
+            let db_path = get_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+                .join("state.db");
+
+            match alephcore::resilience::StateDatabase::new(db_path) {
+                Ok(db) => Some(Arc::new(db)),
+                Err(e) => {
+                    if !daemon {
+                        eprintln!(
+                            "Warning: Failed to open state.db: {}. Replay trace persistence disabled.",
+                            e
+                        );
+                    }
+                    None
+                }
+            }
+        };
         let mut engine = ExecutionEngine::new(
             engine_config,
             provider_registry,
@@ -836,6 +855,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             Some(memory_db.clone()),
         )
         .with_global_tool_permissions(app_config.policies.tool_permissions.clone());
+        if let Some(ref state_db) = resilience_db {
+            engine = engine.with_state_database(state_db.clone());
+        }
         if let Some(router) = task_router {
             engine = engine.with_task_router(router);
         }
@@ -901,27 +923,30 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::media::transcription::TranscriptionService;
             use alephcore::media::whisper::WhisperTranscription;
 
-            // Try to get an OpenAI-compatible API key for Whisper transcription.
-            // Look for "openai" provider first, then any provider with openai protocol.
+            // Look up transcription provider from the dedicated transcription_providers config.
             let transcription: Option<Box<dyn TranscriptionService>> = {
-                let openai_cfg = app_config.providers.get("openai").or_else(|| {
-                    app_config.providers.values().find(|cfg| {
-                        cfg.enabled
-                            && cfg.protocol.as_deref() == Some("openai")
-                            && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
-                    })
-                });
+                let gen_cfg = &app_config.generation;
+                let tcfg = gen_cfg
+                    .default_transcription_provider
+                    .as_ref()
+                    .and_then(|name| gen_cfg.transcription_providers.get(name))
+                    .or_else(|| {
+                        gen_cfg.transcription_providers.values().find(|pcfg| {
+                            pcfg.enabled
+                                && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                        })
+                    });
 
-                if let Some(cfg) = openai_cfg {
-                    if let Some(ref key) = cfg.api_key {
+                if let Some(pcfg) = tcfg {
+                    if let Some(ref key) = pcfg.api_key {
                         if !key.is_empty() {
                             let whisper = WhisperTranscription::new(
                                 key.clone(),
-                                cfg.base_url.clone(),
-                                None, // use default whisper model
+                                pcfg.base_url.clone(),
+                                pcfg.models.first().cloned(),
                             );
                             if !daemon {
-                                println!("  MediaProcessor: Whisper transcription enabled");
+                                println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
                             }
                             Some(Box::new(whisper))
                         } else {
@@ -1066,6 +1091,24 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 .await
             }
         });
+
+        if let Some(trace_db) = resilience_db.clone() {
+            let trace_list_db = trace_db.clone();
+            server.handlers_mut().register("trace.list", move |req| {
+                let db = trace_list_db.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
+                }
+            });
+
+            let trace_get_db = trace_db;
+            server.handlers_mut().register("trace.get", move |req| {
+                let db = trace_get_db.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
+                }
+            });
+        }
 
         // Capture for inbound router
         let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
