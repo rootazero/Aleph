@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::context::DashboardState;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Memory Config
@@ -85,12 +85,24 @@ pub struct MemoryConfig {
     pub backup_max_files: u32,
 }
 
-fn default_retention_days() -> u32 { 90 }
-fn default_dedup_threshold() -> f32 { 0.95 }
-fn default_backup_enabled() -> bool { true }
-fn default_backup_max_files() -> u32 { 7 }
-fn default_rrf_k() -> u32 { 60 }
-fn default_bm25_bonus() -> f32 { 0.15 }
+fn default_retention_days() -> u32 {
+    90
+}
+fn default_dedup_threshold() -> f32 {
+    0.95
+}
+fn default_backup_enabled() -> bool {
+    true
+}
+fn default_backup_max_files() -> u32 {
+    7
+}
+fn default_rrf_k() -> u32 {
+    60
+}
+fn default_bm25_bonus() -> f32 {
+    0.15
+}
 
 /// Fusion strategy for hybrid retrieval
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -170,9 +182,15 @@ pub struct RerankConfig {
     pub rerank_weight: f32,
 }
 
-fn default_rerank_model() -> String { "jina-reranker-v2-base-multilingual".to_string() }
-fn default_rerank_timeout() -> u64 { 5000 }
-fn default_rerank_weight() -> f32 { 0.6 }
+fn default_rerank_model() -> String {
+    "jina-reranker-v2-base-multilingual".to_string()
+}
+fn default_rerank_timeout() -> u64 {
+    5000
+}
+fn default_rerank_weight() -> f32 {
+    0.6
+}
 
 impl Default for RerankConfig {
     fn default() -> Self {
@@ -205,9 +223,15 @@ pub struct ReflectionConfig {
     pub open_loop_inject_prompt: bool,
 }
 
-fn default_reflection_min_turns() -> u32 { 5 }
-fn default_reflection_min_chars() -> u32 { 200 }
-fn default_reflection_cooldown() -> u32 { 30 }
+fn default_reflection_min_turns() -> u32 {
+    5
+}
+fn default_reflection_min_chars() -> u32 {
+    200
+}
+fn default_reflection_cooldown() -> u32 {
+    30
+}
 
 impl Default for ReflectionConfig {
     fn default() -> Self {
@@ -296,13 +320,63 @@ pub struct DreamingConfig {
     pub window_end_local: String,
     #[serde(default = "default_dreaming_max_duration")]
     pub max_duration_seconds: u32,
+    #[serde(default = "default_weekly_enabled")]
+    pub weekly_enabled: bool,
+    #[serde(default = "default_weekly_interval_days")]
+    pub weekly_interval_days: u32,
+    #[serde(default = "default_cluster_dbscan_eps")]
+    pub cluster_dbscan_eps: f32,
+    #[serde(default = "default_cluster_dbscan_min_samples")]
+    pub cluster_dbscan_min_samples: usize,
+    #[serde(default = "default_drift_similarity_threshold")]
+    pub drift_similarity_threshold: f32,
+    #[serde(default = "default_drift_max_pairs_per_run")]
+    pub drift_max_pairs_per_run: usize,
+    #[serde(default = "default_synthesis_min_cluster_size")]
+    pub synthesis_min_cluster_size: usize,
+    #[serde(default = "default_synthesis_max_insights")]
+    pub synthesis_max_insights: usize,
 }
 
-fn default_dreaming_enabled() -> bool { true }
-fn default_dreaming_idle_threshold() -> u32 { 900 }
-fn default_dreaming_window_start() -> String { "02:00".to_string() }
-fn default_dreaming_window_end() -> String { "05:00".to_string() }
-fn default_dreaming_max_duration() -> u32 { 600 }
+fn default_dreaming_enabled() -> bool {
+    true
+}
+fn default_dreaming_idle_threshold() -> u32 {
+    900
+}
+fn default_dreaming_window_start() -> String {
+    "02:00".to_string()
+}
+fn default_dreaming_window_end() -> String {
+    "05:00".to_string()
+}
+fn default_dreaming_max_duration() -> u32 {
+    600
+}
+fn default_weekly_enabled() -> bool {
+    true
+}
+fn default_weekly_interval_days() -> u32 {
+    7
+}
+fn default_cluster_dbscan_eps() -> f32 {
+    0.3
+}
+fn default_cluster_dbscan_min_samples() -> usize {
+    2
+}
+fn default_drift_similarity_threshold() -> f32 {
+    0.85
+}
+fn default_drift_max_pairs_per_run() -> usize {
+    20
+}
+fn default_synthesis_min_cluster_size() -> usize {
+    3
+}
+fn default_synthesis_max_insights() -> usize {
+    10
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphDecayPolicy {
@@ -314,9 +388,15 @@ pub struct GraphDecayPolicy {
     pub min_score: f32,
 }
 
-fn default_graph_node_decay() -> f32 { 0.02 }
-fn default_graph_edge_decay() -> f32 { 0.03 }
-fn default_graph_min_score() -> f32 { 0.1 }
+fn default_graph_node_decay() -> f32 {
+    0.02
+}
+fn default_graph_edge_decay() -> f32 {
+    0.03
+}
+fn default_graph_min_score() -> f32 {
+    0.1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryDecayPolicy {
@@ -330,9 +410,15 @@ pub struct MemoryDecayPolicy {
     pub protected_types: Vec<String>,
 }
 
-fn default_memory_half_life() -> f32 { 30.0 }
-fn default_memory_access_boost() -> f32 { 0.2 }
-fn default_memory_min_strength() -> f32 { 0.1 }
+fn default_memory_half_life() -> f32 {
+    30.0
+}
+fn default_memory_access_boost() -> f32 {
+    0.2
+}
+fn default_memory_min_strength() -> f32 {
+    0.1
+}
 
 // ============================================================================
 // Memory Config API
@@ -343,17 +429,15 @@ pub struct MemoryConfigApi;
 impl MemoryConfigApi {
     /// Get current memory configuration
     pub async fn get(state: &DashboardState) -> Result<MemoryConfig, String> {
-        let result = state.rpc_call("memory_config.get", serde_json::Value::Null).await?;
+        let result = state
+            .rpc_call("memory_config.get", serde_json::Value::Null)
+            .await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse memory config: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse memory config: {}", e))
     }
 
     /// Update memory configuration
-    pub async fn update(
-        state: &DashboardState,
-        config: MemoryConfig,
-    ) -> Result<(), String> {
+    pub async fn update(state: &DashboardState, config: MemoryConfig) -> Result<(), String> {
         let params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
@@ -371,16 +455,24 @@ pub struct RerankConfigApi;
 impl RerankConfigApi {
     /// Get current rerank configuration
     pub async fn get(state: &DashboardState) -> Result<RerankConfig, String> {
-        let result = state.rpc_call("rerank_config.get", serde_json::Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse rerank config: {}", e))
+        let result = state
+            .rpc_call("rerank_config.get", serde_json::Value::Null)
+            .await?;
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {}", e))
     }
 
     /// Get rerank configuration with a specific provider's API key from vault
-    pub async fn get_for_provider(state: &DashboardState, provider: &str) -> Result<RerankConfig, String> {
-        let result = state.rpc_call("rerank_config.get", serde_json::json!({ "provider": provider })).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse rerank config: {}", e))
+    pub async fn get_for_provider(
+        state: &DashboardState,
+        provider: &str,
+    ) -> Result<RerankConfig, String> {
+        let result = state
+            .rpc_call(
+                "rerank_config.get",
+                serde_json::json!({ "provider": provider }),
+            )
+            .await?;
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse rerank config: {}", e))
     }
 
     /// Update rerank configuration
@@ -392,11 +484,13 @@ impl RerankConfigApi {
     }
 
     /// Test rerank provider connectivity
-    pub async fn test(state: &DashboardState, config: RerankConfig) -> Result<TestRerankResponse, String> {
+    pub async fn test(
+        state: &DashboardState,
+        config: RerankConfig,
+    ) -> Result<TestRerankResponse, String> {
         let params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize rerank config: {}", e))?;
         let result = state.rpc_call("rerank_config.test", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse test response: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse test response: {}", e))
     }
 }
