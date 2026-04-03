@@ -10,6 +10,8 @@ mod tests;
 
 pub use types::{DesktopArgs, DesktopOutput};
 
+use std::sync::Mutex;
+
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
@@ -18,11 +20,15 @@ use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolic
 use crate::error::Result;
 use crate::tools::AlephTool;
 
+use session_lock::ComputerUseLock;
+
 /// Desktop tool — gives the AI agent eyes and hands on the desktop.
 #[derive(Clone)]
 pub struct DesktopTool {
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
+    pub(super) session_lock: Option<Arc<Mutex<ComputerUseLock>>>,
+    pub(super) escape_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DesktopTool {
@@ -30,6 +36,8 @@ impl DesktopTool {
         Self {
             approval_policy: None,
             platform: None,
+            session_lock: None,
+            escape_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -50,6 +58,126 @@ impl DesktopTool {
     pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
         self.approval_policy = Some(policy);
         self
+    }
+
+    /// Attach a session ID for computer-use locking.
+    pub fn with_session_id(mut self, session_id: &str) -> Self {
+        self.session_lock = Some(Arc::new(Mutex::new(ComputerUseLock::new(session_id))));
+        self
+    }
+
+    /// Acquire session lock for mutating actions.
+    fn acquire_lock(&self) -> std::result::Result<(), DesktopOutput> {
+        if let Some(ref lock) = self.session_lock {
+            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(msg) = guard.acquire() {
+                return Err(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(msg),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check escape abort and start listener on first call.
+    fn check_escape(&self) -> std::result::Result<(), DesktopOutput> {
+        if let Some(ref platform) = self.platform {
+            if let Some(listener) = platform.escape_listener() {
+                if !self
+                    .escape_started
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    let _ = listener.start();
+                    self.escape_started
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                if listener.is_aborted() {
+                    return Err(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(
+                            "Computer use aborted by user (Escape pressed)".into(),
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute a batch of desktop actions sequentially.
+    async fn execute_batch(&self, args: &DesktopArgs) -> Result<DesktopOutput> {
+        let actions = match &args.actions {
+            Some(list) if !list.is_empty() => list,
+            _ => {
+                return Ok(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some("batch requires non-empty 'actions' array".into()),
+                })
+            }
+        };
+
+        let mut results = Vec::new();
+        for (i, action_json) in actions.iter().enumerate() {
+            // Check escape between actions
+            if let Err(out) = self.check_escape() {
+                results.push(serde_json::json!({
+                    "index": i,
+                    "aborted": true,
+                    "message": out.message,
+                }));
+                break;
+            }
+
+            let sub_args: DesktopArgs = match serde_json::from_value(action_json.clone()) {
+                Ok(a) => a,
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "index": i,
+                        "success": false,
+                        "message": format!("Invalid action: {e}"),
+                    }));
+                    break;
+                }
+            };
+
+            // Prevent nested batch
+            if sub_args.action == "batch" {
+                results.push(serde_json::json!({
+                    "index": i,
+                    "success": false,
+                    "message": "Nested batch not allowed",
+                }));
+                break;
+            }
+
+            let output = AlephTool::call(self, sub_args).await?;
+            let success = output.success;
+            results.push(serde_json::json!({
+                "index": i,
+                "success": success,
+                "data": output.data,
+                "message": output.message,
+            }));
+
+            if !success {
+                break;
+            }
+        }
+
+        let overall_success = results
+            .last()
+            .and_then(|r| r["success"].as_bool())
+            .unwrap_or(false);
+
+        Ok(DesktopOutput {
+            success: overall_success,
+            data: Some(serde_json::json!({"results": results})),
+            message: None,
+        })
     }
 
     /// Check the approval policy for a sensitive action.
@@ -126,7 +254,8 @@ impl DesktopTool {
 fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     match args.action.as_str() {
         "screenshot" | "ocr" | "window_list" | "cursor_position"
-        | "clipboard_read" | "screen_record" | "focus_window" => None,
+        | "clipboard_read" | "screen_record" | "focus_window"
+        | "display_list" => None,
 
         "click" | "double_click" | "hover" | "mouse_button" => Some((
             ActionType::DesktopClick,
@@ -148,6 +277,9 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             ActionType::DesktopLaunchApp,
             args.bundle_id.clone().unwrap_or_default(),
         )),
+
+        "batch" => Some((ActionType::DesktopClick, "batch operation".into())),
+        "paste" => Some((ActionType::DesktopType, args.text.clone().unwrap_or_default())),
 
         _ => Some((ActionType::DesktopClick, format!("unknown: {}", args.action))),
     }
@@ -183,6 +315,9 @@ Actions:
 - clipboard_read: Read clipboard text.
 - clipboard_write: Write text to clipboard.
 - screen_record: Record screen as MP4. Optional duration/fps/with_audio.
+- display_list: List all connected displays with resolution and scale info.
+- batch: Execute multiple actions sequentially. Requires actions array.
+- paste: Paste text via clipboard (Cmd+V). Better for multiline text than type_text.
 
 Examples:
 {"action":"click","x":500,"y":300}
@@ -193,21 +328,45 @@ Examples:
 {"action":"clipboard_read"}
 {"action":"scroll","delta_y":-300}
 {"action":"type_text","text":"Hello"}
-{"action":"screen_record","duration":3.0,"fps":30}"#;
+{"action":"screen_record","duration":3.0,"fps":30}
+{"action":"display_list"}
+{"action":"batch","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
+{"action":"paste","text":"line1\nline2\nline3"}
+{"action":"screenshot","format":"jpeg","quality":0.75,"max_width":1280}"#;
 
     type Args = DesktopArgs;
     type Output = DesktopOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Check approval for sensitive (mutating) actions before attempting
-        // desktop execution. Read-only actions skip approval.
+        let is_mutating = classify_approval(&args).is_some();
+
+        // 1. Approval check
         if let Some((action_type, target)) = classify_approval(&args) {
             if let Some(out) = self.check_approval(action_type, &target).await {
                 return Ok(out);
             }
         }
 
-        // Execute via platform (single path).
+        // 2. Session lock (mutating actions only)
+        if is_mutating {
+            if let Err(out) = self.acquire_lock() {
+                return Ok(out);
+            }
+        }
+
+        // 3. Escape abort check (mutating actions only)
+        if is_mutating {
+            if let Err(out) = self.check_escape() {
+                return Ok(out);
+            }
+        }
+
+        // 4. Handle batch at this level (needs recursive self.call())
+        if args.action == "batch" {
+            return Ok(self.execute_batch(&args).await?);
+        }
+
+        // 5. Execute via platform
         if let Some(ref platform) = self.platform {
             if let Some(output) = self.call_via_platform(platform, &args).await? {
                 return Ok(output);
