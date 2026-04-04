@@ -14,7 +14,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::gateway::config::AuthMode;
@@ -613,8 +613,13 @@ async fn handle_connection(
                             }
                         }
                     }
-                    Err(_) => {
-                        debug!("Event forwarder closed for {}, overflow_count={}", conn_id, buffer_metrics.overflow());
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        buffer_metrics.add_overflow(n as u64);
+                        debug!("Event forwarder lagged for {}, dropped {} events, total overflow={}", conn_id, n, buffer_metrics.overflow());
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!("Event forwarder closed for {}", conn_id);
                         break;
                     }
                 }

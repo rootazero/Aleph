@@ -43,7 +43,7 @@ pub(super) async fn run_ws_loop(ctx: WsLoopContext) {
 
         tracing::info!(
             "Connecting to Feishu WebSocket: {}...",
-            current_url.get(..60).unwrap_or(&current_url)
+            current_url.chars().take(60).collect::<String>()
         );
 
         match tokio_tungstenite::connect_async(&current_url).await {
