@@ -5,7 +5,7 @@
 
 use super::StateDatabase;
 use crate::error::AlephError;
-use crate::resilience::TaskTrace;
+use crate::resilience::{TaskTrace, TaskTraceInfo};
 use aleph_protocol::AgentTraceEvent;
 use rusqlite::params;
 use rusqlite::types::Type;
@@ -193,6 +193,56 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::config(format!("Failed to count traces: {}", e)))?;
         Ok(count as u64)
+    }
+
+    /// List all distinct task IDs that have traces
+    pub async fn list_trace_tasks(&self) -> Result<Vec<TaskTraceInfo>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT task_id, COUNT(*) as event_count, MAX(timestamp) as last_timestamp
+                FROM task_traces
+                GROUP BY task_id
+                ORDER BY last_timestamp DESC
+                "#,
+            )
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let tasks = stmt
+            .query_map([], |row| {
+                Ok(TaskTraceInfo {
+                    task_id: row.get(0)?,
+                    event_count: row.get(1)?,
+                    last_timestamp: row.get(2)?,
+                })
+            })
+            .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;
+
+        Ok(tasks)
+    }
+
+    /// Get a trace by its ID
+    pub async fn get_trace_by_id(&self, trace_id: i64) -> Result<Option<TaskTrace>, AlephError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, task_id, step_index, event_kind, event_json, timestamp
+                FROM task_traces
+                WHERE id = ?1
+                "#,
+            )
+            .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let result = stmt
+            .query_row(params![trace_id], task_trace_from_row)
+            .optional()
+            .map_err(|e| AlephError::config(format!("Failed to get trace: {}", e)))?;
+
+        Ok(result)
     }
 }
 

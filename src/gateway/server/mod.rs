@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod handler;
+mod per_client_buffer;
 
 use super::control_plane::create_control_plane_router;
 use super::openai_api::{openai_routes, OpenAiApiState};

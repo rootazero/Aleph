@@ -356,6 +356,14 @@ impl TaskTrace {
     }
 }
 
+/// Summary info for trace listing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskTraceInfo {
+    pub task_id: String,
+    pub event_count: i64,
+    pub last_timestamp: i64,
+}
+
 // =============================================================================
 // Agent Event
 // =============================================================================

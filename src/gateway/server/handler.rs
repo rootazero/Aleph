@@ -33,6 +33,7 @@ use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKe
 use crate::gateway::state_version::StateVersionTracker;
 
 use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
+use super::per_client_buffer::PerClientBuffer;
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
@@ -99,8 +100,17 @@ async fn handle_connection(
 
     info!("New WebSocket connection: {}", conn_id);
 
-    // Subscribe to event bus for this connection
-    let mut event_rx = ctx.event_bus.subscribe();
+    let event_bus = ctx.event_bus.clone();
+
+    let (buffer, mut client_event_rx) = PerClientBuffer::new();
+    let buffer_metrics = buffer.metrics().clone();
+
+    tokio::spawn(async move {
+        let mut rx = event_bus.subscribe();
+        while let Ok(event) = rx.recv().await {
+            let _ = buffer.try_send(event);
+        }
+    });
 
     // Initialize connection state
     {
@@ -554,7 +564,7 @@ async fn handle_connection(
                 }
             }
             // Forward events to client (with subscription filtering)
-            event = event_rx.recv() => {
+            event = client_event_rx.recv() => {
                 match event {
                     Ok(event_json) => {
                         // Try to extract topic from event for filtering
@@ -603,11 +613,8 @@ async fn handle_connection(
                             }
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("Connection {} lagged, missed {} events", conn_id, n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        debug!("Event bus closed for {}", conn_id);
+                    Err(_) => {
+                        debug!("Event forwarder closed for {}, overflow_count={}", conn_id, buffer_metrics.overflow());
                         break;
                     }
                 }
