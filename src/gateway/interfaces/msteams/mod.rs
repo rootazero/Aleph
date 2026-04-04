@@ -537,6 +537,7 @@ impl MsTeamsChannel {
             reply_to: activity.reply_to_id.as_deref().map(MessageId::new),
             is_group,
             raw: Some(serde_json::to_value(&activity).unwrap_or_default()),
+            metadata: vec![],
         };
 
         Ok(vec![msg])

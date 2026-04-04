@@ -148,6 +148,7 @@ pub fn convert_privmsg(
         reply_to: None,
         is_group,
         raw: None, // IRC has no structured raw data
+        metadata: vec![],
     })
 }
 

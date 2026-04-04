@@ -234,6 +234,7 @@ impl SlackMessageOps {
             reply_to,
             is_group: !is_dm,
             raw: Some(event.clone()),
+            metadata: vec![],
         })
     }
 

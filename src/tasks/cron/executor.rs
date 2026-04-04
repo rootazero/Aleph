@@ -11,6 +11,7 @@ use crate::gateway::channel::OutboundMessage;
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::event_emitter::CollectingEventEmitter;
 use crate::gateway::event_emitter::StreamEvent;
+use crate::gateway::reply_emitter::sanitize_llm_output;
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
@@ -218,6 +219,11 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 }
 
 /// Extract the final response text from collected events.
+///
+/// Sanitizes the output (strips `<completion-check>`, `<task-complete/>`, thinking
+/// tags, etc.) and falls back to concatenated `ResponseChunk` deltas when the
+/// `RunSummary.final_response` is empty after sanitization (e.g. when the last
+/// LLM turn was purely a completion-protocol confirmation).
 async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<String> {
     let events = collector.events().await;
 
@@ -225,8 +231,9 @@ async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<St
     for event in events.iter().rev() {
         if let StreamEvent::RunComplete { ref summary, .. } = event {
             if let Some(ref text) = summary.final_response {
-                if !text.is_empty() {
-                    return Some(text.clone());
+                let sanitized = sanitize_llm_output(text);
+                if !sanitized.is_empty() {
+                    return Some(sanitized.into_owned());
                 }
             }
         }
@@ -240,9 +247,13 @@ async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<St
         }
     }
     if full_text.is_empty() {
+        return None;
+    }
+    let sanitized = sanitize_llm_output(&full_text);
+    if sanitized.is_empty() {
         None
     } else {
-        Some(full_text)
+        Some(sanitized.into_owned())
     }
 }
 

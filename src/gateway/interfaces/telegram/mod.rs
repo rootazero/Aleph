@@ -66,6 +66,8 @@ pub struct TelegramChannel {
     error_cooldown: Arc<ErrorCooldown>,
     /// Persistent polling offset tracker (set via `set_offset_tracker`).
     offset_tracker: Option<Arc<offset::OffsetTracker>>,
+    /// State database for pairing persistence (set via `set_state_database`).
+    state_db: Option<Arc<crate::resilience::StateDatabase>>,
 }
 
 impl TelegramChannel {
@@ -95,6 +97,7 @@ impl TelegramChannel {
             access,
             error_cooldown: Arc::new(ErrorCooldown::new()),
             offset_tracker: None,
+            state_db: None,
         }
     }
 
@@ -107,6 +110,14 @@ impl TelegramChannel {
     /// Set the offset tracker for persistent polling offset management.
     pub fn set_offset_tracker(&mut self, tracker: Arc<offset::OffsetTracker>) {
         self.offset_tracker = Some(tracker);
+    }
+
+    /// Set the state database for pairing persistence.
+    ///
+    /// Must be called **before** `start()` so that the `AccessController`
+    /// can load and persist paired users.
+    pub fn set_state_database(&mut self, db: Arc<crate::resilience::StateDatabase>) {
+        self.state_db = Some(db);
     }
 
     /// Get Telegram-specific capabilities
@@ -168,6 +179,66 @@ impl Channel for TelegramChannel {
         match bot.get_me().await {
             Ok(me) => {
                 tracing::info!("Telegram bot connected: @{} ({})", me.username(), me.id);
+
+                // Boot diagnostics — fire-and-forget
+                {
+                    let diag_bot = bot.clone();
+                    let can_read_groups = me.can_read_all_group_messages;
+                    let group_ids: Vec<i64> = self.config.allowed_groups.clone();
+
+                    tokio::spawn(async move {
+                        let mut warnings: Vec<String> = Vec::new();
+
+                        // (a) Privacy mode check
+                        if !can_read_groups {
+                            warnings.push(
+                                "Privacy mode is enabled. Talk to @BotFather and disable \
+                                 privacy mode for group message access"
+                                    .to_string(),
+                            );
+                        }
+
+                        // (b) Group reachability check
+                        let total_groups = group_ids.len();
+                        let mut reachable = 0usize;
+                        for gid in &group_ids {
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                diag_bot.get_chat(teloxide::types::ChatId(*gid)),
+                            )
+                            .await
+                            {
+                                Ok(Ok(_)) => {
+                                    reachable += 1;
+                                }
+                                Ok(Err(e)) => {
+                                    warnings
+                                        .push(format!("Group {} unreachable: {}", gid, e));
+                                }
+                                Err(_) => {
+                                    warnings
+                                        .push(format!("Group {} check timed out", gid));
+                                }
+                            }
+                        }
+
+                        // Log summary
+                        if warnings.is_empty() {
+                            tracing::info!(
+                                privacy_mode_disabled = can_read_groups,
+                                groups_reachable = %format!("{}/{}", reachable, total_groups),
+                                "Telegram boot diagnostics: all checks passed"
+                            );
+                        } else {
+                            tracing::warn!(
+                                privacy_mode_disabled = can_read_groups,
+                                groups_reachable = %format!("{}/{}", reachable, total_groups),
+                                warnings = ?warnings,
+                                "Telegram boot diagnostics: issues detected"
+                            );
+                        }
+                    });
+                }
             }
             Err(e) => {
                 self.set_status(ChannelStatus::Error).await;
@@ -260,6 +331,22 @@ impl Channel for TelegramChannel {
 
         // Store bot instance
         self.bot = Some(bot.clone());
+
+        // Inject state database into AccessController for pairing persistence.
+        // Arc::get_mut succeeds here because no clones have been made yet.
+        if let Some(ref db) = self.state_db {
+            if let Some(access) = Arc::get_mut(&mut self.access) {
+                access.set_state_database(db.clone());
+            } else {
+                tracing::warn!(
+                    "Could not inject StateDatabase into AccessController \
+                     (Arc has multiple references)"
+                );
+            }
+        }
+
+        // Load previously paired users from the database into memory.
+        self.access.load_from_database(self.info.id.as_str()).await;
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -416,7 +503,8 @@ impl Channel for TelegramChannel {
 
         let status = self.channel_state.status_handle();
         let offset = self.offset_tracker.clone();
-        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx, offset));
+        let ec = self.error_cooldown.clone();
+        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx, offset, ec));
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())

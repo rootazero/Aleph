@@ -235,6 +235,7 @@ impl MattermostMessageOps {
             reply_to,
             is_group,
             raw: Some(event.clone()),
+            metadata: vec![],
         })
     }
 

@@ -83,6 +83,7 @@ impl XmppMessageOps {
                 reply_to: None,
                 is_group: true,
                 raw: None,
+                metadata: vec![],
             })
         } else {
             // 1-on-1 chat: from is the sender's full JID
@@ -112,6 +113,7 @@ impl XmppMessageOps {
                 reply_to: None,
                 is_group: false,
                 raw: None,
+                metadata: vec![],
             })
         }
     }

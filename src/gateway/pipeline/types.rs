@@ -271,6 +271,7 @@ mod tests {
             reply_to: None,
             is_group: false,
             raw: None,
+            metadata: vec![],
         };
         let route = ReplyRoute::new(ChannelId::new("test-ch"), ConversationId::new("conv-1"));
         let session_key = SessionKey::main("main");
@@ -295,6 +296,7 @@ mod tests {
             reply_to: None,
             is_group: false,
             raw: None,
+            metadata: vec![],
         };
         let route = ReplyRoute::new(ChannelId::new("test-ch"), ConversationId::new("conv-1"));
         let session_key = SessionKey::main("main");

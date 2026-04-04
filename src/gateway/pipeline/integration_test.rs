@@ -59,6 +59,7 @@ fn make_context(text: &str, msg_id: &str, attachments: Vec<Attachment>) -> Inbou
         reply_to: None,
         is_group: false,
         raw: None,
+        metadata: vec![],
     };
     let route = ReplyRoute::new(ChannelId::new("test-ch"), ConversationId::new("conv-1"));
     let session_key = SessionKey::main("main");

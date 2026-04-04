@@ -459,6 +459,106 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
     Ok(())
 }
 
+/// Migrate to add channel_offsets table for persistent polling offset tracking.
+///
+/// Stores the last processed update_id per channel so that restarts resume
+/// from where they left off instead of dropping or re-processing updates.
+///
+/// # Safety
+/// - Uses IF NOT EXISTS for idempotent table creation
+/// - Uses savepoint for atomic migration
+pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_channel_offsets")
+        .map_err(|e| AlephError::config(format!("Failed to begin channel_offsets migration: {}", e)))?;
+
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='channel_offsets'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_channel_offsets");
+            AlephError::config(format!("Failed to check channel_offsets table: {}", e))
+        })?;
+
+    if table_exists == 0 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE channel_offsets (
+                channel_id TEXT PRIMARY KEY,
+                bot_id TEXT NOT NULL,
+                last_update_id INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_channel_offsets");
+            AlephError::config(format!("Failed to create channel_offsets table: {}", e))
+        })?;
+
+        tracing::info!("Created channel_offsets table");
+    } else {
+        tracing::debug!("channel_offsets table already exists, skipping creation");
+    }
+
+    conn.execute_batch("RELEASE migration_channel_offsets")
+        .map_err(|e| AlephError::config(format!("Failed to commit channel_offsets migration: {}", e)))?;
+
+    Ok(())
+}
+
+/// Migrate to add paired_users table for pairing persistence.
+///
+/// Stores which Telegram users are paired (allowed to interact) per channel,
+/// enabling pairing state to survive restarts.
+///
+/// # Safety
+/// - Uses IF NOT EXISTS for idempotent table creation
+/// - Uses savepoint for atomic migration
+pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_paired_users")
+        .map_err(|e| AlephError::config(format!("Failed to begin paired_users migration: {}", e)))?;
+
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='paired_users'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_paired_users");
+            AlephError::config(format!("Failed to check paired_users table: {}", e))
+        })?;
+
+    if table_exists == 0 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE paired_users (
+                channel_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                paired_at TEXT NOT NULL,
+                PRIMARY KEY(channel_id, user_id)
+            )
+            "#,
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_paired_users");
+            AlephError::config(format!("Failed to create paired_users table: {}", e))
+        })?;
+
+        tracing::info!("Created paired_users table");
+    } else {
+        tracing::debug!("paired_users table already exists, skipping creation");
+    }
+
+    conn.execute_batch("RELEASE migration_paired_users")
+        .map_err(|e| AlephError::config(format!("Failed to commit paired_users migration: {}", e)))?;
+
+    Ok(())
+}
+
 fn legacy_trace_to_agent_trace(step_index: u32, role: &str, content_json: &str) -> AgentTraceEvent {
     let iteration = step_index as usize;
     let text = extract_legacy_trace_text(content_json);

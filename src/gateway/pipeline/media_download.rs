@@ -120,6 +120,19 @@ impl MediaDownloader {
             return self.download_attachment_url(attachment, url).await;
         }
 
+        // Case 4: file_id passthrough (e.g. Telegram attachment where get_file() timed out
+        // or failed, leaving url=None but id populated with the file_id).
+        // Preserve the attachment metadata so the LLM context builder can still
+        // reference it — do not silently drop.
+        if !attachment.id.is_empty() {
+            let category = MediaCategory::from_mime(&attachment.mime_type);
+            return Ok(LocalMedia {
+                original: attachment.clone(),
+                local_path: PathBuf::new(),
+                media_category: category,
+            });
+        }
+
         Err("Attachment has no path, data, or url".to_string())
     }
 
@@ -267,6 +280,7 @@ mod tests {
             reply_to: None,
             is_group: false,
             raw: None,
+            metadata: vec![],
         };
         let route = ReplyRoute::new(ChannelId::new("ch-1"), ConversationId::new("conv-1"));
         let session_key = SessionKey::main("main");

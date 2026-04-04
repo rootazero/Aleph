@@ -144,6 +144,7 @@ impl CliChannel {
             reply_to: None,
             is_group: false,
             raw: None,
+            metadata: vec![],
         };
 
         tx.send(message)
@@ -223,6 +224,7 @@ impl Channel for CliChannel {
                             reply_to: None,
                             is_group: false,
                             raw: None,
+                            metadata: vec![],
                         };
 
                         if inbound_tx.send(message).await.is_err() {

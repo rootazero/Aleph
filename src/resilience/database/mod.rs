@@ -7,8 +7,10 @@
 /// - Subagent sessions (`sessions`)
 ///
 /// Schema migration utilities are in the `migration` submodule.
+mod channel_offsets;
 mod events;
 mod group_chat;
+mod paired_users;
 mod memory_events;
 pub mod migration;
 mod replay;

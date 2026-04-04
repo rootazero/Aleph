@@ -291,6 +291,7 @@ impl EventHandler for Handler {
                 "guild_id": msg.guild_id.map(|g| g.to_string()),
                 "channel_id": msg.channel_id.to_string(),
             })),
+            metadata: vec![],
         };
 
         // Send to channel

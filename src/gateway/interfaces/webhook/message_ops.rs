@@ -114,6 +114,7 @@ impl WebhookMessageOps {
                 reply_to: payload.thread_id.map(MessageId::new),
                 is_group: payload.is_group,
                 raw: serde_json::to_value(&payload.metadata).ok(),
+                metadata: vec![],
             });
         }
 

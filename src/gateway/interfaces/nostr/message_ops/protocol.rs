@@ -325,5 +325,6 @@ pub fn convert_event_to_inbound(
         reply_to,
         is_group,
         raw: serde_json::to_value(event).ok(),
+        metadata: vec![],
     })
 }

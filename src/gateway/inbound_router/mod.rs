@@ -16,6 +16,7 @@ pub use types::{ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SLASH_COMMAN
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
@@ -108,6 +109,8 @@ pub struct InboundMessageRouter {
     /// Generation config for TTS
     pub(super) generation_config:
         Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
+    /// Message coalescer for merging rapid-fire inbound messages
+    coalescer: Option<super::coalescer::MessageCoalescer>,
 }
 
 impl InboundMessageRouter {
@@ -140,6 +143,7 @@ impl InboundMessageRouter {
             stt_config: None,
             generation_registry: None,
             generation_config: None,
+            coalescer: None,
         }
     }
 
@@ -237,6 +241,15 @@ impl InboundMessageRouter {
         self
     }
 
+    /// Set the message coalescer for merging rapid-fire inbound messages.
+    ///
+    /// When enabled, messages from the same conversation (or Telegram media group)
+    /// are buffered and merged before being handed off to the agent loop.
+    pub fn with_coalescer(mut self, config: super::coalescer::CoalescingConfig) -> Self {
+        self.coalescer = Some(super::coalescer::MessageCoalescer::new(config));
+        self
+    }
+
     /// Register channel-specific configuration
     pub fn register_channel_config(&mut self, channel_id: &str, config: ChannelConfig) {
         self.channel_configs.insert(channel_id.to_string(), config);
@@ -257,31 +270,104 @@ impl InboundMessageRouter {
     async fn run_loop(self: Arc<Self>, mut rx: mpsc::Receiver<InboundMessage>) {
         info!("InboundMessageRouter started");
 
-        while let Some(msg) = rx.recv().await {
-            // Deduplication check
-            let dedup_key = format!("{}:{}", msg.channel_id.as_str(), msg.id.as_str());
-            {
-                let mut tracker = self.dedup_tracker.lock().await;
-                if !tracker.check_and_record(&dedup_key) {
-                    warn!(
-                        "Duplicate message detected and dropped: {} from {}:{}",
-                        dedup_key,
-                        msg.channel_id.as_str(),
-                        msg.sender_id.as_str()
-                    );
-                    continue;
+        let has_coalescer = self.coalescer.is_some();
+
+        if has_coalescer {
+            // Coalescing path: use tokio::select! to interleave recv + tick
+            let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+            // The first tick completes immediately; consume it.
+            tick_interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                // Deduplication check
+                                if !self.dedup_check(&msg).await {
+                                    continue;
+                                }
+
+                                if let Some(ref coalescer) = self.coalescer {
+                                    let immediate = coalescer.push(msg);
+                                    for flushed in immediate {
+                                        let router = self.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = router.handle_message(flushed).await {
+                                                error!("Failed to handle coalesced message: {}", e);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                            None => break, // channel closed
+                        }
+                    }
+                    _ = tick_interval.tick() => {
+                        if let Some(ref coalescer) = self.coalescer {
+                            let flushed = coalescer.tick();
+                            for msg in flushed {
+                                let router = self.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = router.handle_message(msg).await {
+                                        error!("Failed to handle coalesced message: {}", e);
+                                    }
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
-            let router = self.clone();
-            tokio::spawn(async move {
-                if let Err(e) = router.handle_message(msg).await {
-                    error!("Failed to handle inbound message: {}", e);
+            // Graceful shutdown: flush remaining coalescer buffers
+            if let Some(ref coalescer) = self.coalescer {
+                let remaining = coalescer.flush_all();
+                if !remaining.is_empty() {
+                    info!(
+                        pending_buffers = remaining.len(),
+                        "Flushing coalescing buffers on shutdown"
+                    );
+                    for msg in remaining {
+                        let router = self.clone();
+                        if let Err(e) = router.handle_message(msg).await {
+                            error!("Failed to handle flushed message on shutdown: {}", e);
+                        }
+                    }
                 }
-            });
+            }
+        } else {
+            // No coalescer — original direct-dispatch path (backward compatible)
+            while let Some(msg) = rx.recv().await {
+                if !self.dedup_check(&msg).await {
+                    continue;
+                }
+
+                let router = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = router.handle_message(msg).await {
+                        error!("Failed to handle inbound message: {}", e);
+                    }
+                });
+            }
         }
 
         info!("InboundMessageRouter stopped");
+    }
+
+    /// Check dedup tracker, returns `true` if message is new (not a duplicate).
+    async fn dedup_check(&self, msg: &InboundMessage) -> bool {
+        let dedup_key = format!("{}:{}", msg.channel_id.as_str(), msg.id.as_str());
+        let mut tracker = self.dedup_tracker.lock().await;
+        if !tracker.check_and_record(&dedup_key) {
+            warn!(
+                "Duplicate message detected and dropped: {} from {}:{}",
+                dedup_key,
+                msg.channel_id.as_str(),
+                msg.sender_id.as_str()
+            );
+            return false;
+        }
+        true
     }
 
     /// Handle a single inbound message

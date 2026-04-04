@@ -200,6 +200,7 @@ impl SignalMessageOps {
             reply_to: None,
             is_group,
             raw: Some(msg.clone()),
+            metadata: vec![],
         })
     }
 

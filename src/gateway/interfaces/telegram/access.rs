@@ -4,6 +4,7 @@
 //! that was previously scattered across the message handler closure.
 
 use super::config::{DmPolicy, GroupPolicy, PairingEntry, TelegramConfig};
+use crate::resilience::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -38,12 +39,14 @@ pub enum PairingResult {
 /// and handler closures.
 pub struct AccessController {
     config: TelegramConfig,
-    /// Users authorized at runtime via the pairing flow (in-memory only).
+    /// Users authorized at runtime via the pairing flow.
     runtime_users: Arc<RwLock<Vec<i64>>>,
     /// Active pairing codes: code → entry.
     pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
     /// Rate-limit map: user_id → last prompt time.
     prompt_times: Arc<RwLock<HashMap<i64, Instant>>>,
+    /// Optional state database for persisting paired users across restarts.
+    db: Option<Arc<StateDatabase>>,
 }
 
 impl AccessController {
@@ -54,6 +57,39 @@ impl AccessController {
             runtime_users: Arc::new(RwLock::new(Vec::new())),
             pairing_codes: Arc::new(RwLock::new(HashMap::new())),
             prompt_times: Arc::new(RwLock::new(HashMap::new())),
+            db: None,
+        }
+    }
+
+    /// Inject the state database for pairing persistence.
+    ///
+    /// Must be called **before** the controller is wrapped in `Arc`.
+    pub fn set_state_database(&mut self, db: Arc<StateDatabase>) {
+        self.db = Some(db);
+    }
+
+    /// Load previously-paired users from the database into the runtime set.
+    ///
+    /// Silently no-ops when no database is configured.
+    pub async fn load_from_database(&self, channel_id: &str) {
+        if let Some(ref db) = self.db {
+            match db.load_paired_users(channel_id) {
+                Ok(users) => {
+                    let users: Vec<i64> = users;
+                    if !users.is_empty() {
+                        let mut runtime = self.runtime_users.write().await;
+                        for uid in &users {
+                            if !runtime.contains(uid) {
+                                runtime.push(*uid);
+                            }
+                        }
+                        tracing::info!(count = users.len(), "loaded paired users from database");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to load paired users from database: {}", e);
+                }
+            }
         }
     }
 
@@ -72,7 +108,9 @@ impl AccessController {
     }
 
     /// Attempt to pair a user with the given code.
-    pub async fn try_pair(&self, user_id: i64, code: &str) -> PairingResult {
+    ///
+    /// `channel_id` is used to persist the pairing to the database (when configured).
+    pub async fn try_pair(&self, user_id: i64, code: &str, channel_id: &str) -> PairingResult {
         let normalized = code.trim().to_uppercase();
         let mut codes = self.pairing_codes.write().await;
 
@@ -85,6 +123,14 @@ impl AccessController {
             drop(codes);
             self.runtime_users.write().await.push(user_id);
             tracing::info!("User {} paired via code {}", user_id, normalized);
+
+            // Persist to database so the pairing survives restarts.
+            if let Some(ref db) = self.db {
+                if let Err(e) = db.add_paired_user(channel_id, user_id) {
+                    tracing::warn!("failed to persist paired user to database: {}", e);
+                }
+            }
+
             PairingResult::Success
         } else {
             PairingResult::InvalidCode
@@ -256,7 +302,7 @@ mod tests {
 
         // Generate a code and pair
         let code = ctrl.generate_code().await;
-        let result = ctrl.try_pair(111, &code).await;
+        let result = ctrl.try_pair(111, &code, "test-channel").await;
         assert_eq!(result, PairingResult::Success);
 
         // Now the user should be allowed
@@ -362,7 +408,7 @@ mod tests {
             }
         }
 
-        assert_eq!(ctrl.try_pair(111, &code).await, PairingResult::Expired);
+        assert_eq!(ctrl.try_pair(111, &code, "test-channel").await, PairingResult::Expired);
     }
 
     #[tokio::test]
@@ -373,7 +419,7 @@ mod tests {
             vec![],
         ));
         assert_eq!(
-            ctrl.try_pair(111, "NOPE99").await,
+            ctrl.try_pair(111, "NOPE99", "test-channel").await,
             PairingResult::InvalidCode,
         );
     }

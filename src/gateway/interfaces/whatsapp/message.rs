@@ -55,6 +55,7 @@ pub fn bridge_message_to_inbound(
                 reply_to: reply_to.as_ref().map(MessageId::new),
                 is_group: *is_group,
                 raw: None,
+                metadata: vec![],
             })
         }
         _ => None,

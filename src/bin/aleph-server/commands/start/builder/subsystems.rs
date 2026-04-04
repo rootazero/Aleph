@@ -14,6 +14,7 @@ use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
+use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
 use alephcore::gateway::security::{PairingManager, TokenManager};
 use alephcore::gateway::GatewayServer;
@@ -192,6 +193,28 @@ pub(in crate::commands::start) async fn initialize_channels(
 
     let channel_registry = Arc::new(ChannelRegistry::new());
 
+    // Open state database for channel-level persistence (offset tracking, pairing).
+    // Shared across all channels that need it; None on failure (non-fatal).
+    let state_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
+        use alephcore::utils::paths::get_data_dir;
+
+        let db_path = get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+            .join("state.db");
+
+        match alephcore::resilience::StateDatabase::new(db_path) {
+            Ok(db) => Some(Arc::new(db)),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to open state.db for channel persistence: {}. \
+                     Offset tracking and pairing persistence disabled.",
+                    e
+                );
+                None
+            }
+        }
+    };
+
     // Resolve all channel instances from app config
     let instances = app_config.resolved_channels();
 
@@ -237,6 +260,13 @@ pub(in crate::commands::start) async fn initialize_channels(
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
                         tg_channel.set_tool_registry(reg.clone());
+                    }
+                    if let Some(ref db) = state_db {
+                        // Wire offset tracker for persistent polling resume
+                        let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
+                        tg_channel.set_offset_tracker(Arc::new(tracker));
+                        // Wire state database for pairing persistence
+                        tg_channel.set_state_database(db.clone());
                     }
                     channel = Box::new(tg_channel);
                 }
@@ -354,6 +384,27 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         inbound_router = inbound_router.with_group_chat(group_chat_orch, executor);
         if !daemon {
             println!("  Inbound router: group chat enabled (/groupchat commands)");
+        }
+    }
+
+    // Wire message coalescer from Telegram channel config (or default)
+    {
+        let coalescing_config = if let Some(ref cfg_arc) = app_config {
+            let cfg = cfg_arc.read().await;
+            cfg.channels
+                .iter()
+                .find_map(|(_, val)| {
+                    serde_json::from_value::<TelegramConfig>(val.clone())
+                        .ok()
+                        .and_then(|tc| tc.coalescing)
+                })
+                .unwrap_or_default()
+        } else {
+            alephcore::gateway::coalescer::CoalescingConfig::default()
+        };
+        inbound_router = inbound_router.with_coalescer(coalescing_config);
+        if !daemon {
+            println!("  Inbound router: message coalescing enabled");
         }
     }
 

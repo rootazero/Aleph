@@ -205,6 +205,21 @@ pub struct Attachment {
     pub data: Option<Vec<u8>>,
 }
 
+/// Platform-specific metadata attached to an inbound message.
+///
+/// Each variant carries one piece of channel-specific context that the
+/// generic pipeline may act on (e.g. grouping media, detecting forwards).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MessageMeta {
+    /// Telegram `media_group_id` — messages sharing this ID belong to one album.
+    MediaGroupId(String),
+    /// The message was forwarded from another conversation.
+    ForwardOrigin {
+        sender_name: Option<String>,
+        date: Option<DateTime<Utc>>,
+    },
+}
+
 /// Message received from a channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundMessage {
@@ -231,6 +246,26 @@ pub struct InboundMessage {
     /// Raw message data from the channel (for debugging)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<serde_json::Value>,
+    /// Platform-specific metadata (media groups, forward info, etc.)
+    #[serde(default)]
+    pub metadata: Vec<MessageMeta>,
+}
+
+impl InboundMessage {
+    /// Returns the `media_group_id` if present in metadata.
+    pub fn meta_media_group_id(&self) -> Option<&str> {
+        self.metadata.iter().find_map(|m| match m {
+            MessageMeta::MediaGroupId(id) => Some(id.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Returns `true` if this message was forwarded from another conversation.
+    pub fn is_forwarded(&self) -> bool {
+        self.metadata
+            .iter()
+            .any(|m| matches!(m, MessageMeta::ForwardOrigin { .. }))
+    }
 }
 
 /// Message to be sent through a channel
@@ -725,6 +760,7 @@ mod tests {
             reply_to: None,
             is_group: false,
             raw: None,
+            metadata: vec![],
         };
 
         tx.send(msg).await.unwrap();

@@ -73,6 +73,10 @@ impl StateDatabase {
         )
         .map_err(|e| AlephError::config(format!("Failed to update schema_info: {}", e)))?;
 
+        // Run migrations (same as new()) so in-memory DBs have full schema
+        migration::migrate_add_channel_offsets(&conn)?;
+        migration::migrate_add_paired_users(&conn)?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path: PathBuf::from(":memory:"),
@@ -127,6 +131,12 @@ impl StateDatabase {
 
         // Migrate task traces to structured AgentTraceEvent storage (idempotent)
         migration::migrate_task_traces_to_agent_trace(&conn)?;
+
+        // Migrate to add channel_offsets table for polling offset persistence (idempotent)
+        migration::migrate_add_channel_offsets(&conn)?;
+
+        // Migrate to add paired_users table for pairing persistence (idempotent)
+        migration::migrate_add_paired_users(&conn)?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
@@ -191,6 +201,8 @@ impl StateDatabase {
         migration::migrate_add_vfs_paths(&conn)?;
         migration::migrate_add_embedding_model(&conn)?;
         migration::migrate_task_traces_to_agent_trace(&conn)?;
+        migration::migrate_add_channel_offsets(&conn)?;
+        migration::migrate_add_paired_users(&conn)?;
 
         if !dim_changed {
             Self::migrate_to_vec0(&conn)?;

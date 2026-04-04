@@ -217,6 +217,7 @@ async fn handle_text_frame(
                 reply_to: parent_id.map(MessageId::new),
                 is_group: chat_type == ChatType::Group,
                 raw: None,
+                metadata: vec![],
             };
 
             if sender.send(inbound).await.is_err() {

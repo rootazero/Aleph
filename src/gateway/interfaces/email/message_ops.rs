@@ -395,6 +395,7 @@ impl EmailMessageOps {
                         "message_id": message_id,
                         "folder": folder,
                     })),
+                    metadata: vec![],
                 };
 
                 if inbound_tx.send(inbound).await.is_err() {

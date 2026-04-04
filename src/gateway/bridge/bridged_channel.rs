@@ -411,6 +411,7 @@ async fn handle_event(
                 reply_to: reply_to.as_ref().map(|r| MessageId::new(r.clone())),
                 is_group: *is_group,
                 raw: None,
+                metadata: vec![],
             };
 
             if let Err(e) = inbound_tx.send(inbound).await {

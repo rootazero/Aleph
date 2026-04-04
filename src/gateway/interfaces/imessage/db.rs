@@ -208,6 +208,7 @@ impl MessagesDb {
                 reply_to: None,
                 is_group,
                 raw: None,
+                metadata: vec![],
             };
 
             trace!("Parsed message: {:?}", inbound);

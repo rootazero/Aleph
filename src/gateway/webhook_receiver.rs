@@ -392,6 +392,7 @@ mod tests {
                 reply_to: None,
                 is_group: false,
                 raw: None,
+                metadata: vec![],
             }])
         }
 

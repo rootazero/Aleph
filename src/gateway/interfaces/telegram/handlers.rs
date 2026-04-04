@@ -5,11 +5,12 @@
 //! top-level module focused on channel lifecycle and trait implementation.
 
 use crate::gateway::channel::{
-    Attachment, ChannelId, ConversationId, InboundMessage, MessageId, UserId,
+    Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
 use chrono::{TimeZone, Utc};
+use std::time::Duration;
 use teloxide::prelude::*;
-use teloxide::types::{MediaKind, MessageKind};
+use teloxide::types::{MediaKind, MessageKind, MessageOrigin};
 
 /// Convert a Telegram message to an [`InboundMessage`].
 ///
@@ -81,6 +82,44 @@ pub(crate) async fn convert_message(
         ConversationId::new(msg.chat.id.0.to_string())
     };
 
+    // Extract platform-specific metadata
+    let mut metadata: Vec<MessageMeta> = Vec::new();
+
+    // media_group_id — messages sharing this ID belong to one album
+    if let Some(group_id) = msg.media_group_id() {
+        metadata.push(MessageMeta::MediaGroupId(group_id.to_string()));
+    }
+
+    // forward_origin — extract sender name from whichever variant is present
+    if let MessageKind::Common(ref common) = msg.kind {
+        if let Some(ref origin) = common.forward_origin {
+            let (sender_name, date) = match origin {
+                MessageOrigin::User { date, sender_user } => {
+                    let name = sender_user
+                        .username
+                        .clone()
+                        .unwrap_or_else(|| sender_user.first_name.clone());
+                    (Some(name), Some(*date))
+                }
+                MessageOrigin::HiddenUser {
+                    date,
+                    sender_user_name,
+                } => (Some(sender_user_name.clone()), Some(*date)),
+                MessageOrigin::Chat {
+                    date, sender_chat, ..
+                } => {
+                    let name = sender_chat.title().map(|t| t.to_string());
+                    (name, Some(*date))
+                }
+                MessageOrigin::Channel { date, chat, .. } => {
+                    let name = chat.title().map(|t| t.to_string());
+                    (name, Some(*date))
+                }
+            };
+            metadata.push(MessageMeta::ForwardOrigin { sender_name, date });
+        }
+    }
+
     if !attachments.is_empty() {
         let mime_types: Vec<&str> = attachments.iter().map(|a| a.mime_type.as_str()).collect();
         tracing::info!(
@@ -107,6 +146,7 @@ pub(crate) async fn convert_message(
         reply_to,
         is_group,
         raw: Some(serde_json::to_value(msg).unwrap_or_default()),
+        metadata,
     })
 }
 
@@ -195,15 +235,19 @@ pub(crate) async fn extract_attachments(
         return Vec::new();
     };
 
-    // Resolve file URL via Bot API
-    let url = match bot.get_file(&file_id).await {
-        Ok(file) => Some(format!(
+    // Resolve file URL via Bot API (with 5s timeout to prevent handler blocking)
+    let url = match tokio::time::timeout(Duration::from_secs(5), bot.get_file(&file_id)).await {
+        Ok(Ok(file)) => Some(format!(
             "https://api.telegram.org/file/bot{}/{}",
             bot.token(),
             file.path
         )),
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::warn!("Failed to resolve file URL for {}: {}", file_id, e);
+            None
+        }
+        Err(_elapsed) => {
+            tracing::warn!("Timed out resolving file URL for {} (5s)", file_id);
             None
         }
     };
