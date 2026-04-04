@@ -22,8 +22,9 @@ use super::tool::{LoopTool, ToolResult};
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
-use crate::teams::messages::store::MessageStore;
-use crate::teams::messages::types::{MessageType, NewMessage, Recipient, RecipientRole};
+use crate::teams::messages::inbox::Inbox;
+use crate::teams::messages::router::{MessageRouter, SendRequest};
+use crate::teams::messages::types::MessageType;
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
@@ -62,8 +63,10 @@ pub struct SubagentTool {
     background_tracker: Arc<BackgroundAgentTracker>,
     /// Optional teammate manager for auto team creation/registration.
     teammate_manager: Option<Arc<TeammateManager>>,
-    /// Optional message store for send_message/read_inbox actions.
-    message_store: Option<Arc<dyn MessageStore>>,
+    /// Optional message router for send_message actions.
+    message_router: Option<Arc<MessageRouter>>,
+    /// Optional inbox for read_inbox actions.
+    inbox: Option<Arc<Inbox>>,
     /// Identifies the calling agent (default: "primary").
     parent_agent_id: String,
 }
@@ -93,7 +96,8 @@ impl SubagentTool {
             agent_registry,
             background_tracker,
             teammate_manager: None,
-            message_store: None,
+            message_router: None,
+            inbox: None,
             parent_agent_id: "primary".to_string(),
         }
     }
@@ -104,9 +108,15 @@ impl SubagentTool {
         self
     }
 
-    /// Set the message store for send_message/read_inbox actions.
-    pub fn with_message_store(mut self, store: Arc<dyn MessageStore>) -> Self {
-        self.message_store = Some(store);
+    /// Set the message router for send_message actions.
+    pub fn with_message_router(mut self, router: Arc<MessageRouter>) -> Self {
+        self.message_router = Some(router);
+        self
+    }
+
+    /// Set the inbox for read_inbox actions.
+    pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Self {
+        self.inbox = Some(inbox);
         self
     }
 
@@ -344,32 +354,40 @@ impl LoopTool for SubagentTool {
         // Handle non-run actions
         let args = match action {
             SubagentAction::SendMessage { to, text, team_name } => {
-                let store = match &self.message_store {
-                    Some(s) => s.clone(),
+                let router = match &self.message_router {
+                    Some(r) => r.clone(),
                     None => {
                         return ToolResult::Error {
-                            error: "send_message requires a message store (not configured)"
+                            error: "send_message requires a message router (not configured)"
                                 .to_string(),
                             retryable: false,
                         };
                     }
                 };
 
-                let msg = NewMessage {
-                    team_id: team_name,
-                    from_agent: self.parent_agent_id.clone(),
-                    msg_type: MessageType::Message,
-                    subject: format!("Message to {to}"),
-                    content: text,
-                    recipients: vec![Recipient {
-                        agent_id: to.clone(),
-                        role: RecipientRole::To,
-                    }],
-                    reply_to: None,
-                    attachments: vec![],
+                // Resolve team_name to team_id via teammate_manager
+                let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
+                    mgr.ensure_team(&team_name, &self.parent_agent_id)
+                        .await
+                        .unwrap_or_else(|_| team_name.clone())
+                } else {
+                    team_name.clone()
                 };
 
-                match store.send_message(msg).await {
+                match router
+                    .send(SendRequest {
+                        team_id: resolved_team_id,
+                        from_agent: self.parent_agent_id.clone(),
+                        to: vec![to.clone()],
+                        cc: vec![],
+                        msg_type: MessageType::Message,
+                        subject: format!("Message to {to}"),
+                        content: text,
+                        reply_to: None,
+                        attachments: vec![],
+                    })
+                    .await
+                {
                     Ok(sent) => {
                         return ToolResult::Success {
                             output: json!({
@@ -388,19 +406,28 @@ impl LoopTool for SubagentTool {
                 }
             }
             SubagentAction::ReadInbox { team_name } => {
-                let store = match &self.message_store {
-                    Some(s) => s.clone(),
+                let inbox = match &self.inbox {
+                    Some(i) => i.clone(),
                     None => {
                         return ToolResult::Error {
-                            error: "read_inbox requires a message store (not configured)"
+                            error: "read_inbox requires an inbox (not configured)"
                                 .to_string(),
                             retryable: false,
                         };
                     }
                 };
 
-                match store
-                    .read_inbox(&self.parent_agent_id, &team_name, None)
+                // Resolve team_name to team_id via teammate_manager
+                let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
+                    mgr.ensure_team(&team_name, &self.parent_agent_id)
+                        .await
+                        .unwrap_or_else(|_| team_name.clone())
+                } else {
+                    team_name.clone()
+                };
+
+                match inbox
+                    .read(&self.parent_agent_id, &resolved_team_id, None, true)
                     .await
                 {
                     Ok(messages) => {
@@ -553,7 +580,7 @@ impl LoopTool for SubagentTool {
             let cancel_token = CancellationToken::new();
 
             self.background_tracker
-                .register(request_id.clone(), cancel_token, args.task.clone());
+                .register(request_id.clone(), cancel_token.clone(), args.task.clone());
 
             let provider = self.provider.clone();
             let factory = self.tool_registry_factory.clone();
@@ -576,6 +603,7 @@ impl LoopTool for SubagentTool {
                     safety_factory,
                     child_chain,
                     timeout_secs,
+                    cancel_token,
                 ))
                 .catch_unwind()
                 .await;
@@ -607,6 +635,7 @@ impl LoopTool for SubagentTool {
                 self.safety_guard_factory.clone(),
                 child_chain,
                 args.timeout_secs,
+                CancellationToken::new(),
             )
             .await
             {
@@ -993,7 +1022,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_message_without_store() {
+    async fn test_send_message_without_router() {
         let tool = make_tool();
         let result = tool
             .execute(json!({
@@ -1006,16 +1035,16 @@ mod tests {
         match result {
             ToolResult::Error { error, .. } => {
                 assert!(
-                    error.contains("message store"),
+                    error.contains("message router"),
                     "unexpected error: {error}"
                 );
             }
-            _ => panic!("expected error when message store not configured"),
+            _ => panic!("expected error when message router not configured"),
         }
     }
 
     #[tokio::test]
-    async fn test_read_inbox_without_store() {
+    async fn test_read_inbox_without_inbox() {
         let tool = make_tool();
         let result = tool
             .execute(json!({
@@ -1026,11 +1055,11 @@ mod tests {
         match result {
             ToolResult::Error { error, .. } => {
                 assert!(
-                    error.contains("message store"),
+                    error.contains("inbox"),
                     "unexpected error: {error}"
                 );
             }
-            _ => panic!("expected error when message store not configured"),
+            _ => panic!("expected error when inbox not configured"),
         }
     }
 

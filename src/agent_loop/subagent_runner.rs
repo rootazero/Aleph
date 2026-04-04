@@ -41,6 +41,7 @@ pub async fn run_subagent(
     safety_guard_factory: SafetyGuardFactory,
     child_chain: super::chain_context::ChainContext,
     timeout_secs: u64,
+    cancel_token: CancellationToken,
 ) -> Result<super::loop_core::LoopRunResult, String> {
     // Apply model override: explicit arg > agent_def.model_hint > default
     let resolved_model = model.or_else(|| agent_def.model_hint.clone());
@@ -81,7 +82,7 @@ pub async fn run_subagent(
         prompt_builder,
         (safety_guard_factory)(),
         config,
-        CancellationToken::new(),
+        cancel_token,
     )
     .with_chain(child_chain);
 
