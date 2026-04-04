@@ -10,7 +10,9 @@
 //! `run_in_background`.
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use serde_json::{json, Value};
+use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
 use super::background_tracker::BackgroundAgentTracker;
@@ -31,7 +33,7 @@ enum SubagentAction {
     /// Check status of a background sub-agent.
     CheckStatus(String),
     /// Send a message to a named teammate.
-    SendMessage { to: String, text: String },
+    SendMessage { to: String, text: String, team_name: String },
     /// Read inbox messages.
     ReadInbox { team_name: String },
 }
@@ -133,9 +135,14 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
                 .get("text")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "send_message requires 'text' field".to_string())?;
+            let team_name = input
+                .get("team_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "send_message requires 'team_name' field".to_string())?;
             return Ok(SubagentAction::SendMessage {
                 to: to.to_string(),
                 text: text.to_string(),
+                team_name: team_name.to_string(),
             });
         }
         "read_inbox" => {
@@ -227,6 +234,16 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     if team_name.is_some() && name.is_none() {
         return Err("team_name requires 'name' to be set (agent must be addressable)".to_string());
     }
+
+    // Named teammates always run in background — override explicitly at parse time
+    let run_in_background = if name.is_some() {
+        if !run_in_background {
+            tracing::info!("Named teammates always run in background — overriding run_in_background to true");
+        }
+        true
+    } else {
+        run_in_background
+    };
 
     Ok(SubagentAction::Run(RunArgs {
         task,
@@ -326,7 +343,7 @@ impl LoopTool for SubagentTool {
 
         // Handle non-run actions
         let args = match action {
-            SubagentAction::SendMessage { to, text } => {
+            SubagentAction::SendMessage { to, text, team_name } => {
                 let store = match &self.message_store {
                     Some(s) => s.clone(),
                     None => {
@@ -339,7 +356,7 @@ impl LoopTool for SubagentTool {
                 };
 
                 let msg = NewMessage {
-                    team_id: String::new(), // filled by caller or default
+                    team_id: team_name,
                     from_agent: self.parent_agent_id.clone(),
                     msg_type: MessageType::Message,
                     subject: format!("Message to {to}"),
@@ -365,7 +382,7 @@ impl LoopTool for SubagentTool {
                     Err(e) => {
                         return ToolResult::Error {
                             error: format!("Failed to send message: {e}"),
-                            retryable: true,
+                            retryable: false,
                         };
                     }
                 }
@@ -406,7 +423,7 @@ impl LoopTool for SubagentTool {
                     Err(e) => {
                         return ToolResult::Error {
                             error: format!("Failed to read inbox: {e}"),
-                            retryable: true,
+                            retryable: false,
                         };
                     }
                 }
@@ -503,41 +520,35 @@ impl LoopTool for SubagentTool {
         };
 
         // 4. Teammate registration (when name + team_name are both provided)
-        let mut run_in_background = args.run_in_background;
-        if let (Some(ref name), Some(ref team_name)) = (&args.name, &args.team_name) {
+        if let (Some(ref name), Some(ref tname)) = (&args.name, &args.team_name) {
             if let Some(ref mgr) = self.teammate_manager {
-                match mgr.ensure_team(team_name, &self.parent_agent_id).await {
-                    Ok(team_id) => {
-                        if let Err(e) = mgr.register_teammate(&team_id, name, "worker").await {
-                            tracing::warn!(
-                                error = %e,
-                                name = %name,
-                                team = %team_name,
-                                "subagent: failed to register teammate, proceeding anyway"
-                            );
+                match mgr.ensure_team(tname, &self.parent_agent_id).await {
+                    Ok(tid) => {
+                        if let Err(e) = mgr.register_teammate(&tid, name, "worker").await {
+                            return ToolResult::Error {
+                                error: format!("Failed to register teammate '{}': {}", name, e),
+                                retryable: true,
+                            };
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            team = %team_name,
-                            "subagent: failed to ensure team, proceeding anyway"
-                        );
+                        return ToolResult::Error {
+                            error: format!("Failed to create team '{}': {}", tname, e),
+                            retryable: false,
+                        };
                     }
                 }
             } else {
                 tracing::warn!(
                     name = %name,
-                    team = %team_name,
+                    team = %tname,
                     "subagent: teammate_manager not configured, skipping team registration"
                 );
             }
-            // Named teammates always run in background
-            run_in_background = true;
         }
 
         // 5. Foreground vs background execution
-        if run_in_background {
+        if args.run_in_background {
             let request_id = uuid::Uuid::new_v4().to_string();
             let cancel_token = CancellationToken::new();
 
@@ -555,7 +566,7 @@ impl LoopTool for SubagentTool {
             let rid = request_id.clone();
 
             tokio::spawn(async move {
-                let result = run_subagent(
+                let result = AssertUnwindSafe(run_subagent(
                     provider,
                     agent_def,
                     task,
@@ -565,12 +576,14 @@ impl LoopTool for SubagentTool {
                     safety_factory,
                     child_chain,
                     timeout_secs,
-                )
+                ))
+                .catch_unwind()
                 .await;
 
                 let outcome = match result {
-                    Ok(r) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
-                    Err(e) => Err(e),
+                    Ok(Ok(r)) => Ok(r.final_text.unwrap_or_else(|| "(no output)".to_string())),
+                    Ok(Err(e)) => Err(e),
+                    Err(_panic) => Err("Sub-agent panicked".to_string()),
                 };
                 tracker.mark_completed(&rid, outcome);
             });
@@ -824,14 +837,16 @@ mod tests {
         let action = parse_args(&json!({
             "action": "send_message",
             "to": "builder-1",
-            "text": "please review the PR"
+            "text": "please review the PR",
+            "team_name": "alpha"
         }))
         .unwrap();
 
         match action {
-            SubagentAction::SendMessage { to, text } => {
+            SubagentAction::SendMessage { to, text, team_name } => {
                 assert_eq!(to, "builder-1");
                 assert_eq!(text, "please review the PR");
+                assert_eq!(team_name, "alpha");
             }
             _ => panic!("expected SubagentAction::SendMessage"),
         }
@@ -984,7 +999,8 @@ mod tests {
             .execute(json!({
                 "action": "send_message",
                 "to": "agent-b",
-                "text": "hello"
+                "text": "hello",
+                "team_name": "alpha"
             }))
             .await;
         match result {

@@ -32,17 +32,35 @@ impl TeammateManager {
             return Ok(existing.id.clone());
         }
 
-        // Create new team
-        let team = self
+        // Create new team — may race with a concurrent call
+        match self
             .team_store
             .create_team(NewTeam {
                 name: team_name.to_string(),
                 description: "Auto-created team for teammate collaboration".to_string(),
                 leader_id: parent_agent_id.to_string(),
             })
-            .await?;
-
-        Ok(team.id)
+            .await
+        {
+            Ok(team) => Ok(team.id),
+            Err(_) => {
+                // Race: another call created the team first. Retry lookup.
+                let teams = self.team_store.list_teams().await?;
+                teams
+                    .iter()
+                    .find(|t| t.name == team_name)
+                    .map(|t| t.id.clone())
+                    .ok_or_else(|| {
+                        crate::error::AlephError::Other {
+                            message: format!(
+                                "Failed to create or find team '{}'",
+                                team_name
+                            ),
+                            suggestion: None,
+                        }
+                    })
+            }
+        }
     }
 
     /// Register a named agent as a member of a team.
