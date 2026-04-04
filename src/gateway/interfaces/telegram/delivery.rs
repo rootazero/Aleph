@@ -129,7 +129,9 @@ fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
     matches!(
         err,
         teloxide::RequestError::Api(
-            teloxide::ApiError::MessageNotModified | teloxide::ApiError::MessageCantBeEdited
+            teloxide::ApiError::MessageNotModified
+                | teloxide::ApiError::MessageCantBeEdited
+                | teloxide::ApiError::EditedMessageIsTooLong
         )
     )
 }
