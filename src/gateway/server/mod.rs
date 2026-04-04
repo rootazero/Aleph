@@ -21,6 +21,7 @@ use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::event_scope::EventScopeGuard;
 use super::handlers::events::SubscriptionManager;
 use super::handlers::HandlerRegistry;
+use super::middleware::MiddlewareChain;
 use super::lane::{LaneConfig, LaneManager};
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};
@@ -485,9 +486,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_valid_request() {
-        let handlers = HandlerRegistry::new();
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
         let response =
-            handler::process_request(r#"{"jsonrpc":"2.0","method":"health","id":1}"#, &handlers)
+            handler::process_request(r#"{"jsonrpc":"2.0","method":"health","id":1}"#, &chain)
                 .await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();
@@ -496,8 +501,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_invalid_json() {
-        let handlers = HandlerRegistry::new();
-        let response = handler::process_request("not json", &handlers).await;
+        let handlers_arc = Arc::new(HandlerRegistry::new());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let response = handler::process_request("not json", &chain).await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();
         assert!(parsed.is_error());
@@ -506,9 +515,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_method_not_found() {
-        let handlers = HandlerRegistry::empty();
+        let handlers_arc = Arc::new(HandlerRegistry::empty());
+        let chain = MiddlewareChain::new(
+            handlers_arc.clone(),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
         let response =
-            handler::process_request(r#"{"jsonrpc":"2.0","method":"unknown","id":1}"#, &handlers)
+            handler::process_request(r#"{"jsonrpc":"2.0","method":"unknown","id":1}"#, &chain)
                 .await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();

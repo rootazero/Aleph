@@ -25,6 +25,7 @@ use crate::gateway::handlers::events::{
 };
 use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::lane::LaneManager;
+use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
@@ -38,6 +39,7 @@ use super::per_client_buffer::PerClientBuffer;
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
     handlers: Arc<HandlerRegistry>,
+    middleware_chain: MiddlewareChain,
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     subscription_manager: Arc<SubscriptionManager>,
@@ -71,6 +73,7 @@ pub(super) async fn ws_upgrade_handler(
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
             handlers: state.handlers.clone(),
+            middleware_chain: MiddlewareChain::new(state.handlers.clone(), state.rate_limiter.clone()),
             event_bus: state.event_bus.clone(),
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
@@ -175,7 +178,7 @@ async fn handle_connection(
                                         .unwrap_or_default()
                                     } else {
                                         // Handle connect request
-                                        let response = process_request(&text, &ctx.handlers).await;
+                                        let response = process_request(&text, &ctx.middleware_chain).await;
 
                                         // If connect succeeded, mark as authenticated
                                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&response) {
@@ -344,10 +347,10 @@ async fn handle_connection(
                                         let lane = crate::gateway::lane::Lane::for_method(&req.method);
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, handlers: Arc<HandlerRegistry>, lm: Arc<LaneManager>, method: String, req_id: Option<serde_json::Value>| async move {
-                                            let lane_result = lm.acquire(&method).await;
-                                            match lane_result {
-                                                Ok(_permit) => process_request(&text, &handlers).await,
+                                         let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>| async move {
+                                             let lane_result = lm.acquire(&method).await;
+                                             match lane_result {
+                                                 Ok(_permit) => process_request(&text, &mc).await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -394,7 +397,7 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = process_request(&text, &ctx.handlers).await;
+                                                                let resp = process_request(&text, &ctx.middleware_chain).await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -423,11 +426,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.handlers.clone(), ctx.lane_manager.clone(), req.method.clone(), req.id.clone()).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.handlers.clone(), ctx.lane_manager.clone(), req.method.clone(), req.id.clone()).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone()).await
                                         };
                                         // --- End idempotency + lane block ---
 
@@ -689,7 +692,10 @@ async fn handle_connection(
 }
 
 /// Process a JSON-RPC request string
-pub(super) async fn process_request(text: &str, handlers: &HandlerRegistry) -> String {
+pub(super) async fn process_request(
+    text: &str,
+    middleware_chain: &MiddlewareChain,
+) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
         Ok(req) => req,
@@ -703,17 +709,7 @@ pub(super) async fn process_request(text: &str, handlers: &HandlerRegistry) -> S
         }
     };
 
-    // Validate the request
-    if let Err(e) = request.validate() {
-        return serde_json::to_string(&JsonRpcResponse::error(
-            request.id.clone(),
-            e.code,
-            e.message,
-        ))
-        .unwrap_or_default();
-    }
-
-    // Dispatch to handler
-    let response = handlers.handle(&request).await;
+    // Dispatch to middleware chain
+    let response = middleware_chain.serve(request).await;
     serde_json::to_string(&response).unwrap_or_default()
 }

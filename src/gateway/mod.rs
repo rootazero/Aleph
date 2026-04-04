@@ -34,6 +34,7 @@ pub mod formatter;
 pub mod handlers;
 pub mod mdns_broadcaster;
 pub mod message_dedup;
+pub mod middleware;
 pub mod protocol;
 pub mod router;
 pub mod security;
