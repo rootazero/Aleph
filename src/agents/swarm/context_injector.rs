@@ -221,7 +221,13 @@ impl ContextInjector {
             ..Default::default()
         };
 
-        let tasks = store.list_tasks(filter).await.ok()?;
+        let tasks = match store.list_tasks(filter).await {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                warn!(agent_id = agent_id, error = %e, "Failed to load task context for agent");
+                return None;
+            }
+        };
 
         if tasks.is_empty() {
             return None;

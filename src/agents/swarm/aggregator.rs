@@ -328,14 +328,24 @@ impl IntelligenceLayer {
             payload = payload.with_model(Some(hint.clone()));
         }
 
-        let response = provider.process(payload).await?;
-        let text = response.text_content();
-        if text.is_empty() {
-            return Err(crate::error::AlephError::provider(
-                "LLM returned empty summary",
-            ));
+        let timeout_duration = std::time::Duration::from_secs(30);
+        match tokio::time::timeout(timeout_duration, provider.process(payload)).await {
+            Ok(Ok(response)) => {
+                let text = response.text_content();
+                if text.is_empty() {
+                    return Err(crate::error::AlephError::provider(
+                        "LLM returned empty summary",
+                    ));
+                }
+                Ok(text)
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_elapsed) => {
+                Err(crate::error::AlephError::provider(
+                    "LLM summarization timed out after 30s",
+                ))
+            }
         }
-        Ok(text)
     }
 
     /// Generate a simple statistical summary (fallback).
