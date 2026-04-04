@@ -109,7 +109,7 @@ pub(crate) async fn run_polling_loop(
     // When we have a persisted offset, use offset+1 so Telegram only returns
     // updates newer than what we already processed.
     let test_request = if persisted_offset > 0 {
-        bot.get_updates().offset(i32::try_from(persisted_offset).unwrap_or(i32::MAX) + 1).limit(1).timeout(5)
+        bot.get_updates().offset(i32::try_from(persisted_offset).unwrap_or(i32::MAX).saturating_add(1)).limit(1).timeout(5)
     } else {
         bot.get_updates().limit(1).timeout(5)
     };

@@ -216,7 +216,7 @@ impl ErrorCooldown {
     /// is refreshed to extend the cooldown.
     pub fn record_typing_failure(&self) {
         let mut state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
-        state.consecutive_failures += 1;
+        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
 
         if state.tripped_at.is_some() {
             // Already tripped — this was a half-open probe that failed.
