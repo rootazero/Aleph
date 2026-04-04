@@ -15,10 +15,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::background_tracker::BackgroundAgentTracker;
 pub use super::subagent_runner::{run_subagent, SafetyGuardFactory, ToolRegistryFactory};
+use super::subagent_teammates::TeammateManager;
 use super::tool::{LoopTool, ToolResult};
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use crate::teams::messages::store::MessageStore;
+use crate::teams::messages::types::{MessageType, NewMessage, Recipient, RecipientRole};
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
@@ -27,6 +30,10 @@ enum SubagentAction {
     Run(RunArgs),
     /// Check status of a background sub-agent.
     CheckStatus(String),
+    /// Send a message to a named teammate.
+    SendMessage { to: String, text: String },
+    /// Read inbox messages.
+    ReadInbox { team_name: String },
 }
 
 #[derive(Debug)]
@@ -37,6 +44,10 @@ struct RunArgs {
     timeout_secs: u64,
     run_in_background: bool,
     context_summary: Option<String>,
+    /// Optional name — makes the agent addressable.
+    name: Option<String>,
+    /// Optional team name — enables shared tasks and messages.
+    team_name: Option<String>,
 }
 
 /// A LoopTool that delegates tasks to a temporary AgentLoop.
@@ -47,6 +58,12 @@ pub struct SubagentTool {
     chain: super::chain_context::ChainContext,
     agent_registry: Arc<AgentRegistry>,
     background_tracker: Arc<BackgroundAgentTracker>,
+    /// Optional teammate manager for auto team creation/registration.
+    teammate_manager: Option<Arc<TeammateManager>>,
+    /// Optional message store for send_message/read_inbox actions.
+    message_store: Option<Arc<dyn MessageStore>>,
+    /// Identifies the calling agent (default: "primary").
+    parent_agent_id: String,
 }
 
 impl SubagentTool {
@@ -73,13 +90,78 @@ impl SubagentTool {
             chain,
             agent_registry,
             background_tracker,
+            teammate_manager: None,
+            message_store: None,
+            parent_agent_id: "primary".to_string(),
         }
+    }
+
+    /// Set the teammate manager for auto team creation/registration.
+    pub fn with_teammate_manager(mut self, mgr: Arc<TeammateManager>) -> Self {
+        self.teammate_manager = Some(mgr);
+        self
+    }
+
+    /// Set the message store for send_message/read_inbox actions.
+    pub fn with_message_store(mut self, store: Arc<dyn MessageStore>) -> Self {
+        self.message_store = Some(store);
+        self
+    }
+
+    /// Set the parent agent id (identifies the calling agent).
+    pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
+        self.parent_agent_id = id.into();
+        self
     }
 }
 
 /// Parse the input JSON into a SubagentAction.
 fn parse_args(input: &Value) -> Result<SubagentAction, String> {
-    // Check for status-check mode first
+    // Determine action from explicit field, falling back to legacy heuristics.
+    let action = input
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match action {
+        "send_message" => {
+            let to = input
+                .get("to")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "send_message requires 'to' field".to_string())?;
+            let text = input
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "send_message requires 'text' field".to_string())?;
+            return Ok(SubagentAction::SendMessage {
+                to: to.to_string(),
+                text: text.to_string(),
+            });
+        }
+        "read_inbox" => {
+            let team_name = input
+                .get("team_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "read_inbox requires 'team_name' field".to_string())?;
+            return Ok(SubagentAction::ReadInbox {
+                team_name: team_name.to_string(),
+            });
+        }
+        "check_status" => {
+            let rid = input
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "check_status requires 'request_id' field".to_string())?;
+            return Ok(SubagentAction::CheckStatus(rid.to_string()));
+        }
+        // "run" or "" (default) — fall through to legacy run/check_status logic
+        "run" | "" => {}
+        other => {
+            return Err(format!("unknown action '{other}'. Expected one of: run, check_status, send_message, read_inbox"));
+        }
+    }
+
+    // Legacy heuristic: request_id without task → check_status
     let request_id = input
         .get("request_id")
         .and_then(|v| v.as_str())
@@ -90,14 +172,13 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // If request_id is provided without task, this is a status check
     if let Some(rid) = request_id {
         if task.is_none() || task.as_ref().map_or(false, |t| t.trim().is_empty()) {
             return Ok(SubagentAction::CheckStatus(rid));
         }
     }
 
-    // Otherwise, this is a run action — task is required
+    // Run action — task is required
     let task = task.ok_or_else(|| {
         "missing required field: task (or provide request_id to check background status)"
             .to_string()
@@ -132,6 +213,21 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let name = input
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let team_name = input
+        .get("team_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Validate: team_name without name is an error
+    if team_name.is_some() && name.is_none() {
+        return Err("team_name requires 'name' to be set (agent must be addressable)".to_string());
+    }
+
     Ok(SubagentAction::Run(RunArgs {
         task,
         agent_type,
@@ -139,6 +235,8 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         timeout_secs,
         run_in_background,
         context_summary,
+        name,
+        team_name,
     }))
 }
 
@@ -158,6 +256,11 @@ impl LoopTool for SubagentTool {
         json!({
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["run", "check_status", "send_message", "read_inbox"],
+                    "description": "The action to perform. Defaults to 'run' (or 'check_status' if only request_id is provided)."
+                },
                 "task": {
                     "type": "string",
                     "description": "A clear description of the task for the sub-agent to complete."
@@ -187,6 +290,22 @@ impl LoopTool for SubagentTool {
                 "request_id": {
                     "type": "string",
                     "description": "Check status of a background sub-agent. Provide request_id without task to retrieve the result."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional name for the sub-agent, making it addressable by teammates."
+                },
+                "team_name": {
+                    "type": "string",
+                    "description": "Optional team name. Enables shared tasks and inter-agent messaging. Requires 'name' to be set."
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Target agent name for send_message action."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Message text for send_message action."
                 }
             },
             "required": []
@@ -205,8 +324,93 @@ impl LoopTool for SubagentTool {
             }
         };
 
-        // Handle status check mode
+        // Handle non-run actions
         let args = match action {
+            SubagentAction::SendMessage { to, text } => {
+                let store = match &self.message_store {
+                    Some(s) => s.clone(),
+                    None => {
+                        return ToolResult::Error {
+                            error: "send_message requires a message store (not configured)"
+                                .to_string(),
+                            retryable: false,
+                        };
+                    }
+                };
+
+                let msg = NewMessage {
+                    team_id: String::new(), // filled by caller or default
+                    from_agent: self.parent_agent_id.clone(),
+                    msg_type: MessageType::Message,
+                    subject: format!("Message to {to}"),
+                    content: text,
+                    recipients: vec![Recipient {
+                        agent_id: to.clone(),
+                        role: RecipientRole::To,
+                    }],
+                    reply_to: None,
+                    attachments: vec![],
+                };
+
+                match store.send_message(msg).await {
+                    Ok(sent) => {
+                        return ToolResult::Success {
+                            output: json!({
+                                "status": "sent",
+                                "message_id": sent.id,
+                                "to": to,
+                            }),
+                        };
+                    }
+                    Err(e) => {
+                        return ToolResult::Error {
+                            error: format!("Failed to send message: {e}"),
+                            retryable: true,
+                        };
+                    }
+                }
+            }
+            SubagentAction::ReadInbox { team_name } => {
+                let store = match &self.message_store {
+                    Some(s) => s.clone(),
+                    None => {
+                        return ToolResult::Error {
+                            error: "read_inbox requires a message store (not configured)"
+                                .to_string(),
+                            retryable: false,
+                        };
+                    }
+                };
+
+                match store
+                    .read_inbox(&self.parent_agent_id, &team_name, None)
+                    .await
+                {
+                    Ok(messages) => {
+                        let summaries: Vec<Value> = messages
+                            .iter()
+                            .map(|m| {
+                                json!({
+                                    "id": m.id,
+                                    "from": m.from_agent,
+                                    "subject": m.subject,
+                                    "content": m.content,
+                                    "type": m.msg_type.as_str(),
+                                })
+                            })
+                            .collect();
+                        return ToolResult::Success {
+                            output: json!(summaries),
+                        };
+                    }
+                    Err(e) => {
+                        return ToolResult::Error {
+                            error: format!("Failed to read inbox: {e}"),
+                            retryable: true,
+                        };
+                    }
+                }
+            }
             SubagentAction::CheckStatus(request_id) => {
                 // Check running first
                 let running = self.background_tracker.list_running();
@@ -298,8 +502,42 @@ impl LoopTool for SubagentTool {
             }
         };
 
-        // 4. Foreground vs background execution
-        if args.run_in_background {
+        // 4. Teammate registration (when name + team_name are both provided)
+        let mut run_in_background = args.run_in_background;
+        if let (Some(ref name), Some(ref team_name)) = (&args.name, &args.team_name) {
+            if let Some(ref mgr) = self.teammate_manager {
+                match mgr.ensure_team(team_name, &self.parent_agent_id).await {
+                    Ok(team_id) => {
+                        if let Err(e) = mgr.register_teammate(&team_id, name, "worker").await {
+                            tracing::warn!(
+                                error = %e,
+                                name = %name,
+                                team = %team_name,
+                                "subagent: failed to register teammate, proceeding anyway"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            team = %team_name,
+                            "subagent: failed to ensure team, proceeding anyway"
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    name = %name,
+                    team = %team_name,
+                    "subagent: teammate_manager not configured, skipping team registration"
+                );
+            }
+            // Named teammates always run in background
+            run_in_background = true;
+        }
+
+        // 5. Foreground vs background execution
+        if run_in_background {
             let request_id = uuid::Uuid::new_v4().to_string();
             let cancel_token = CancellationToken::new();
 
@@ -541,6 +779,78 @@ mod tests {
         assert!(props["run_in_background"].is_object());
         assert!(props["context_summary"].is_object());
         assert!(props["request_id"].is_object());
+        assert!(props["action"].is_object());
+        assert!(props["name"].is_object());
+        assert!(props["team_name"].is_object());
+        assert!(props["to"].is_object());
+        assert!(props["text"].is_object());
+    }
+
+    #[test]
+    fn test_parse_args_with_name_and_team() {
+        let action = parse_args(&json!({
+            "task": "build feature",
+            "name": "builder-1",
+            "team_name": "alpha"
+        }))
+        .unwrap();
+
+        match action {
+            SubagentAction::Run(args) => {
+                assert_eq!(args.task, "build feature");
+                assert_eq!(args.name.as_deref(), Some("builder-1"));
+                assert_eq!(args.team_name.as_deref(), Some("alpha"));
+            }
+            _ => panic!("expected SubagentAction::Run"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_team_without_name_is_error() {
+        let result = parse_args(&json!({
+            "task": "build feature",
+            "team_name": "alpha"
+        }));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("team_name requires 'name'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_args_send_message() {
+        let action = parse_args(&json!({
+            "action": "send_message",
+            "to": "builder-1",
+            "text": "please review the PR"
+        }))
+        .unwrap();
+
+        match action {
+            SubagentAction::SendMessage { to, text } => {
+                assert_eq!(to, "builder-1");
+                assert_eq!(text, "please review the PR");
+            }
+            _ => panic!("expected SubagentAction::SendMessage"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_read_inbox() {
+        let action = parse_args(&json!({
+            "action": "read_inbox",
+            "team_name": "alpha"
+        }))
+        .unwrap();
+
+        match action {
+            SubagentAction::ReadInbox { team_name } => {
+                assert_eq!(team_name, "alpha");
+            }
+            _ => panic!("expected SubagentAction::ReadInbox"),
+        }
     }
 
     #[tokio::test]
@@ -657,6 +967,54 @@ mod tests {
                 assert!(!retryable);
             }
             _ => panic!("expected ToolResult::Error"),
+        }
+    }
+
+    #[test]
+    fn test_builder_methods() {
+        let tool = make_tool();
+        // Verify the builder methods compile and don't panic
+        let _tool = tool.with_parent_agent_id("test-agent");
+    }
+
+    #[tokio::test]
+    async fn test_send_message_without_store() {
+        let tool = make_tool();
+        let result = tool
+            .execute(json!({
+                "action": "send_message",
+                "to": "agent-b",
+                "text": "hello"
+            }))
+            .await;
+        match result {
+            ToolResult::Error { error, .. } => {
+                assert!(
+                    error.contains("message store"),
+                    "unexpected error: {error}"
+                );
+            }
+            _ => panic!("expected error when message store not configured"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_inbox_without_store() {
+        let tool = make_tool();
+        let result = tool
+            .execute(json!({
+                "action": "read_inbox",
+                "team_name": "alpha"
+            }))
+            .await;
+        match result {
+            ToolResult::Error { error, .. } => {
+                assert!(
+                    error.contains("message store"),
+                    "unexpected error: {error}"
+                );
+            }
+            _ => panic!("expected error when message store not configured"),
         }
     }
 
