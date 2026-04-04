@@ -56,7 +56,7 @@ pub enum InsightSeverity {
 }
 
 /// Swarm Coordinator Configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SwarmConfig {
     /// Enable intelligence layer for LLM summarization
     pub enable_intelligence: bool,
@@ -68,6 +68,21 @@ pub struct SwarmConfig {
     pub context_window_size: usize,
     /// Collective memory capacity (max events to store)
     pub memory_capacity: usize,
+    /// Optional AI provider for intelligence layer LLM summarization.
+    pub intelligence_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+}
+
+impl std::fmt::Debug for SwarmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwarmConfig")
+            .field("enable_intelligence", &self.enable_intelligence)
+            .field("summary_interval_secs", &self.summary_interval_secs)
+            .field("min_events_for_summary", &self.min_events_for_summary)
+            .field("context_window_size", &self.context_window_size)
+            .field("memory_capacity", &self.memory_capacity)
+            .field("intelligence_provider", &self.intelligence_provider.is_some())
+            .finish()
+    }
 }
 
 impl Default for SwarmConfig {
@@ -78,6 +93,7 @@ impl Default for SwarmConfig {
             min_events_for_summary: 10,
             context_window_size: 5,
             memory_capacity: 10000,
+            intelligence_provider: None,
         }
     }
 }
@@ -116,11 +132,14 @@ impl SwarmCoordinator {
 
         // Add intelligence layer if enabled
         if config.enable_intelligence {
-            let intelligence = Arc::new(IntelligenceLayer::new(
+            let mut layer = IntelligenceLayer::new(
                 Duration::from_secs(config.summary_interval_secs),
                 config.min_events_for_summary,
-            ));
-            aggregator = aggregator.with_intelligence_layer(intelligence);
+            );
+            if let Some(provider) = config.intelligence_provider {
+                layer = layer.with_provider(provider);
+            }
+            aggregator = aggregator.with_intelligence_layer(Arc::new(layer));
         }
         let aggregator = Arc::new(aggregator);
 
@@ -345,6 +364,7 @@ mod tests {
             min_events_for_summary: 20,
             context_window_size: 3,
             memory_capacity: 5000,
+            intelligence_provider: None,
         };
 
         let coordinator = SwarmCoordinator::with_config(config).await.unwrap();

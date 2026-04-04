@@ -318,7 +318,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         _ => None,
     };
 
-    // Initialize SwarmCoordinator and attach the coord task store.
+    // Initialize SwarmCoordinator and attach the coord task store and inbox provider.
+    // TODO(M5): Wire intelligence_provider into SwarmConfig once the default AI provider
+    // is available at this point. Currently the provider is resolved later (inside the
+    // `if let Some(provider_registry)` block), so IntelligenceLayer runs without LLM
+    // summarization and falls back to rule-based aggregation. To fix, either move
+    // SwarmCoordinator init after provider resolution or add a deferred provider setter.
     let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = async {
         use alephcore::agents::swarm::{SwarmConfig, SwarmCoordinator};
 
@@ -349,6 +354,49 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         } else {
             coordinator
         };
+
+        // Attach inbox context provider for team message awareness.
+        // with_inbox_provider consumes self, so on the (unlikely) error path
+        // the coordinator is lost. This only fails if the injector Arc was
+        // already shared (i.e. start() was called), which hasn't happened yet.
+        let coordinator =
+            if let (Some(ref ib), Some(ref ts)) = (inbox.as_ref(), team_store.as_ref()) {
+                use alephcore::teams::context::TeamInboxContextProvider;
+                let mut inbox_provider =
+                    TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
+                if let Some(ref ss) = session_store {
+                    inbox_provider = inbox_provider.with_session_store(ss.clone());
+                }
+                match coordinator.with_inbox_provider(Arc::new(inbox_provider)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to attach inbox provider to swarm coordinator: {e}"
+                        );
+                        // Coordinator was consumed; recreate without inbox provider
+                        let c2 = SwarmCoordinator::with_config(SwarmConfig::default())
+                            .await
+                            .map_err(|e2| {
+                                tracing::error!("Swarm coordinator recreation failed: {e2}");
+                            })
+                            .ok()?;
+                        // Re-attach task store if available
+                        if let Some(ref store) = coord_store {
+                            match c2.with_task_store(store.clone()) {
+                                Ok(c) => c,
+                                Err(_) => {
+                                    SwarmCoordinator::with_config(SwarmConfig::default())
+                                        .await.ok()?
+                                }
+                            }
+                        } else {
+                            c2
+                        }
+                    }
+                }
+            } else {
+                coordinator
+            };
 
         let coordinator = Arc::new(coordinator);
         coordinator.clone().start().await;
@@ -976,6 +1024,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 println!("  MediaProcessor initialized");
             }
             engine = engine.with_media_processor(media_processor);
+        }
+
+        // Wire team stores into ExecutionEngine for SubagentTool builder methods
+        if let Some(ref ts) = team_store {
+            engine = engine.with_teammate_manager(Arc::new(
+                alephcore::agent_loop::subagent_teammates::TeammateManager::new(ts.clone()),
+            ));
+        }
+        if let Some(ref mr) = message_router {
+            engine = engine.with_message_router(mr.clone());
+        }
+        if let Some(ref ib) = inbox {
+            engine = engine.with_inbox(ib.clone());
         }
 
         let engine = Arc::new(engine);

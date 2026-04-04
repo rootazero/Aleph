@@ -59,6 +59,12 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) media_processor: Option<Arc<crate::media::processor::MediaProcessor>>,
     /// Optional resilience database for task/trace persistence.
     pub(super) state_database: Option<Arc<StateDatabase>>,
+    /// Teammate manager for named sub-agent team creation/registration.
+    pub(super) teammate_manager: Option<Arc<crate::agent_loop::subagent_teammates::TeammateManager>>,
+    /// Message router for sub-agent send_message actions.
+    pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
+    /// Inbox for sub-agent read_inbox actions.
+    pub(super) inbox: Option<Arc<crate::teams::messages::inbox::Inbox>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -87,6 +93,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             event_bus: None,
             media_processor: None,
             state_database: None,
+            teammate_manager: None,
+            message_router: None,
+            inbox: None,
         }
     }
 
@@ -165,6 +174,30 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// and the workspace_id into the request context metadata.
     pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
+        self
+    }
+
+    /// Set the teammate manager for named sub-agent team creation/registration.
+    pub fn with_teammate_manager(
+        mut self,
+        mgr: Arc<crate::agent_loop::subagent_teammates::TeammateManager>,
+    ) -> Self {
+        self.teammate_manager = Some(mgr);
+        self
+    }
+
+    /// Set the message router for sub-agent send_message actions.
+    pub fn with_message_router(
+        mut self,
+        router: Arc<crate::teams::messages::router::MessageRouter>,
+    ) -> Self {
+        self.message_router = Some(router);
+        self
+    }
+
+    /// Set the inbox for sub-agent read_inbox actions.
+    pub fn with_inbox(mut self, inbox: Arc<crate::teams::messages::inbox::Inbox>) -> Self {
+        self.inbox = Some(inbox);
         self
     }
 

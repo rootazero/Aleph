@@ -456,14 +456,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 let sub_provider = self.provider_registry.default_provider();
                 let agent_registry = Arc::new(AgentRegistry::with_builtins());
                 let background_tracker = Arc::new(BackgroundAgentTracker::new());
-                tool_registry.register(Box::new(SubagentTool::new(
+                let mut subagent_tool = SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
                     sub_safety_factory.clone(),
                     run_chain.clone(),
                     agent_registry,
                     background_tracker,
-                )));
+                );
+                if let Some(ref mgr) = self.teammate_manager {
+                    subagent_tool = subagent_tool.with_teammate_manager(mgr.clone());
+                }
+                if let Some(ref router) = self.message_router {
+                    subagent_tool = subagent_tool.with_message_router(router.clone());
+                }
+                if let Some(ref inbox) = self.inbox {
+                    subagent_tool = subagent_tool.with_inbox(inbox.clone());
+                }
+                tool_registry.register(Box::new(subagent_tool));
             }
 
             debug!(
