@@ -21,6 +21,7 @@ pub mod sections;
 pub mod skill_prefetch;
 pub mod stop_hooks;
 pub mod streaming_bridge;
+pub mod subagent_runner;
 pub mod subagent_tool;
 mod tool;
 pub mod tool_orchestrator;
