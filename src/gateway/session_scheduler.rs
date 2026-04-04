@@ -163,7 +163,7 @@ impl SessionScheduler {
         };
 
         // Build reply emitter, respecting configured output_mode
-        let reply_config = match &self.app_config {
+        let mut reply_config = match &self.app_config {
             Some(cfg) => {
                 let cfg = cfg.read().await;
                 let mode = cfg
@@ -175,6 +175,19 @@ impl SessionScheduler {
             }
             None => ReplyEmitterConfig::default(),
         };
+        // Per-channel streaming override
+        if let Some(handle) = self
+            .channel_registry
+            .get(&enriched.merged.primary_context.reply_route.channel_id)
+            .await
+        {
+            let ch = handle.read().await;
+            let caps = ch.capabilities();
+            if caps.stream_protocol == crate::gateway::channel::StreamProtocol::EditBased {
+                reply_config.stream_enabled = true;
+                reply_config.max_message_length = caps.max_message_length;
+            }
+        }
         let pending_media: crate::gateway::media::PendingMedia =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let reply_emitter: Arc<dyn EventEmitter + Send + Sync> =
@@ -385,7 +398,7 @@ async fn execute_next(
     };
 
     // Build reply emitter, respecting configured output_mode
-    let reply_config = match &app_config {
+    let mut reply_config = match &app_config {
         Some(cfg) => {
             let cfg = cfg.read().await;
             let mode = cfg
@@ -397,6 +410,18 @@ async fn execute_next(
         }
         None => ReplyEmitterConfig::default(),
     };
+    // Per-channel streaming override
+    if let Some(handle) = channel_registry
+        .get(&enriched.merged.primary_context.reply_route.channel_id)
+        .await
+    {
+        let ch = handle.read().await;
+        let caps = ch.capabilities();
+        if caps.stream_protocol == crate::gateway::channel::StreamProtocol::EditBased {
+            reply_config.stream_enabled = true;
+            reply_config.max_message_length = caps.max_message_length;
+        }
+    }
     let pending_media: crate::gateway::media::PendingMedia =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(

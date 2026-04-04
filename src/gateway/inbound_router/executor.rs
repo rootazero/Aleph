@@ -98,6 +98,17 @@ impl InboundMessageRouter {
         reply_config.voice_enabled = voice_enabled;
         reply_config.voice_reply_hint = ctx.voice_reply_hint;
 
+        // Per-channel streaming override: if the channel declares EditBased,
+        // enable streaming and apply channel-specific debounce/threshold.
+        if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
+            let ch = handle.read().await;
+            let caps = ch.capabilities();
+            if caps.stream_protocol == crate::gateway::channel::StreamProtocol::EditBased {
+                reply_config.stream_enabled = true;
+                reply_config.max_message_length = caps.max_message_length;
+            }
+        }
+
         let pending_media: crate::gateway::media::PendingMedia =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 

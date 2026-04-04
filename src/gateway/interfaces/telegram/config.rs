@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+use crate::gateway::coalescer::CoalescingConfig;
+
 /// DM access policy.
 ///
 /// Controls how the bot handles direct messages from users.
@@ -59,6 +61,36 @@ impl PairingEntry {
     }
 }
 
+/// Streaming delivery options for Telegram's edit-based streaming.
+///
+/// When enabled, LLM responses are delivered progressively via
+/// `editMessageText` instead of buffering until completion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamingOptions {
+    /// Whether edit-based streaming is enabled (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Minimum interval between edits in milliseconds (default: 800).
+    /// Telegram's edit API is more strictly rate-limited than send.
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+
+    /// Minimum characters before sending the initial message (default: 30).
+    #[serde(default = "default_min_initial_chars")]
+    pub min_initial_chars: usize,
+}
+
+impl Default for StreamingOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            debounce_ms: 800,
+            min_initial_chars: 30,
+        }
+    }
+}
+
 /// Telegram channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
@@ -108,6 +140,15 @@ pub struct TelegramConfig {
     /// Maximum retries for failed messages
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+
+    /// Message coalescing configuration (merges rapid-fire messages).
+    /// Enabled by default for Telegram channels.
+    #[serde(default = "default_coalescing")]
+    pub coalescing: Option<CoalescingConfig>,
+
+    /// Streaming delivery options (edit-based progressive output).
+    #[serde(default)]
+    pub streaming: StreamingOptions,
 }
 
 /// Webhook configuration for receiving updates
@@ -152,6 +193,18 @@ fn default_webhook_path() -> String {
     "/telegram/webhook".to_string()
 }
 
+fn default_coalescing() -> Option<CoalescingConfig> {
+    Some(CoalescingConfig::default())
+}
+
+fn default_debounce_ms() -> u64 {
+    800
+}
+
+fn default_min_initial_chars() -> usize {
+    30
+}
+
 impl Default for TelegramConfig {
     fn default() -> Self {
         Self {
@@ -167,6 +220,8 @@ impl Default for TelegramConfig {
             polling_interval_secs: 1,
             send_typing: true,
             max_retries: 3,
+            coalescing: default_coalescing(),
+            streaming: StreamingOptions::default(),
         }
     }
 }

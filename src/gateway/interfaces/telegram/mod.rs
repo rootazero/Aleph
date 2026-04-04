@@ -19,12 +19,14 @@ pub mod access;
 pub mod chunking;
 pub mod config;
 pub mod delivery;
+pub mod error_cooldown;
 pub mod group_chat;
 pub mod handlers;
+pub mod offset;
 mod polling;
 
 pub use access::AccessController;
-pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
+pub use config::{PairingEntry, StreamingOptions, TelegramConfig, WebhookConfig};
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
@@ -34,6 +36,7 @@ use crate::gateway::channel::{
 use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
+use error_cooldown::ErrorCooldown;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -59,6 +62,10 @@ pub struct TelegramChannel {
     tool_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
     /// Centralized access controller (pairing, allowlists, policies).
     access: Arc<AccessController>,
+    /// Per-conversation error cooldown and typing circuit breaker.
+    error_cooldown: Arc<ErrorCooldown>,
+    /// Persistent polling offset tracker (set via `set_offset_tracker`).
+    offset_tracker: Option<Arc<offset::OffsetTracker>>,
 }
 
 impl TelegramChannel {
@@ -86,6 +93,8 @@ impl TelegramChannel {
             bot: None,
             tool_registry: None,
             access,
+            error_cooldown: Arc::new(ErrorCooldown::new()),
+            offset_tracker: None,
         }
     }
 
@@ -93,6 +102,11 @@ impl TelegramChannel {
     /// and register them as Telegram slash commands.
     pub fn set_tool_registry(&mut self, registry: Arc<crate::dispatcher::ToolRegistry>) {
         self.tool_registry = Some(registry);
+    }
+
+    /// Set the offset tracker for persistent polling offset management.
+    pub fn set_offset_tracker(&mut self, tracker: Arc<offset::OffsetTracker>) {
+        self.offset_tracker = Some(tracker);
     }
 
     /// Get Telegram-specific capabilities
@@ -111,7 +125,7 @@ impl TelegramChannel {
             rich_text: true, // Markdown/HTML support
             max_message_length: 4096,
             max_attachment_size: 50 * 1024 * 1024, // 50MB
-            stream_protocol: Default::default(),
+            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
         }
     }
 
@@ -375,6 +389,7 @@ impl Channel for TelegramChannel {
                                 reply_to: None,
                                 is_group,
                                 raw: None,
+                                metadata: vec![],
                             };
                             if let Err(e) = inbound_tx.send(inbound).await {
                                 tracing::error!(
@@ -400,7 +415,8 @@ impl Channel for TelegramChannel {
             .branch(callback_handler);
 
         let status = self.channel_state.status_handle();
-        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx));
+        let offset = self.offset_tracker.clone();
+        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx, offset));
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
@@ -425,7 +441,7 @@ impl Channel for TelegramChannel {
             .bot
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::send_message(bot, &self.config, &message).await
+        delivery::send_message(bot, &self.config, &message, &self.error_cooldown).await
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -433,7 +449,7 @@ impl Channel for TelegramChannel {
             .bot
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::send_typing(bot, conversation_id.as_str()).await
+        delivery::send_typing(bot, conversation_id.as_str(), &self.error_cooldown).await
     }
 
     async fn react(

@@ -16,6 +16,7 @@ use teloxide::{
 
 use super::chunking::split_html_safe;
 use super::config::TelegramConfig;
+use super::error_cooldown::{ErrorCooldown, ErrorKind};
 
 // ---------------------------------------------------------------------------
 // Error classification
@@ -76,6 +77,16 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
     }
 }
 
+/// Map an `ErrorClass` to an `ErrorKind` for cooldown purposes.
+fn error_class_to_kind(ec: &ErrorClass) -> ErrorKind {
+    match ec {
+        ErrorClass::Rejected(_) => ErrorKind::Permanent,
+        ErrorClass::PreConnect | ErrorClass::PostConnect | ErrorClass::RateLimited(_) => {
+            ErrorKind::Retryable
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -106,6 +117,24 @@ macro_rules! with_thread {
 }
 
 // ---------------------------------------------------------------------------
+// Benign edit errors (streaming)
+// ---------------------------------------------------------------------------
+
+/// Returns `true` for Telegram API errors that are expected and non-fatal
+/// during edit-based streaming delivery.
+///
+/// - `MessageNotModified`: debounce window produced no new tokens.
+/// - `MessageCantBeEdited`: user deleted the message mid-stream.
+fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
+    matches!(
+        err,
+        teloxide::RequestError::Api(
+            teloxide::ApiError::MessageNotModified | teloxide::ApiError::MessageCantBeEdited
+        )
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Core send
 // ---------------------------------------------------------------------------
 
@@ -116,11 +145,26 @@ pub(crate) async fn send_message(
     bot: &Bot,
     config: &TelegramConfig,
     message: &OutboundMessage,
+    cooldown: &ErrorCooldown,
 ) -> ChannelResult<SendResult> {
-    let (chat_id, thread_id) = parse_conversation_id(message.conversation_id.as_str());
+    let conv_id = message.conversation_id.as_str();
+    let (chat_id, thread_id) = parse_conversation_id(conv_id);
 
-    // Send typing indicator if enabled
-    if config.send_typing {
+    // Check cooldown before attempting to send
+    if let Err(cd) = cooldown.check(conv_id) {
+        tracing::warn!(
+            conversation_id = conv_id,
+            remaining_secs = cd.remaining.as_secs_f64(),
+            "skipping send — conversation in cooldown",
+        );
+        return Err(ChannelError::SendFailed(format!(
+            "conversation in cooldown: {}",
+            cd
+        )));
+    }
+
+    // Send typing indicator if enabled and typing breaker allows it
+    if config.send_typing && cooldown.check_typing() {
         let mut action_req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
         if let Some(tid) = thread_id {
             if tid != 1 {
@@ -128,7 +172,10 @@ pub(crate) async fn send_message(
                     action_req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
             }
         }
-        let _ = action_req.await;
+        match action_req.await {
+            Ok(_) => cooldown.record_typing_success(),
+            Err(_) => cooldown.record_typing_failure(),
+        }
     }
 
     // Voice-only: if text is empty but attachments exist, skip text and send attachments only
@@ -224,14 +271,21 @@ pub(crate) async fn send_message(
                                 "HTML send rejected ({}), falling back to plain text",
                                 reason
                             );
-                            break build_request(None, chunk, reply_to_ref, keyboard_ref)
-                                .await
-                                .map_err(|e| {
-                                    ChannelError::SendFailed(format!("Telegram send error: {}", e))
-                                })?;
+                            match build_request(None, chunk, reply_to_ref, keyboard_ref).await {
+                                Ok(msg) => break msg,
+                                Err(fallback_err) => {
+                                    let cls = classify_error(&fallback_err);
+                                    cooldown.record_failure(conv_id, error_class_to_kind(&cls));
+                                    return Err(ChannelError::SendFailed(format!(
+                                        "Telegram send error: {}",
+                                        fallback_err
+                                    )));
+                                }
+                            }
                         }
                         ErrorClass::RateLimited(secs) => {
                             if attempts > max_retries {
+                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
                                 return Err(ChannelError::RateLimited {
                                     retry_after_secs: secs,
                                 });
@@ -247,6 +301,7 @@ pub(crate) async fn send_message(
                         ErrorClass::PreConnect => {
                             // DNS/TCP failure — data never sent, safe to retry aggressively
                             if attempts > max_retries {
+                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
                             let backoff_ms = 500 * attempts as u64;
@@ -263,6 +318,7 @@ pub(crate) async fn send_message(
                             // Data may have been sent — limit retries to avoid duplicates
                             let post_connect_max = max_retries.min(2);
                             if attempts > post_connect_max {
+                                cooldown.record_failure(conv_id, ErrorKind::Retryable);
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
                             let backoff_ms = 1000 * attempts as u64;
@@ -294,6 +350,9 @@ pub(crate) async fn send_message(
         send_attachment(bot, chat_id, thread_id, attachment).await?;
     }
 
+    // Delivery succeeded — clear any cooldown for this conversation
+    cooldown.record_success(conv_id);
+
     Ok(SendResult {
         message_id: MessageId::new(sent.id.0.to_string()),
         timestamp: Utc::now(),
@@ -305,7 +364,17 @@ pub(crate) async fn send_message(
 // ---------------------------------------------------------------------------
 
 /// Send a typing indicator to a conversation.
-pub(crate) async fn send_typing(bot: &Bot, conversation_id: &str) -> ChannelResult<()> {
+pub(crate) async fn send_typing(
+    bot: &Bot,
+    conversation_id: &str,
+    cooldown: &ErrorCooldown,
+) -> ChannelResult<()> {
+    // Skip if typing circuit breaker has tripped
+    if !cooldown.check_typing() {
+        tracing::debug!("typing indicator suppressed by circuit breaker");
+        return Ok(());
+    }
+
     let (chat_id, thread_id) = parse_conversation_id(conversation_id);
 
     let mut req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
@@ -314,10 +383,19 @@ pub(crate) async fn send_typing(bot: &Bot, conversation_id: &str) -> ChannelResu
             req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
         }
     }
-    req.await
-        .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
-
-    Ok(())
+    match req.await {
+        Ok(_) => {
+            cooldown.record_typing_success();
+            Ok(())
+        }
+        Err(e) => {
+            cooldown.record_typing_failure();
+            Err(ChannelError::Internal(format!(
+                "Failed to send typing: {}",
+                e
+            )))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -479,9 +557,15 @@ pub(crate) async fn edit_message(
             request = request.reply_markup(InlineKeyboardMarkup::default());
         }
 
-        request
-            .await
-            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        match request.await {
+            Ok(_) => {}
+            Err(ref e) if is_benign_edit_error(e) => {
+                tracing::debug!("edit_message: benign error ignored: {}", e);
+            }
+            Err(e) => {
+                return Err(ChannelError::SendFailed(e.to_string()));
+            }
+        }
     } else if let Some(kb) = keyboard {
         // Edit only the keyboard (need to use edit_message_reply_markup)
         let markup = InlineKeyboardMarkup::new(

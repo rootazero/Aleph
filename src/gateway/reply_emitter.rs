@@ -33,6 +33,9 @@ use crate::gateway::media::PendingMedia;
 use crate::gateway::streaming::{StreamAction, StreamingConfig, StreamingController};
 use crate::media::cache::MediaCache;
 
+/// Streaming cursor appended to intermediate edits, removed on final.
+const STREAMING_CURSOR: &str = "▍";
+
 // ── LLM output sanitization ────────────────────────────────────────────────
 
 /// Strip LLM-internal tags that should never reach the user or TTS engine.
@@ -47,7 +50,7 @@ use crate::media::cache::MediaCache;
 /// preserved, preventing accidental stripping of example/documentation code.
 ///
 /// Returns `Cow::Borrowed` when no tags are found (zero-alloc fast path).
-fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
+pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     // Fast path: quick probe for any tag-like pattern before doing real work.
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"<(?:think|thinking|thought|antthinking|completion-check|task-complete)[\s/>]")
@@ -284,6 +287,18 @@ pub struct ReplyEmitterConfig {
     /// Whether the inbound message requested a voice reply
     /// Default: false
     pub voice_reply_hint: bool,
+
+    /// Minimum interval between streaming edits in milliseconds.
+    /// Default: 300 (global). Telegram overrides to 800.
+    pub debounce_ms: u64,
+
+    /// Minimum characters before sending the initial streaming message.
+    /// Default: 30.
+    pub min_initial_chars: usize,
+
+    /// Maximum message length for the target channel (0 = unlimited).
+    /// Used for overflow detection during streaming.
+    pub max_message_length: usize,
 }
 
 impl Default for ReplyEmitterConfig {
@@ -293,6 +308,9 @@ impl Default for ReplyEmitterConfig {
             stream_enabled: false,
             voice_enabled: false,
             voice_reply_hint: false,
+            debounce_ms: 300,
+            min_initial_chars: 30,
+            max_message_length: 0,
         }
     }
 }
@@ -301,10 +319,8 @@ impl ReplyEmitterConfig {
     /// Create config from output_mode string ("typewriter" or "instant")
     pub fn from_output_mode(mode: &str) -> Self {
         Self {
-            buffer_threshold: 500,
             stream_enabled: mode == "typewriter",
-            voice_enabled: false,
-            voice_reply_hint: false,
+            ..Default::default()
         }
     }
 }
@@ -408,6 +424,8 @@ impl ReplyEmitter {
         pending_media: PendingMedia,
     ) -> Self {
         let stream_enabled = config.stream_enabled;
+        let debounce_ms = config.debounce_ms;
+        let min_initial_chars = config.min_initial_chars;
         Self {
             channel_registry,
             route,
@@ -423,8 +441,8 @@ impl ReplyEmitter {
             pending_media,
             media_cache: MediaCache::new(),
             streaming: Mutex::new(StreamingController::new(StreamingConfig {
-                min_initial_chars: 30,
-                debounce_interval: Duration::from_millis(300),
+                min_initial_chars,
+                debounce_interval: Duration::from_millis(debounce_ms),
                 enabled: stream_enabled,
             })),
             native_handler: None,
@@ -440,6 +458,17 @@ impl ReplyEmitter {
 
     pub fn route(&self) -> &ReplyRoute {
         &self.route
+    }
+
+    /// Overflow threshold in characters. Returns 0 when overflow detection
+    /// is disabled (channel has no max_message_length or streaming is off).
+    /// Subtracts a safety margin (~300) for HTML tag overhead.
+    fn overflow_threshold(&self) -> usize {
+        let max = self.config.max_message_length;
+        if max == 0 {
+            return 0;
+        }
+        max.saturating_sub(300)
     }
 
     /// Attach voice mode dependencies, enabling TTS output.
@@ -1012,7 +1041,8 @@ impl EventEmitter for ReplyEmitter {
                         ctrl.push_chunk(&content);
                         match ctrl.poll_action() {
                             StreamAction::SendInitial(text) => {
-                                let text = sanitize_llm_output(&text).into_owned();
+                                let mut text = sanitize_llm_output(&text).into_owned();
+                                text.push_str(STREAMING_CURSOR);
                                 let message = OutboundMessage {
                                     conversation_id: self.route.conversation_id.clone(),
                                     text,
@@ -1028,24 +1058,78 @@ impl EventEmitter for ReplyEmitter {
                                 {
                                     ctrl.record_sent(result.message_id);
                                     self.has_sent.store(true, Ordering::SeqCst);
+                                    self.typing_cancel.cancel();
                                 }
                             }
                             StreamAction::Edit(text) => {
-                                let text = sanitize_llm_output(&text);
-                                if let Some(msg_id) = ctrl.message_id() {
-                                    let msg_id = msg_id.clone();
-                                    if self
+                                let text = sanitize_llm_output(&text).into_owned();
+                                let overflow_threshold = self.overflow_threshold();
+                                if overflow_threshold > 0
+                                    && text.chars().count() > overflow_threshold
+                                {
+                                    // Overflow: finalize current message, start new one
+                                    let char_boundary = text
+                                        .char_indices()
+                                        .nth(overflow_threshold)
+                                        .map(|(i, _)| i)
+                                        .unwrap_or(text.len());
+                                    let (head, tail) = text.split_at(char_boundary);
+
+                                    // Edit current message with head (clean, no cursor)
+                                    if let Some(msg_id) = ctrl.message_id() {
+                                        let msg_id = msg_id.clone();
+                                        let _ = self
+                                            .channel_registry
+                                            .edit(
+                                                &self.route.channel_id,
+                                                &self.route.conversation_id,
+                                                &msg_id,
+                                                head,
+                                            )
+                                            .await;
+                                    }
+
+                                    // Reset controller and push overflow text back
+                                    ctrl.reset();
+                                    ctrl.push_chunk(tail);
+
+                                    // Send new message with overflow + cursor
+                                    let mut overflow_text = tail.to_string();
+                                    overflow_text.push_str(STREAMING_CURSOR);
+                                    let message = OutboundMessage {
+                                        conversation_id: self.route.conversation_id.clone(),
+                                        text: overflow_text,
+                                        attachments: vec![],
+                                        reply_to: None,
+                                        inline_keyboard: None,
+                                        metadata: Default::default(),
+                                    };
+                                    if let Ok(result) = self
                                         .channel_registry
-                                        .edit(
-                                            &self.route.channel_id,
-                                            &self.route.conversation_id,
-                                            &msg_id,
-                                            &text,
-                                        )
+                                        .send(&self.route.channel_id, message)
                                         .await
-                                        .is_ok()
                                     {
-                                        ctrl.record_edit();
+                                        ctrl.record_sent(result.message_id);
+                                    }
+                                } else {
+                                    // Normal edit with cursor
+                                    let mut text_with_cursor = text;
+                                    text_with_cursor.push_str(STREAMING_CURSOR);
+                                    if let Some(msg_id) = ctrl.message_id() {
+                                        let msg_id = msg_id.clone();
+                                        if self
+                                            .channel_registry
+                                            .edit(
+                                                &self.route.channel_id,
+                                                &self.route.conversation_id,
+                                                &msg_id,
+                                                &text_with_cursor,
+                                            )
+                                            .await
+                                            .is_ok()
+                                        {
+                                            ctrl.record_edit();
+                                        }
                                     }
                                 }
                             }
@@ -1387,6 +1471,9 @@ mod tests {
             stream_enabled: true,
             voice_enabled: false,
             voice_reply_hint: false,
+            debounce_ms: 800,
+            min_initial_chars: 30,
+            max_message_length: 4096,
         };
 
         let registry = Arc::new(ChannelRegistry::new());
