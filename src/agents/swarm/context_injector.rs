@@ -3,8 +3,10 @@
 //! Implements layered context delivery strategy based on event priority.
 
 use crate::sync_primitives::Arc;
+use dashmap::DashMap;
 use std::collections::VecDeque;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::bus::AgentMessageBus;
@@ -31,6 +33,10 @@ pub struct ContextInjector {
     task_store: Option<Arc<dyn CoordTaskStore>>,
     /// Optional inbox context provider for team message awareness
     inbox_provider: Option<Arc<dyn InboxContextProvider>>,
+    /// agent_id → CancellationToken for interrupting current LLM call
+    agent_tokens: DashMap<String, CancellationToken>,
+    /// agent_id → pending interrupt feedback to inject
+    pending_interrupts: DashMap<String, String>,
 }
 
 /// Sliding context viewport for Tier 2 events
@@ -79,6 +85,8 @@ impl ContextInjector {
             context_window: Arc::new(RwLock::new(ContextWindow::new(DEFAULT_CONTEXT_WINDOW_SIZE))),
             task_store: None,
             inbox_provider: None,
+            agent_tokens: DashMap::new(),
+            pending_interrupts: DashMap::new(),
         }
     }
 
@@ -89,6 +97,8 @@ impl ContextInjector {
             context_window: Arc::new(RwLock::new(ContextWindow::new(window_size))),
             task_store: None,
             inbox_provider: None,
+            agent_tokens: DashMap::new(),
+            pending_interrupts: DashMap::new(),
         }
     }
 
@@ -199,33 +209,77 @@ impl ContextInjector {
 
     /// Inject task coordination context for an agent
     ///
-    /// TODO: Re-implement with the new `crate::teams` module once team tools land.
-    pub async fn inject_task_context(&self, _agent_id: &str) -> Option<String> {
-        // Old team-based context injection removed; will be re-implemented
-        // with the new teams module (crate::teams::TeamStore).
-        None
+    /// Queries the task store for tasks owned by the given agent and formats
+    /// them into a markdown section suitable for system prompt injection.
+    pub async fn inject_task_context(&self, agent_id: &str) -> Option<String> {
+        use super::tasks::CoordTaskFilter;
+
+        let store = self.task_store.as_ref()?;
+
+        let filter = CoordTaskFilter {
+            owner: Some(agent_id.to_string()),
+            ..Default::default()
+        };
+
+        let tasks = store.list_tasks(filter).await.ok()?;
+
+        if tasks.is_empty() {
+            return None;
+        }
+
+        let mut ctx = String::from("## Your Tasks\n");
+        for task in &tasks {
+            ctx.push_str(&format!(
+                "- [{}] {} (priority: {})\n",
+                task.status, task.subject, task.priority.as_str()
+            ));
+            if !task.dependencies.is_empty() {
+                ctx.push_str(&format!("  blocked by: {}\n", task.dependencies.join(", ")));
+            }
+        }
+        Some(ctx)
+    }
+
+    /// Register a CancellationToken for an agent (called at sub-agent spawn).
+    pub fn register_agent_token(&self, agent_id: &str, token: CancellationToken) {
+        self.agent_tokens.insert(agent_id.to_string(), token);
+    }
+
+    /// Remove an agent's token (called when sub-agent completes).
+    pub fn unregister_agent_token(&self, agent_id: &str) {
+        self.agent_tokens.remove(agent_id);
+    }
+
+    /// Take (consume) a pending interrupt message for an agent.
+    pub fn take_pending_interrupt(&self, agent_id: &str) -> Option<String> {
+        self.pending_interrupts.remove(agent_id).map(|(_, v)| v)
     }
 
     /// Handle critical event (Tier 1: Interrupt-Driven)
     ///
-    /// This is a placeholder for interrupt mechanism.
-    /// In a full implementation, this would:
-    /// 1. Abort current LLM generation
-    /// 2. Inject event as System Feedback
-    /// 3. Trigger agent to re-enter Think phase
+    /// Cancels the agent's current LLM call (if a token is registered)
+    /// and stores a pending interrupt message for injection in the next Think phase.
     pub async fn handle_critical_event(
         &self,
         event: &CriticalEvent,
-        _agent_id: &str,
+        agent_id: &str,
     ) -> Result<String> {
-        // Format critical event for immediate attention
         let feedback = format!("[CRITICAL INTERRUPT] {}", self.format_critical_event(event));
 
-        info!("Critical event: {}", feedback);
+        info!("Critical event for agent {}: {}", agent_id, feedback);
 
-        // TODO: Implement actual interrupt mechanism
-        // - Abort current generation
-        // - Trigger rethink
+        // Cancel the agent's current LLM call if token is registered
+        if let Some(token) = self.agent_tokens.get(agent_id) {
+            token.cancel();
+            tracing::info!(
+                agent_id = agent_id,
+                "Cancelled agent's CancellationToken due to critical event"
+            );
+        }
+
+        // Store pending interrupt for injection in next Think phase
+        self.pending_interrupts
+            .insert(agent_id.to_string(), feedback.clone());
 
         Ok(feedback)
     }
@@ -548,6 +602,134 @@ mod tests {
         assert!(formatted.contains("Text: art-1; Code: art-2"));
     }
 
+    // -----------------------------------------------------------------------
+    // Mock CoordTaskStore for testing inject_task_context
+    // -----------------------------------------------------------------------
+
+    use super::super::tasks::{
+        CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate,
+        NewCoordTask, Priority,
+    };
+    use async_trait::async_trait;
+
+    struct MockTaskStore {
+        tasks: Vec<CoordTask>,
+    }
+
+    #[async_trait]
+    impl CoordTaskStore for MockTaskStore {
+        async fn create_task(&self, _task: NewCoordTask) -> crate::error::Result<CoordTask> {
+            unimplemented!()
+        }
+        async fn get_task(&self, _id: &str) -> crate::error::Result<Option<CoordTask>> {
+            unimplemented!()
+        }
+        async fn update_task(
+            &self,
+            _id: &str,
+            _update: CoordTaskUpdate,
+        ) -> crate::error::Result<CoordTask> {
+            unimplemented!()
+        }
+        async fn list_tasks(
+            &self,
+            filter: CoordTaskFilter,
+        ) -> crate::error::Result<Vec<CoordTask>> {
+            let results: Vec<CoordTask> = self
+                .tasks
+                .iter()
+                .filter(|t| {
+                    filter
+                        .owner
+                        .as_ref()
+                        .map_or(true, |o| t.owner.as_deref() == Some(o.as_str()))
+                })
+                .cloned()
+                .collect();
+            Ok(results)
+        }
+        async fn get_dependencies(&self, _id: &str) -> crate::error::Result<Vec<CoordTaskId>> {
+            unimplemented!()
+        }
+        async fn get_dependents(&self, _id: &str) -> crate::error::Result<Vec<CoordTaskId>> {
+            unimplemented!()
+        }
+        async fn get_newly_unblocked(
+            &self,
+            _completed_id: &str,
+        ) -> crate::error::Result<Vec<CoordTask>> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_inject_task_context_returns_formatted_list() {
+        let store = Arc::new(MockTaskStore {
+            tasks: vec![
+                CoordTask {
+                    id: "t-1".into(),
+                    team_id: None,
+                    subject: "Implement login".into(),
+                    description: String::new(),
+                    status: CoordTaskStatus::InProgress,
+                    owner: Some("agent-1".into()),
+                    priority: Priority::High,
+                    result: None,
+                    metadata: serde_json::Value::Null,
+                    dependencies: vec![],
+                    created_at: 0,
+                    started_at: None,
+                    completed_at: None,
+                },
+                CoordTask {
+                    id: "t-2".into(),
+                    team_id: None,
+                    subject: "Write tests".into(),
+                    description: String::new(),
+                    status: CoordTaskStatus::Pending,
+                    owner: Some("agent-1".into()),
+                    priority: Priority::Normal,
+                    result: None,
+                    metadata: serde_json::Value::Null,
+                    dependencies: vec!["t-1".into()],
+                    created_at: 0,
+                    started_at: None,
+                    completed_at: None,
+                },
+            ],
+        });
+
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus).with_task_store(store);
+
+        let ctx = injector.inject_task_context("agent-1").await;
+        assert!(ctx.is_some());
+        let text = ctx.unwrap();
+        assert!(text.contains("## Your Tasks"));
+        assert!(text.contains("Implement login"));
+        assert!(text.contains("in_progress"));
+        assert!(text.contains("high"));
+        assert!(text.contains("Write tests"));
+        assert!(text.contains("blocked by: t-1"));
+    }
+
+    #[tokio::test]
+    async fn test_inject_task_context_empty_returns_none() {
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus);
+        let ctx = injector.inject_task_context("agent-1").await;
+        assert!(ctx.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_inject_task_context_no_matching_tasks_returns_none() {
+        let store = Arc::new(MockTaskStore { tasks: vec![] });
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus).with_task_store(store);
+        let ctx = injector.inject_task_context("agent-1").await;
+        assert!(ctx.is_none());
+    }
+
     #[tokio::test]
     async fn test_format_arena_state_update_no_artifacts() {
         let bus = Arc::new(AgentMessageBus::new());
@@ -566,5 +748,68 @@ mod tests {
         let formatted = injector.format_important_event(&event);
         assert!(formatted.contains("none yet"));
         assert!(formatted.contains("0/5 steps done"));
+    }
+
+    #[tokio::test]
+    async fn test_interrupt_stores_pending_feedback() {
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus);
+
+        let token = CancellationToken::new();
+        injector.register_agent_token("agent-1", token.clone());
+
+        let event = CriticalEvent::ErrorDetected {
+            agent_id: "agent-2".into(),
+            error_message: "Database connection lost".into(),
+            timestamp: 0,
+        };
+
+        let feedback = injector
+            .handle_critical_event(&event, "agent-1")
+            .await
+            .unwrap();
+
+        assert!(feedback.contains("CRITICAL INTERRUPT"));
+        assert!(feedback.contains("Database connection lost"));
+        assert!(token.is_cancelled());
+
+        let pending = injector.take_pending_interrupt("agent-1");
+        assert!(pending.is_some());
+        assert!(pending.unwrap().contains("Database connection lost"));
+
+        // Second take returns None
+        assert!(injector.take_pending_interrupt("agent-1").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_interrupt_no_token_still_formats() {
+        let bus = Arc::new(AgentMessageBus::new());
+        let injector = ContextInjector::new(bus);
+
+        let event = CriticalEvent::GlobalFailure {
+            error: "Out of memory".into(),
+            timestamp: 0,
+        };
+
+        let feedback = injector
+            .handle_critical_event(&event, "unknown-agent")
+            .await
+            .unwrap();
+
+        assert!(feedback.contains("CRITICAL INTERRUPT"));
+        assert!(feedback.contains("Out of memory"));
+    }
+
+    #[test]
+    fn test_register_and_unregister_token() {
+        let bus_rt = tokio::runtime::Runtime::new().unwrap();
+        let bus = bus_rt.block_on(async { Arc::new(AgentMessageBus::new()) });
+        let injector = ContextInjector::new(bus);
+
+        let token = CancellationToken::new();
+        injector.register_agent_token("agent-1", token);
+        injector.unregister_agent_token("agent-1");
+
+        assert!(injector.take_pending_interrupt("agent-1").is_none());
     }
 }
