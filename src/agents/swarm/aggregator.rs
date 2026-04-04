@@ -3,6 +3,7 @@
 //! Implements "fast reflex + slow thinking" dual-loop control.
 //! Transforms low-level events into high-level situational awareness.
 
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -168,6 +169,10 @@ pub struct IntelligenceLayer {
     summary_interval: Duration,
     /// Minimum events before summarizing
     min_events: usize,
+    /// Optional AI provider for LLM-powered summarization.
+    provider: Option<Arc<dyn AiProvider>>,
+    /// Model hint for cost control (prefer cheap models).
+    model_hint: Option<String>,
 }
 
 impl IntelligenceLayer {
@@ -176,7 +181,21 @@ impl IntelligenceLayer {
         Self {
             summary_interval,
             min_events,
+            provider: None,
+            model_hint: None,
         }
+    }
+
+    /// Attach an AI provider for LLM-powered summarization.
+    pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.provider = Some(provider);
+        self
+    }
+
+    /// Set a model hint for cost control (prefer cheap models).
+    pub fn with_model_hint(mut self, hint: impl Into<String>) -> Self {
+        self.model_hint = Some(hint.into());
+        self
     }
 
     /// Run the intelligence layer background loop
@@ -219,15 +238,108 @@ impl IntelligenceLayer {
         }
     }
 
-    /// Summarize swarm behavior (placeholder implementation)
+    /// Summarize swarm behavior using LLM when available, falling back to statistics.
     async fn summarize_swarm_behavior(&self, events: &[InfoEvent]) -> Option<String> {
         if events.is_empty() {
             return None;
         }
 
-        // TODO: Integrate with LLM for intelligent summarization
-        // For now, provide a simple statistical summary
+        // Try LLM-powered summarization when a provider is available
+        if let Some(ref provider) = self.provider {
+            match self.llm_summarize(provider, events).await {
+                Ok(summary) => return Some(summary),
+                Err(e) => {
+                    warn!("LLM summarization failed, falling back to statistics: {}", e);
+                }
+            }
+        }
 
+        // Statistical fallback
+        self.statistical_summary(events)
+    }
+
+    /// Generate an LLM-powered summary from swarm events.
+    async fn llm_summarize(
+        &self,
+        provider: &Arc<dyn AiProvider>,
+        events: &[InfoEvent],
+    ) -> crate::error::Result<String> {
+        use crate::providers::adapter::RequestPayload;
+        use crate::providers::message::UnifiedMessage;
+
+        // Format each event as a one-line description
+        let event_lines: Vec<String> = events
+            .iter()
+            .map(|e| match e {
+                InfoEvent::ToolExecuted {
+                    agent_id, tool, path, ..
+                } => format!(
+                    "- Agent {} executed tool '{}'{}",
+                    agent_id,
+                    tool,
+                    path.as_deref()
+                        .map(|p| format!(" on {}", p))
+                        .unwrap_or_default()
+                ),
+                InfoEvent::FileAccessed {
+                    agent_id,
+                    path,
+                    operation,
+                    ..
+                } => format!("- Agent {} {:?} file {}", agent_id, operation, path),
+                InfoEvent::SymbolSearched {
+                    agent_id, symbol, ..
+                } => format!("- Agent {} searched for symbol '{}'", agent_id, symbol),
+                InfoEvent::ActionStarted {
+                    agent_id,
+                    action_type,
+                    target,
+                    ..
+                } => format!(
+                    "- Agent {} started action '{}'{}",
+                    agent_id,
+                    action_type,
+                    target
+                        .as_deref()
+                        .map(|t| format!(" targeting {}", t))
+                        .unwrap_or_default()
+                ),
+                InfoEvent::InsightCaptured {
+                    agent_id, insight, ..
+                } => format!("- Agent {} captured insight: {}", agent_id, insight),
+            })
+            .collect();
+
+        let prompt = format!(
+            "Summarize the following swarm agent activity in 2-3 concise sentences. \
+             Focus on what the agents are collectively working on and any patterns:\n\n{}",
+            event_lines.join("\n")
+        );
+
+        let messages = [UnifiedMessage::user(prompt)];
+        let mut payload = RequestPayload::new(&messages)
+            .with_system(Some(
+                "You are a swarm activity summarizer. Be concise and insightful.",
+            ))
+            .with_max_tokens(Some(200));
+
+        // Apply model hint if configured
+        if let Some(ref hint) = self.model_hint {
+            payload = payload.with_model(Some(hint.clone()));
+        }
+
+        let response = provider.process(payload).await?;
+        let text = response.text_content();
+        if text.is_empty() {
+            return Err(crate::error::AlephError::provider(
+                "LLM returned empty summary",
+            ));
+        }
+        Ok(text)
+    }
+
+    /// Generate a simple statistical summary (fallback).
+    fn statistical_summary(&self, events: &[InfoEvent]) -> Option<String> {
         let tool_count = events
             .iter()
             .filter(|e| matches!(e, InfoEvent::ToolExecuted { .. }))
@@ -324,5 +436,64 @@ mod tests {
         let layer = IntelligenceLayer::new(Duration::from_secs(5), 10);
         assert_eq!(layer.summary_interval, Duration::from_secs(5));
         assert_eq!(layer.min_events, 10);
+        assert!(layer.provider.is_none());
+        assert!(layer.model_hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_intelligence_layer_with_provider() {
+        use crate::providers::MockProvider;
+
+        let mock = MockProvider::new("The swarm agents are collaborating on auth module refactoring.");
+        let provider: Arc<dyn crate::providers::AiProvider> = Arc::new(mock);
+
+        let layer = IntelligenceLayer::new(Duration::from_secs(5), 1)
+            .with_provider(provider)
+            .with_model_hint("haiku");
+
+        let events = vec![
+            InfoEvent::ToolExecuted {
+                agent_id: "agent_1".into(),
+                tool: "grep".into(),
+                path: Some("/src/auth".into()),
+                timestamp: 1,
+            },
+            InfoEvent::FileAccessed {
+                agent_id: "agent_2".into(),
+                path: "/src/auth/mod.rs".into(),
+                operation: FileOperation::Read,
+                timestamp: 2,
+            },
+            InfoEvent::SymbolSearched {
+                agent_id: "agent_1".into(),
+                symbol: "AuthToken".into(),
+                context: None,
+                timestamp: 3,
+            },
+        ];
+
+        let summary = layer.summarize_swarm_behavior(&events).await;
+        assert!(summary.is_some());
+        let text = summary.unwrap();
+        // LLM provider should return its mock response
+        assert!(text.contains("swarm agents are collaborating"));
+    }
+
+    #[tokio::test]
+    async fn test_intelligence_layer_fallback_without_provider() {
+        let layer = IntelligenceLayer::new(Duration::from_secs(10), 1);
+
+        let events = vec![InfoEvent::ToolExecuted {
+            agent_id: "agent_1".into(),
+            tool: "grep".into(),
+            path: None,
+            timestamp: 1,
+        }];
+
+        let summary = layer.summarize_swarm_behavior(&events).await;
+        assert!(summary.is_some());
+        let text = summary.unwrap();
+        // Should use statistical fallback
+        assert!(text.contains("1 tool executions"));
     }
 }
