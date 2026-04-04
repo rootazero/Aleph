@@ -164,6 +164,22 @@ impl SwarmCoordinator {
         Ok(self)
     }
 
+    /// Attach an inbox context provider for team message awareness.
+    ///
+    /// Must be called before `start()` (i.e. before the injector Arc is shared).
+    pub fn with_inbox_provider(
+        mut self,
+        provider: Arc<dyn crate::teams::context::InboxContextProvider>,
+    ) -> Result<Self> {
+        let inner = Arc::try_unwrap(self.injector).map_err(|_| {
+            crate::error::AlephError::config(
+                "with_inbox_provider must be called before start() — injector Arc already shared",
+            )
+        })?;
+        self.injector = Arc::new(inner.with_inbox_provider(provider));
+        Ok(self)
+    }
+
     /// Start all background tasks
     pub async fn start(self: Arc<Self>) {
         info!("Starting swarm coordinator background tasks");
@@ -336,6 +352,28 @@ mod tests {
         let stats = coordinator.statistics().await;
         assert_eq!(stats.context_window_size, 0);
         assert_eq!(stats.memory_event_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_with_inbox_provider() {
+        use crate::teams::context::{InboxContext, InboxContextProvider};
+        use async_trait::async_trait;
+
+        struct MockInboxProvider;
+
+        #[async_trait]
+        impl InboxContextProvider for MockInboxProvider {
+            async fn get_inbox_context(&self, _agent_id: &str) -> InboxContext {
+                InboxContext::default()
+            }
+        }
+
+        let coordinator = SwarmCoordinator::new().await.unwrap();
+        let coordinator = coordinator
+            .with_inbox_provider(Arc::new(MockInboxProvider))
+            .unwrap();
+        let stats = coordinator.statistics().await;
+        assert_eq!(stats.context_window_size, 0);
     }
 
     #[tokio::test]
