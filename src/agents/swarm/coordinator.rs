@@ -199,6 +199,17 @@ impl SwarmCoordinator {
         Ok(self)
     }
 
+    /// Inject an AI provider into the intelligence layer for LLM-powered summarization.
+    ///
+    /// This supports deferred wiring: the coordinator can be constructed and even
+    /// started before the AI provider is available. The intelligence layer will
+    /// pick up the provider on its next summarization cycle.
+    ///
+    /// Returns `true` if the provider was successfully set.
+    pub fn set_intelligence_provider(&self, provider: Arc<dyn crate::providers::AiProvider>) -> bool {
+        self.aggregator.set_intelligence_provider(provider)
+    }
+
     /// Start all background tasks
     pub async fn start(self: Arc<Self>) {
         info!("Starting swarm coordinator background tasks");

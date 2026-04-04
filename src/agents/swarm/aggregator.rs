@@ -6,6 +6,7 @@
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -84,6 +85,18 @@ impl SemanticAggregator {
     pub fn with_intelligence_layer(mut self, layer: Arc<IntelligenceLayer>) -> Self {
         self.intelligence_layer = Some(layer);
         self
+    }
+
+    /// Inject an AI provider into the intelligence layer after construction.
+    ///
+    /// Returns `true` if the provider was set, `false` if the intelligence layer
+    /// is absent or already has a provider.
+    pub fn set_intelligence_provider(&self, provider: Arc<dyn AiProvider>) -> bool {
+        if let Some(ref layer) = self.intelligence_layer {
+            layer.set_provider(provider)
+        } else {
+            false
+        }
     }
 
     /// Process an info event through the aggregation pipeline
@@ -169,8 +182,8 @@ pub struct IntelligenceLayer {
     summary_interval: Duration,
     /// Minimum events before summarizing
     min_events: usize,
-    /// Optional AI provider for LLM-powered summarization.
-    provider: Option<Arc<dyn AiProvider>>,
+    /// AI provider for LLM-powered summarization (supports deferred injection via `set_provider`).
+    provider: OnceLock<Arc<dyn AiProvider>>,
     /// Model hint for cost control (prefer cheap models).
     model_hint: Option<String>,
 }
@@ -181,15 +194,23 @@ impl IntelligenceLayer {
         Self {
             summary_interval,
             min_events,
-            provider: None,
+            provider: OnceLock::new(),
             model_hint: None,
         }
     }
 
-    /// Attach an AI provider for LLM-powered summarization.
-    pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
-        self.provider = Some(provider);
+    /// Attach an AI provider for LLM-powered summarization (builder-style).
+    pub fn with_provider(self, provider: Arc<dyn AiProvider>) -> Self {
+        // OnceLock::set may fail if already set; ignore the error (first-write wins).
+        let _ = self.provider.set(provider);
         self
+    }
+
+    /// Inject an AI provider after construction (deferred wiring).
+    ///
+    /// Returns `true` if the provider was successfully set, `false` if one was already present.
+    pub fn set_provider(&self, provider: Arc<dyn AiProvider>) -> bool {
+        self.provider.set(provider).is_ok()
     }
 
     /// Set a model hint for cost control (prefer cheap models).
@@ -245,7 +266,7 @@ impl IntelligenceLayer {
         }
 
         // Try LLM-powered summarization when a provider is available
-        if let Some(ref provider) = self.provider {
+        if let Some(provider) = self.provider.get() {
             match self.llm_summarize(provider, events).await {
                 Ok(summary) => return Some(summary),
                 Err(e) => {
@@ -446,7 +467,7 @@ mod tests {
         let layer = IntelligenceLayer::new(Duration::from_secs(5), 10);
         assert_eq!(layer.summary_interval, Duration::from_secs(5));
         assert_eq!(layer.min_events, 10);
-        assert!(layer.provider.is_none());
+        assert!(layer.provider.get().is_none());
         assert!(layer.model_hint.is_none());
     }
 

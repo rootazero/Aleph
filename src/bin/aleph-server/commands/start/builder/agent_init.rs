@@ -319,11 +319,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     };
 
     // Initialize SwarmCoordinator and attach the coord task store and inbox provider.
-    // TODO(M5): Wire intelligence_provider into SwarmConfig once the default AI provider
-    // is available at this point. Currently the provider is resolved later (inside the
-    // `if let Some(provider_registry)` block), so IntelligenceLayer runs without LLM
-    // summarization and falls back to rule-based aggregation. To fix, either move
-    // SwarmCoordinator init after provider resolution or add a deferred provider setter.
+    // The AI provider is injected later via set_intelligence_provider() once resolved.
     let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = async {
         use alephcore::agents::swarm::{SwarmConfig, SwarmCoordinator};
 
@@ -641,6 +637,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     > = Arc::new(tokio::sync::RwLock::new(None));
 
     if let Some(provider_registry) = provider_registry {
+        // Wire AI provider into SwarmCoordinator's IntelligenceLayer (deferred injection).
+        // The coordinator was initialized before the provider was resolved; now that we
+        // have a provider, inject it so the intelligence layer can use LLM summarization.
+        if let Some(ref coordinator) = swarm_coordinator {
+            let provider = provider_registry.default_provider();
+            if coordinator.set_intelligence_provider(provider) {
+                tracing::info!("Swarm intelligence layer: AI provider attached");
+            }
+        }
+
         // Create embedding provider from app config for memory tools
         let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
             let embedding_settings = &app_config.memory.embedding;
