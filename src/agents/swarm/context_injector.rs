@@ -127,30 +127,65 @@ impl ContextInjector {
             }
         };
 
-        // Process Important events and add to context window
-        loop {
-            match important_rx.recv().await {
-                Ok(event) => {
-                    if let super::events::AgentEvent::Important(important_event) = event {
-                        let summary = self.format_important_event(&important_event);
-                        let entry = SwarmContextEntry {
-                            timestamp: important_event.timestamp(),
-                            event: important_event,
-                            summary,
-                        };
+        // Subscribe to Critical events (Tier 1)
+        let mut critical_rx = match self.bus.subscribe(EventTier::Critical).await {
+            Ok(rx) => rx,
+            Err(e) => {
+                warn!("Failed to subscribe to Critical events: {}", e);
+                return;
+            }
+        };
 
-                        let mut window = self.context_window.write().await;
-                        window.push(entry);
-                        debug!("Added event to context window");
+        // Process both Important and Critical events
+        loop {
+            tokio::select! {
+                result = important_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            if let super::events::AgentEvent::Important(important_event) = event {
+                                let summary = self.format_important_event(&important_event);
+                                let entry = SwarmContextEntry {
+                                    timestamp: important_event.timestamp(),
+                                    event: important_event,
+                                    summary,
+                                };
+                                let mut window = self.context_window.write().await;
+                                window.push(entry);
+                                debug!("Added event to context window");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Context injector lagged on important, skipped {} events", n);
+                        }
+                        Err(e) => {
+                            warn!("Error receiving Important event: {}", e);
+                            break;
+                        }
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("Context injector lagged, skipped {} events", n);
-                    continue;
-                }
-                Err(e) => {
-                    warn!("Error receiving Important event: {}", e);
-                    break;
+                result = critical_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            if let super::events::AgentEvent::Critical(critical_event) = event {
+                                // Broadcast interrupt to ALL registered agents
+                                let agent_ids: Vec<String> = self.agent_tokens.iter()
+                                    .map(|entry| entry.key().clone())
+                                    .collect();
+                                for agent_id in &agent_ids {
+                                    if let Err(e) = self.handle_critical_event(&critical_event, agent_id).await {
+                                        warn!("Failed to handle critical event for {}: {}", agent_id, e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Context injector lagged on critical, skipped {} events", n);
+                        }
+                        Err(e) => {
+                            warn!("Error receiving Critical event: {}", e);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -163,10 +198,16 @@ impl ContextInjector {
     /// This should be called before the agent enters Think phase.
     /// Returns a formatted string to be added to the system prompt.
     pub async fn inject_swarm_state(&self, agent_id: &str) -> String {
+        let mut context = String::new();
+
+        // Check for pending critical interrupts first
+        if let Some(interrupt) = self.take_pending_interrupt(agent_id) {
+            context.push_str(&interrupt);
+            context.push('\n');
+        }
+
         let window = self.context_window.read().await;
         let recent_updates = window.get_recent(window.max_entries);
-
-        let mut context = String::new();
 
         if !recent_updates.is_empty() {
             tracing::info!(

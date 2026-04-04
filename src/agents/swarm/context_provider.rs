@@ -19,12 +19,24 @@ use super::context_injector::ContextInjector;
 /// Swarm context provider for team awareness injection
 pub struct SwarmContextProvider {
     context_injector: Arc<ContextInjector>,
+    agent_id: String,
 }
 
 impl SwarmContextProvider {
-    /// Create a new swarm context provider
+    /// Create a new swarm context provider for a specific agent
     pub fn new(context_injector: Arc<ContextInjector>) -> Self {
-        Self { context_injector }
+        Self {
+            context_injector,
+            agent_id: String::new(),
+        }
+    }
+
+    /// Create a new swarm context provider with an agent identity
+    pub fn with_agent_id(context_injector: Arc<ContextInjector>, agent_id: impl Into<String>) -> Self {
+        Self {
+            context_injector,
+            agent_id: agent_id.into(),
+        }
     }
 
     /// Format swarm state as XML team communication protocol
@@ -66,8 +78,9 @@ impl ContextProvider for SwarmContextProvider {
         let injector = self.context_injector.clone();
 
         let swarm_state = tokio::task::block_in_place(|| {
+            let id = self.agent_id.clone();
             tokio::runtime::Handle::current()
-                .block_on(async move { injector.inject_swarm_state("").await })
+                .block_on(async move { injector.inject_swarm_state(&id).await })
         });
 
         if swarm_state.is_empty() {
