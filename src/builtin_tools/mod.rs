@@ -47,6 +47,7 @@ pub mod cron_manage;
 pub mod desktop;
 pub mod error;
 pub mod file_ops;
+pub mod gateway_route;
 pub mod generation;
 pub mod heartbeat_manage;
 pub mod invalid;
@@ -109,6 +110,7 @@ pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTo
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use error::ToolError;
 pub use file_ops::{FileOpsArgs, FileOpsTool};
+pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,
 };

@@ -157,23 +157,3 @@ pub trait EventEmitter: Send + Sync {
     /// Get the next sequence number (must be monotonically increasing)
     fn next_seq(&self) -> u64;
 }
-
-/// Get the JSON-RPC method name for a stream event
-pub(crate) fn event_method(event: &StreamEvent) -> &'static str {
-    match event {
-        StreamEvent::RunAccepted { .. } => "stream.run_accepted",
-        StreamEvent::Reasoning { .. } => "stream.reasoning",
-        StreamEvent::ToolStart { .. } => "stream.tool_start",
-        StreamEvent::ToolUpdate { .. } => "stream.tool_update",
-        StreamEvent::ToolEnd { .. } => "stream.tool_end",
-        StreamEvent::AgentTrace { .. } => "stream.agent_trace",
-        StreamEvent::ResponseChunk { .. } => "stream.response_chunk",
-        StreamEvent::RunComplete { .. } => "stream.run_complete",
-        StreamEvent::RunError { .. } => "stream.run_error",
-        StreamEvent::AskUser { .. } => "stream.ask_user",
-        StreamEvent::ReasoningBlock { .. } => "stream.reasoning_block",
-        StreamEvent::UncertaintySignal { .. } => "stream.uncertainty_signal",
-        StreamEvent::ModelResolved { .. } => "stream.model_resolved",
-        StreamEvent::SessionUpdated { .. } => "stream.session_updated",
-    }
-}

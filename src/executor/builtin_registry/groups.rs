@@ -99,7 +99,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "delegate",
         name: "Agent 间通信",
-        tools: &["session_send", "session_list"],
+        tools: &["session_send", "session_list", "gateway_route"],
     },
     ToolCategory {
         id: "team",

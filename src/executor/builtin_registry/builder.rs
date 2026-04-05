@@ -777,6 +777,7 @@ impl BuiltinToolRegistry {
                 cell
             },
             clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
+            gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
             task_create_tool,
             task_update_tool,
             task_list_tool,

@@ -56,6 +56,7 @@ impl Default for RoutingPatternsConfig {
 }
 
 /// Compiled routing rules for zero-latency classification.
+#[derive(Debug, Clone)]
 pub struct RoutingRules {
     critical: Vec<Regex>,
     multi_step: Vec<Regex>,

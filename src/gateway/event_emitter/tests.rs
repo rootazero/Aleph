@@ -74,33 +74,6 @@ async fn test_tool_lifecycle() {
 }
 
 #[test]
-fn test_event_method_names() {
-    let event = StreamEvent::Reasoning {
-        run_id: "".to_string(),
-        seq: 0,
-        content: "".to_string(),
-        is_complete: false,
-    };
-    assert_eq!(event_method(&event), "stream.reasoning");
-
-    let event = StreamEvent::ToolStart {
-        run_id: "".to_string(),
-        seq: 0,
-        tool_name: "".to_string(),
-        tool_id: "".to_string(),
-        params: serde_json::json!({}),
-    };
-    assert_eq!(event_method(&event), "stream.tool_start");
-
-    let event = StreamEvent::agent_trace(
-        "run-1",
-        1,
-        crate::agent_loop::LoopTraceEvent::TurnStarted { iteration: 1 },
-    );
-    assert_eq!(event_method(&event), "stream.agent_trace");
-}
-
-#[test]
 fn test_reasoning_block_serialization() {
     let event = StreamEvent::reasoning_block(
         "run-123",

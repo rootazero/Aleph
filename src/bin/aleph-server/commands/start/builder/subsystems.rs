@@ -190,6 +190,9 @@ pub(in crate::commands::start) async fn initialize_channels(
     use alephcore::gateway::handlers::channel::{
         create_channel_from_config, inject_channel_secrets,
     };
+    use alephcore::gateway::interfaces::register_channel_plugins;
+
+    register_channel_plugins();
 
     let channel_registry = Arc::new(ChannelRegistry::new());
 
@@ -250,7 +253,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         inject_channel_secrets(&inst.id, &mut config_with_secrets, &vault);
 
         if let Some(mut channel) =
-            create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone())
+            create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone()).await
         {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {

@@ -6,6 +6,7 @@
 //! and stopped on demand. Each service is identified by a composite key of
 //! `{plugin_id}:{service_id}`.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -56,7 +57,7 @@ impl From<ServiceInfo> for ServiceInfoJson {
 // ============================================================================
 
 /// Parameters for services.start
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StartParams {
     /// ID of the plugin that registered the service
@@ -114,7 +115,7 @@ pub async fn handle_start(request: JsonRpcRequest) -> JsonRpcResponse {
 // ============================================================================
 
 /// Parameters for services.stop
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StopParams {
     /// ID of the plugin that registered the service
@@ -172,7 +173,7 @@ pub async fn handle_stop(request: JsonRpcRequest) -> JsonRpcResponse {
 // ============================================================================
 
 /// Parameters for services.list (optional filtering)
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListParams {
     /// Filter by plugin ID (optional)
@@ -270,7 +271,7 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 // ============================================================================
 
 /// Parameters for services.status
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusParams {
     /// ID of the plugin that registered the service

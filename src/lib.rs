@@ -165,7 +165,7 @@ pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServer
 
 // Dispatcher (tool registry)
 pub use crate::dispatcher::{
-    DispatcherConfig, ToolCategory, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyLevel,
+    ToolCategory, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyLevel,
     ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 

@@ -164,6 +164,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     /// ClawHub tool instance
     pub(crate) clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool,
+    pub(crate) gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool,
     /// Task coordination tools (optional — require CoordTaskStore)
     pub(crate) task_create_tool: Option<crate::builtin_tools::task_manage::TaskCreateTool>,
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
@@ -855,6 +856,10 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // ClawHub tool
             "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
+
+            "gateway_route" => Box::pin(async move {
+                self.gateway_route_tool.call_json(arguments).await
+            }),
 
             // Media send tool — no dependencies, always available
             "media_send" => Box::pin(async move {

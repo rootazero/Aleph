@@ -64,3 +64,7 @@ pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
+
+pub fn register_channel_plugins() {
+    telegram::register_with_plugin();
+}

@@ -612,6 +612,16 @@ impl ChannelFactory for TelegramChannelFactory {
     }
 }
 
+fn telegram_factory_creator(
+    _config: crate::gateway::channel::ChannelConfig,
+) -> crate::gateway::channel::ChannelResult<std::sync::Arc<dyn ChannelFactory>> {
+    Ok(std::sync::Arc::new(TelegramChannelFactory))
+}
+
+pub fn register_with_plugin() {
+    crate::gateway::interfaces::plugin::register("telegram", telegram_factory_creator);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

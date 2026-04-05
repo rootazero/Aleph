@@ -97,6 +97,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "gateway_route",
+        description: "Query Aleph's routing engine to determine how a message would be routed. Returns the target agent, session key, and task classification.",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "desktop",
         description: "Control the desktop via platform-native capabilities: screenshots, OCR, keyboard/mouse, app launch, windows, and screen recording",
         requires_config: false,
