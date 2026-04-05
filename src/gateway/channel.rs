@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::mpsc;
 
+use crate::gateway::channel_approval::ChannelApprovalCapability;
 use crate::thinker::interaction::{Capability, InteractionManifest};
 
 /// Result type for channel operations
@@ -601,6 +602,14 @@ pub trait Channel: Send + Sync {
     /// Get capabilities
     fn capabilities(&self) -> &ChannelCapabilities {
         &self.info().capabilities
+    }
+
+    /// Get approval capability for this channel.
+    ///
+    /// Returns the channel's approval delivery capability if supported.
+    /// Channels that don't support approval delivery return `None`.
+    fn approval_capability(&self) -> Option<Arc<dyn ChannelApprovalCapability>> {
+        None
     }
 
     /// Get pairing data (e.g., QR code for WhatsApp or pairing code for iMessage)

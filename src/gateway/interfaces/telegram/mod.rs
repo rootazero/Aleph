@@ -16,6 +16,7 @@
 //! - Smart retry with error classification
 
 pub mod access;
+pub mod approval;
 pub mod chunking;
 pub mod config;
 pub mod delivery;
@@ -583,6 +584,26 @@ impl Channel for TelegramChannel {
         Err(ChannelError::UnsupportedFeature(
             "Message deletion requires chat context".to_string(),
         ))
+    }
+
+    fn approval_capability(&self) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
+        Some(Arc::new(crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
+            Arc::new(TelegramChannel {
+                info: self.info.clone(),
+                config: self.config.clone(),
+                channel_state: ChannelState::new(100),
+                callback_tx: self.callback_tx.clone(),
+                callback_rx: None,
+                shutdown_tx: None,
+                bot: self.bot.clone(),
+                tool_registry: self.tool_registry.clone(),
+                access: self.access.clone(),
+                error_cooldown: self.error_cooldown.clone(),
+                offset_tracker: self.offset_tracker.clone(),
+                state_db: self.state_db.clone(),
+            }),
+            self.access.clone(),
+        )))
     }
 }
 

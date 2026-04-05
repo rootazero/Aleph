@@ -56,6 +56,7 @@ pub mod session_manager;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
 pub mod bind_mode;
 pub mod channel;
+pub mod channel_approval;
 pub mod coalescer;
 pub mod channel_registry;
 pub mod device_store;
