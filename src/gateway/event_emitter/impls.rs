@@ -13,9 +13,9 @@ use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 
 use super::types::{EventEmitError, OutputMode, StreamEvent};
-use super::{event_method, EventEmitter};
+use super::EventEmitter;
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::protocol::JsonRpcRequest;
+use crate::gateway::events::GatewayEventFrame;
 
 /// Gateway-based event emitter
 ///
@@ -79,7 +79,7 @@ impl EventEmitter for GatewayEventEmitter {
                         let accumulated = std::mem::take(&mut *buffer);
                         drop(buffer);
                         if !accumulated.is_empty() {
-                            let flush_event = StreamEvent::ResponseChunk {
+                            let flush_frame = GatewayEventFrame::ResponseChunk {
                                 run_id: run_id.clone(),
                                 seq: self.next_seq(),
                                 delta: accumulated.clone(),
@@ -89,21 +89,12 @@ impl EventEmitter for GatewayEventEmitter {
                                 is_final: false,
                                 is_intermediate: true,
                             };
-                            let flush_value = serde_json::to_value(&flush_event)?;
-                            let flush_notification = JsonRpcRequest::notification(
-                                event_method(&flush_event),
-                                Some(flush_value),
-                            );
-                            let flush_json = serde_json::to_string(&flush_notification)?;
-                            self.event_bus.publish(flush_json);
+                            self.event_bus.publish_frame(&flush_frame)?;
                         }
                     } else {
                         // Non-empty intermediate: emit immediately as standalone message
-                        let event_value = serde_json::to_value(&event)?;
-                        let notification =
-                            JsonRpcRequest::notification(event_method(&event), Some(event_value));
-                        let json = serde_json::to_string(&notification)?;
-                        self.event_bus.publish(json);
+                        let frame = GatewayEventFrame::from(event);
+                        self.event_bus.publish_frame(&frame)?;
                     }
                     return Ok(());
                 } else if !is_final {
@@ -122,7 +113,7 @@ impl EventEmitter for GatewayEventEmitter {
                 };
                 drop(buffer);
 
-                let final_event = StreamEvent::ResponseChunk {
+                let final_frame = GatewayEventFrame::ResponseChunk {
                     run_id: run_id.clone(),
                     seq: self.next_seq(),
                     delta: full_content.clone(),
@@ -132,11 +123,7 @@ impl EventEmitter for GatewayEventEmitter {
                     is_final: true,
                     is_intermediate: false,
                 };
-                let event_value = serde_json::to_value(&final_event)?;
-                let notification =
-                    JsonRpcRequest::notification(event_method(&final_event), Some(event_value));
-                let json = serde_json::to_string(&notification)?;
-                self.event_bus.publish(json);
+                self.event_bus.publish_frame(&final_frame)?;
                 return Ok(());
             }
         }
@@ -153,7 +140,7 @@ impl EventEmitter for GatewayEventEmitter {
                 if !buffer.is_empty() {
                     let buffered = std::mem::take(&mut *buffer);
                     drop(buffer);
-                    let flush_event = StreamEvent::ResponseChunk {
+                    let flush_frame = GatewayEventFrame::ResponseChunk {
                         run_id: run_id.clone(),
                         seq: self.next_seq(),
                         delta: buffered.clone(),
@@ -163,17 +150,13 @@ impl EventEmitter for GatewayEventEmitter {
                         is_final: true,
                         is_intermediate: false,
                     };
-                    let flush_value = serde_json::to_value(&flush_event)?;
-                    let flush_notification =
-                        JsonRpcRequest::notification(event_method(&flush_event), Some(flush_value));
-                    let flush_json = serde_json::to_string(&flush_notification)?;
-                    self.event_bus.publish(flush_json);
+                    self.event_bus.publish_frame(&flush_frame)?;
                 } else if let Some(ref final_response) = summary.final_response {
                     // Fallback: buffer was empty (race with fire-and-forget emit),
                     // use final_response from summary
                     if !final_response.is_empty() {
                         drop(buffer);
-                        let fallback_event = StreamEvent::ResponseChunk {
+                        let fallback_frame = GatewayEventFrame::ResponseChunk {
                             run_id: run_id.clone(),
                             seq: self.next_seq(),
                             delta: final_response.clone(),
@@ -183,23 +166,15 @@ impl EventEmitter for GatewayEventEmitter {
                             is_final: true,
                             is_intermediate: false,
                         };
-                        let fb_value = serde_json::to_value(&fallback_event)?;
-                        let fb_notification = JsonRpcRequest::notification(
-                            event_method(&fallback_event),
-                            Some(fb_value),
-                        );
-                        let fb_json = serde_json::to_string(&fb_notification)?;
-                        self.event_bus.publish(fb_json);
+                        self.event_bus.publish_frame(&fallback_frame)?;
                     }
                 }
             }
         }
 
         // Default: broadcast immediately (typewriter mode or non-ResponseChunk events)
-        let event_value = serde_json::to_value(&event)?;
-        let notification = JsonRpcRequest::notification(event_method(&event), Some(event_value));
-        let json = serde_json::to_string(&notification)?;
-        self.event_bus.publish(json);
+        let frame = GatewayEventFrame::from(event);
+        self.event_bus.publish_frame(&frame)?;
         Ok(())
     }
 
