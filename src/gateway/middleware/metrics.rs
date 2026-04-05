@@ -164,11 +164,17 @@ where
         }
 
         // Register request and transition through states
+        // These transitions should always succeed since we just inserted the request,
+        // but we check and warn in case of programming errors.
         state_registry.insert(request_id);
-        state_registry.transition(request_id, RequestState::Validating);
+        if let Some(Err(e)) = state_registry.transition(request_id, RequestState::Validating) {
+            tracing::error!(request_id = %request_id, error = ?e, "failed to transition to Validating");
+        }
 
         // Transition to Processing before calling handler
-        let _ = state_registry.transition(request_id, RequestState::Processing);
+        if let Some(Err(e)) = state_registry.transition(request_id, RequestState::Processing) {
+            tracing::error!(request_id = %request_id, error = ?e, "failed to transition to Processing");
+        }
 
         requests_in_flight.fetch_add(1, Ordering::SeqCst);
 

@@ -17,16 +17,25 @@ pub struct MiddlewareChain {
     handlers: Arc<HandlerRegistry>,
     rate_limiter: Arc<RateLimiter>,
     state_registry: Arc<RequestStateRegistry>,
+    trace: TraceLayer,
+    metrics: MetricsLayer,
+    auth: AuthLayer,
+    validate: ValidateLayer,
 }
 
 impl MiddlewareChain {
     pub fn new(handlers: Arc<HandlerRegistry>, rate_limiter: Arc<RateLimiter>) -> Self {
         let state_registry = Arc::new(RequestStateRegistry::new());
         set_global_registry(state_registry.clone());
+        let metrics = MetricsLayer::new_with_registry(state_registry.clone());
         Self {
             handlers,
             rate_limiter,
             state_registry,
+            trace: TraceLayer::new(),
+            metrics,
+            auth: AuthLayer::new(),
+            validate: ValidateLayer::new(),
         }
     }
 
@@ -35,21 +44,14 @@ impl MiddlewareChain {
     }
 
     pub async fn serve(&self, request: JsonRpcRequest) -> JsonRpcResponse {
-        let handlers = self.handlers.clone();
-        let rate_limiter = self.rate_limiter.clone();
+        let rate_limit = RateLimitLayer::new(self.rate_limiter.clone());
+        let terminal: HandlerService<()> = HandlerService::new(self.handlers.clone());
 
-        let trace = TraceLayer::new();
-        let metrics = MetricsLayer::new_with_registry(self.state_registry.clone());
-        let auth = AuthLayer::new();
-        let validate = ValidateLayer::new();
-        let rate_limit = RateLimitLayer::new(rate_limiter);
-
-        let terminal: HandlerService<()> = HandlerService::new(handlers);
-        let traced = trace.layer(terminal);
-        let metered = metrics.layer(traced);
-        let authed = auth.layer(metered);
+        let traced = self.trace.layer(terminal);
+        let metered = self.metrics.layer(traced);
+        let authed = self.auth.layer(metered);
         let rate_limited = rate_limit.layer(authed);
-        let validated = validate.layer(rate_limited);
+        let validated = self.validate.layer(rate_limited);
 
         let mut svc = validated;
         match svc.call(request).await {
