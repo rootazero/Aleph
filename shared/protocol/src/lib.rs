@@ -21,6 +21,8 @@ pub mod events;
 pub mod invitation;
 pub mod jsonrpc;
 pub mod thinking;
+pub mod trace_presentation;
+pub mod trace_replay;
 
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
@@ -40,3 +42,12 @@ pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
 };
 pub use thinking::{ConfidenceLevel, ReasoningStepType};
+pub use trace_presentation::{
+    present_agent_trace_event, present_agent_trace_event_with_labels_and_preset,
+    present_agent_trace_event_with_preset, summarize_tool_input, summarize_tool_output,
+    summarize_tool_result, AgentTracePresentation, AgentTracePresentationLabels,
+    AgentTracePresentationOptions, AgentTracePresentationPreset, AgentTracePresentationStatus,
+};
+pub use trace_replay::{
+    AgentTraceReplay, AgentTraceReplayEntry, AgentTraceReplayListItem, AgentTraceTaskSummary,
+};
