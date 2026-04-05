@@ -10,7 +10,7 @@ use tracing::debug;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
-use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
+use crate::gateway::channel::{ChannelHealth, ChannelId, ChannelInfo, ChannelStatus, HealthStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
@@ -335,7 +335,7 @@ pub async fn handle_start(
         inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
 
         if let Some(mut new_channel) =
-            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone())
+            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()).await
         {
             // Re-attach ToolRegistry for telegram channels so slash commands are registered
             if channel_type == "telegram" {
@@ -379,86 +379,39 @@ pub async fn handle_start(
 /// `id` is the instance identifier (e.g. "telegram", "tg-work", "discord-gaming").
 /// `channel_type` is the platform type (e.g. "telegram", "discord").
 /// `config` is the remaining config with the `type` field already stripped.
-pub fn create_channel_from_config(
+pub async fn create_channel_from_config(
     id: &str,
     channel_type: &str,
     config: Value,
 ) -> Option<Box<dyn crate::gateway::channel::Channel>> {
-    use crate::gateway::interfaces::discord::{DiscordChannel, DiscordConfig};
-    use crate::gateway::interfaces::email::{EmailChannel, EmailConfig};
-    use crate::gateway::interfaces::feishu::{FeishuChannel, FeishuConfig};
-    use crate::gateway::interfaces::irc::{IrcChannel, IrcConfig};
-    use crate::gateway::interfaces::matrix::{MatrixChannel, MatrixConfig};
-    use crate::gateway::interfaces::mattermost::{MattermostChannel, MattermostConfig};
-    use crate::gateway::interfaces::msteams::{MsTeamsChannel, MsTeamsConfig};
-    use crate::gateway::interfaces::nostr::{NostrChannel, NostrConfig};
-    use crate::gateway::interfaces::signal::{SignalChannel, SignalConfig};
-    use crate::gateway::interfaces::slack::{SlackChannel, SlackConfig};
-    use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
-    use crate::gateway::interfaces::webhook::{
-        WebhookChannel, WebhookChannelConfig as WebhookConfig,
-    };
-    use crate::gateway::interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig};
-    use crate::gateway::interfaces::xmpp::{XmppChannel, XmppConfig};
+    use crate::gateway::interfaces::plugin;
+    use crate::gateway::channel::ChannelConfig;
 
-    match channel_type {
-        "telegram" => serde_json::from_value::<TelegramConfig>(config)
-            .ok()
-            .map(|cfg| {
-                Box::new(TelegramChannel::new(id, cfg)) as Box<dyn crate::gateway::channel::Channel>
-            }),
-        "discord" => serde_json::from_value::<DiscordConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(DiscordChannel::new(id, cfg)) as _),
-        "whatsapp" => serde_json::from_value::<WhatsAppConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(WhatsAppChannel::new(id, cfg)) as _),
-        "slack" => serde_json::from_value::<SlackConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(SlackChannel::new(id, cfg)) as _),
-        "email" => serde_json::from_value::<EmailConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(EmailChannel::new(id, cfg)) as _),
-        "matrix" => serde_json::from_value::<MatrixConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(MatrixChannel::new(id, cfg)) as _),
-        "signal" => serde_json::from_value::<SignalConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(SignalChannel::new(id, cfg)) as _),
-        "mattermost" => serde_json::from_value::<MattermostConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(MattermostChannel::new(id, cfg)) as _),
-        "irc" => serde_json::from_value::<IrcConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(IrcChannel::new(id, cfg)) as _),
-        "webhook" => serde_json::from_value::<WebhookConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(WebhookChannel::new(id, cfg)) as _),
-        "xmpp" => serde_json::from_value::<XmppConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(XmppChannel::new(id, cfg)) as _),
-        "nostr" => serde_json::from_value::<NostrConfig>(config)
-            .ok()
-            .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
-        "feishu" => serde_json::from_value::<FeishuConfig>(config)
-            .ok()
-            .and_then(|cfg| match FeishuChannel::new(id, cfg) {
-                Ok(ch) => Some(Box::new(ch) as _),
-                Err(e) => {
-                    tracing::warn!("Invalid feishu config: {}", e);
-                    None
-                }
-            }),
-        "msteams" => serde_json::from_value::<MsTeamsConfig>(config)
-            .ok()
-            .and_then(|cfg| {
-                if let Err(e) = cfg.validate() {
-                    tracing::warn!("Invalid msteams config: {}", e);
-                    return None;
-                }
-                Some(Box::new(MsTeamsChannel::new(id, cfg)) as _)
-            }),
-        _ => None,
+    let channel_config = ChannelConfig {
+        id: id.to_string(),
+        channel_type: channel_type.to_string(),
+        enabled: true,
+        config: config.clone(),
+    };
+
+    let factory = match plugin::create(channel_type, channel_config) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::debug!(
+                "No plugin registered for channel type '{}': {}",
+                channel_type,
+                e
+            );
+            return None;
+        }
+    };
+
+    match factory.create(config).await {
+        Ok(channel) => Some(channel),
+        Err(e) => {
+            tracing::warn!("Failed to create channel '{}': {}", id, e);
+            None
+        }
     }
 }
 
@@ -672,7 +625,7 @@ pub async fn handle_create(
     // Try to create and register channel instance (with secrets injected).
     // If config is incomplete (e.g. missing bot_token), we still succeed
     // with status "pending_config" so the user can fill in details via Panel.
-    let channel = create_channel_from_config(&id, &channel_type, config_with_secrets);
+    let channel = create_channel_from_config(&id, &channel_type, config_with_secrets).await;
 
     if let Some(ch) = channel {
         registry.register(ch).await;
@@ -771,6 +724,105 @@ pub async fn handle_delete(
             "status": "deleted",
         }),
     )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChannelHealthResponse {
+    pub id: String,
+    pub channel_type: String,
+    pub status: String,
+    pub health_status: String,
+    pub last_event_at: String,
+    pub failure_count: u32,
+    pub status_reason: Option<String>,
+}
+
+impl From<(&ChannelId, &str, ChannelStatus, &ChannelHealth)> for ChannelHealthResponse {
+    fn from((id, channel_type, status, health): (&ChannelId, &str, ChannelStatus, &ChannelHealth)) -> Self {
+        Self {
+            id: id.as_str().to_string(),
+            channel_type: channel_type.to_string(),
+            status: status_to_string(status),
+            health_status: health_status_to_string(health.status),
+            last_event_at: health.last_event_at.to_rfc3339(),
+            failure_count: health.failure_count,
+            status_reason: health.status_reason.clone(),
+        }
+    }
+}
+
+fn health_status_to_string(status: HealthStatus) -> String {
+    match status {
+        HealthStatus::Healthy => "healthy",
+        HealthStatus::Stale => "stale",
+        HealthStatus::Degraded => "degraded",
+    }
+    .to_string()
+}
+
+pub async fn handle_health(
+    request: JsonRpcRequest,
+    registry: Arc<ChannelRegistry>,
+) -> JsonRpcResponse {
+    let channel_id = match &request.params {
+        Some(Value::Object(map)) => map.get("channel_id").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    debug!("Handling channel.health");
+
+    if let Some(id) = channel_id {
+        let channel_id = ChannelId::new(id);
+        match registry.get(&channel_id).await {
+            Some(channel_arc) => {
+                let channel = channel_arc.read().await;
+                let health = channel.health().await;
+                let info = ChannelHealthResponse::from((
+                    &channel_id,
+                    channel.channel_type(),
+                    channel.status(),
+                    &health,
+                ));
+                JsonRpcResponse::success(request.id, json!(info))
+            }
+            None => JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Channel not found: {}", id),
+            ),
+        }
+    } else {
+        let summary = registry.health_summary().await;
+
+        let channel_list = registry.list().await;
+        let mut health_infos: Vec<ChannelHealthResponse> = Vec::new();
+
+        for info in channel_list.iter() {
+            let channel_id = &info.id;
+            let channel_type = info.channel_type.as_str();
+            let status = info.status;
+            let health = if let Some(ch) = registry.get(channel_id).await {
+                let channel = ch.read().await;
+                channel.health().await
+            } else {
+                ChannelHealth::new()
+            };
+            health_infos.push(ChannelHealthResponse::from((channel_id, channel_type, status, &health)));
+        }
+
+        JsonRpcResponse::success(
+            request.id,
+            json!({
+                "channels": health_infos,
+                "summary": {
+                    "total": summary.total,
+                    "healthy": summary.healthy,
+                    "stale": summary.stale,
+                    "degraded": summary.degraded,
+                }
+            }),
+        )
+    }
 }
 
 #[cfg(test)]

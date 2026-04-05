@@ -155,6 +155,7 @@ struct ManagedProcess {
     /// How many times this process has been restarted.
     #[allow(dead_code)]
     restart_count: u32,
+    consecutive_failures: u32,
     /// Timestamp of the most recent successful health check.
     last_heartbeat: Instant,
     /// Current status.
@@ -409,6 +410,7 @@ impl BridgeSupervisor {
             transport: Arc::clone(&transport),
             config,
             restart_count: 0,
+            consecutive_failures: 0,
             last_heartbeat: Instant::now(),
             status: ProcessStatus::Running,
         };
@@ -570,6 +572,7 @@ impl BridgeSupervisor {
                                 let was_unhealthy = proc.status == ProcessStatus::Unhealthy;
                                 proc.last_heartbeat = Instant::now();
                                 proc.status = ProcessStatus::Running;
+                                proc.consecutive_failures = 0;
                                 if was_unhealthy {
                                     Some(true)
                                 } else {
@@ -577,6 +580,7 @@ impl BridgeSupervisor {
                                 }
                             }
                             Err(_) => {
+                                proc.consecutive_failures += 1;
                                 proc.status = ProcessStatus::Unhealthy;
                                 Some(false)
                             }

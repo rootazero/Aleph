@@ -119,10 +119,10 @@ pub use session_manager::{SessionManager, SessionManagerConfig};
 pub use bind_mode::BindMode;
 pub use channel::{
     Attachment, Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory,
-    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    ChannelHealth, ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId,
+    HealthStatus, InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
 };
-pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};
+pub use channel_registry::{ChannelHealthSummary, ChannelRegistry, ChannelStatusSummary};
 pub use device_store::{ApprovedDevice, DeviceStore};
 pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
 pub use events::GatewayEventFrame;

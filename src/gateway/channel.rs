@@ -384,6 +384,87 @@ pub enum ChannelStatus {
     Disabled,
 }
 
+/// Health status of a channel indicating if it's stale or healthy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthStatus {
+    /// Channel is healthy and receiving events
+    Healthy,
+    /// Channel has not received events within the stale threshold
+    Stale,
+    /// Channel has recorded failures
+    Degraded,
+}
+
+/// Channel health tracking for auto-recovery decisions
+///
+/// Tracks when a channel last received an event, consecutive failure count,
+/// and the reason for the current degraded state. Used by the health monitor
+/// to determine when to trigger auto-restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelHealth {
+    /// Timestamp of the last event received through this channel
+    pub last_event_at: DateTime<Utc>,
+    /// Number of consecutive failures since last successful event
+    pub failure_count: u32,
+    /// Human-readable reason for degraded state (if any)
+    pub status_reason: Option<String>,
+    /// Current health evaluation
+    pub status: HealthStatus,
+}
+
+impl ChannelHealth {
+    /// Create a new health tracker with the current timestamp
+    pub fn new() -> Self {
+        Self {
+            last_event_at: Utc::now(),
+            failure_count: 0,
+            status_reason: None,
+            status: HealthStatus::Healthy,
+        }
+    }
+
+    /// Record that an event was successfully received
+    pub fn record_event(&mut self) {
+        self.last_event_at = Utc::now();
+        self.failure_count = 0;
+        self.status_reason = None;
+        self.status = HealthStatus::Healthy;
+    }
+
+    /// Record a failure with optional reason
+    pub fn record_failure(&mut self, reason: Option<String>) {
+        self.failure_count = self.failure_count.saturating_add(1);
+        if self.failure_count > 0 {
+            self.status = HealthStatus::Degraded;
+            if self.status_reason.is_none() {
+                self.status_reason = reason;
+            }
+        }
+    }
+
+    /// Check if the channel is stale (no events within threshold)
+    pub fn is_stale(&self, stale_threshold: chrono::Duration) -> bool {
+        Utc::now() - self.last_event_at > stale_threshold
+    }
+
+    /// Update health status based on stale threshold
+    pub fn update_status(&mut self, stale_threshold: chrono::Duration) {
+        if self.failure_count > 0 {
+            self.status = HealthStatus::Degraded;
+        } else if self.is_stale(stale_threshold) {
+            self.status = HealthStatus::Stale;
+        } else {
+            self.status = HealthStatus::Healthy;
+        }
+    }
+}
+
+impl Default for ChannelHealth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Channel information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
@@ -410,6 +491,7 @@ pub struct ChannelState {
     inbound_rx: StdMutex<Option<mpsc::Receiver<InboundMessage>>>,
     /// Sender side — channel impl pushes inbound messages here
     inbound_tx: mpsc::Sender<InboundMessage>,
+    health: Arc<tokio::sync::RwLock<ChannelHealth>>,
 }
 
 impl ChannelState {
@@ -420,7 +502,24 @@ impl ChannelState {
             status: Arc::new(tokio::sync::RwLock::new(ChannelStatus::Disconnected)),
             inbound_rx: StdMutex::new(Some(rx)),
             inbound_tx: tx,
+            health: Arc::new(tokio::sync::RwLock::new(ChannelHealth::new())),
         }
+    }
+
+    pub async fn health(&self) -> ChannelHealth {
+        self.health.read().await.clone()
+    }
+
+    pub async fn record_event(&self) {
+        self.health.write().await.record_event();
+    }
+
+    pub async fn record_failure(&self, reason: Option<String>) {
+        self.health.write().await.record_failure(reason);
+    }
+
+    pub fn health_handle(&self) -> Arc<tokio::sync::RwLock<ChannelHealth>> {
+        self.health.clone()
     }
 
     /// Read current status (non-blocking via try_read, fallback Connecting).
@@ -493,6 +592,10 @@ pub trait Channel: Send + Sync {
     /// Get current status
     fn status(&self) -> ChannelStatus {
         self.state().status()
+    }
+
+    async fn health(&self) -> ChannelHealth {
+        self.state().health().await
     }
 
     /// Get capabilities
@@ -766,5 +869,69 @@ mod tests {
         tx.send(msg).await.unwrap();
         let received = rx.recv().await.unwrap();
         assert_eq!(received.text, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_channel_health_initial_state() {
+        let health = ChannelHealth::new();
+        assert_eq!(health.failure_count, 0);
+        assert!(health.status_reason.is_none());
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn test_channel_health_record_event() {
+        let mut health = ChannelHealth::new();
+        health.record_failure(Some("test failure".to_string()));
+        assert!(health.failure_count > 0);
+        assert_eq!(health.status, HealthStatus::Degraded);
+
+        health.record_event();
+        assert_eq!(health.failure_count, 0);
+        assert!(health.status_reason.is_none());
+        assert_eq!(health.status, HealthStatus::Healthy);
+    }
+
+    #[tokio::test]
+    async fn test_channel_health_record_failure() {
+        let mut health = ChannelHealth::new();
+        health.record_failure(Some("connection timeout".to_string()));
+        assert_eq!(health.failure_count, 1);
+        assert_eq!(health.status_reason.as_deref(), Some("connection timeout"));
+        assert_eq!(health.status, HealthStatus::Degraded);
+
+        health.record_failure(Some("retry failed".to_string()));
+        assert_eq!(health.failure_count, 2);
+        assert_eq!(health.status_reason.as_deref(), Some("connection timeout"));
+    }
+
+    #[tokio::test]
+    async fn test_channel_health_is_stale() {
+        let mut health = ChannelHealth::new();
+        let stale_threshold = chrono::Duration::minutes(5);
+
+        assert!(!health.is_stale(stale_threshold));
+
+        health.last_event_at = Utc::now() - chrono::Duration::minutes(10);
+        assert!(health.is_stale(stale_threshold));
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_health_tracking() {
+        let state = ChannelState::new(100);
+
+        let initial_health = state.health().await;
+        assert_eq!(initial_health.failure_count, 0);
+        assert_eq!(initial_health.status, HealthStatus::Healthy);
+
+        state.record_failure(Some("test error".to_string())).await;
+        let after_failure = state.health().await;
+        assert_eq!(after_failure.failure_count, 1);
+        assert_eq!(after_failure.status, HealthStatus::Degraded);
+
+        state.record_event().await;
+        let after_event = state.health().await;
+        assert_eq!(after_event.failure_count, 0);
+        assert_eq!(after_event.status, HealthStatus::Healthy);
     }
 }

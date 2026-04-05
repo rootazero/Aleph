@@ -46,6 +46,7 @@ pub mod activity;
 pub mod agent;
 pub mod agent_config;
 pub mod agents;
+pub mod schema;
 pub mod approval_bridge;
 pub mod arena;
 pub mod auth;
@@ -199,6 +200,11 @@ impl HandlerRegistry {
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);
+
+        // Schema introspection handlers
+        registry.register("schema.list", schema::handle_schema_list);
+        registry.register("schema.get", schema::handle_schema_get);
+        registry.register("schema.protocol", schema::handle_schema_protocol);
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);

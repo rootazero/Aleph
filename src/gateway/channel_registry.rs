@@ -30,9 +30,9 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
 use super::channel::{
-    Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelId,
-    ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage,
-    SendResult,
+    Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelHealth,
+    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus,
+    InboundMessage, OutboundMessage, SendResult,
 };
 use super::voice::VoiceState;
 
@@ -450,6 +450,24 @@ impl ChannelRegistry {
 
         summary
     }
+
+    pub async fn health_summary(&self) -> ChannelHealthSummary {
+        let channels = self.channels.read().await;
+        let mut summary = ChannelHealthSummary::default();
+
+        for channel_arc in channels.values() {
+            let channel = channel_arc.read().await;
+            summary.total += 1;
+            let health = channel.health().await;
+            match health.status {
+                HealthStatus::Healthy => summary.healthy += 1,
+                HealthStatus::Stale => summary.stale += 1,
+                HealthStatus::Degraded => summary.degraded += 1,
+            }
+        }
+
+        summary
+    }
 }
 
 impl Default for ChannelRegistry {
@@ -467,6 +485,14 @@ pub struct ChannelStatusSummary {
     pub disconnected: usize,
     pub error: usize,
     pub disabled: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChannelHealthSummary {
+    pub total: usize,
+    pub healthy: usize,
+    pub stale: usize,
+    pub degraded: usize,
 }
 
 #[cfg(test)]
