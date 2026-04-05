@@ -1,30 +1,45 @@
 //! Health Check Handler
-//!
-//! Returns the health status of the Gateway server.
 
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::future::Future;
+use std::pin::Pin;
+
+use super::schema::{HandlerSchema, NoParams, TypedHandler};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
-use serde_json::json;
 
-/// Handle health check requests
-///
-/// Returns a JSON object with:
-/// - `status`: "healthy" if the server is operating normally
-/// - `timestamp`: ISO 8601 formatted timestamp
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"health","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {"jsonrpc":"2.0","result":{"status":"healthy","timestamp":"2024-01-15T10:30:00Z"},"id":1}
-/// ```
+pub struct HealthHandler;
+
+impl HandlerSchema for HealthHandler {
+    type Params = NoParams;
+    const METHOD: &'static str = "health";
+    const DESCRIPTION: &'static str = "Returns the health status of the Gateway server";
+
+    fn handle_with_params(
+        id: Option<Value>,
+        _params: Self::Params,
+    ) -> impl Future<Output = JsonRpcResponse> + Send + 'static
+    where
+        Self: Sized,
+    {
+        async move {
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "status": "healthy",
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }),
+            )
+        }
+    }
+}
+
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
+    let id = request.id.clone();
     JsonRpcResponse::success(
-        request.id,
+        id,
         json!({
             "status": "healthy",
             "timestamp": chrono::Utc::now().to_rfc3339()
@@ -34,13 +49,15 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::schema::TypedHandler;
+    use super::{JsonRpcRequest, HealthHandler};
     use serde_json::json;
 
     #[tokio::test]
     async fn test_health_response() {
+        let handler = TypedHandler::<HealthHandler>::new();
         let request = JsonRpcRequest::with_id("health", None, json!(1));
-        let response = handle(request).await;
+        let response = handler.handle(&request).await;
 
         assert!(response.is_success());
 

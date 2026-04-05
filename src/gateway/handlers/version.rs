@@ -1,31 +1,46 @@
 //! Version Handler
-//!
-//! Returns version information about the Gateway server.
 
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::future::Future;
+use std::pin::Pin;
+
+use super::schema::{HandlerSchema, NoParams, TypedHandler};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
-use serde_json::json;
 
-/// Handle version requests
-///
-/// Returns a JSON object with:
-/// - `name`: Server name ("aleph-gateway")
-/// - `version`: Crate version from Cargo.toml
-/// - `protocol`: Protocol version ("json-rpc-2.0")
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"version","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {"jsonrpc":"2.0","result":{"name":"aleph-gateway","version":"0.1.0","protocol":"json-rpc-2.0"},"id":1}
-/// ```
+pub struct VersionHandler;
+
+impl HandlerSchema for VersionHandler {
+    type Params = NoParams;
+    const METHOD: &'static str = "version";
+    const DESCRIPTION: &'static str = "Returns version information about the Gateway server";
+
+    fn handle_with_params(
+        id: Option<Value>,
+        _params: Self::Params,
+    ) -> impl Future<Output = JsonRpcResponse> + Send + 'static
+    where
+        Self: Sized,
+    {
+        async move {
+            JsonRpcResponse::success(
+                id,
+                json!({
+                    "name": "aleph-gateway",
+                    "version": env!("ALEPH_VERSION"),
+                    "protocol": "json-rpc-2.0"
+                }),
+            )
+        }
+    }
+}
+
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
+    let id = request.id.clone();
     JsonRpcResponse::success(
-        request.id,
+        id,
         json!({
             "name": "aleph-gateway",
             "version": env!("ALEPH_VERSION"),
@@ -36,13 +51,15 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::schema::TypedHandler;
+    use super::{JsonRpcRequest, VersionHandler};
     use serde_json::json;
 
     #[tokio::test]
     async fn test_version_response() {
+        let handler = TypedHandler::<VersionHandler>::new();
         let request = JsonRpcRequest::with_id("version", None, json!(1));
-        let response = handle(request).await;
+        let response = handler.handle(&request).await;
 
         assert!(response.is_success());
 
