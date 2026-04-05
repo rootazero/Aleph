@@ -30,6 +30,7 @@ pub mod transport;
 pub mod auth_middleware;
 pub mod event_bus;
 pub mod event_emitter;
+pub mod events;
 pub mod formatter;
 pub mod handlers;
 pub mod mdns_broadcaster;
@@ -124,6 +125,7 @@ pub use channel::{
 pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};
 pub use device_store::{ApprovedDevice, DeviceStore};
 pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
+pub use events::GatewayEventFrame;
 pub use execution_adapter::ExecutionAdapter;
 pub use handlers::auth::{
     create_hello_notification, handle_connect, handle_devices_list, handle_devices_revoke,

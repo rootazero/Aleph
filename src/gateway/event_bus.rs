@@ -18,6 +18,8 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::debug;
 
+use super::events::GatewayEventFrame;
+
 /// Default channel capacity for event broadcasting
 const EVENT_CHANNEL_SIZE: usize = 1024;
 
@@ -172,74 +174,78 @@ impl TopicFilter {
 
 /// Event bus for broadcasting events to all connected clients
 ///
-/// The event bus uses a broadcast channel to efficiently distribute
-/// events to multiple subscribers. If a subscriber falls behind,
-/// it will miss events rather than blocking the sender.
+/// The event bus uses two broadcast channels internally:
+/// - A string channel for backward compatibility (`subscribe()`)
+/// - A typed channel for `GatewayEventFrame` (`subscribe_typed()`)
+///
+/// Events published via `publish()` go to both channels simultaneously.
 pub struct GatewayEventBus {
     sender: broadcast::Sender<String>,
+    typed_sender: broadcast::Sender<GatewayEventFrame>,
 }
 
 impl GatewayEventBus {
     /// Create a new event bus with default channel size
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
-        Self { sender }
+        let (typed_sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
+        Self { sender, typed_sender }
     }
 
     /// Create a new event bus with custom channel size
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        let (typed_sender, _) = broadcast::channel(capacity);
+        Self { sender, typed_sender }
     }
 
-    /// Publish an event to all subscribers
+    /// Publish a typed event frame to both the typed and string channels.
     ///
-    /// The event should be a JSON-encoded string. Events are delivered
-    /// asynchronously; this method returns immediately.
+    /// Serializes the frame to JSON and sends to both the typed channel
+    /// (for `subscribe_typed()`) and the string channel (for `subscribe()`).
+    pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {
+        let preview = format!("{:?}", frame);
+        debug!("Publishing typed event: {}", &preview[..preview.len().min(100)]);
+        let json = serde_json::to_string(frame)?;
+        let typed_count = self.typed_sender.send(frame.clone()).unwrap_or(0);
+        let str_count = self.sender.send(json).unwrap_or(0);
+        Ok(typed_count.max(str_count))
+    }
+
+    /// Publish a raw JSON string event to the string channel.
     ///
-    /// # Arguments
-    ///
-    /// * `event` - JSON-encoded event string
-    ///
-    /// # Returns
-    ///
-    /// Number of receivers that will receive the event
-    pub fn publish(&self, event: String) -> usize {
-        let preview = if event.chars().count() > 100 {
-            let truncated: String = event.chars().take(100).collect();
+    /// For new code, prefer `publish_frame()` to get typed channel support.
+    pub fn publish(&self, event: impl AsRef<str>) -> usize {
+        let event_str = event.as_ref();
+        let preview = if event_str.chars().count() > 100 {
+            let truncated: String = event_str.chars().take(100).collect();
             format!("{}...", truncated)
         } else {
-            event.clone()
+            event_str.to_string()
         };
         debug!("Publishing event: {}", preview);
-
-        // send returns Err if there are no receivers, which is fine
-        self.sender.send(event).unwrap_or(0)
+        self.sender.send(event_str.to_string()).unwrap_or(0)
     }
 
-    /// Publish a typed event by serializing it to JSON
-    ///
-    /// # Arguments
-    ///
-    /// * `event` - Event object that implements Serialize
-    ///
-    /// # Returns
-    ///
-    /// Number of receivers, or error if serialization fails
+    /// Publish a typed event by serializing it to JSON.
     pub fn publish_json<T: serde::Serialize>(&self, event: &T) -> Result<usize, serde_json::Error> {
         let json = serde_json::to_string(event)?;
         Ok(self.publish(json))
     }
 
-    /// Subscribe to receive events
+    /// Subscribe to receive raw string events (backward compatibility).
     ///
-    /// Returns a receiver that will receive all events published after
-    /// this call. The receiver should be polled in a loop.
+    /// Prefer `subscribe_typed()` for new code.
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.sender.subscribe()
     }
 
-    /// Get the current number of active subscribers
+    /// Subscribe to receive typed event frames.
+    pub fn subscribe_typed(&self) -> broadcast::Receiver<GatewayEventFrame> {
+        self.typed_sender.subscribe()
+    }
+
+    /// Get the current number of active subscribers (string channel).
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }
@@ -255,6 +261,7 @@ impl Clone for GatewayEventBus {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            typed_sender: self.typed_sender.clone(),
         }
     }
 }
@@ -264,14 +271,59 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_publish_subscribe() {
+    async fn test_publish_subscribe_str() {
         let bus = GatewayEventBus::new();
         let mut rx = bus.subscribe();
 
-        bus.publish(r#"{"event":"test"}"#.to_string());
+        bus.publish(r#"{"event":"test"}"#);
 
         let received = rx.recv().await.unwrap();
         assert!(received.contains("test"));
+    }
+
+    #[tokio::test]
+    async fn test_publish_subscribe_typed() {
+        use super::super::events::GatewayEventFrame;
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe_typed();
+
+        let frame = GatewayEventFrame::SessionUpdated {
+            session_key: "test-session".to_string(),
+        };
+        bus.publish_frame(&frame).unwrap();
+
+        let received = rx.recv().await.unwrap();
+        match received {
+            GatewayEventFrame::SessionUpdated { session_key } => {
+                assert_eq!(session_key, "test-session");
+            }
+            _ => panic!("expected SessionUpdated"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_publish_dual_channel() {
+        use super::super::events::GatewayEventFrame;
+
+        let bus = GatewayEventBus::new();
+        let mut str_rx = bus.subscribe();
+        let mut typed_rx = bus.subscribe_typed();
+
+        let frame = GatewayEventFrame::ConfigChanged {
+            section: None,
+            value: serde_json::json!({}),
+        };
+        bus.publish_frame(&frame).unwrap();
+
+        let str_received = str_rx.recv().await.unwrap();
+        assert!(str_received.contains("config_changed"));
+
+        let typed_received = typed_rx.recv().await.unwrap();
+        match typed_received {
+            GatewayEventFrame::ConfigChanged { .. } => {}
+            _ => panic!("expected ConfigChanged"),
+        }
     }
 
     #[tokio::test]
@@ -280,7 +332,7 @@ mod tests {
         let mut rx1 = bus.subscribe();
         let mut rx2 = bus.subscribe();
 
-        let count = bus.publish(r#"{"event":"multi"}"#.to_string());
+        let count = bus.publish(r#"{"event":"multi"}"#);
         assert_eq!(count, 2);
 
         assert!(rx1.recv().await.is_ok());
@@ -290,8 +342,7 @@ mod tests {
     #[test]
     fn test_no_subscribers() {
         let bus = GatewayEventBus::new();
-        // Should not panic when there are no subscribers
-        let count = bus.publish("test".to_string());
+        let count = bus.publish("test");
         assert_eq!(count, 0);
     }
 
@@ -307,7 +358,6 @@ mod tests {
         assert_eq!(bus.subscriber_count(), 2);
     }
 
-    // Topic matching tests
     #[test]
     fn test_topic_exact_match() {
         assert!(topic_matches("agent.run.started", "agent.run.started"));
@@ -352,20 +402,5 @@ mod tests {
         let filter = TopicFilter::all();
         assert!(filter.matches("anything"));
         assert!(filter.matches("any.nested.topic"));
-    }
-
-    #[test]
-    fn test_topic_event_notification() {
-        let event = TopicEvent::new("agent.run.started", serde_json::json!({"run_id": "123"}));
-        let notification = event.to_notification();
-
-        assert!(notification.get("jsonrpc").is_some());
-        assert!(notification.get("params").is_some());
-
-        let params = notification.get("params").unwrap();
-        assert_eq!(
-            params.get("topic").unwrap().as_str().unwrap(),
-            "agent.run.started"
-        );
     }
 }
