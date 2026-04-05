@@ -379,6 +379,14 @@ impl PromptBuilder {
         self
     }
 
+    pub fn with_exec_approval(
+        mut self,
+        ctx: &super::prompt_sections::exec_approval::ExecApprovalContext,
+    ) -> Self {
+        self.register(super::prompt_sections::exec_approval::render(ctx));
+        self
+    }
+
     pub fn with_model_behavior(mut self, content: &str) -> Self {
         self.register(super::prompt_sections::model_behavior::render(content));
         self

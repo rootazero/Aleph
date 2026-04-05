@@ -8,6 +8,7 @@ pub mod directives;
 pub mod discovered_skills;
 pub mod doing_tasks;
 pub mod environment;
+pub mod exec_approval;
 pub mod identity;
 pub mod memory;
 pub mod memory_protocol;

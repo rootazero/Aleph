@@ -690,6 +690,8 @@ pub struct AgentLoop<P: LoopProvider> {
     skill_prefetcher: Option<super::skill_prefetch::SkillPrefetcher>,
     /// Optional session context for environment info injection.
     session_context: Option<super::sections::SessionContext>,
+    /// Optional approval gate for two-phase exec approval.
+    approval_gate: Option<crate::agent_loop::exec_approval::ApprovalGate>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -749,6 +751,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             chain: super::chain_context::ChainContext::new(),
             skill_prefetcher: None,
             session_context: None,
+            approval_gate: None,
         }
     }
 
@@ -791,6 +794,14 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// to WebSocket clients or other reactive consumers.
     pub fn with_delta_sink(mut self, sink: Box<dyn DeltaSink>) -> Self {
         self.delta_sink = sink;
+        self
+    }
+
+    pub fn with_approval_gate(
+        mut self,
+        gate: crate::agent_loop::exec_approval::ApprovalGate,
+    ) -> Self {
+        self.approval_gate = Some(gate);
         self
     }
 
@@ -1486,6 +1497,20 @@ impl<P: LoopProvider> AgentLoop<P> {
                     vec![]
                 }
             };
+
+            if let Some(ref gate) = self.approval_gate {
+                let tool_names: Vec<&str> = response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| tc.name.as_str())
+                    .collect();
+                let decision = gate.parse_and_decide(&response, &tool_names);
+                tracing::info!(
+                    "Exec approval decision: {:?}, reason: {}",
+                    decision.action,
+                    decision.reason
+                );
+            }
 
             let tool_args_by_id: std::collections::HashMap<&str, &Value> = response
                 .tool_calls

@@ -5,6 +5,7 @@
 
 pub mod adapters;
 pub mod compaction;
+pub mod exec_approval;
 pub mod background_tracker;
 pub mod chain_context;
 pub mod context_budget;
