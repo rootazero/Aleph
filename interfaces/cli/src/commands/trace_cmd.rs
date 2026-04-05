@@ -21,7 +21,7 @@ pub async fn list(server_url: &str, limit: usize, json: bool) -> CliResult<()> {
         output::print_json(&result);
     } else {
         let items: Vec<AgentTraceReplayListItem> =
-            serde_json::from_value(result.clone()).unwrap_or_default();
+            serde_json::from_value(result.clone()).map_err(|e| anyhow::anyhow!("Failed to parse trace list: {e}"))?;
 
         if items.is_empty() {
             println!("No traces found.");

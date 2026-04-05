@@ -42,7 +42,7 @@ pub fn AgentTrace() -> impl IntoView {
         let counter = step_counter.get_value();
 
         state.subscribe_events(move |event: GatewayEvent| {
-            if event.topic != "run.agent_trace" {
+            if event.topic != "run.agent_trace" || mode.get() != TraceMode::Live {
                 return;
             }
             // Try to parse the agent_trace event from data

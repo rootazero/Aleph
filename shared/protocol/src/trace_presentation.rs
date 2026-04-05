@@ -374,7 +374,7 @@ pub fn summarize_tool_input(params: &Value, options: AgentTracePresentationOptio
 
 /// Truncate raw tool output to `limit` characters.
 pub fn summarize_tool_output(output: &str, limit: usize) -> String {
-    truncate(output, limit).to_string()
+    truncate(output, limit)
 }
 
 /// Summarize a `AgentTraceToolResult` into a short string.
@@ -382,7 +382,7 @@ pub fn summarize_tool_result(result: &AgentTraceToolResult, limit: usize) -> Str
     match result {
         AgentTraceToolResult::Success { output } | AgentTraceToolResult::SuccessAndStopLoop { output } => {
             let text = compact_json(output);
-            truncate(&text, limit).to_string()
+            truncate(&text, limit)
         }
         AgentTraceToolResult::Error { error, .. } => {
             format!("ERROR: {}", truncate(error, limit.saturating_sub(7)))
@@ -405,10 +405,10 @@ fn summarize_tool_input_raw(params: &Value, limit: usize) -> String {
                 .map(|(k, v)| format!("{}={}", k, compact_value(v)))
                 .collect();
             let joined = pairs.join(", ");
-            truncate(&joined, limit).to_string()
+            truncate(&joined, limit)
         }
         Value::Null => "null".into(),
-        other => truncate(&compact_json(other), limit).to_string(),
+        other => truncate(&compact_json(other), limit),
     }
 }
 
@@ -416,8 +416,12 @@ fn summarize_tool_input_raw(params: &Value, limit: usize) -> String {
 fn compact_value(v: &Value) -> String {
     match v {
         Value::String(s) => {
-            if s.len() > 60 {
-                format!("\"{}...\"", &s[..s.char_indices().nth(57).map_or(57, |(i, _)| i)])
+            if s.chars().count() > 60 {
+                let boundary = s
+                    .char_indices()
+                    .nth(57)
+                    .map_or(s.len(), |(i, _)| i);
+                format!("\"{}...\"", &s[..boundary])
             } else {
                 format!("\"{}\"", s)
             }
@@ -436,19 +440,19 @@ fn compact_json(v: &Value) -> String {
 }
 
 /// Truncate a string to at most `limit` characters, appending "..." if cut.
-fn truncate(s: &str, limit: usize) -> &str {
-    if s.len() <= limit {
-        return s;
+fn truncate(s: &str, limit: usize) -> String {
+    if limit == 0 {
+        return String::new();
     }
-    // Find a valid char boundary near `limit - 3` to leave room for the ellipsis.
-    // We return a slice without the ellipsis here; callers that need it use
-    // `truncate_owned`.
-    let end = s
+    let char_count = s.chars().count();
+    if char_count <= limit {
+        return s.to_string();
+    }
+    let boundary = s
         .char_indices()
-        .take_while(|(i, _)| *i < limit)
-        .last()
-        .map_or(0, |(i, _)| i);
-    &s[..end]
+        .nth(limit.saturating_sub(3))
+        .map_or(s.len(), |(i, _)| i);
+    format!("{}...", &s[..boundary])
 }
 
 // ---------------------------------------------------------------------------
