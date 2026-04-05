@@ -3,7 +3,7 @@ name = "aleph-tui"
 version = "0.1.0"
 edition = "2021"
 description = "Aleph TUI - Interactive terminal interface for Aleph"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
 # It communicates with Aleph Gateway via WebSocket using aleph-protocol types.
