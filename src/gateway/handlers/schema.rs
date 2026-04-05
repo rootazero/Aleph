@@ -282,6 +282,115 @@ impl TypedHandlerRegistry {
             "methods": methods_schema
         })
     }
+
+    pub fn openapi_schema(&self) -> Value {
+        let mut paths = serde_json::Map::new();
+
+        for handler in &self.handlers {
+            let path_name = handler.method.replace('.', "/");
+            let rpc_path = format!("/rpc/{}", path_name);
+
+            let params_schema = &handler.params_schema;
+            let request_body_schema = params_schema
+                .get("definitions")
+                .and_then(|d| d.get("Root"))
+                .or_else(|| params_schema.get("properties"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({
+                    "type": "object",
+                    "description": handler.description.clone()
+                }));
+
+            let operation = serde_json::json!({
+                "post": {
+                    "operationId": handler.method.clone(),
+                    "summary": handler.description.clone(),
+                    "description": handler.description.clone(),
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": request_body_schema
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Successful JSON-RPC response",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "jsonrpc": {
+                                                "type": "string",
+                                                "enum": ["2.0"]
+                                            },
+                                            "id": {
+                                                "oneOf": [
+                                                    {"type": "string"},
+                                                    {"type": "number"},
+                                                    {"type": "null"}
+                                                ]
+                                            },
+                                            "result": {
+                                                "type": "object"
+                                            },
+                                            "error": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "code": {"type": "integer"},
+                                                    "message": {"type": "string"},
+                                                    "data": {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "security": if handler.requires_auth {
+                        serde_json::json!([{"bearerAuth": []}])
+                    } else {
+                        serde_json::json!([])
+                    },
+                    "tags": handler.method.split('.').next()
+                }
+            });
+
+            paths.insert(rpc_path, serde_json::json!({ "post": operation }));
+        }
+
+        serde_json::json!({
+            "openapi": "3.0.3",
+            "info": {
+                "title": "Aleph Gateway RPC API",
+                "description": "JSON-RPC 2.0 API for Aleph messaging gateway. All methods are exposed as POST /rpc/{method}.",
+                "version": "1.0.0",
+                "contact": {
+                    "name": "Aleph Support"
+                }
+            },
+            "servers": [
+                {
+                    "url": "ws://localhost:8080",
+                    "description": "Local gateway WebSocket server"
+                }
+            ],
+            "paths": paths,
+            "components": {
+                "securitySchemes": {
+                    "bearerAuth": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "JWT",
+                        "description": "JWT token obtained from identity.get"
+                    }
+                }
+            }
+        })
+    }
 }
 
 impl Default for TypedHandlerRegistry {
@@ -439,6 +548,19 @@ pub async fn handle_schema_protocol(
     JsonRpcResponse::success(request.id, schema)
 }
 
+/// Handle schema.openapi RPC request
+///
+/// Returns the full API specification as an OpenAPI 3.0 document.
+/// The spec can be used with Swagger UI, Redoc, or openapi-generator.
+pub async fn handle_schema_openapi(
+    request: JsonRpcRequest,
+) -> JsonRpcResponse {
+    let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);
+    let spec = registry.openapi_schema();
+
+    JsonRpcResponse::success(request.id, spec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,6 +707,31 @@ mod tests {
             assert!(obj.contains_key("$schema"));
             assert!(obj.contains_key("title"));
             assert!(obj.contains_key("methods"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_openapi_schema_generation() {
+        let mut registry = TypedHandlerRegistry::new();
+        registry.register::<TestHandler>();
+
+        let spec = registry.openapi_schema();
+        let obj = spec.as_object().unwrap();
+
+        assert_eq!(obj.get("openapi").unwrap(), "3.0.3");
+        assert!(obj.contains_key("info"));
+        assert!(obj.contains_key("paths"));
+        assert!(obj.contains_key("components"));
+    }
+
+    #[tokio::test]
+    async fn test_openapi_handler() {
+        let request = JsonRpcRequest::with_id("schema.openapi", None, json!(1));
+        let response = handle_schema_openapi(request).await;
+        assert!(response.is_success());
+        if let Some(result) = response.result {
+            let obj = result.as_object().unwrap();
+            assert_eq!(obj.get("openapi").unwrap(), "3.0.3");
         }
     }
 }

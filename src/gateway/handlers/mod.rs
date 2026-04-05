@@ -205,6 +205,7 @@ impl HandlerRegistry {
         registry.register("schema.list", schema::handle_schema_list);
         registry.register("schema.get", schema::handle_schema_get);
         registry.register("schema.protocol", schema::handle_schema_protocol);
+        registry.register("schema.openapi", schema::handle_schema_openapi);
 
         // Logs handlers
         registry.register("logs.getLevel", logs::handle_get_level);
