@@ -88,6 +88,7 @@ pub mod plugins;
 pub mod profiles;
 pub mod providers;
 pub mod rerank_config;
+pub mod request_state;
 pub mod routing_rules;
 pub mod runs;
 pub mod search_config;
@@ -198,6 +199,7 @@ impl HandlerRegistry {
         registry.register("echo", echo::handle);
         registry.register("version", version::handle);
         registry.register("system.info", system_info::handle);
+        registry.register("request.state", request_state::handle);
 
         // Config handlers (schema is stateless)
         registry.register("config.schema", config::handle_schema);

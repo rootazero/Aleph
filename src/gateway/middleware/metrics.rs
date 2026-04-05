@@ -7,13 +7,17 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};
+use uuid::Uuid;
 
+use crate::gateway::middleware::request_state::{RequestState, RequestStateRegistry};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Clone)]
 pub struct MetricsLayer {
     requests_total: Arc<AtomicU64>,
     requests_in_flight: Arc<AtomicU64>,
+    state_registry: Arc<RequestStateRegistry>,
+    processing_threshold: u64,
 }
 
 impl MetricsLayer {
@@ -21,7 +25,23 @@ impl MetricsLayer {
         Self {
             requests_total: Arc::new(AtomicU64::new(0)),
             requests_in_flight: Arc::new(AtomicU64::new(0)),
+            state_registry: Arc::new(RequestStateRegistry::new()),
+            processing_threshold: 100,
         }
+    }
+
+    pub fn new_with_registry(state_registry: Arc<RequestStateRegistry>) -> Self {
+        Self {
+            requests_total: Arc::new(AtomicU64::new(0)),
+            requests_in_flight: Arc::new(AtomicU64::new(0)),
+            state_registry,
+            processing_threshold: 100,
+        }
+    }
+
+    pub fn with_threshold(mut self, threshold: u64) -> Self {
+        self.processing_threshold = threshold;
+        self
     }
 
     pub fn requests_total(&self) -> u64 {
@@ -30,6 +50,26 @@ impl MetricsLayer {
 
     pub fn requests_in_flight(&self) -> u64 {
         self.requests_in_flight.load(Ordering::SeqCst)
+    }
+
+    pub fn state_registry(&self) -> Arc<RequestStateRegistry> {
+        self.state_registry.clone()
+    }
+
+    pub fn processing_count(&self) -> u64 {
+        self.state_registry.count(RequestState::Processing)
+    }
+
+    pub fn pending_count(&self) -> u64 {
+        self.state_registry.count(RequestState::Pending)
+    }
+
+    pub fn validating_count(&self) -> u64 {
+        self.state_registry.count(RequestState::Validating)
+    }
+
+    pub fn awaiting_count(&self) -> u64 {
+        self.state_registry.count(RequestState::AwaitingResponse)
     }
 }
 
@@ -47,6 +87,8 @@ impl<S> Layer<S> for MetricsLayer {
             inner,
             requests_total: self.requests_total.clone(),
             requests_in_flight: self.requests_in_flight.clone(),
+            state_registry: self.state_registry.clone(),
+            processing_threshold: self.processing_threshold,
         }
     }
 }
@@ -56,11 +98,25 @@ pub struct MetricsService<S> {
     inner: S,
     requests_total: Arc<AtomicU64>,
     requests_in_flight: Arc<AtomicU64>,
+    state_registry: Arc<RequestStateRegistry>,
+    processing_threshold: u64,
 }
 
 impl<S> MetricsService<S> {
-    pub fn new(inner: S, requests_total: Arc<AtomicU64>, requests_in_flight: Arc<AtomicU64>) -> Self {
-        Self { inner, requests_total, requests_in_flight }
+    pub fn new(
+        inner: S,
+        requests_total: Arc<AtomicU64>,
+        requests_in_flight: Arc<AtomicU64>,
+        state_registry: Arc<RequestStateRegistry>,
+        processing_threshold: u64,
+    ) -> Self {
+        Self {
+            inner,
+            requests_total,
+            requests_in_flight,
+            state_registry,
+            processing_threshold,
+        }
     }
 }
 
@@ -82,12 +138,39 @@ where
         let mut inner_mut = std::mem::replace(&mut self.inner, inner);
         let requests_total = self.requests_total.clone();
         let requests_in_flight = self.requests_in_flight.clone();
+        let state_registry = self.state_registry.clone();
+        let processing_threshold = self.processing_threshold;
 
-        requests_total.fetch_add(1, Ordering::SeqCst);
-        requests_in_flight.fetch_add(1, Ordering::SeqCst);
-
+        let request_id = Uuid::new_v4();
         let method = req.method.clone();
         let start = std::time::Instant::now();
+
+        // Check backpressure - if processing count exceeds threshold, return 429
+        if state_registry.count(RequestState::Processing) >= processing_threshold {
+            requests_total.fetch_add(1, Ordering::SeqCst);
+            tracing::warn!(
+                method = %method,
+                processing_count = state_registry.count(RequestState::Processing),
+                threshold = processing_threshold,
+                "backpressure triggered"
+            );
+            return Box::pin(async move {
+                Ok(JsonRpcResponse::error(
+                    None,
+                    crate::gateway::protocol::RATE_LIMITED,
+                    "Processing capacity exceeded, try again later",
+                ))
+            });
+        }
+
+        // Register request and transition through states
+        state_registry.insert(request_id);
+        state_registry.transition(request_id, RequestState::Validating);
+
+        // Transition to Processing before calling handler
+        let _ = state_registry.transition(request_id, RequestState::Processing);
+
+        requests_in_flight.fetch_add(1, Ordering::SeqCst);
 
         Box::pin(async move {
             let result = inner_mut.call(req).await;
@@ -97,6 +180,7 @@ where
             match &result {
                 Ok(resp) => {
                     if resp.is_error() {
+                        state_registry.fail(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -104,6 +188,7 @@ where
                             "rpc request"
                         );
                     } else {
+                        state_registry.complete(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -113,6 +198,7 @@ where
                     }
                 }
                 Err(_) => {
+                    state_registry.fail(request_id);
                     tracing::debug!(
                         method = %method,
                         elapsed_ms = %elapsed_ms,
@@ -122,6 +208,7 @@ where
                 }
             }
 
+            requests_total.fetch_add(1, Ordering::SeqCst);
             result
         })
     }
@@ -165,5 +252,21 @@ mod tests {
 
         assert_eq!(layer.requests_total(), 1);
         assert_eq!(layer.requests_in_flight(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_state_registry_tracks_requests() {
+        let layer = MetricsLayer::new();
+        let registry = layer.state_registry();
+
+        let traced = layer.layer(MockService);
+        let mut svc = traced;
+
+        let waker = futures_util::task::noop_waker_ref();
+        let _ = svc.poll_ready(&mut Context::from_waker(waker));
+        let _ = svc.call(JsonRpcRequest::notification("test", None)).await;
+
+        assert_eq!(registry.completed(), 1);
+        assert_eq!(registry.in_flight(), 0);
     }
 }

@@ -6,6 +6,7 @@ use tower::{Layer, Service};
 
 use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::middleware::{
+    request_state::{set_global_registry, RequestStateRegistry},
     AuthLayer, HandlerService, MetricsLayer, RateLimitLayer, TraceLayer, ValidateLayer,
 };
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
@@ -15,11 +16,22 @@ use crate::gateway::rate_limiter::RateLimiter;
 pub struct MiddlewareChain {
     handlers: Arc<HandlerRegistry>,
     rate_limiter: Arc<RateLimiter>,
+    state_registry: Arc<RequestStateRegistry>,
 }
 
 impl MiddlewareChain {
     pub fn new(handlers: Arc<HandlerRegistry>, rate_limiter: Arc<RateLimiter>) -> Self {
-        Self { handlers, rate_limiter }
+        let state_registry = Arc::new(RequestStateRegistry::new());
+        set_global_registry(state_registry.clone());
+        Self {
+            handlers,
+            rate_limiter,
+            state_registry,
+        }
+    }
+
+    pub fn state_registry(&self) -> Arc<RequestStateRegistry> {
+        self.state_registry.clone()
     }
 
     pub async fn serve(&self, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -27,7 +39,7 @@ impl MiddlewareChain {
         let rate_limiter = self.rate_limiter.clone();
 
         let trace = TraceLayer::new();
-        let metrics = MetricsLayer::new();
+        let metrics = MetricsLayer::new_with_registry(self.state_registry.clone());
         let auth = AuthLayer::new();
         let validate = ValidateLayer::new();
         let rate_limit = RateLimitLayer::new(rate_limiter);

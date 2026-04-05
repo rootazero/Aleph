@@ -9,7 +9,7 @@
 //!   → parse JSON
 //!   → MiddlewareChain
 //!       → TraceLayer      (logs request_id, method, duration)
-//!       → MetricsLayer   (increments counters, records latency)
+//!       → MetricsLayer   (increments counters, records latency, tracks state)
 //!       → AuthLayer      (validates token, populates user_id)
 //!       → PluginMiddlewares  (inserted by PluginMiddlewareRegistry)
 //!       → RateLimitLayer (token bucket, returns 429 on exceed)
@@ -19,6 +19,11 @@
 //!
 //! All middleware operates on `JsonRpcRequest → JsonRpcResponse` via Tower's
 //! `Layer<Service>` composable pattern.
+//!
+//! # Request Lifecycle
+//!
+//! Requests are tracked through typestate-inspired stages:
+//! `Pending → Validating → Processing → AwaitingResponse → Completed/Failed/Cancelled`
 
 pub mod auth;
 pub mod chain;
@@ -26,6 +31,7 @@ pub mod context;
 pub mod handler_service;
 pub mod metrics;
 pub mod rate_limit;
+pub mod request_state;
 pub mod traits;
 pub mod trace;
 pub mod validate;
@@ -36,5 +42,6 @@ pub use context::{GatewayRequestContext, TraceFlags};
 pub use handler_service::{HandlerLayer, HandlerService};
 pub use metrics::{MetricsLayer, MetricsService};
 pub use rate_limit::RateLimitLayer;
+pub use request_state::{RequestState, RequestStateData, RequestStateRegistry, StateSnapshot};
 pub use trace::{TraceLayer, TraceService};
 pub use validate::ValidateLayer;
