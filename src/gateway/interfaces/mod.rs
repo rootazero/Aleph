@@ -22,6 +22,7 @@
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 
 pub mod cli;
+pub mod plugin;
 
 #[cfg(target_os = "macos")]
 pub mod imessage;
