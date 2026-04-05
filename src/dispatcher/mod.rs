@@ -1,9 +1,8 @@
 //! Dispatcher Layer - Tool Management
 //!
-//! This module manages tool registration, discovery, and confirmation:
+//! This module manages tool registration, discovery, and risk evaluation:
 //!
 //! - **Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)
-//! - **Confirmation System**: User confirmation for tool execution
 //! - **Risk Evaluation**: Tool risk assessment
 //! - **Tool Index**: Semantic tool retrieval and hydration
 
@@ -12,9 +11,6 @@ mod constants;
 pub use constants::*;
 
 // === Tool Management ===
-mod async_confirmation;
-mod confirmation;
-mod integration;
 mod registry;
 mod types;
 
@@ -25,18 +21,6 @@ pub mod risk;
 pub mod tool_index;
 
 // === Re-exports: Tool Management ===
-pub use async_confirmation::{
-    AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
-    PendingConfirmationInfo, PendingConfirmationStore, UserConfirmationDecision,
-};
-pub use confirmation::{
-    ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation, OPTION_CANCEL,
-    OPTION_EDIT, OPTION_EXECUTE,
-};
-pub use integration::{
-    ConfidenceAction, ConfidenceThresholds, DispatcherAction, DispatcherConfig,
-    DispatcherIntegration, DispatcherResult,
-};
 pub use registry::ResolvedCommand;
 pub use registry::ToolRegistry;
 pub use types::{

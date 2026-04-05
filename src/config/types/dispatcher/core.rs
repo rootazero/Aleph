@@ -151,25 +151,6 @@ impl DispatcherConfigToml {
 
         Ok(())
     }
-
-    /// Convert to internal DispatcherConfig
-    pub fn to_dispatcher_config(&self) -> crate::dispatcher::DispatcherConfig {
-        use crate::dispatcher::{ConfirmationConfig, DispatcherConfig};
-
-        DispatcherConfig {
-            enabled: self.enabled,
-            l3_enabled: self.l3_enabled,
-            l3_timeout_ms: self.l3_timeout_ms,
-            l3_confidence_threshold: self.confirmation_threshold,
-            confirmation: ConfirmationConfig {
-                enabled: self.confirmation_enabled,
-                threshold: self.confirmation_threshold,
-                timeout_ms: self.confirmation_timeout_ms,
-                show_parameters: true,
-                skip_native_tools: false,
-            },
-        }
-    }
 }
 
 // =============================================================================

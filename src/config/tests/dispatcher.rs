@@ -69,29 +69,6 @@ fn test_dispatcher_config_threshold_above_one() {
 }
 
 #[test]
-fn test_dispatcher_config_to_internal() {
-    let toml_config = DispatcherConfigToml {
-        enabled: true,
-        l3_enabled: false,
-        l3_timeout_ms: 3000,
-        confirmation_threshold: 0.8,
-        confirmation_timeout_ms: 20000,
-        confirmation_enabled: true,
-        agent: Default::default(),
-    };
-
-    let internal = toml_config.to_dispatcher_config();
-
-    assert!(internal.enabled);
-    assert!(!internal.l3_enabled);
-    assert_eq!(internal.l3_timeout_ms, 3000);
-    assert!((internal.l3_confidence_threshold - 0.8).abs() < 0.01);
-    assert!(internal.confirmation.enabled);
-    assert!((internal.confirmation.threshold - 0.8).abs() < 0.01);
-    assert_eq!(internal.confirmation.timeout_ms, 20000);
-}
-
-#[test]
 fn test_dispatcher_config_toml_parsing() {
     let toml_str = r#"
 [dispatcher]
