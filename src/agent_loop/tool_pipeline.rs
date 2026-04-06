@@ -20,7 +20,7 @@ use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
 use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
-use crate::extension::hooks::{HookContext, HookExecutor};
+use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::tool_output::compressor::compress_tool_output;
 
@@ -45,6 +45,10 @@ pub struct PipelineOutcome {
     pub prevent_continuation: bool,
     /// Messages from hooks to surface in conversation.
     pub hook_messages: Vec<String>,
+    /// If true, execution was paused pending user confirmation.
+    pub needs_user_confirmation: bool,
+    /// Reason for requiring confirmation (from hook Ask decision).
+    pub confirmation_reason: Option<String>,
 }
 
 // =============================================================================
@@ -122,6 +126,9 @@ impl ToolPipeline {
         let mut additional_contexts: Vec<String> = Vec::new();
         let mut hook_messages: Vec<String> = Vec::new();
         let mut prevent_continuation = false;
+        let mut needs_user_confirmation = false;
+        let mut confirmation_reason: Option<String> = None;
+        let mut skip_safety_patterns = false;
 
         // -----------------------------------------------------------------
         // Stage 1: Build initial HookContext
@@ -149,6 +156,8 @@ impl ToolPipeline {
                         additional_contexts: Vec::new(),
                         prevent_continuation: false,
                         hook_messages: Vec::new(),
+                        needs_user_confirmation: false,
+                        confirmation_reason: None,
                     };
                 }
             }
@@ -179,30 +188,52 @@ impl ToolPipeline {
                 "pre-hooks completed"
             );
 
-            // Deny check first — policy refusal takes precedence over block
-            if interceptor_result.denied {
-                let reason = interceptor_result.deny_reason.unwrap_or_default();
-                return PipelineOutcome {
-                    outcome: ToolOutcome {
-                        tool_id: id.to_string(),
-                        tool_name: name.to_string(),
-                        duration_ms: 0,
-                        output_text: format!("[HOOK_DENIED] {}", reason),
-                        is_error: true,
-                        should_stop: false,
-                        retryable: false,
-                    },
-                    additional_contexts: Vec::new(),
-                    prevent_continuation: false,
-                    hook_messages: Vec::new(),
-                };
-            }
+            // Resolve permission decision (new field takes precedence over legacy)
+            let decision = interceptor_result.permission_decision.clone().or_else(|| {
+                if interceptor_result.denied {
+                    Some(PermissionDecision::Deny {
+                        reason: interceptor_result.deny_reason.clone().unwrap_or_default(),
+                    })
+                } else if interceptor_result.blocked {
+                    Some(PermissionDecision::Block {
+                        reason: interceptor_result.block_reason.clone().unwrap_or_default(),
+                    })
+                } else {
+                    None
+                }
+            });
 
-            // Block check — temporary interception, retryable
-            if interceptor_result.blocked {
-                let reason = interceptor_result.block_reason.unwrap_or_default();
-                let msg = format!("[HOOK_BLOCKED] {}", reason);
-                return self.blocked_outcome(id, name, msg);
+            match decision {
+                Some(PermissionDecision::Deny { reason }) => {
+                    return PipelineOutcome {
+                        outcome: ToolOutcome {
+                            tool_id: id.to_string(),
+                            tool_name: name.to_string(),
+                            duration_ms: 0,
+                            output_text: format!("[HOOK_DENIED] {}", reason),
+                            is_error: true,
+                            should_stop: false,
+                            retryable: false,
+                        },
+                        additional_contexts: Vec::new(),
+                        prevent_continuation: false,
+                        hook_messages: Vec::new(),
+                        needs_user_confirmation: false,
+                        confirmation_reason: None,
+                    };
+                }
+                Some(PermissionDecision::Block { reason }) => {
+                    let msg = format!("[HOOK_BLOCKED] {}", reason);
+                    return self.blocked_outcome(id, name, msg);
+                }
+                Some(PermissionDecision::Ask { reason }) => {
+                    needs_user_confirmation = true;
+                    confirmation_reason = Some(reason);
+                }
+                Some(PermissionDecision::Allow) => {
+                    skip_safety_patterns = true;
+                }
+                None => {}
             }
 
             // Collect interceptor outputs (messages, contexts, prevent_continuation).
@@ -234,7 +265,12 @@ impl ToolPipeline {
                 name: name.to_string(),
                 input: effective_args.clone(),
             };
-            if let Err(e) = self.safety.check(&safety_call) {
+            let safety_result = if skip_safety_patterns {
+                self.safety.check_permissions_only(&safety_call)
+            } else {
+                self.safety.check(&safety_call)
+            };
+            if let Err(e) = safety_result {
                 let msg = map_safety_error(&e);
                 return PipelineOutcome {
                     outcome: ToolOutcome {
@@ -249,6 +285,8 @@ impl ToolPipeline {
                     additional_contexts,
                     prevent_continuation,
                     hook_messages,
+                    needs_user_confirmation: false,
+                    confirmation_reason: None,
                 };
             }
             tracing::debug!("safety check passed");
@@ -275,6 +313,8 @@ impl ToolPipeline {
                     additional_contexts,
                     prevent_continuation,
                     hook_messages,
+                    needs_user_confirmation: false,
+                    confirmation_reason: None,
                 };
             }
         };
@@ -358,6 +398,8 @@ impl ToolPipeline {
             additional_contexts,
             prevent_continuation,
             hook_messages,
+            needs_user_confirmation,
+            confirmation_reason,
         }
     }
 
@@ -457,6 +499,8 @@ impl ToolPipeline {
             additional_contexts: Vec::new(),
             prevent_continuation: false,
             hook_messages: Vec::new(),
+            needs_user_confirmation: false,
+            confirmation_reason: None,
         }
     }
 }

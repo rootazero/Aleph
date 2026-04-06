@@ -213,6 +213,8 @@ impl StreamingToolExecutor {
                             additional_contexts: Vec::new(),
                             prevent_continuation: false,
                             hook_messages: Vec::new(),
+                            needs_user_confirmation: false,
+                            confirmation_reason: None,
                         },
                     ));
                 }
