@@ -199,7 +199,7 @@ impl PromptPipeline {
             .collect()
     }
 
-    /// Create a pipeline pre-loaded with the 29 default layers.
+    /// Create a pipeline pre-loaded with the 30 default layers.
     ///
     /// Layer order (by priority):
     ///
@@ -219,6 +219,7 @@ impl PromptPipeline {
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
     /// 1050  SkillInstructionsLayer
+    /// 1060  McpInstructionsLayer
     /// 1100  SpecialActionsLayer
     /// 1200  ResponseFormatLayer
     /// 1300  GuidelinesLayer
@@ -255,6 +256,7 @@ impl PromptPipeline {
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
+            Box::new(McpInstructionsLayer),
             Box::new(SpecialActionsLayer),
             Box::new(ResponseFormatLayer),
             Box::new(GuidelinesLayer),
@@ -465,7 +467,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 29);
+        assert_eq!(pipeline.layer_count(), 30);
     }
 
     #[test]
@@ -520,6 +522,7 @@ mod mode_tests {
             "citation_standards",
             "generation_models",
             "skill_instructions",
+            "mcp_instructions",
             "special_actions",
             "guidelines",
             "thinking_guidance",
@@ -772,9 +775,14 @@ mod stability_tests {
         let pipeline = PromptPipeline::default_layers();
         let layers = pipeline.layer_info();
 
+        // McpInstructionsLayer is Dynamic at priority 1060 (within the stable zone)
+        // because its content changes per-request based on connected MCP servers.
+        // All other dynamic layers reside in the tail (priority >= 1700).
+        let exceptions = ["mcp_instructions"];
+
         let mut found_dynamic = false;
         for (priority, name, stability) in &layers {
-            if *stability == LayerStability::Dynamic {
+            if *stability == LayerStability::Dynamic && !exceptions.contains(name) {
                 found_dynamic = true;
             }
             if found_dynamic && *stability == LayerStability::Stable {
@@ -813,7 +821,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_augmentation"));
         assert!(dynamic_names.contains(&"session_context_guide"));
-        assert_eq!(dynamic_names.len(), 6, "Exactly 6 dynamic layers expected");
+        assert!(dynamic_names.contains(&"mcp_instructions"));
+        assert_eq!(dynamic_names.len(), 7, "Exactly 7 dynamic layers expected");
     }
 
     #[test]

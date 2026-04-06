@@ -11,6 +11,7 @@ mod custom_instructions;
 mod generation_models;
 mod language;
 mod runtime_capabilities;
+mod mcp_instructions;
 mod skill_instructions;
 
 // --- Behavior layers ---
@@ -63,6 +64,7 @@ pub use custom_instructions::CustomInstructionsLayer;
 pub use generation_models::GenerationModelsLayer;
 pub use language::LanguageLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
+pub use mcp_instructions::McpInstructionsLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
 pub use response_format::ResponseFormatLayer;

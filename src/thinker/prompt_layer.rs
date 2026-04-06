@@ -10,6 +10,13 @@ use crate::agent_loop::ToolInfo;
 use crate::agents::AgentDef;
 use crate::dispatcher::tool_index::HydrationResult;
 
+/// MCP server instruction metadata for prompt injection.
+#[derive(Debug, Clone)]
+pub struct McpServerInstruction {
+    pub server_name: String,
+    pub instructions: String,
+}
+
 /// Whether a layer's content is stable across requests or changes per request.
 ///
 /// Used by the prompt cache optimisation to partition the system prompt
@@ -71,6 +78,11 @@ pub struct LayerInput<'a> {
     /// When set, `AgentRoleLayer` injects the role header and protocol
     /// sections declared in `agent_def.prompt_sections`.
     pub agent_def: Option<&'a AgentDef>,
+    /// MCP server instructions for prompt injection.
+    ///
+    /// When set, `McpInstructionsLayer` injects per-server instruction
+    /// blocks into the system prompt.
+    pub mcp_instructions: Option<&'a [McpServerInstruction]>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -89,6 +101,7 @@ impl<'a> LayerInput<'a> {
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
+            mcp_instructions: None,
         }
     }
 
@@ -107,6 +120,7 @@ impl<'a> LayerInput<'a> {
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
+            mcp_instructions: None,
         }
     }
 
@@ -125,6 +139,7 @@ impl<'a> LayerInput<'a> {
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
+            mcp_instructions: None,
         }
     }
 
@@ -143,6 +158,7 @@ impl<'a> LayerInput<'a> {
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
+            mcp_instructions: None,
         }
     }
 
@@ -206,6 +222,12 @@ impl<'a> LayerInput<'a> {
     /// Attach an agent definition for sub-agent prompt assembly.
     pub fn with_agent_def(mut self, agent_def: &'a AgentDef) -> Self {
         self.agent_def = Some(agent_def);
+        self
+    }
+
+    /// Attach MCP server instructions for prompt injection.
+    pub fn with_mcp_instructions(mut self, instructions: &'a [McpServerInstruction]) -> Self {
+        self.mcp_instructions = Some(instructions);
         self
     }
 
