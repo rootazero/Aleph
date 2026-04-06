@@ -227,6 +227,10 @@ impl ToolPipeline {
                     return self.blocked_outcome(id, name, msg);
                 }
                 Some(PermissionDecision::Ask { reason }) => {
+                    // NOTE: Ask does NOT block execution. The tool runs normally
+                    // and PipelineOutcome carries the confirmation request back to
+                    // the caller (agent loop). The caller decides whether to surface
+                    // the result to the user or request confirmation first.
                     needs_user_confirmation = true;
                     confirmation_reason = Some(reason);
                 }
