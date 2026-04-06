@@ -4,19 +4,8 @@
 //! (varies per request). The builder renders them in priority order, inserting a
 //! cache boundary marker between the two zones.
 
-// =============================================================================
-// ToolInfo
-// =============================================================================
-
-/// Lightweight tool info for prompt building.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ToolInfo {
-    pub name: String,
-    pub description: String,
-    /// Optional JSON Schema for tool parameters
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parameters_schema: Option<serde_json::Value>,
-}
+// Re-export ToolInfo from its new home
+pub use super::tool_info::ToolInfo;
 
 // =============================================================================
 // Stability

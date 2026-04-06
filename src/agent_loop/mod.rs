@@ -26,6 +26,7 @@ pub mod subagent_runner;
 pub mod subagent_teammates;
 pub mod subagent_tool;
 mod tool;
+pub mod tool_info;
 pub mod tool_orchestrator;
 pub mod tool_pipeline;
 pub mod tool_refresh;
