@@ -65,7 +65,7 @@ pub struct AgentRuntimeConfig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Outcome classification for a sub-agent execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptOutcome {
     /// The sub-agent completed successfully.
     Success,
@@ -76,7 +76,7 @@ pub enum TranscriptOutcome {
 }
 
 /// Structured transcript of a sub-agent execution for observability.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubagentTranscript {
     /// Unique identifier for the agent instance.
     pub agent_id: String,
@@ -92,6 +92,8 @@ pub struct SubagentTranscript {
     pub duration_ms: u64,
     /// Total tokens consumed.
     pub tokens_used: usize,
+    /// Key findings extracted from the agent's final response (first 200 chars).
+    pub key_findings: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,6 +157,16 @@ impl AgentRuntime {
 
         // Phase 4: Record transcript
         let duration_ms = start.elapsed().as_millis() as u64;
+        let key_findings = match &result {
+            Ok(run_result) => run_result
+                .final_text
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect::<String>(),
+            Err(_) => String::new(),
+        };
         let transcript = match &result {
             Ok(run_result) => SubagentTranscript {
                 agent_id: agent_id.clone(),
@@ -164,6 +176,7 @@ impl AgentRuntime {
                 iterations: run_result.iterations,
                 duration_ms,
                 tokens_used: run_result.total_tokens,
+                key_findings: key_findings.clone(),
             },
             Err(e) => {
                 let outcome = if e.contains("timed out") {
@@ -179,6 +192,7 @@ impl AgentRuntime {
                     iterations: 0,
                     duration_ms,
                     tokens_used: 0,
+                    key_findings: key_findings.clone(),
                 }
             }
         };
@@ -192,6 +206,10 @@ impl AgentRuntime {
             tokens_used = transcript.tokens_used,
             "SubagentEnd: sub-agent completed"
         );
+
+        // Best-effort persistence
+        let session_id = &self.child_chain.chain_id;
+        persist_transcript(&transcript, session_id);
 
         result
     }
@@ -288,6 +306,34 @@ fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     }
 }
 
+/// Persist a subagent transcript to disk for future retrieval.
+/// Writes to `~/.aleph/data/transcripts/{session_id}/{agent_id}.json`.
+/// Best-effort: errors are logged but not propagated.
+fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
+    let base = match dirs::home_dir() {
+        Some(h) => h.join(".aleph/data/transcripts").join(session_id),
+        None => {
+            tracing::warn!("Cannot resolve home dir for transcript persistence");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(&base) {
+        tracing::warn!(error = %e, "Failed to create transcript directory");
+        return;
+    }
+    let path = base.join(format!("{}.json", transcript.agent_id));
+    match serde_json::to_string_pretty(transcript) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to write transcript");
+            } else {
+                tracing::debug!(path = %path.display(), "Transcript persisted");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "Failed to serialize transcript"),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,6 +386,7 @@ mod tests {
             iterations: 5,
             duration_ms: 1200,
             tokens_used: 500,
+            key_findings: "some findings".to_string(),
         };
 
         assert_eq!(transcript.agent_id, "test-agent-123");
@@ -371,6 +418,47 @@ mod tests {
         let s = "你好世界这是一个很长的字符串用于测试截断功能";
         let result = truncate_for_log(s, 5);
         assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn transcript_serialization_roundtrip() {
+        let transcript = SubagentTranscript {
+            agent_id: "test-123".to_string(),
+            agent_type: "explorer".to_string(),
+            task_summary: "Find all Rust files".to_string(),
+            outcome: TranscriptOutcome::Success,
+            iterations: 5,
+            duration_ms: 1200,
+            tokens_used: 3000,
+            key_findings: "Found 42 Rust files in src/".to_string(),
+        };
+
+        let json = serde_json::to_string(&transcript).unwrap();
+        let deserialized: SubagentTranscript = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.agent_id, "test-123");
+        assert_eq!(deserialized.iterations, 5);
+        assert_eq!(deserialized.key_findings, "Found 42 Rust files in src/");
+        assert!(matches!(deserialized.outcome, TranscriptOutcome::Success));
+    }
+
+    #[test]
+    fn transcript_error_outcome_roundtrip() {
+        let transcript = SubagentTranscript {
+            agent_id: "err-1".to_string(),
+            agent_type: "planner".to_string(),
+            task_summary: "Plan feature".to_string(),
+            outcome: TranscriptOutcome::Error("timeout".to_string()),
+            iterations: 0,
+            duration_ms: 5000,
+            tokens_used: 0,
+            key_findings: String::new(),
+        };
+
+        let json = serde_json::to_string(&transcript).unwrap();
+        assert!(json.contains("\"timeout\""));
+        let deserialized: SubagentTranscript = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized.outcome, TranscriptOutcome::Error(ref e) if e == "timeout"));
     }
 
     #[test]
