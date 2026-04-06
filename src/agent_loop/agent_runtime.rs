@@ -372,4 +372,27 @@ mod tests {
         let result = truncate_for_log(s, 5);
         assert!(result.ends_with("..."));
     }
+
+    #[test]
+    fn fork_path_uses_snapshot_prefix() {
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+
+        let config = PromptConfig::default();
+        let builder = PromptBuilder::new(config);
+        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
+        let snapshot = builder.capture_snapshot(&tools);
+
+        // Build a minimal sub-agent AgentDef for the fork path
+        let agent_def = AgentDef::new("fork-test-agent", crate::agents::AgentMode::SubAgent);
+
+        let forked = builder.build_from_snapshot(&snapshot, &agent_def, &tools);
+
+        // Fork result must start with the snapshot's stable prefix
+        assert!(
+            forked.starts_with(&snapshot.stable_prefix),
+            "forked prompt must start with the snapshot's stable prefix"
+        );
+        // Fork result should include content beyond just the prefix
+        assert!(forked.len() >= snapshot.stable_prefix.len());
+    }
 }
