@@ -82,6 +82,8 @@ struct RawFrontmatter {
     homepage: Option<String>,
     #[serde(default)]
     emoji: Option<String>,
+    #[serde(default)]
+    when_to_use: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -235,6 +237,9 @@ pub fn parse_skill_content(
     }
     if let Some(emoji) = raw.emoji {
         manifest.set_emoji(emoji);
+    }
+    if let Some(when) = raw.when_to_use {
+        manifest.set_when_to_use(when);
     }
 
     Ok(manifest)
@@ -440,5 +445,33 @@ Content."#;
         assert!(manifest.primary_env().is_none());
         assert!(manifest.homepage().is_none());
         assert!(manifest.emoji().is_none());
+    }
+
+    #[test]
+    fn parse_when_to_use_from_frontmatter() {
+        let content = r#"---
+name: Code Review
+description: Reviews code for quality
+when-to-use: When code has been written or modified and needs quality review
+---
+Review instructions."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert_eq!(
+            manifest.when_to_use(),
+            Some("When code has been written or modified and needs quality review")
+        );
+    }
+
+    #[test]
+    fn parse_when_to_use_absent() {
+        let content = r#"---
+name: Simple Skill
+description: No trigger hint
+---
+Content."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert!(manifest.when_to_use().is_none());
     }
 }
