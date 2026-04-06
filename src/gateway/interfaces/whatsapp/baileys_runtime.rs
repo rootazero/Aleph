@@ -23,12 +23,22 @@ pub enum ReceiptType {
 
 #[derive(Debug, Clone)]
 pub enum WaEvent {
-    QrCode { data: String, expires_at: DateTime<Utc> },
+    QrCode {
+        data: String,
+        expires_at: DateTime<Utc>,
+    },
     Connected(ConnectionInfo),
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+    },
     Message(Box<crate::gateway::channel::InboundMessage>),
-    Receipt { message_id: String, kind: ReceiptType },
-    Error { message: String },
+    Receipt {
+        message_id: String,
+        kind: ReceiptType,
+    },
+    Error {
+        message: String,
+    },
 }
 
 pub struct SendResponse {

@@ -125,7 +125,10 @@ pub fn take_screenshot_display(
     display_id: u32,
     region: Option<&ScreenRegion>,
 ) -> Result<Screenshot> {
-    debug!("Taking screenshot for display {}, region: {:?}", display_id, region);
+    debug!(
+        "Taking screenshot for display {}, region: {:?}",
+        display_id, region
+    );
 
     let monitors = xcap::Monitor::all()
         .map_err(|e| DesktopError::ScreenCapture(format!("Failed to enumerate monitors: {e}")))?;
@@ -152,7 +155,10 @@ pub fn take_screenshot_display(
 
     let image_base64 = general_purpose::STANDARD.encode(buf.into_inner());
 
-    debug!("Screenshot captured for display {}: {}x{}", display_id, width, height);
+    debug!(
+        "Screenshot captured for display {}: {}x{}",
+        display_id, width, height
+    );
 
     Ok(Screenshot {
         image_base64,
@@ -214,8 +220,7 @@ pub fn process_screenshot(
     let mut buf = Cursor::new(Vec::new());
 
     let out_format = if format == "jpeg" || format == "jpg" {
-        let mut encoder =
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
         encoder
             .encode_image(&img)
             .map_err(|e| DesktopError::ScreenCapture(format!("JPEG encoding failed: {e}")))?;
@@ -228,7 +233,10 @@ pub fn process_screenshot(
 
     let image_base64 = general_purpose::STANDARD.encode(buf.into_inner());
 
-    debug!("Processed screenshot: {}x{} as {}", width, height, out_format);
+    debug!(
+        "Processed screenshot: {}x{} as {}",
+        width, height, out_format
+    );
 
     Ok(Screenshot {
         image_base64,

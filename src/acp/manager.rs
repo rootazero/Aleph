@@ -441,10 +441,7 @@ impl AcpHarnessManager {
     }
 
     /// Set the persistence hook for session state changes.
-    pub async fn set_persistence_hook(
-        &self,
-        hook: super::PersistenceHook,
-    ) {
+    pub async fn set_persistence_hook(&self, hook: super::PersistenceHook) {
         let mut h = self.persistence_hook.write().await;
         *h = Some(hook);
     }

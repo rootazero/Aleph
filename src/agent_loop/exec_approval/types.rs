@@ -71,8 +71,7 @@ impl Default for ApprovalDecision {
     }
 }
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ApprovalConfig {
     pub always_confirm: HashSet<String>,
 }
@@ -82,7 +81,6 @@ impl ApprovalConfig {
         self.always_confirm.contains(tool_name)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

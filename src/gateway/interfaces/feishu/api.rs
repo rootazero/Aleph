@@ -564,10 +564,7 @@ impl FeishuApi {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!(
-                "Download resource HTTP {}: {}",
-                status, body
-            ));
+            return Err(format!("Download resource HTTP {}: {}", status, body));
         }
 
         let content_type = resp
@@ -658,10 +655,7 @@ impl FeishuApi {
     #[allow(dead_code)]
     pub async fn get_message(&self, message_id: &str) -> Result<FeishuMessage, String> {
         let token = self.auth.get_token().await?;
-        let url = format!(
-            "{}/open-apis/im/v1/messages/{}",
-            self.base_url, message_id
-        );
+        let url = format!("{}/open-apis/im/v1/messages/{}", self.base_url, message_id);
 
         let resp = self
             .http
@@ -735,10 +729,7 @@ impl FeishuApi {
     /// Fetch user info by open_id. Returns name if available.
     pub async fn get_user_info(&self, open_id: &str) -> Result<Option<String>, String> {
         let token = self.auth.get_token().await?;
-        let url = format!(
-            "{}/open-apis/contact/v3/users/{}",
-            self.base_url, open_id
-        );
+        let url = format!("{}/open-apis/contact/v3/users/{}", self.base_url, open_id);
 
         let resp = self
             .http
@@ -764,7 +755,8 @@ impl FeishuApi {
             return Ok(None);
         }
 
-        let user = user_resp.data
+        let user = user_resp
+            .data
             .and_then(|d| d.user)
             .ok_or_else(|| "No user data".to_string())?;
         Ok(user.name.or(user.english_name))

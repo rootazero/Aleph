@@ -14,7 +14,6 @@ mod tests {
 
     use crate::agent_loop::loop_core::{AgentLoop, LoopConfig, NoopCallback};
     use crate::agent_loop::provider_bridge::AiProviderBridge;
-    use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
     use crate::agent_loop::safety::SafetyGuard;
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::providers::adapter::{
@@ -23,6 +22,7 @@ mod tests {
     use crate::providers::message::{ContentBlock, UnifiedMessage};
     use crate::providers::AiProvider;
     use crate::sync_primitives::{Arc, Mutex};
+    use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
     // =========================================================================
     // Test infrastructure

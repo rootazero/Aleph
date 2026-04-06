@@ -158,4 +158,3 @@ pub struct WindowInfo {
     /// Process ID of the owning application.
     pub pid: u64,
 }
-

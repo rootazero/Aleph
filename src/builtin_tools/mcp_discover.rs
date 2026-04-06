@@ -67,8 +67,7 @@ impl McpToolSchemaTool {
 #[async_trait]
 impl AlephTool for McpToolSchemaTool {
     const NAME: &'static str = "mcp_tool_schema";
-    const DESCRIPTION: &'static str =
-        "Get the full parameter schema for an MCP server tool. \
+    const DESCRIPTION: &'static str = "Get the full parameter schema for an MCP server tool. \
          Returns the tool's JSON Schema input definition so you can call it correctly.";
 
     type Args = McpToolSchemaArgs;

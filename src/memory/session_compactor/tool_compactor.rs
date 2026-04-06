@@ -482,8 +482,14 @@ mod tests {
         let result = compress_subagent(&content);
         assert!(result.starts_with("[Subagent:"), "got: {result}");
         // The brief should be truncated to at most 80 bytes
-        let inner = result.trim_start_matches("[Subagent: ").trim_end_matches(']');
-        assert!(inner.len() <= 80, "inner too long ({}): {inner}", inner.len());
+        let inner = result
+            .trim_start_matches("[Subagent: ")
+            .trim_end_matches(']');
+        assert!(
+            inner.len() <= 80,
+            "inner too long ({}): {inner}",
+            inner.len()
+        );
     }
 
     // --- safe_truncate ---

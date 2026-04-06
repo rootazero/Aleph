@@ -1,8 +1,10 @@
 //! AgentCatalogLayer — sub-agent catalog index for primary agent awareness (priority 1704)
 
-use crate::thinker::prompt_layer::{AgentCatalogEntry, AssemblyPath, LayerInput, LayerStability, PromptLayer};
-use crate::thinker::xml_util::escape_xml;
+use crate::thinker::prompt_layer::{
+    AgentCatalogEntry, AssemblyPath, LayerInput, LayerStability, PromptLayer,
+};
 use crate::thinker::prompt_mode::PromptMode;
+use crate::thinker::xml_util::escape_xml;
 
 pub struct AgentCatalogLayer;
 
@@ -33,8 +35,10 @@ impl PromptLayer for AgentCatalogLayer {
             _ => return,
         };
 
-        let visible: Vec<&AgentCatalogEntry> =
-            agents.iter().filter(|a| !a.description.is_empty()).collect();
+        let visible: Vec<&AgentCatalogEntry> = agents
+            .iter()
+            .filter(|a| !a.description.is_empty())
+            .collect();
 
         if visible.is_empty() {
             return;

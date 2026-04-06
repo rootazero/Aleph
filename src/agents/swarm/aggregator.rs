@@ -270,7 +270,10 @@ impl IntelligenceLayer {
             match self.llm_summarize(provider, events).await {
                 Ok(summary) => return Some(summary),
                 Err(e) => {
-                    warn!("LLM summarization failed, falling back to statistics: {}", e);
+                    warn!(
+                        "LLM summarization failed, falling back to statistics: {}",
+                        e
+                    );
                 }
             }
         }
@@ -293,7 +296,10 @@ impl IntelligenceLayer {
             .iter()
             .map(|e| match e {
                 InfoEvent::ToolExecuted {
-                    agent_id, tool, path, ..
+                    agent_id,
+                    tool,
+                    path,
+                    ..
                 } => format!(
                     "- Agent {} executed tool '{}'{}",
                     agent_id,
@@ -361,11 +367,9 @@ impl IntelligenceLayer {
                 Ok(text)
             }
             Ok(Err(e)) => Err(e),
-            Err(_elapsed) => {
-                Err(crate::error::AlephError::provider(
-                    "LLM summarization timed out after 30s",
-                ))
-            }
+            Err(_elapsed) => Err(crate::error::AlephError::provider(
+                "LLM summarization timed out after 30s",
+            )),
         }
     }
 
@@ -475,7 +479,8 @@ mod tests {
     async fn test_intelligence_layer_with_provider() {
         use crate::providers::MockProvider;
 
-        let mock = MockProvider::new("The swarm agents are collaborating on auth module refactoring.");
+        let mock =
+            MockProvider::new("The swarm agents are collaborating on auth module refactoring.");
         let provider: Arc<dyn crate::providers::AiProvider> = Arc::new(mock);
 
         let layer = IntelligenceLayer::new(Duration::from_secs(5), 1)

@@ -194,12 +194,14 @@ impl CompactionStage for ResultClearing {
             let compressed = if idx < half_life {
                 // Beyond half-life (oldest) → ultra-compact one-liner
                 crate::memory::session_compactor::tool_compactor::compress_to_oneliner(
-                    &tool_name, &old_content,
+                    &tool_name,
+                    &old_content,
                 )
             } else {
                 // Within half-life → semantic per-tool compression
                 crate::memory::session_compactor::tool_compactor::compress_tool_result(
-                    &tool_name, &old_content,
+                    &tool_name,
+                    &old_content,
                 )
             };
 
@@ -527,7 +529,12 @@ mod tests {
             UnifiedMessage::assistant("read it"),
             // Middle round
             UnifiedMessage::user("second request"),
-            UnifiedMessage::tool_result("c2", "Grep", &"match1\nmatch2\nmatch3\n".repeat(50), false),
+            UnifiedMessage::tool_result(
+                "c2",
+                "Grep",
+                &"match1\nmatch2\nmatch3\n".repeat(50),
+                false,
+            ),
             UnifiedMessage::assistant("searched it"),
             // Fresh tail
             UnifiedMessage::user("latest"),

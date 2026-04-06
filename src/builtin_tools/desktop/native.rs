@@ -75,8 +75,7 @@ impl super::DesktopTool {
                 let max_w = args.max_width;
                 let max_h = args.max_height;
                 let display_id = args.display_id;
-                let needs_processing =
-                    fmt.is_some() || max_w.is_some() || max_h.is_some();
+                let needs_processing = fmt.is_some() || max_w.is_some() || max_h.is_some();
 
                 // Capture: specific display or primary
                 let screenshot_result = if let Some(did) = display_id {
@@ -127,9 +126,7 @@ impl super::DesktopTool {
                                 Err(e) => Ok(Some(DesktopOutput {
                                     success: false,
                                     data: None,
-                                    message: Some(format!(
-                                        "Screenshot processing error: {e}"
-                                    )),
+                                    message: Some(format!("Screenshot processing error: {e}")),
                                 })),
                             }
                         } else {
@@ -403,7 +400,8 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
@@ -420,7 +418,8 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
@@ -435,24 +434,24 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
             }
-            "cursor_position" => {
-                match screen.cursor_position().await {
-                    Ok((x, y)) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({"x": x, "y": y})),
-                        message: None,
-                    })),
-                    Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
-                        message: Some(format!("Screen capability error: {e}")),
-                    })),
-                }
-            }
+            "cursor_position" => match screen.cursor_position().await {
+                Ok((x, y)) => Ok(Some(DesktopOutput {
+                    success: true,
+                    data: Some(serde_json::json!({"x": x, "y": y})),
+                    message: None,
+                })),
+                Err(e) => Ok(Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Screen capability error: {e}")),
+                })),
+            },
             "mouse_button" => {
                 let x = args.x.unwrap_or(0.0);
                 let y = args.y.unwrap_or(0.0);
@@ -461,12 +460,15 @@ impl super::DesktopTool {
                     Some("press") => aleph_desktop::PressAction::Press,
                     Some("release") => aleph_desktop::PressAction::Release,
                     Some("click") | None => aleph_desktop::PressAction::Click,
-                    Some(other) => return Ok(Some(DesktopOutput {
-                        success: false, data: None,
-                        message: Some(format!(
+                    Some(other) => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!(
                             "Invalid press_action '{other}'. Use 'press', 'release', or 'click'."
                         )),
-                    })),
+                        }))
+                    }
                 };
                 match screen.mouse_button(x, y, button, press_action).await {
                     Ok(()) => Ok(Some(DesktopOutput {
@@ -475,7 +477,8 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
@@ -483,10 +486,13 @@ impl super::DesktopTool {
             "quit_app" => {
                 let bundle_id = match args.bundle_id.as_deref() {
                     Some(id) if !id.is_empty() => id,
-                    _ => return Ok(Some(DesktopOutput {
-                        success: false, data: None,
-                        message: Some("quit_app requires 'bundle_id'".to_string()),
-                    })),
+                    _ => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some("quit_app requires 'bundle_id'".to_string()),
+                        }))
+                    }
                 };
                 match screen.quit_app(bundle_id).await {
                     Ok(()) => Ok(Some(DesktopOutput {
@@ -495,24 +501,24 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
             }
-            "clipboard_read" => {
-                match screen.clipboard_read().await {
-                    Ok(text) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(serde_json::json!({"text": text})),
-                        message: None,
-                    })),
-                    Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
-                        message: Some(format!("Screen capability error: {e}")),
-                    })),
-                }
-            }
+            "clipboard_read" => match screen.clipboard_read().await {
+                Ok(text) => Ok(Some(DesktopOutput {
+                    success: true,
+                    data: Some(serde_json::json!({"text": text})),
+                    message: None,
+                })),
+                Err(e) => Ok(Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Screen capability error: {e}")),
+                })),
+            },
             "clipboard_write" => {
                 let text = args.text.as_deref().unwrap_or("");
                 match screen.clipboard_write(text).await {
@@ -522,7 +528,8 @@ impl super::DesktopTool {
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
-                        success: false, data: None,
+                        success: false,
+                        data: None,
                         message: Some(format!("Screen capability error: {e}")),
                     })),
                 }
@@ -593,9 +600,7 @@ impl super::DesktopTool {
 
                 Ok(Some(DesktopOutput {
                     success: true,
-                    data: Some(
-                        serde_json::json!({"pasted": true, "chars": text.chars().count()}),
-                    ),
+                    data: Some(serde_json::json!({"pasted": true, "chars": text.chars().count()})),
                     message: None,
                 }))
             }

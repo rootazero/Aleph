@@ -35,41 +35,38 @@ impl MediaProcessor {
     pub fn new(config: MediaConfig) -> Self {
         Self { config }
     }
-    
+
     pub async fn prepare_outbound(&self, attachment: &Attachment) -> Result<OutboundMedia> {
         let max_bytes = self.config.max_outbound_mb * 1024 * 1024;
-        
+
         if let Some(size) = attachment.size {
             if size > max_bytes {
-                return Err(anyhow::anyhow!("Media file too large: {} bytes (max: {})", size, max_bytes));
+                return Err(anyhow::anyhow!(
+                    "Media file too large: {} bytes (max: {})",
+                    size,
+                    max_bytes
+                ));
             }
         }
-        
+
         match attachment.mime_type.as_str() {
-            "image/jpeg" | "image/png" | "image/gif" => {
-                self.process_image(attachment).await
-            }
-            "video/mp4" | "video/quicktime" => {
-                self.process_video(attachment).await
-            }
-            "audio/ogg" => {
-                self.process_audio_ogg(attachment).await
-            }
-            _ => {
-                self.process_document(attachment).await
-            }
+            "image/jpeg" | "image/png" | "image/gif" => self.process_image(attachment).await,
+            "video/mp4" | "video/quicktime" => self.process_video(attachment).await,
+            "audio/ogg" => self.process_audio_ogg(attachment).await,
+            _ => self.process_document(attachment).await,
         }
     }
-    
+
     async fn process_image(&self, attachment: &Attachment) -> Result<OutboundMedia> {
         let Some(path) = &attachment.path else {
             return Err(anyhow::anyhow!("No path for image attachment"));
         };
-        
+
         let img = image::open(path)?;
-        
-        let img = if img.width() > self.config.max_dimension 
-                || img.height() > self.config.max_dimension {
+
+        let img = if img.width() > self.config.max_dimension
+            || img.height() > self.config.max_dimension
+        {
             img.resize(
                 self.config.max_dimension,
                 self.config.max_dimension,
@@ -78,18 +75,18 @@ impl MediaProcessor {
         } else {
             img
         };
-        
+
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         img.write_to(&mut cursor, image::ImageFormat::Jpeg)?;
-        
+
         Ok(OutboundMedia {
             data: buf,
             mime_type: "image/jpeg".to_string(),
             is_voice_note: false,
         })
     }
-    
+
     async fn process_audio_ogg(&self, attachment: &Attachment) -> Result<OutboundMedia> {
         let data = self.read_file(attachment).await?;
         Ok(OutboundMedia {

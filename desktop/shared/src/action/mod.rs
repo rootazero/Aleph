@@ -14,8 +14,8 @@ pub mod window;
 
 pub use app_launch::{launch_app, quit_app};
 pub use input::{
-    click, clipboard_read, clipboard_write, cursor_position, double_click, drag, hover,
-    key_combo, mouse_button, scroll, type_text,
+    click, clipboard_read, clipboard_write, cursor_position, double_click, drag, hover, key_combo,
+    mouse_button, scroll, type_text,
 };
 pub use window::{focus_window, window_list};
 

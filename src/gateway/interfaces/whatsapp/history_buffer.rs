@@ -3,10 +3,10 @@
 //! Buffers recent group messages for context injection before agent responses.
 
 use crate::gateway::channel::{ConversationId, InboundMessage};
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferedMessage {
@@ -21,7 +21,7 @@ impl BufferedMessage {
             buffered_at: Utc::now(),
         }
     }
-    
+
     pub fn format_for_context(&self) -> String {
         let sender = self.message.sender_name.as_deref().unwrap_or("Unknown");
         format!(
@@ -52,7 +52,8 @@ impl Default for HistoryBufferConfig {
 
 pub struct GroupHistoryBuffer {
     config: HistoryBufferConfig,
-    buffers: std::sync::Arc<tokio::sync::RwLock<HashMap<ConversationId, VecDeque<BufferedMessage>>>>,
+    buffers:
+        std::sync::Arc<tokio::sync::RwLock<HashMap<ConversationId, VecDeque<BufferedMessage>>>>,
 }
 
 impl GroupHistoryBuffer {
@@ -62,41 +63,38 @@ impl GroupHistoryBuffer {
             buffers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
-    
+
     pub async fn add(&self, message: &InboundMessage) {
         if !message.is_group {
             return;
         }
-        
+
         let mut buffers = self.buffers.write().await;
         let queue = buffers
             .entry(message.conversation_id.clone())
             .or_insert_with(VecDeque::new);
-        
+
         queue.push_back(BufferedMessage::new(message.clone()));
-        
+
         while queue.len() > self.config.limit {
             queue.pop_front();
         }
     }
-    
+
     pub async fn get_context(&self, conv_id: &ConversationId) -> Option<String> {
         if !self.config.inject_context {
             return None;
         }
-        
+
         let buffers = self.buffers.read().await;
         let queue = buffers.get(conv_id)?;
-        
+
         if queue.is_empty() {
             return None;
         }
-        
-        let messages: Vec<String> = queue
-            .iter()
-            .map(|b| b.format_for_context())
-            .collect();
-        
+
+        let messages: Vec<String> = queue.iter().map(|b| b.format_for_context()).collect();
+
         let delimiter = &self.config.inject_delimiter;
         Some(format!(
             "{}{}[Chat messages since your last reply - for context]\n{}{}[Current message - respond to this]",
@@ -106,7 +104,7 @@ impl GroupHistoryBuffer {
             delimiter
         ))
     }
-    
+
     pub async fn clear(&self, conv_id: &ConversationId) {
         let mut buffers = self.buffers.write().await;
         buffers.remove(conv_id);

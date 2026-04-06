@@ -10,8 +10,8 @@ pub mod synthesis;
 
 use async_trait::async_trait;
 
-use crate::error::AlephError;
 use super::DreamContext;
+use crate::error::AlephError;
 
 /// A single stage in the dream pipeline.
 ///

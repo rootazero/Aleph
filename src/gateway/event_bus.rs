@@ -189,14 +189,20 @@ impl GatewayEventBus {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
         let (typed_sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
-        Self { sender, typed_sender }
+        Self {
+            sender,
+            typed_sender,
+        }
     }
 
     /// Create a new event bus with custom channel size
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let (typed_sender, _) = broadcast::channel(capacity);
-        Self { sender, typed_sender }
+        Self {
+            sender,
+            typed_sender,
+        }
     }
 
     /// Publish a typed event frame to both the typed and string channels.
@@ -205,7 +211,10 @@ impl GatewayEventBus {
     /// (for `subscribe_typed()`) and the string channel (for `subscribe()`).
     pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {
         let preview = format!("{:?}", frame);
-        debug!("Publishing typed event: {}", &preview[..preview.len().min(100)]);
+        debug!(
+            "Publishing typed event: {}",
+            &preview[..preview.len().min(100)]
+        );
         let json = serde_json::to_string(frame)?;
         let typed_count = self.typed_sender.send(frame.clone()).unwrap_or(0);
         let str_count = self.sender.send(json).unwrap_or(0);

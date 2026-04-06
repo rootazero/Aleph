@@ -21,8 +21,7 @@ impl std::fmt::Display for AgentMode {
 }
 
 /// Context mode for sub-agents
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ContextMode {
     /// Start with a fresh context (no parent history)
     #[default]
@@ -30,7 +29,6 @@ pub enum ContextMode {
     /// Receive a summary of parent context
     Summary,
 }
-
 
 impl std::fmt::Display for ContextMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -270,15 +268,14 @@ mod tests {
 
     #[test]
     fn test_with_description() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_description("A test agent");
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_description("A test agent");
         assert_eq!(agent.description, "A test agent");
     }
 
     #[test]
     fn test_with_when_to_use() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent)
-            .with_when_to_use("When you need testing");
+        let agent =
+            AgentDef::new("test", AgentMode::SubAgent).with_when_to_use("When you need testing");
         assert_eq!(agent.when_to_use.as_deref(), Some("When you need testing"));
     }
 }

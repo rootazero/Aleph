@@ -6,7 +6,9 @@ use leptos::task::spawn_local;
 use crate::api::trace::TraceApi;
 use crate::context::{DashboardState, GatewayEvent};
 use crate::models::{TraceNode, TraceStatus};
-use crate::views::agent_trace_model::{trace_node_from_event, trace_nodes_from_replay, TraceLabels};
+use crate::views::agent_trace_model::{
+    trace_node_from_event, trace_nodes_from_replay, TraceLabels,
+};
 
 use aleph_protocol::AgentTraceEvent;
 

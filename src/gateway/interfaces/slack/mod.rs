@@ -178,19 +178,30 @@ impl Channel for SlackChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        // Extract thread_ts from reply_to for threading
+        let conversation_id = message.conversation_id.as_str();
         let thread_ts = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
-        // Send typing indicator if enabled
+        // Send typing indicator if enabled (non-blocking, best-effort)
         if self.config.send_typing {
-            // Slack doesn't have a dedicated typing API for bots in channels,
-            // but we respect the config flag for potential future use.
+            let client = self.client.clone();
+            let token = self.config.bot_token.clone();
+            let channel = conversation_id.to_string();
+            tokio::spawn(async move {
+                let _ = SlackMessageOps::post_typing(&client, &token, &channel).await;
+            });
+        }
+
+        // Handle file attachments
+        if !message.attachments.is_empty() {
+            return self
+                .send_with_attachments(message, thread_ts.as_deref())
+                .await;
         }
 
         SlackMessageOps::send_message(
             &self.client,
             &self.config.bot_token,
-            message.conversation_id.as_str(),
+            conversation_id,
             &message.text,
             thread_ts.as_deref(),
         )
@@ -198,11 +209,28 @@ impl Channel for SlackChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        // Slack Bot API does not support typing indicators in channels.
-        // The typing_indicator capability is declared true for UI parity,
-        // but actual implementation is a no-op.
-        let _ = conversation_id;
-        Ok(())
+        SlackMessageOps::post_typing(
+            &self.client,
+            &self.config.bot_token,
+            conversation_id.as_str(),
+        )
+        .await
+    }
+
+    async fn react(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        SlackMessageOps::add_reaction(
+            &self.client,
+            &self.config.bot_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+            reaction,
+        )
+        .await
     }
 
     async fn edit(
@@ -211,36 +239,28 @@ impl Channel for SlackChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        // Slack chat.update requires channel + ts + text
-        let _ = (conversation_id, message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "Slack message editing not yet implemented".to_string(),
-        ))
+        SlackMessageOps::update_message(
+            &self.client,
+            &self.config.bot_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+            new_text,
+        )
+        .await
     }
 
     async fn delete(
         &self,
-        _conversation_id: &ConversationId,
+        conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        // Note: Deleting requires both message ts and channel ID
-        let _ = message_id;
-        Err(ChannelError::UnsupportedFeature(
-            "Message deletion requires channel context (conversation_id + ts)".to_string(),
-        ))
-    }
-
-    async fn react(
-        &self,
-        _conversation_id: &ConversationId,
-        message_id: &MessageId,
-        reaction: &str,
-    ) -> ChannelResult<()> {
-        // Note: Reacting requires channel ID + timestamp
-        let _ = (message_id, reaction);
-        Err(ChannelError::UnsupportedFeature(
-            "Reactions require channel context (conversation_id + ts)".to_string(),
-        ))
+        SlackMessageOps::delete_message(
+            &self.client,
+            &self.config.bot_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+        )
+        .await
     }
 }
 
@@ -260,6 +280,136 @@ impl ChannelFactory for SlackChannelFactory {
         config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(SlackChannel::new("slack", config)))
+    }
+}
+
+// SlackChannel helper methods for file uploads
+impl SlackChannel {
+    /// Send a message with file attachments.
+    async fn send_with_attachments(
+        &self,
+        message: OutboundMessage,
+        thread_ts: Option<&str>,
+    ) -> ChannelResult<SendResult> {
+        let conversation_id = message.conversation_id.as_str();
+
+        let mut last_result = None;
+
+        for (i, attachment) in message.attachments.iter().enumerate() {
+            let caption = if i == 0 && !message.text.trim().is_empty() {
+                Some(message.text.as_str())
+            } else {
+                None
+            };
+
+            // Get file data based on attachment source
+            let upload_result = if let Some(data) = &attachment.data {
+                let filename = attachment.filename.as_deref().unwrap_or("file");
+                SlackMessageOps::upload_file(
+                    &self.client,
+                    &self.config.bot_token,
+                    conversation_id,
+                    data.as_slice(),
+                    filename,
+                    None,
+                    Some(attachment.mime_type.as_str()),
+                    caption,
+                    thread_ts,
+                )
+                .await
+            } else if let Some(path) = &attachment.path {
+                let file_data = tokio::fs::read(path).await.map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to read file {}: {}", path, e))
+                })?;
+                let filename = attachment.filename.as_deref().unwrap_or(path);
+                SlackMessageOps::upload_file(
+                    &self.client,
+                    &self.config.bot_token,
+                    conversation_id,
+                    file_data.as_slice(),
+                    filename,
+                    None,
+                    Some(attachment.mime_type.as_str()),
+                    caption,
+                    thread_ts,
+                )
+                .await
+            } else if let Some(url) = &attachment.url {
+                let file_data = self.download_url(url).await?;
+                let filename = attachment.filename.as_deref().unwrap_or("file");
+                SlackMessageOps::upload_file(
+                    &self.client,
+                    &self.config.bot_token,
+                    conversation_id,
+                    file_data.as_slice(),
+                    filename,
+                    None,
+                    Some(attachment.mime_type.as_str()),
+                    caption,
+                    thread_ts,
+                )
+                .await
+            } else {
+                tracing::warn!("Attachment {} has no data, path, or URL - skipping", attachment.id);
+                continue;
+            };
+
+            match upload_result {
+                Ok(file_id) => {
+                    last_result = Some(SendResult {
+                        message_id: MessageId::new(file_id),
+                        timestamp: chrono::Utc::now(),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to upload attachment {}: {}", attachment.id, e);
+                    return Err(e);
+                }
+            }
+        }
+
+        if !message.text.trim().is_empty() && message.attachments.len() > 1 {
+            let formatted = crate::gateway::formatter::MessageFormatter::format(
+                &message.text,
+                crate::gateway::formatter::MarkupFormat::SlackMrkdwn,
+            );
+            let result = SlackMessageOps::send_message(
+                &self.client,
+                &self.config.bot_token,
+                conversation_id,
+                &formatted,
+                thread_ts,
+            )
+            .await?;
+            last_result = Some(result);
+        }
+
+        last_result.ok_or_else(|| {
+            ChannelError::SendFailed("No attachments to send".to_string())
+        })
+    }
+
+    async fn download_url(&self, url: &str) -> ChannelResult<Vec<u8>> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to download {}: {}", url, e)))?;
+
+        if !response.status().is_success() {
+            return Err(ChannelError::SendFailed(format!(
+                "Download failed with status: {}",
+                response.status()
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to read download body: {}", e)))?;
+
+        Ok(bytes.to_vec())
     }
 }
 

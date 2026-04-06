@@ -30,8 +30,8 @@ use tracing::{info, warn};
 // Re-export stage types for backward compatibility
 pub use stages::decay::MemoryDecayReport;
 pub use stages::{
-    ClusterStage, CollectStage, ConsolidateStage, DecayStage, DeepSynthesisStage,
-    DriftDetectStage, SummarizeStage,
+    ClusterStage, CollectStage, ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage,
+    SummarizeStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster, MetadataGroupKey};
 
@@ -79,9 +79,7 @@ pub struct DreamPipeline {
 
 impl DreamPipeline {
     pub fn new() -> Self {
-        Self {
-            stages: Vec::new(),
-        }
+        Self { stages: Vec::new() }
     }
 
     /// Append a stage to the pipeline (builder pattern).
@@ -636,7 +634,6 @@ fn decay_config_from_policy(policy: &MemoryDecayPolicy) -> DecayConfig {
     config
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,9 +746,7 @@ mod pipeline_integration_tests {
     use super::*;
     use crate::memory::store::lance::LanceMemoryBackend;
 
-    async fn create_test_context(
-        activity_detected: bool,
-    ) -> (DreamContext, tempfile::TempDir) {
+    async fn create_test_context(activity_detected: bool) -> (DreamContext, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let backend = LanceMemoryBackend::open_or_create(tmp.path())
             .await

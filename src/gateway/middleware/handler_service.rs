@@ -44,13 +44,19 @@ pub struct HandlerService<S> {
 
 impl HandlerService<()> {
     pub fn new(handlers: Arc<HandlerRegistry>) -> Self {
-        Self { _marker: (), handlers }
+        Self {
+            _marker: (),
+            handlers,
+        }
     }
 }
 
 impl<S> HandlerService<S> {
     pub fn with_inner(inner: S, handlers: Arc<HandlerRegistry>) -> Self {
-        Self { _marker: inner, handlers }
+        Self {
+            _marker: inner,
+            handlers,
+        }
     }
 }
 
@@ -65,8 +71,6 @@ impl Service<JsonRpcRequest> for HandlerService<()> {
 
     fn call(&mut self, req: JsonRpcRequest) -> Self::Future {
         let handlers = self.handlers.clone();
-        Box::pin(async move {
-            Ok(handlers.handle(&req).await)
-        })
+        Box::pin(async move { Ok(handlers.handle(&req).await) })
     }
 }

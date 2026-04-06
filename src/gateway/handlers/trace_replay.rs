@@ -3,10 +3,7 @@ use crate::resilience::StateDatabase;
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
 
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    db: Arc<StateDatabase>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, db: Arc<StateDatabase>) -> JsonRpcResponse {
     match db.list_trace_tasks().await {
         Ok(tasks) => {
             let traces: Vec<Value> = tasks
@@ -28,10 +25,7 @@ pub async fn handle_list(
     }
 }
 
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    db: Arc<StateDatabase>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, db: Arc<StateDatabase>) -> JsonRpcResponse {
     let trace_id = match request
         .params
         .as_ref()
@@ -57,9 +51,7 @@ pub async fn handle_get(
                 }
             }),
         ),
-        Ok(None) => {
-            JsonRpcResponse::error(request.id, INVALID_PARAMS, "Trace not found")
-        }
+        Ok(None) => JsonRpcResponse::error(request.id, INVALID_PARAMS, "Trace not found"),
         Err(e) => {
             tracing::error!("Failed to get trace: {}", e);
             JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Failed to get trace")

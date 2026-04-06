@@ -5,8 +5,8 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::routing::{
-    resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind,
-    RoutingRules, SessionConfig,
+    resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind, RoutingRules,
+    SessionConfig,
 };
 use crate::tools::AlephTool;
 

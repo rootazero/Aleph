@@ -231,16 +231,15 @@ mod tests {
     impl Service<JsonRpcRequest> for MockService {
         type Response = JsonRpcResponse;
         type Error = std::convert::Infallible;
-        type Future = Pin<Box<dyn Future<Output = Result<JsonRpcResponse, std::convert::Infallible>> + Send>>;
+        type Future =
+            Pin<Box<dyn Future<Output = Result<JsonRpcResponse, std::convert::Infallible>> + Send>>;
 
         fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _req: JsonRpcRequest) -> Self::Future {
-            Box::pin(async move {
-                Ok(JsonRpcResponse::success(None, serde_json::Value::Null))
-            })
+            Box::pin(async move { Ok(JsonRpcResponse::success(None, serde_json::Value::Null)) })
         }
     }
 

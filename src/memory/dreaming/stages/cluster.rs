@@ -7,9 +7,9 @@
 use async_trait::async_trait;
 use tracing::debug;
 
+use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
 use crate::memory::context::MemoryEntry;
-use super::{DreamStage, DreamContext};
 
 /// Threshold: groups with >= this many memories use session-based pre-grouping
 const PREGROUP_SESSION_THRESHOLD: usize = 200;
@@ -128,9 +128,10 @@ pub fn dbscan(points: &[Vec<f32>], eps: f32, min_samples: usize) -> Vec<i32> {
             if q_neighbors.len() >= min_samples {
                 for &neighbor in &q_neighbors {
                     if (labels[neighbor] == -2 || labels[neighbor] == -1)
-                        && !seed_set.contains(&neighbor) {
-                            seed_set.push(neighbor);
-                        }
+                        && !seed_set.contains(&neighbor)
+                    {
+                        seed_set.push(neighbor);
+                    }
                 }
             }
         }
@@ -271,8 +272,7 @@ impl DreamStage for ClusterStage {
             }
 
             // Build embedding matrix for DBSCAN
-            let embeddings: Vec<Vec<f32>> =
-                with_emb.iter().map(|(_, e)| (*e).clone()).collect();
+            let embeddings: Vec<Vec<f32>> = with_emb.iter().map(|(_, e)| (*e).clone()).collect();
             let emb_to_member: Vec<usize> = with_emb.iter().map(|(i, _)| *i).collect();
 
             let labels = dbscan(&embeddings, eps, min_samples);
@@ -386,11 +386,7 @@ mod tests {
     #[test]
     fn dbscan_all_noise() {
         // Points far apart in direction — cosine distance >> eps
-        let points = vec![
-            point(1.0, 0.0),
-            point(0.0, 1.0),
-            point(-1.0, 0.0),
-        ];
+        let points = vec![point(1.0, 0.0), point(0.0, 1.0), point(-1.0, 0.0)];
         let labels = dbscan(&points, 0.1, 2);
         assert_eq!(labels.len(), 3);
         // All should be noise
@@ -477,7 +473,11 @@ mod tests {
         let mut memories = make_test_memories(30, "sess-1", 1_700_000_000); // day 1
         memories.extend(make_test_memories(30, "sess-1", 1_700_000_000 + 86400)); // day 2
         let groups = pregroup(&memories);
-        assert!(groups.len() >= 2, "expected >=2 day groups, got {}", groups.len());
+        assert!(
+            groups.len() >= 2,
+            "expected >=2 day groups, got {}",
+            groups.len()
+        );
         for (key, _) in &groups {
             assert!(matches!(key, MetadataGroupKey::TimeWindow { .. }));
         }

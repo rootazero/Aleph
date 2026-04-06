@@ -99,7 +99,10 @@ pub struct SemanticChunk {
 impl SemanticChunk {
     /// Flat-map all message indices across every unit in the chunk, in order.
     pub fn message_indices(&self) -> Vec<usize> {
-        self.units.iter().flat_map(|u| u.message_indices()).collect()
+        self.units
+            .iter()
+            .flat_map(|u| u.message_indices())
+            .collect()
     }
 }
 
@@ -157,7 +160,9 @@ pub fn parse_semantic_units(messages: &[UnifiedMessage]) -> Vec<SemanticUnit> {
                 });
             } else {
                 // No matching ToolResult — treat as plain assistant text.
-                units.push(SemanticUnit::AssistantText { index: tool_use_index });
+                units.push(SemanticUnit::AssistantText {
+                    index: tool_use_index,
+                });
                 i += 1;
             }
         } else if msg.is_user() {
@@ -203,7 +208,10 @@ pub struct ToolAwareChunker {
 impl ToolAwareChunker {
     /// Create a new chunker with the given token limit and estimation ratio.
     pub fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
-        Self { chunk_token_limit, token_ratio }
+        Self {
+            chunk_token_limit,
+            token_ratio,
+        }
     }
 
     /// Chunk `units` into [`SemanticChunk`]s using a greedy algorithm.
@@ -419,8 +427,7 @@ mod tests {
         }
 
         // Sanity: all 4 messages accounted for across all chunks.
-        let all_indices: Vec<usize> =
-            chunks.iter().flat_map(|c| c.message_indices()).collect();
+        let all_indices: Vec<usize> = chunks.iter().flat_map(|c| c.message_indices()).collect();
         assert_eq!(all_indices.len(), 4);
     }
 }

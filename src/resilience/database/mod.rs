@@ -10,9 +10,9 @@
 mod channel_offsets;
 mod events;
 mod group_chat;
-mod paired_users;
 mod memory_events;
 pub mod migration;
+mod paired_users;
 mod replay;
 mod sessions;
 mod state_database;

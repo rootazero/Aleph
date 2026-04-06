@@ -278,7 +278,9 @@ impl ContextInjector {
         for task in &tasks {
             ctx.push_str(&format!(
                 "- [{}] {} (priority: {})\n",
-                task.status, task.subject, task.priority.as_str()
+                task.status,
+                task.subject,
+                task.priority.as_str()
             ));
             if !task.dependencies.is_empty() {
                 ctx.push_str(&format!("  blocked by: {}\n", task.dependencies.join(", ")));

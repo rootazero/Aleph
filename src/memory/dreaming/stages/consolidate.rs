@@ -7,11 +7,11 @@
 use async_trait::async_trait;
 use tracing::info;
 
+use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
 use crate::memory::context::MemoryTier;
 use crate::memory::dreaming::{should_consolidate, should_prune, ConsolidationPipelineConfig};
 use crate::memory::store::MemoryStore;
-use super::{DreamStage, DreamContext};
 
 /// Consolidates short-term memory facts into long-term memory.
 pub struct ConsolidateStage;

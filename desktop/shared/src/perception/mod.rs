@@ -8,12 +8,14 @@
 //! All functions are synchronous and should be called via
 //! `tokio::task::spawn_blocking` from async contexts.
 
-mod screenshot;
 mod ocr_macos;
 mod ocr_windows;
 mod screen_record;
+mod screenshot;
 
-pub use screenshot::{take_screenshot, capture_screen_png, list_displays, process_screenshot, take_screenshot_display};
+pub use screenshot::{
+    capture_screen_png, list_displays, process_screenshot, take_screenshot, take_screenshot_display,
+};
 
 #[cfg(target_os = "macos")]
 pub use screen_record::screen_record;

@@ -62,7 +62,9 @@ pub(crate) fn sanitize_llm_output(text: &str) -> Cow<'_, str> {
     let has_tags = QUICK_PROBE.is_match(text);
     let has_trailing = text.ends_with("[[") || text.ends_with('[');
     // Check for trailing incomplete tag: last '<' has no closing '>'
-    let has_incomplete_tag = text.rfind('<').is_some_and(|pos| !text[pos..].contains('>'));
+    let has_incomplete_tag = text
+        .rfind('<')
+        .is_some_and(|pos| !text[pos..].contains('>'));
 
     if !has_tags && !has_trailing && !has_incomplete_tag {
         return Cow::Borrowed(text);
@@ -97,8 +99,11 @@ fn strip_tags_code_aware(text: &str) -> String {
 
     while i < len {
         // Track fenced code blocks (3+ backticks at line start or after whitespace)
-        if inline_backtick_count == 0 && i + 2 < len
-            && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`'
+        if inline_backtick_count == 0
+            && i + 2 < len
+            && bytes[i] == b'`'
+            && bytes[i + 1] == b'`'
+            && bytes[i + 2] == b'`'
         {
             // Count consecutive backticks
             let fence_start = i;
@@ -197,7 +202,8 @@ fn try_skip_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<usi
     let close_tag_len = 2 + tag.len() + 1; // </ + tag + >
     let search_start = pos + open_len;
     for k in search_start..bytes.len().saturating_sub(close_tag_len - 1) {
-        if bytes[k] == b'<' && bytes[k + 1] == b'/'
+        if bytes[k] == b'<'
+            && bytes[k + 1] == b'/'
             && k + close_tag_len <= bytes.len()
             && bytes[k + 2..k + 2 + tag.len()]
                 .iter()
@@ -237,10 +243,15 @@ fn try_match_self_closing_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<
 
 /// Length of a UTF-8 character from its leading byte.
 fn utf8_char_len(b: u8) -> usize {
-    if b < 0x80 { 1 }
-    else if b < 0xE0 { 2 }
-    else if b < 0xF0 { 3 }
-    else { 4 }
+    if b < 0x80 {
+        1
+    } else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// Strip trailing incomplete directives that LLMs sometimes emit at stream end.
@@ -258,8 +269,7 @@ fn strip_trailing_incomplete(text: &str) -> String {
         let tail = &s[last_lt..];
         if !tail.contains('>') {
             let after_lt = tail.as_bytes().get(1);
-            let looks_like_tag = after_lt
-                .is_some_and(|&b| b.is_ascii_alphabetic() || b == b'/');
+            let looks_like_tag = after_lt.is_some_and(|&b| b.is_ascii_alphabetic() || b == b'/');
             if looks_like_tag {
                 s.truncate(last_lt);
             }
@@ -1673,7 +1683,8 @@ mod tests {
 
     #[test]
     fn sanitize_strips_think_outside_but_preserves_inside_code() {
-        let input = "<think>reasoning</think>\nHere is code:\n```\n<think>example</think>\n```\nDone.";
+        let input =
+            "<think>reasoning</think>\nHere is code:\n```\n<think>example</think>\n```\nDone.";
         let result = sanitize_llm_output(input);
         assert!(
             !result.starts_with("<think>"),

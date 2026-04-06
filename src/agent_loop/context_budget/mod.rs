@@ -287,8 +287,7 @@ impl ContextBudget {
 
         // Bootstrap overhead warnings (system prompt + tool definitions)
         if pressure.budget_tokens > 0 {
-            let overhead_ratio =
-                pressure.overhead_tokens as f64 / pressure.budget_tokens as f64;
+            let overhead_ratio = pressure.overhead_tokens as f64 / pressure.budget_tokens as f64;
             if overhead_ratio >= OVERHEAD_CRITICAL_RATIO {
                 tracing::warn!(
                     target: "context_budget",

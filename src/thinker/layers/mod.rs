@@ -11,9 +11,9 @@ mod agent_catalog;
 mod custom_instructions;
 mod generation_models;
 mod language;
-mod runtime_capabilities;
 mod mcp_instructions;
 mod mcp_tool_index;
+mod runtime_capabilities;
 mod skill_instructions;
 
 // --- Behavior layers ---
@@ -69,9 +69,9 @@ pub use agent_catalog::AgentCatalogLayer;
 pub use custom_instructions::CustomInstructionsLayer;
 pub use generation_models::GenerationModelsLayer;
 pub use language::LanguageLayer;
+pub use mcp_instructions::McpInstructionsLayer;
 pub use mcp_tool_index::McpToolIndexLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
-pub use mcp_instructions::McpInstructionsLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
 pub use response_format::ResponseFormatLayer;

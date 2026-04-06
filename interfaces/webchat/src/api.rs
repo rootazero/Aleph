@@ -32,7 +32,6 @@ pub mod trace;
 pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
-pub use trace::*;
 pub use acp::*;
 pub use agent_config::*;
 pub use agent_run::*;
@@ -51,4 +50,5 @@ pub use search::*;
 pub use security::*;
 pub use settings::*;
 pub use system::*;
+pub use trace::*;
 pub use workspace::*;

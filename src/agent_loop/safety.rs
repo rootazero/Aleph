@@ -209,12 +209,7 @@ fn default_blocked_patterns() -> Vec<String> {
 /// Known builtin tools whose names contain high-risk keywords
 /// (see `ToolSafetyPolicy::default().high_risk_keywords`) are mapped to `Ask`.
 fn default_high_risk_permissions() -> HashMap<String, PermissionAction> {
-    let high_risk_tools = [
-        "bash_exec",
-        "file_delete",
-        "shell",
-        "code_exec",
-    ];
+    let high_risk_tools = ["bash_exec", "file_delete", "shell", "code_exec"];
 
     high_risk_tools
         .iter()
@@ -364,7 +359,10 @@ mod tests {
                 input: json!({ "safe": true }),
             };
             assert!(
-                matches!(guard.check(&call), Err(SafetyError::NeedsConfirmation { .. })),
+                matches!(
+                    guard.check(&call),
+                    Err(SafetyError::NeedsConfirmation { .. })
+                ),
                 "expected NeedsConfirmation for high-risk tool: {}",
                 name
             );

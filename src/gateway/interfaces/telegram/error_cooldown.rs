@@ -110,10 +110,15 @@ impl ErrorCooldown {
     /// Should be called periodically (e.g., every hour from a background task).
     pub fn sweep_expired(&self) {
         let before = self.cooldowns.len();
-        self.cooldowns.retain(|_k, entry| entry.cooldown_until > Instant::now());
+        self.cooldowns
+            .retain(|_k, entry| entry.cooldown_until > Instant::now());
         let removed = before - self.cooldowns.len();
         if removed > 0 {
-            tracing::info!(removed = removed, remaining = self.cooldowns.len(), "swept expired cooldown entries");
+            tracing::info!(
+                removed = removed,
+                remaining = self.cooldowns.len(),
+                "swept expired cooldown entries"
+            );
         }
     }
 
@@ -184,7 +189,10 @@ impl ErrorCooldown {
     /// Record a successful delivery — removes the conversation from the map.
     pub fn record_success(&self, conversation_id: &str) {
         if self.cooldowns.remove(conversation_id).is_some() {
-            tracing::info!(conversation_id, "cooldown cleared after successful delivery");
+            tracing::info!(
+                conversation_id,
+                "cooldown cleared after successful delivery"
+            );
         }
     }
 
@@ -202,7 +210,10 @@ impl ErrorCooldown {
     /// - Tripped but 5 minutes elapsed (half-open) → `true` (allow probe)
     /// - Tripped and within 5 minutes → `false`
     pub fn check_typing(&self) -> bool {
-        let state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self
+            .typing_breaker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match state.tripped_at {
             None => true,
             Some(tripped) => tripped.elapsed() > TYPING_BREAKER_DECAY,
@@ -215,7 +226,10 @@ impl ErrorCooldown {
     /// trips. If already tripped (half-open probe failed), the trip timestamp
     /// is refreshed to extend the cooldown.
     pub fn record_typing_failure(&self) {
-        let mut state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .typing_breaker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         state.consecutive_failures = state.consecutive_failures.saturating_add(1);
 
         if state.tripped_at.is_some() {
@@ -234,7 +248,10 @@ impl ErrorCooldown {
 
     /// Record a successful typing indicator send — fully restores the breaker.
     pub fn record_typing_success(&self) {
-        let mut state = self.typing_breaker.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .typing_breaker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let was_tripped = state.tripped_at.is_some();
         state.consecutive_failures = 0;
         state.tripped_at = None;
@@ -331,7 +348,10 @@ mod tests {
         let ec = ErrorCooldown::new();
         for _ in 0..9 {
             ec.record_typing_failure();
-            assert!(ec.check_typing(), "breaker should not trip before 10 failures");
+            assert!(
+                ec.check_typing(),
+                "breaker should not trip before 10 failures"
+            );
         }
         ec.record_typing_failure(); // 10th
         assert!(!ec.check_typing(), "breaker should trip at 10 failures");
@@ -345,7 +365,10 @@ mod tests {
         }
         assert!(!ec.check_typing());
         ec.record_typing_success();
-        assert!(ec.check_typing(), "breaker should be restored after success");
+        assert!(
+            ec.check_typing(),
+            "breaker should be restored after success"
+        );
         let (failures, tripped) = ec.typing_breaker_snapshot();
         assert_eq!(failures, 0);
         assert!(tripped.is_none());
@@ -365,7 +388,10 @@ mod tests {
         ec.set_typing_breaker_state(10, Some(past));
 
         // Half-open: should allow a probe
-        assert!(ec.check_typing(), "breaker should be half-open after 5 minutes");
+        assert!(
+            ec.check_typing(),
+            "breaker should be half-open after 5 minutes"
+        );
     }
 
     #[test]
@@ -387,7 +413,10 @@ mod tests {
         assert!(ec.check_typing());
         let (failures, tripped) = ec.typing_breaker_snapshot();
         assert_eq!(failures, 0);
-        assert!(tripped.is_none(), "breaker should be fully restored after probe success");
+        assert!(
+            tripped.is_none(),
+            "breaker should be fully restored after probe success"
+        );
     }
 
     #[test]
@@ -406,7 +435,10 @@ mod tests {
 
         // Probe fails → re-tripped with fresh timestamp
         ec.record_typing_failure();
-        assert!(!ec.check_typing(), "breaker should be re-tripped after failed probe");
+        assert!(
+            !ec.check_typing(),
+            "breaker should be re-tripped after failed probe"
+        );
 
         let (failures, tripped) = ec.typing_breaker_snapshot();
         assert_eq!(failures, 11);

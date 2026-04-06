@@ -1,8 +1,8 @@
 //! Health Check Handler
 
-use serde_json::{json, Value};
-use super::schema::{HandlerSchema, NoParams};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::schema::{HandlerSchema, NoParams};
+use serde_json::{json, Value};
 
 pub struct HealthHandler;
 
@@ -11,10 +11,7 @@ impl HandlerSchema for HealthHandler {
     const METHOD: &'static str = "health";
     const DESCRIPTION: &'static str = "Returns the health status of the Gateway server";
 
-    async fn handle_with_params(
-        id: Option<Value>,
-        _params: Self::Params,
-    ) -> JsonRpcResponse {
+    async fn handle_with_params(id: Option<Value>, _params: Self::Params) -> JsonRpcResponse {
         JsonRpcResponse::success(
             id,
             json!({
@@ -39,7 +36,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::super::schema::TypedHandler;
-    use super::{JsonRpcRequest, HealthHandler};
+    use super::{HealthHandler, JsonRpcRequest};
     use serde_json::json;
 
     #[tokio::test]

@@ -3,8 +3,8 @@
 //! Single WhatsApp account instance with state management.
 
 use crate::gateway::channel::ChannelHealth;
-use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 use crate::gateway::channel_policy::E164Number;
+use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,8 +14,13 @@ pub enum AccountState {
     #[default]
     Disconnected,
     Connecting,
-    Connected { since: DateTime<Utc> },
-    Error { message: String, since: DateTime<Utc> },
+    Connected {
+        since: DateTime<Utc>,
+    },
+    Error {
+        message: String,
+        since: DateTime<Utc>,
+    },
 }
 
 pub struct WhatsAppAccount {
@@ -50,7 +55,7 @@ impl WhatsAppAccount {
             health: Arc::new(RwLock::new(ChannelHealth::new())),
         }
     }
-    
+
     pub async fn is_connected(&self) -> bool {
         matches!(*self.state.read().await, AccountState::Connected { .. })
     }

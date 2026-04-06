@@ -20,8 +20,8 @@ pub async fn list(server_url: &str, limit: usize, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        let items: Vec<AgentTraceReplayListItem> =
-            serde_json::from_value(result.clone()).map_err(|e| anyhow::anyhow!("Failed to parse trace list: {e}"))?;
+        let items: Vec<AgentTraceReplayListItem> = serde_json::from_value(result.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to parse trace list: {e}"))?;
 
         if items.is_empty() {
             println!("No traces found.");
@@ -51,10 +51,7 @@ pub async fn show(server_url: &str, task_id: &str, json: bool) -> CliResult<()> 
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     let result: Value = client
-        .call(
-            "trace.get",
-            Some(serde_json::json!({ "task_id": task_id })),
-        )
+        .call("trace.get", Some(serde_json::json!({ "task_id": task_id })))
         .await?;
 
     if json {
@@ -78,7 +75,10 @@ pub async fn show(server_url: &str, task_id: &str, json: bool) -> CliResult<()> 
                 &entry.event,
                 AgentTracePresentationPreset::CliCompact,
             ) {
-                println!("[{:>3}] {} {}", entry.step, presentation.kind, presentation.content);
+                println!(
+                    "[{:>3}] {} {}",
+                    entry.step, presentation.kind, presentation.content
+                );
             }
         }
     }

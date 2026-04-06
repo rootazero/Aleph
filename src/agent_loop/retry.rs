@@ -118,10 +118,10 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
 fn extract_retry_after(err: &anyhow::Error) -> Option<Duration> {
     let msg = err.to_string().to_lowercase();
     // Match patterns like "retry after 30 seconds" or "retry-after: 60"
-    let after_idx = msg.find("retry after ").or_else(|| msg.find("retry-after: "))?;
-    let start = msg[after_idx..]
-        .find(|c: char| c.is_ascii_digit())?
-        + after_idx;
+    let after_idx = msg
+        .find("retry after ")
+        .or_else(|| msg.find("retry-after: "))?;
+    let start = msg[after_idx..].find(|c: char| c.is_ascii_digit())? + after_idx;
     let num_str: String = msg[start..]
         .chars()
         .take_while(|c| c.is_ascii_digit())
@@ -273,13 +273,19 @@ mod tests {
     fn test_classify_rate_limit_model_specific_fallback() {
         // Default 429 → Fallback (try switching provider)
         let err = anyhow::anyhow!("HTTP 429 Too Many Requests");
-        assert!(matches!(classify_error(&err), RetryVerdict::Fallback { .. }));
+        assert!(matches!(
+            classify_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
     }
 
     #[test]
     fn test_classify_rate_limit_message_fallback() {
         let err = anyhow::anyhow!("Rate limit exceeded: 4500 requests per minute");
-        assert!(matches!(classify_error(&err), RetryVerdict::Fallback { .. }));
+        assert!(matches!(
+            classify_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
     }
 
     #[test]

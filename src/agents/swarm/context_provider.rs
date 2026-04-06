@@ -32,7 +32,10 @@ impl SwarmContextProvider {
     }
 
     /// Create a new swarm context provider with an agent identity
-    pub fn with_agent_id(context_injector: Arc<ContextInjector>, agent_id: impl Into<String>) -> Self {
+    pub fn with_agent_id(
+        context_injector: Arc<ContextInjector>,
+        agent_id: impl Into<String>,
+    ) -> Self {
         Self {
             context_injector,
             agent_id: agent_id.into(),

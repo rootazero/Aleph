@@ -18,7 +18,9 @@ static STATE_REGISTRY: RwLock<Option<Arc<RequestStateRegistry>>> = RwLock::new(N
 ///
 /// Called by MiddlewareChain during initialization.
 pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
-    let mut guard = STATE_REGISTRY.write().expect("STATE_REGISTRY lock poisoned");
+    let mut guard = STATE_REGISTRY
+        .write()
+        .expect("STATE_REGISTRY lock poisoned");
     *guard = Some(registry);
 }
 
@@ -175,7 +177,10 @@ impl RequestStateData {
     pub fn transition_to(&self, new_state: RequestState) -> Result<RequestState, TransitionError> {
         let current = self.state();
         if !current.can_transition_to(new_state) {
-            return Err(TransitionError { from: current, to: new_state });
+            return Err(TransitionError {
+                from: current,
+                to: new_state,
+            });
         }
 
         let now = current_timestamp_ms();
@@ -330,7 +335,9 @@ impl RequestStateRegistry {
         let mut removed = 0;
 
         // We need to collect keys first because we can't mutate while iterating
-        let keys: Vec<Uuid> = self.states.iter()
+        let keys: Vec<Uuid> = self
+            .states
+            .iter()
             .filter(|entry| {
                 let state = entry.value().state();
                 if state.is_terminal() {
@@ -500,10 +507,19 @@ mod tests {
         registry.insert(id2);
         registry.insert(id3);
 
-        registry.transition(id1, RequestState::Validating).unwrap().unwrap();
+        registry
+            .transition(id1, RequestState::Validating)
+            .unwrap()
+            .unwrap();
         // id2 must go through Validating before Processing
-        registry.transition(id2, RequestState::Validating).unwrap().unwrap();
-        registry.transition(id2, RequestState::Processing).unwrap().unwrap();
+        registry
+            .transition(id2, RequestState::Validating)
+            .unwrap()
+            .unwrap();
+        registry
+            .transition(id2, RequestState::Processing)
+            .unwrap()
+            .unwrap();
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.pending, 1);
@@ -527,8 +543,14 @@ mod tests {
             let handle = task::spawn(async move {
                 let request_id = Uuid::new_v4();
                 registry.insert(request_id);
-                registry.transition(request_id, RequestState::Validating).unwrap().unwrap();
-                registry.transition(request_id, RequestState::Processing).unwrap().unwrap();
+                registry
+                    .transition(request_id, RequestState::Validating)
+                    .unwrap()
+                    .unwrap();
+                registry
+                    .transition(request_id, RequestState::Processing)
+                    .unwrap()
+                    .unwrap();
                 registry.complete(request_id);
             });
             handles.push(handle);

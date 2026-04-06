@@ -29,7 +29,10 @@ impl DreamStage for CollectStage {
             .get_memories_since(since, &NamespaceScope::Owner, "default")
             .await?;
         ctx.memories = memories.into_iter().take(DEFAULT_MAX_MEMORIES).collect();
-        info!(count = ctx.memories.len(), "CollectStage: gathered memories");
+        info!(
+            count = ctx.memories.len(),
+            "CollectStage: gathered memories"
+        );
         Ok(ctx)
     }
 }

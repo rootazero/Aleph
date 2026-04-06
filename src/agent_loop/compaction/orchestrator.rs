@@ -67,10 +67,7 @@ impl CompactionOrchestrator {
     /// estimated savings.  Execution stops early once pressure drops below
     /// [`PressureLevel::Warning`].  Strategy errors are logged as warnings
     /// and do not abort the remaining strategies.
-    pub async fn execute(
-        &self,
-        ctx: &mut CompactionContext,
-    ) -> anyhow::Result<CompactionResult> {
+    pub async fn execute(&self, ctx: &mut CompactionContext) -> anyhow::Result<CompactionResult> {
         let pressure_before = ctx.pressure.ratio;
         let mut total_freed = 0usize;
         let mut total_compacted = 0usize;
@@ -97,7 +94,10 @@ impl CompactionOrchestrator {
             }
 
             if !strategy.is_applicable(ctx) {
-                info!(strategy = strategy.name(), "strategy not applicable — skipping");
+                info!(
+                    strategy = strategy.name(),
+                    "strategy not applicable — skipping"
+                );
                 continue;
             }
 
@@ -123,12 +123,10 @@ impl CompactionOrchestrator {
                     last_strategy_name = result.strategy_name.clone();
 
                     // Update simulated pressure — keep used_tokens and ratio in sync.
-                    ctx.pressure.used_tokens = ctx
-                        .pressure
-                        .used_tokens
-                        .saturating_sub(result.freed_tokens);
-                    ctx.pressure.ratio = ctx.pressure.used_tokens as f64
-                        / ctx.pressure.budget_tokens.max(1) as f64;
+                    ctx.pressure.used_tokens =
+                        ctx.pressure.used_tokens.saturating_sub(result.freed_tokens);
+                    ctx.pressure.ratio =
+                        ctx.pressure.used_tokens as f64 / ctx.pressure.budget_tokens.max(1) as f64;
                     ctx.pressure_level = PressureLevel::from_ratio(ctx.pressure.ratio);
                 }
                 Err(e) => {

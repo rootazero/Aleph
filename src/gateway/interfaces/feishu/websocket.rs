@@ -12,7 +12,9 @@ use crate::gateway::channel::{
 use super::api::FeishuApi;
 use super::config::{FeishuConfig, GroupSessionScope};
 use super::dedup::MessageDedup;
-use super::events::{extract_text_content, mark_bot_mentions, parse_ws_frame, parse_merge_forward_content};
+use super::events::{
+    extract_text_content, mark_bot_mentions, parse_merge_forward_content, parse_ws_frame,
+};
 use super::types::{ChatType, FeishuEvent};
 use super::user_cache::{UserProfile, UserProfileCache};
 
@@ -172,18 +174,16 @@ async fn handle_text_frame(
                     None => return,
                 },
                 "image" => "[Image]".to_string(),
-                "merge_forward" => {
-                    match api.get_message(&message_id).await {
-                        Ok(msg) => {
-                            let items_content = msg.content.unwrap_or_default();
-                            parse_merge_forward_content(&items_content)
-                        }
-                        Err(e) => {
-                            tracing::debug!("merge_forward fetch failed: {}", e);
-                            "[Merged and Forwarded Message - fetch error]".to_string()
-                        }
+                "merge_forward" => match api.get_message(&message_id).await {
+                    Ok(msg) => {
+                        let items_content = msg.content.unwrap_or_default();
+                        parse_merge_forward_content(&items_content)
                     }
-                }
+                    Err(e) => {
+                        tracing::debug!("merge_forward fetch failed: {}", e);
+                        "[Merged and Forwarded Message - fetch error]".to_string()
+                    }
+                },
                 other => {
                     tracing::debug!("Skipping unsupported message type: {other}");
                     return;
@@ -244,13 +244,26 @@ async fn handle_text_frame(
         Ok(Some(FeishuEvent::CardAction { .. })) => {
             tracing::debug!("Feishu card action (not handled in websocket)");
         }
-        Ok(Some(FeishuEvent::BotAdded { chat_id, operator_id, .. })) => {
+        Ok(Some(FeishuEvent::BotAdded {
+            chat_id,
+            operator_id,
+            ..
+        })) => {
             tracing::info!("Feishu bot added to chat {chat_id} by {operator_id}");
         }
-        Ok(Some(FeishuEvent::BotRemoved { chat_id, operator_id })) => {
+        Ok(Some(FeishuEvent::BotRemoved {
+            chat_id,
+            operator_id,
+        })) => {
             tracing::info!("Feishu bot removed from chat {chat_id} by {operator_id:?}");
         }
-        Ok(Some(FeishuEvent::ReactionCreated { message_id, chat_id, emoji, operator_id, .. })) => {
+        Ok(Some(FeishuEvent::ReactionCreated {
+            message_id,
+            chat_id,
+            emoji,
+            operator_id,
+            ..
+        })) => {
             if !config.reaction_notifications {
                 return;
             }
@@ -264,7 +277,9 @@ async fn handle_text_frame(
                     return;
                 }
             };
-            let is_bot_message = original_msg.sender.as_ref()
+            let is_bot_message = original_msg
+                .sender
+                .as_ref()
                 .and_then(|s| s.sender_id.as_ref())
                 .and_then(|id| id.open_id.as_ref())
                 .map(|id| id == bot_open_id)
@@ -272,13 +287,16 @@ async fn handle_text_frame(
             if !is_bot_message {
                 tracing::debug!(
                     "Ignoring reaction on non-bot message {} by {}",
-                    message_id, operator_id
+                    message_id,
+                    operator_id
                 );
                 return;
             }
             let synthetic_id = format!("{}:reaction:{}", message_id, emoji);
             let content = format!("[reacted with {} to message {}]", emoji, message_id);
-            let resolved_chat_id = chat_id.clone().unwrap_or_else(|| format!("p2p:{}", operator_id));
+            let resolved_chat_id = chat_id
+                .clone()
+                .unwrap_or_else(|| format!("p2p:{}", operator_id));
             let conversation_id = resolved_chat_id.clone();
             let inbound = InboundMessage {
                 id: MessageId::new(&synthetic_id),
@@ -298,15 +316,26 @@ async fn handle_text_frame(
                 tracing::warn!("Feishu inbound channel closed");
             }
         }
-        Ok(Some(FeishuEvent::ReactionDeleted { message_id, emoji, operator_id, .. })) => {
-            tracing::debug!(
-                "Feishu reaction deleted: {emoji} on {message_id} by {operator_id}"
-            );
+        Ok(Some(FeishuEvent::ReactionDeleted {
+            message_id,
+            emoji,
+            operator_id,
+            ..
+        })) => {
+            tracing::debug!("Feishu reaction deleted: {emoji} on {message_id} by {operator_id}");
         }
-        Ok(Some(FeishuEvent::BotMenu { event_key, operator_id, .. })) => {
+        Ok(Some(FeishuEvent::BotMenu {
+            event_key,
+            operator_id,
+            ..
+        })) => {
             tracing::info!("Feishu bot menu event: {event_key} by {operator_id}");
         }
-        Ok(Some(FeishuEvent::DriveComment { event_id, file_token, .. })) => {
+        Ok(Some(FeishuEvent::DriveComment {
+            event_id,
+            file_token,
+            ..
+        })) => {
             tracing::info!("Feishu drive comment: {event_id} on file {file_token}");
         }
         Ok(Some(FeishuEvent::Unknown(t))) => {

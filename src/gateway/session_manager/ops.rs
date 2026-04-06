@@ -144,7 +144,9 @@ impl SessionManager {
                     params![&key_str],
                     |row| {
                         let state_str: Option<String> = row.get(0)?;
-                        Ok(state_str.map(|s| s != "stopped" && s != "error").unwrap_or(true))
+                        Ok(state_str
+                            .map(|s| s != "stopped" && s != "error")
+                            .unwrap_or(true))
                     },
                 )
                 .unwrap_or(true);
@@ -319,8 +321,8 @@ impl SessionManager {
             let rows = stmt
                 .query_map(params![id], |row| {
                     let state_str: String = row.get(8)?;
-                    let state = serde_json::from_str(&format!("\"{}\"", state_str))
-                        .unwrap_or_default();
+                    let state =
+                        serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
                     Ok(SessionMetadata {
                         key: row.get(0)?,
                         agent_id: row.get(1)?,
@@ -349,8 +351,8 @@ impl SessionManager {
             let rows = stmt
                 .query_map([], |row| {
                     let state_str: String = row.get(8)?;
-                    let state = serde_json::from_str(&format!("\"{}\"", state_str))
-                        .unwrap_or_default();
+                    let state =
+                        serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
                     Ok(SessionMetadata {
                         key: row.get(0)?,
                         agent_id: row.get(1)?,
@@ -795,10 +797,7 @@ impl SessionManager {
     }
 
     /// Get current session state
-    pub async fn get_state(
-        &self,
-        key: &SessionKey,
-    ) -> Result<SessionState, SessionManagerError> {
+    pub async fn get_state(&self, key: &SessionKey) -> Result<SessionState, SessionManagerError> {
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -814,20 +813,18 @@ impl SessionManager {
             .ok();
 
         match state_str {
-            Some(s) => {
-                match serde_json::from_str::<SessionState>(&format!("\"{}\"", s)) {
-                    Ok(state) => Ok(state),
-                    Err(e) => {
-                        tracing::warn!(
-                            key = %key_str,
-                            state = %s,
-                            error = %e,
-                            "Failed to parse session state, returning Created"
-                        );
-                        Ok(SessionState::Created)
-                    }
+            Some(s) => match serde_json::from_str::<SessionState>(&format!("\"{}\"", s)) {
+                Ok(state) => Ok(state),
+                Err(e) => {
+                    tracing::warn!(
+                        key = %key_str,
+                        state = %s,
+                        error = %e,
+                        "Failed to parse session state, returning Created"
+                    );
+                    Ok(SessionState::Created)
                 }
-            }
+            },
             None => {
                 tracing::debug!(
                     key = %key_str,
@@ -863,10 +860,7 @@ impl SessionManager {
     }
 
     /// Count sessions by state
-    pub async fn count_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<usize, SessionManagerError> {
+    pub async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionManagerError> {
         let conn = self
             .conn
             .lock()
@@ -904,8 +898,7 @@ impl SessionManager {
         let rows = stmt
             .query_map(params![state.to_string()], |row| {
                 let state_str: String = row.get(8)?;
-                let state = serde_json::from_str(&format!("\"{}\"", state_str))
-                    .unwrap_or_default();
+                let state = serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
                 Ok(SessionMetadata {
                     key: row.get(0)?,
                     agent_id: row.get(1)?,

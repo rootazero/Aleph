@@ -33,8 +33,8 @@ use crate::gateway::protocol::{
 use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
 use crate::gateway::state_version::StateVersionTracker;
 
-use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
 use super::per_client_buffer::PerClientBuffer;
+use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
@@ -74,7 +74,10 @@ pub(super) async fn ws_upgrade_handler(
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
             handlers: state.handlers.clone(),
-            middleware_chain: MiddlewareChain::new(state.handlers.clone(), state.rate_limiter.clone()),
+            middleware_chain: MiddlewareChain::new(
+                state.handlers.clone(),
+                state.rate_limiter.clone(),
+            ),
             event_bus: state.event_bus.clone(),
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
@@ -693,10 +696,7 @@ async fn handle_connection(
 }
 
 /// Process a JSON-RPC request string
-pub(super) async fn process_request(
-    text: &str,
-    middleware_chain: &MiddlewareChain,
-) -> String {
+pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareChain) -> String {
     // Parse the request
     let request: JsonRpcRequest = match serde_json::from_str(text) {
         Ok(req) => req,

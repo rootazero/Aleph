@@ -13,14 +13,14 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
+use crate::memory::context::MemoryFact;
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::MemoryStore;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use super::{DreamStage, DreamContext};
-use crate::memory::context::MemoryFact;
+use crate::providers::AiProvider;
 
 /// Number of similar facts to retrieve per vector search.
 const DRIFT_SEARCH_K: usize = 5;
@@ -29,9 +29,19 @@ const DRIFT_SEARCH_K: usize = 5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "UPPERCASE")]
 pub enum DriftAction {
-    Supersede { old_id: String, new_id: String },
-    Merge { old_id: String, new_id: String, merged_content: String },
-    Coexist { old_id: String, new_id: String },
+    Supersede {
+        old_id: String,
+        new_id: String,
+    },
+    Merge {
+        old_id: String,
+        new_id: String,
+        merged_content: String,
+    },
+    Coexist {
+        old_id: String,
+        new_id: String,
+    },
     Ignore,
 }
 
@@ -53,9 +63,7 @@ pub struct DriftCandidate {
 /// `(old_content, old_type, old_ts, new_content, new_type, new_ts)`
 ///
 /// The returned prompt asks the LLM to return a JSON array of actions.
-pub fn build_arbitration_prompt(
-    pairs: &[(&str, &str, i64, &str, &str, i64)],
-) -> String {
+pub fn build_arbitration_prompt(pairs: &[(&str, &str, i64, &str, &str, i64)]) -> String {
     let mut prompt = String::from(
         "You are a memory curator. Given pairs of OLD and NEW memory facts, \
          decide for each pair what action to take.\n\n\
@@ -77,8 +85,12 @@ pub fn build_arbitration_prompt(
              OLD (type={}, ts={}): {}\n\
              NEW (type={}, ts={}): {}\n\n",
             i + 1,
-            old_type, old_ts, old_content,
-            new_type, new_ts, new_content,
+            old_type,
+            old_ts,
+            old_content,
+            new_type,
+            new_ts,
+            new_content,
         ));
     }
 
@@ -153,24 +165,35 @@ impl DreamStage for DriftDetectStage {
         // Resolve drift candidates via LLM arbitration when a provider is available,
         // otherwise fall back to Coexist (safe default).
         let resolutions = if let Some(ref provider) = ctx.provider {
-            let type_strings: Vec<_> = candidates.iter().map(|c| {
-                (c.existing_fact.fact_type.to_string(), c.new_fact.fact_type.to_string())
-            }).collect();
+            let type_strings: Vec<_> = candidates
+                .iter()
+                .map(|c| {
+                    (
+                        c.existing_fact.fact_type.to_string(),
+                        c.new_fact.fact_type.to_string(),
+                    )
+                })
+                .collect();
 
-            let pairs: Vec<_> = candidates.iter().zip(type_strings.iter()).map(|(c, (old_type, new_type))| {
-                (
-                    c.existing_fact.content.as_str(),
-                    old_type.as_str(),
-                    c.existing_fact.created_at,
-                    c.new_fact.content.as_str(),
-                    new_type.as_str(),
-                    c.new_fact.created_at,
-                )
-            }).collect();
+            let pairs: Vec<_> = candidates
+                .iter()
+                .zip(type_strings.iter())
+                .map(|(c, (old_type, new_type))| {
+                    (
+                        c.existing_fact.content.as_str(),
+                        old_type.as_str(),
+                        c.existing_fact.created_at,
+                        c.new_fact.content.as_str(),
+                        new_type.as_str(),
+                        c.new_fact.created_at,
+                    )
+                })
+                .collect();
 
-            let candidate_ids: Vec<_> = candidates.iter().map(|c| {
-                (c.existing_fact.id.clone(), c.new_fact.id.clone())
-            }).collect();
+            let candidate_ids: Vec<_> = candidates
+                .iter()
+                .map(|c| (c.existing_fact.id.clone(), c.new_fact.id.clone()))
+                .collect();
 
             let prompt = build_arbitration_prompt(&pairs);
 
@@ -227,7 +250,9 @@ async fn call_llm_arbitration(
     let msgs = [UnifiedMessage::user(prompt)];
     let system = "You are a memory curator. Respond ONLY with a JSON array. No explanation.";
     let payload = RequestPayload::new(&msgs).with_system(Some(system));
-    let response = provider.process(payload).await
+    let response = provider
+        .process(payload)
+        .await
         .map_err(|e| AlephError::other(format!("drift arbitration LLM call failed: {}", e)))?;
 
     let text = response.text_content();
@@ -242,8 +267,12 @@ fn parse_arbitration_response(
     text: &str,
     candidate_ids: &[(String, String)],
 ) -> Result<Vec<DriftAction>, AlephError> {
-    let json_start = text.find('[').ok_or_else(|| AlephError::other("no JSON array in response"))?;
-    let json_end = text.rfind(']').ok_or_else(|| AlephError::other("no closing bracket"))?;
+    let json_start = text
+        .find('[')
+        .ok_or_else(|| AlephError::other("no JSON array in response"))?;
+    let json_end = text
+        .rfind(']')
+        .ok_or_else(|| AlephError::other("no closing bracket"))?;
     let json_str = &text[json_start..=json_end];
 
     let raw: Vec<serde_json::Value> = serde_json::from_str(json_str)
@@ -251,19 +280,28 @@ fn parse_arbitration_response(
 
     let mut actions = Vec::new();
     for (i, val) in raw.iter().enumerate() {
-        let action_str = val.get("action").and_then(|a| a.as_str()).unwrap_or("COEXIST");
-        let (old_id, new_id) = candidate_ids.get(i)
+        let action_str = val
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("COEXIST");
+        let (old_id, new_id) = candidate_ids
+            .get(i)
             .cloned()
             .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
 
         let action = match action_str.to_uppercase().as_str() {
             "SUPERSEDE" => DriftAction::Supersede { old_id, new_id },
             "MERGE" => {
-                let merged = val.get("merged_content")
+                let merged = val
+                    .get("merged_content")
                     .and_then(|m| m.as_str())
                     .unwrap_or("")
                     .to_string();
-                DriftAction::Merge { old_id, new_id, merged_content: merged }
+                DriftAction::Merge {
+                    old_id,
+                    new_id,
+                    merged_content: merged,
+                }
             }
             "IGNORE" => DriftAction::Ignore,
             _ => DriftAction::Coexist { old_id, new_id },
@@ -276,10 +314,13 @@ fn parse_arbitration_response(
 
 /// Default all candidates to Coexist when LLM arbitration is unavailable.
 fn default_coexist(candidates: &[DriftCandidate]) -> Vec<DriftAction> {
-    candidates.iter().map(|c| DriftAction::Coexist {
-        old_id: c.existing_fact.id.clone(),
-        new_id: c.new_fact.id.clone(),
-    }).collect()
+    candidates
+        .iter()
+        .map(|c| DriftAction::Coexist {
+            old_id: c.existing_fact.id.clone(),
+            new_id: c.new_fact.id.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -305,8 +346,7 @@ mod tests {
 
     #[test]
     fn serde_parse_merge() {
-        let json =
-            r#"{"action":"MERGE","old_id":"a","new_id":"b","merged_content":"combined"}"#;
+        let json = r#"{"action":"MERGE","old_id":"a","new_id":"b","merged_content":"combined"}"#;
         let action: DriftAction = serde_json::from_str(json).unwrap();
         match action {
             DriftAction::Merge {
@@ -362,9 +402,14 @@ mod tests {
 
     #[test]
     fn arbitration_prompt_contains_expected_text() {
-        let pairs = vec![
-            ("The user likes Python", "preference", 1000i64, "The user prefers Rust", "preference", 2000i64),
-        ];
+        let pairs = vec![(
+            "The user likes Python",
+            "preference",
+            1000i64,
+            "The user prefers Rust",
+            "preference",
+            2000i64,
+        )];
         let prompt = build_arbitration_prompt(&pairs);
 
         assert!(prompt.contains("You are a memory curator"));
@@ -381,8 +426,22 @@ mod tests {
     #[test]
     fn arbitration_prompt_multiple_pairs() {
         let pairs = vec![
-            ("fact A old", "learning", 100i64, "fact A new", "learning", 200i64),
-            ("fact B old", "personal", 300i64, "fact B new", "personal", 400i64),
+            (
+                "fact A old",
+                "learning",
+                100i64,
+                "fact A new",
+                "learning",
+                200i64,
+            ),
+            (
+                "fact B old",
+                "personal",
+                300i64,
+                "fact B new",
+                "personal",
+                400i64,
+            ),
         ];
         let prompt = build_arbitration_prompt(&pairs);
         assert!(prompt.contains("### Pair 1"));
@@ -405,8 +464,8 @@ mod tests {
 
     #[tokio::test]
     async fn execute_with_empty_new_facts_returns_empty_resolutions() {
-        use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
         use crate::memory::decay::DecayConfig;
+        use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
         use crate::memory::graph::{GraphDecayConfig, GraphStore};
         use crate::sync_primitives::Arc;
 
@@ -454,7 +513,8 @@ mod tests {
 
     #[test]
     fn parse_arbitration_valid_json() {
-        let text = r#"[{"action": "SUPERSEDE"}, {"action": "MERGE", "merged_content": "combined fact"}]"#;
+        let text =
+            r#"[{"action": "SUPERSEDE"}, {"action": "MERGE", "merged_content": "combined fact"}]"#;
         let ids = vec![
             ("old1".to_string(), "new1".to_string()),
             ("old2".to_string(), "new2".to_string()),
@@ -462,7 +522,9 @@ mod tests {
         let actions = parse_arbitration_response(text, &ids).unwrap();
         assert_eq!(actions.len(), 2);
         assert!(matches!(&actions[0], DriftAction::Supersede { old_id, .. } if old_id == "old1"));
-        assert!(matches!(&actions[1], DriftAction::Merge { merged_content, .. } if merged_content == "combined fact"));
+        assert!(
+            matches!(&actions[1], DriftAction::Merge { merged_content, .. } if merged_content == "combined fact")
+        );
     }
 
     #[test]
@@ -495,8 +557,8 @@ mod tests {
 
     #[tokio::test]
     async fn execute_with_new_facts_no_similar_existing_returns_empty_resolutions() {
-        use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
         use crate::memory::decay::DecayConfig;
+        use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
         use crate::memory::graph::{GraphDecayConfig, GraphStore};
         use crate::sync_primitives::Arc;
 

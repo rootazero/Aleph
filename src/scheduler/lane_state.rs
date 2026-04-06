@@ -126,7 +126,7 @@ impl LaneState {
 
             if wait_ms > threshold_ms {
                 // +1 boost per 10 seconds over threshold, max +10
-                
+
                 ((wait_ms - threshold_ms) / 10_000).min(10) as i8
             } else {
                 0

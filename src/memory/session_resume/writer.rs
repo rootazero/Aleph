@@ -32,9 +32,8 @@ impl SnapshotWriter {
         std::fs::create_dir_all(&dir)?;
 
         let path = dir.join("resume.json");
-        let json = serde_json::to_string_pretty(snapshot).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let json = serde_json::to_string_pretty(snapshot)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(&path, json)?;
 
         self.cleanup_old_snapshots();

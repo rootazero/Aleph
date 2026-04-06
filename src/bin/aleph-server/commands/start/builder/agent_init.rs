@@ -356,44 +356,39 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // with_inbox_provider consumes self, so on the (unlikely) error path
         // the coordinator is lost. This only fails if the injector Arc was
         // already shared (i.e. start() was called), which hasn't happened yet.
-        let coordinator =
-            if let (Some(ib), Some(ts)) = (inbox.as_ref(), team_store.as_ref()) {
-                use alephcore::teams::context::TeamInboxContextProvider;
-                let mut inbox_provider =
-                    TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
-                if let Some(ref ss) = session_store {
-                    inbox_provider = inbox_provider.with_session_store(ss.clone());
-                }
-                match coordinator.with_inbox_provider(Arc::new(inbox_provider)) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to attach inbox provider to swarm coordinator: {e}"
-                        );
-                        // Coordinator was consumed; recreate without inbox provider
-                        let c2 = SwarmCoordinator::with_config(SwarmConfig::default())
-                            .await
-                            .map_err(|e2| {
-                                tracing::error!("Swarm coordinator recreation failed: {e2}");
-                            })
-                            .ok()?;
-                        // Re-attach task store if available
-                        if let Some(ref store) = coord_store {
-                            match c2.with_task_store(store.clone()) {
-                                Ok(c) => c,
-                                Err(_) => {
-                                    SwarmCoordinator::with_config(SwarmConfig::default())
-                                        .await.ok()?
-                                }
-                            }
-                        } else {
-                            c2
+        let coordinator = if let (Some(ib), Some(ts)) = (inbox.as_ref(), team_store.as_ref()) {
+            use alephcore::teams::context::TeamInboxContextProvider;
+            let mut inbox_provider = TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
+            if let Some(ref ss) = session_store {
+                inbox_provider = inbox_provider.with_session_store(ss.clone());
+            }
+            match coordinator.with_inbox_provider(Arc::new(inbox_provider)) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to attach inbox provider to swarm coordinator: {e}");
+                    // Coordinator was consumed; recreate without inbox provider
+                    let c2 = SwarmCoordinator::with_config(SwarmConfig::default())
+                        .await
+                        .map_err(|e2| {
+                            tracing::error!("Swarm coordinator recreation failed: {e2}");
+                        })
+                        .ok()?;
+                    // Re-attach task store if available
+                    if let Some(ref store) = coord_store {
+                        match c2.with_task_store(store.clone()) {
+                            Ok(c) => c,
+                            Err(_) => SwarmCoordinator::with_config(SwarmConfig::default())
+                                .await
+                                .ok()?,
                         }
+                    } else {
+                        c2
                     }
                 }
-            } else {
-                coordinator
-            };
+            }
+        } else {
+            coordinator
+        };
 
         let coordinator = Arc::new(coordinator);
         coordinator.clone().start().await;
@@ -985,7 +980,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let gen_cfg = &app_config.generation;
 
                 // Helper: resolve api_key from vault for a transcription provider
-                let resolve_key = |name: &str, pcfg: &alephcore::GenerationProviderConfig| -> Option<String> {
+                let resolve_key = |name: &str,
+                                   pcfg: &alephcore::GenerationProviderConfig|
+                 -> Option<String> {
                     // Use config api_key if present
                     if let Some(ref key) = pcfg.api_key {
                         if !key.is_empty() {
@@ -993,7 +990,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         }
                     }
                     // Fall back to vault
-                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name)) {
+                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name))
+                    {
                         let val = secret.expose().to_string();
                         if !val.is_empty() {
                             return Some(val);
@@ -1006,12 +1004,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     .default_transcription_provider
                     .as_ref()
                     .and_then(|name| {
-                        gen_cfg.transcription_providers.get(name)
+                        gen_cfg
+                            .transcription_providers
+                            .get(name)
                             .filter(|pcfg| pcfg.enabled)
                             .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (key, pcfg)))
                     })
                     .or_else(|| {
-                        gen_cfg.transcription_providers.iter()
+                        gen_cfg
+                            .transcription_providers
+                            .iter()
                             .find_map(|(name, pcfg)| {
                                 if pcfg.enabled {
                                     resolve_key(name, pcfg).map(|key| (key, pcfg))
@@ -1193,9 +1195,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let trace_get_db = trace_db;
             server.handlers_mut().register("trace.get", move |req| {
                 let db = trace_get_db.clone();
-                async move {
-                    alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
-                }
+                async move { alephcore::gateway::handlers::trace_replay::handle_get(req, db).await }
             });
         }
 

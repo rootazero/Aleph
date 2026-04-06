@@ -275,10 +275,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
                     });
                 return Err(AlephError::RateLimitError {
-                    message: format!(
-                        "OpenAI Responses API rate limited (429): {}",
-                        error_text
-                    ),
+                    message: format!("OpenAI Responses API rate limited (429): {}", error_text),
                     suggestion: Some(suggestion),
                 });
             }

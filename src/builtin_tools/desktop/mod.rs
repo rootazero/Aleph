@@ -100,9 +100,7 @@ impl DesktopTool {
                     return Err(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(
-                            "Computer use aborted by user (Escape pressed)".into(),
-                        ),
+                        message: Some("Computer use aborted by user (Escape pressed)".into()),
                     });
                 }
             }
@@ -256,13 +254,17 @@ impl DesktopTool {
 /// or `Some((ActionType, target))` for actions that require approval.
 fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
     match args.action.as_str() {
-        "screenshot" | "ocr" | "window_list" | "cursor_position"
-        | "clipboard_read" | "screen_record" | "focus_window"
-        | "display_list" => None,
+        "screenshot" | "ocr" | "window_list" | "cursor_position" | "clipboard_read"
+        | "screen_record" | "focus_window" | "display_list" => None,
 
         "click" | "double_click" | "hover" | "mouse_button" => Some((
             ActionType::DesktopClick,
-            format!("{}({},{})", args.action, args.x.unwrap_or(0.0), args.y.unwrap_or(0.0)),
+            format!(
+                "{}({},{})",
+                args.action,
+                args.x.unwrap_or(0.0),
+                args.y.unwrap_or(0.0)
+            ),
         )),
         "drag" => Some((ActionType::DesktopClick, "drag".into())),
         "scroll" => Some((ActionType::DesktopClick, "scroll".into())),
@@ -282,9 +284,15 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
         )),
 
         "batch" => Some((ActionType::DesktopClick, "batch operation".into())),
-        "paste" => Some((ActionType::DesktopType, args.text.clone().unwrap_or_default())),
+        "paste" => Some((
+            ActionType::DesktopType,
+            args.text.clone().unwrap_or_default(),
+        )),
 
-        _ => Some((ActionType::DesktopClick, format!("unknown: {}", args.action))),
+        _ => Some((
+            ActionType::DesktopClick,
+            format!("unknown: {}", args.action),
+        )),
     }
 }
 

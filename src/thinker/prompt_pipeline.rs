@@ -829,7 +829,11 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"mcp_tool_index"));
         assert!(dynamic_names.contains(&"agent_catalog"));
-        assert_eq!(dynamic_names.len(), 10, "Exactly 10 dynamic layers expected");
+        assert_eq!(
+            dynamic_names.len(),
+            10,
+            "Exactly 10 dynamic layers expected"
+        );
     }
 
     #[test]

@@ -28,6 +28,23 @@ pub struct SlackConfig {
     /// Allow direct messages
     #[serde(default = "default_true")]
     pub dm_allowed: bool,
+
+    /// Enable message reactions (add/remove emoji)
+    #[serde(default = "default_true")]
+    pub enable_reactions: bool,
+
+    /// Enable message editing
+    #[serde(default = "default_true")]
+    pub enable_editing: bool,
+
+    /// Enable message deletion (dangerous - defaults to false)
+    #[serde(default)]
+    pub enable_deletion: bool,
+
+    /// Debounce window (ms) for coalescing rapid messages from same sender
+    /// Set to 0 to disable debouncing
+    #[serde(default)]
+    pub debounce_ms: u64,
 }
 
 impl Default for SlackConfig {
@@ -38,6 +55,10 @@ impl Default for SlackConfig {
             allowed_channels: Vec::new(),
             send_typing: true,
             dm_allowed: true,
+            enable_reactions: true,
+            enable_editing: true,
+            enable_deletion: false,
+            debounce_ms: 700,
         }
     }
 }
@@ -95,6 +116,10 @@ mod tests {
         assert!(config.allowed_channels.is_empty());
         assert!(config.send_typing);
         assert!(config.dm_allowed);
+        assert!(config.enable_reactions);
+        assert!(config.enable_editing);
+        assert!(!config.enable_deletion);
+        assert_eq!(config.debounce_ms, 700);
     }
 
     #[test]
@@ -180,6 +205,10 @@ mod tests {
             allowed_channels: vec!["C123".to_string()],
             send_typing: false,
             dm_allowed: true,
+            enable_reactions: false,
+            enable_editing: false,
+            enable_deletion: true,
+            debounce_ms: 500,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -190,6 +219,10 @@ mod tests {
         assert_eq!(deserialized.allowed_channels, config.allowed_channels);
         assert_eq!(deserialized.send_typing, config.send_typing);
         assert_eq!(deserialized.dm_allowed, config.dm_allowed);
+        assert_eq!(deserialized.enable_reactions, config.enable_reactions);
+        assert_eq!(deserialized.enable_editing, config.enable_editing);
+        assert_eq!(deserialized.enable_deletion, config.enable_deletion);
+        assert_eq!(deserialized.debounce_ms, config.debounce_ms);
     }
 
     #[test]
@@ -199,6 +232,12 @@ mod tests {
 
         assert!(config.send_typing);
         assert!(config.dm_allowed);
+        assert!(config.enable_reactions);
+        assert!(config.enable_editing);
+        assert!(!config.enable_deletion);
+        // debounce_ms defaults to 0 (disabled) when not specified in JSON
+        // because #[serde(default)] uses the type's default (0 for u64)
+        assert_eq!(config.debounce_ms, 0);
         assert!(config.allowed_channels.is_empty());
     }
 }

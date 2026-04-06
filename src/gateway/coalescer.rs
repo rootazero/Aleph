@@ -255,10 +255,7 @@ fn is_sentence_end(text: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    matches!(
-        trimmed.chars().last(),
-        Some('?' | '。' | '！' | '.' | '？')
-    )
+    matches!(trimmed.chars().last(), Some('?' | '。' | '！' | '.' | '？'))
 }
 
 // ---------------------------------------------------------------------------

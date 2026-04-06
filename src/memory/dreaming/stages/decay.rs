@@ -3,10 +3,10 @@
 use async_trait::async_trait;
 use tracing::{debug, info};
 
+use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
 use crate::memory::events::commands::ApplyDecayCommand;
 use crate::memory::store::MemoryStore;
-use super::{DreamStage, DreamContext};
 
 /// Memory decay summary report.
 #[derive(Debug, Clone, Default)]
@@ -26,10 +26,7 @@ impl DreamStage for DecayStage {
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         // 1. Apply graph decay
-        let graph_report = ctx
-            .graph_store
-            .apply_decay(&ctx.graph_decay_config)
-            .await?;
+        let graph_report = ctx.graph_store.apply_decay(&ctx.graph_decay_config).await?;
         debug!(
             pruned_nodes = graph_report.pruned_nodes,
             pruned_edges = graph_report.pruned_edges,
@@ -50,9 +47,8 @@ impl DreamStage for DecayStage {
                     // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
                     let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
                     let days_since_access = (now_ts - last_access) as f64 / 86400.0;
-                    let decay =
-                        (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp()
-                            as f32;
+                    let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64)
+                        .exp() as f32;
                     let new_strength = fact.strength * decay;
                     // Only record facts that actually change.
                     if (new_strength - fact.strength).abs() > f32::EPSILON {

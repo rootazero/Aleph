@@ -857,9 +857,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             // ClawHub tool
             "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
 
-            "gateway_route" => Box::pin(async move {
-                self.gateway_route_tool.call_json(arguments).await
-            }),
+            "gateway_route" => {
+                Box::pin(async move { self.gateway_route_tool.call_json(arguments).await })
+            }
 
             // Media send tool — no dependencies, always available
             "media_send" => Box::pin(async move {

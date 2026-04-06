@@ -43,7 +43,10 @@ impl DreamStage for SummarizeStage {
             warn!(error = %e, "SummarizeStage: failed to persist daily insight");
         }
 
-        info!(clusters = ctx.clusters.len(), "SummarizeStage: built summary");
+        info!(
+            clusters = ctx.clusters.len(),
+            "SummarizeStage: built summary"
+        );
         Ok(ctx)
     }
 }

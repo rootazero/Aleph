@@ -87,14 +87,15 @@ pub trait HandlerSchema: Send + Sync {
     ///
     /// The default implementation parses params from the request and delegates
     /// to `handle_with_params`. Override if you need direct request access.
-    fn handle(request: &JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>>
+    fn handle(
+        request: &JsonRpcRequest,
+    ) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>>
     where
         Self: Sized,
     {
         let id = request.id.clone();
-        let params_result: Result<Self::Params, _> = serde_json::from_value(
-            request.params.clone().unwrap_or(Value::Null),
-        );
+        let params_result: Result<Self::Params, _> =
+            serde_json::from_value(request.params.clone().unwrap_or(Value::Null));
 
         let params = match params_result {
             Ok(p) => p,
@@ -263,16 +264,16 @@ impl TypedHandlerRegistry {
                 "description".to_string(),
                 serde_json::Value::String(handler.description.clone()),
             );
-            method_schema.insert(
-                "params".to_string(),
-                handler.params_schema.clone(),
-            );
+            method_schema.insert("params".to_string(), handler.params_schema.clone());
             method_schema.insert(
                 "requiresAuth".to_string(),
                 serde_json::Value::Bool(handler.requires_auth),
             );
 
-            methods_schema.insert(handler.method.clone(), serde_json::Value::Object(method_schema));
+            methods_schema.insert(
+                handler.method.clone(),
+                serde_json::Value::Object(method_schema),
+            );
         }
 
         serde_json::json!({
@@ -296,10 +297,12 @@ impl TypedHandlerRegistry {
                 .and_then(|d| d.get("Root"))
                 .or_else(|| params_schema.get("properties"))
                 .cloned()
-                .unwrap_or_else(|| serde_json::json!({
-                    "type": "object",
-                    "description": handler.description.clone()
-                }));
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "type": "object",
+                        "description": handler.description.clone()
+                    })
+                });
 
             let operation = serde_json::json!({
                 "post": {
@@ -412,8 +415,7 @@ impl SchemaValidator {
     ///
     /// Returns `Ok(params)` if valid, or an error with details otherwise.
     pub fn validate<T: DeserializeOwned + JsonSchema>(params: &Value) -> Result<T, String> {
-        serde_json::from_value(params.clone())
-            .map_err(|e| format!("Invalid params: {}", e))
+        serde_json::from_value(params.clone()).map_err(|e| format!("Invalid params: {}", e))
     }
 
     /// Validate that params are present (not null/omitted) for a handler.
@@ -450,12 +452,11 @@ pub struct SchemaListParams {
 /// Handle schema.list RPC request
 ///
 /// Returns a list of all registered handler schemas, optionally filtered by category.
-pub async fn handle_schema_list(
-    request: JsonRpcRequest,
-) -> JsonRpcResponse {
+pub async fn handle_schema_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);
 
-    let params: SchemaListParams = request.params
+    let params: SchemaListParams = request
+        .params
         .and_then(|p| serde_json::from_value(p).ok())
         .unwrap_or(SchemaListParams { category: None });
 
@@ -498,10 +499,9 @@ pub struct SchemaGetParams {
 /// Handle schema.get RPC request
 ///
 /// Returns detailed schema information for a specific handler method.
-pub async fn handle_schema_get(
-    request: JsonRpcRequest,
-) -> JsonRpcResponse {
-    let params: SchemaGetParams = match request.params.and_then(|p| serde_json::from_value(p).ok()) {
+pub async fn handle_schema_get(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: SchemaGetParams = match request.params.and_then(|p| serde_json::from_value(p).ok())
+    {
         Some(p) => p,
         None => {
             return JsonRpcResponse::error(
@@ -515,33 +515,27 @@ pub async fn handle_schema_get(
     let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);
 
     match registry.get(&params.method) {
-        Some(info) => {
-            JsonRpcResponse::success(
-                request.id,
-                serde_json::json!({
-                    "method": info.method,
-                    "description": info.description,
-                    "requiresAuth": info.requires_auth,
-                    "paramsSchema": info.params_schema,
-                }),
-            )
-        }
-        None => {
-            JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Method not found: {}", params.method),
-            )
-        }
+        Some(info) => JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({
+                "method": info.method,
+                "description": info.description,
+                "requiresAuth": info.requires_auth,
+                "paramsSchema": info.params_schema,
+            }),
+        ),
+        None => JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Method not found: {}", params.method),
+        ),
     }
 }
 
 /// Handle schema.protocol RPC request
 ///
 /// Returns the full protocol schema as a JSON Schema document.
-pub async fn handle_schema_protocol(
-    request: JsonRpcRequest,
-) -> JsonRpcResponse {
+pub async fn handle_schema_protocol(request: JsonRpcRequest) -> JsonRpcResponse {
     let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);
     let schema = registry.protocol_schema();
 
@@ -552,9 +546,7 @@ pub async fn handle_schema_protocol(
 ///
 /// Returns the full API specification as an OpenAPI 3.0 document.
 /// The spec can be used with Swagger UI, Redoc, or openapi-generator.
-pub async fn handle_schema_openapi(
-    request: JsonRpcRequest,
-) -> JsonRpcResponse {
+pub async fn handle_schema_openapi(request: JsonRpcRequest) -> JsonRpcResponse {
     let registry = SCHEMA_REGISTRY.get_or_init(TypedHandlerRegistry::new);
     let spec = registry.openapi_schema();
 
@@ -629,19 +621,12 @@ mod tests {
     async fn test_typed_handler_invalid_params() {
         let handler = TypedHandler::<TestHandler>::new();
 
-        let request = JsonRpcRequest::with_id(
-            "test.method",
-            Some(json!({"invalid": "params"})),
-            json!(1),
-        );
+        let request =
+            JsonRpcRequest::with_id("test.method", Some(json!({"invalid": "params"})), json!(1));
 
         let response = handler.handle(&request).await;
         assert!(response.is_error());
-        assert!(response
-            .error
-            .unwrap()
-            .message
-            .contains("Invalid params"));
+        assert!(response.error.unwrap().message.contains("Invalid params"));
     }
 
     #[tokio::test]

@@ -164,7 +164,10 @@ impl PromptBuilder {
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
-            Some(soul) => (AssemblyPath::Soul, LayerInput::soul(&self.config, tools, soul)),
+            Some(soul) => (
+                AssemblyPath::Soul,
+                LayerInput::soul(&self.config, tools, soul),
+            ),
             None => (AssemblyPath::Basic, LayerInput::basic(&self.config, tools)),
         };
         let input = match &self.agent_def {
@@ -181,7 +184,8 @@ impl PromptBuilder {
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
         let input = LayerInput::hydration(&self.config, hydration);
-        self.pipeline.execute_cached(AssemblyPath::Hydration, &input)
+        self.pipeline
+            .execute_cached(AssemblyPath::Hydration, &input)
     }
 
     /// Build system prompt with soul section at the top
@@ -245,8 +249,7 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         soul: &SoulManifest,
     ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_agent_def(agent_def);
+        let input = LayerInput::soul(&self.config, tools, soul).with_agent_def(agent_def);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -258,8 +261,7 @@ impl PromptBuilder {
         agent_def: &crate::agents::AgentDef,
         tools: &[ToolInfo],
     ) -> String {
-        let input = LayerInput::basic(&self.config, tools)
-            .with_agent_def(agent_def);
+        let input = LayerInput::basic(&self.config, tools).with_agent_def(agent_def);
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
@@ -274,7 +276,10 @@ impl PromptBuilder {
             None => LayerInput::basic(&self.config, tools),
         };
         let stable_prefix = self.pipeline.execute_stable_only(path, &input);
-        PromptSnapshot { stable_prefix, path }
+        PromptSnapshot {
+            stable_prefix,
+            path,
+        }
     }
 
     /// Build a sub-agent prompt by reusing the snapshot's stable prefix.

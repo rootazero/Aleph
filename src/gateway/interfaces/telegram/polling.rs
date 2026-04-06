@@ -77,10 +77,7 @@ pub(crate) async fn run_polling_loop(
     //     a potentially huge backlog accumulated before the bot was connected.
     //   offset >  0 (restart): do NOT drop — resume from the persisted offset
     //     so no messages are lost between restarts.
-    let persisted_offset = offset_tracker
-        .as_ref()
-        .map(|t| t.load())
-        .unwrap_or(0);
+    let persisted_offset = offset_tracker.as_ref().map(|t| t.load()).unwrap_or(0);
 
     if persisted_offset > 0 {
         // Restart path: clear webhook but keep pending updates
@@ -97,7 +94,9 @@ pub(crate) async fn run_polling_loop(
     } else {
         // First startup: clear webhook AND drop pending updates
         match bot.delete_webhook().drop_pending_updates(true).await {
-            Ok(_) => tracing::info!("Telegram webhook cleared + pending updates dropped (first startup)"),
+            Ok(_) => {
+                tracing::info!("Telegram webhook cleared + pending updates dropped (first startup)")
+            }
             Err(e) => tracing::warn!(
                 "Failed to delete Telegram webhook: {} (polling may not work)",
                 e
@@ -109,7 +108,14 @@ pub(crate) async fn run_polling_loop(
     // When we have a persisted offset, use offset+1 so Telegram only returns
     // updates newer than what we already processed.
     let test_request = if persisted_offset > 0 {
-        bot.get_updates().offset(i32::try_from(persisted_offset).unwrap_or(i32::MAX).saturating_add(1)).limit(1).timeout(5)
+        bot.get_updates()
+            .offset(
+                i32::try_from(persisted_offset)
+                    .unwrap_or(i32::MAX)
+                    .saturating_add(1),
+            )
+            .limit(1)
+            .timeout(5)
     } else {
         bot.get_updates().limit(1).timeout(5)
     };
@@ -210,8 +216,7 @@ pub(crate) async fn run_polling_loop(
         let sweep_ec = error_cooldown.clone();
         let sweep_token = watchdog_cancel.clone();
         let _sweep = tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30 * 60));
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
@@ -261,7 +266,10 @@ pub(crate) async fn run_polling_loop(
 
         state.maybe_reset_attempts();
         let delay = state.backoff_secs();
-        tracing::info!(delay_secs = format!("{:.1}", delay), "Telegram backoff sleeping");
+        tracing::info!(
+            delay_secs = format!("{:.1}", delay),
+            "Telegram backoff sleeping"
+        );
         tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
         // healthy_since is set at dispatcher start (above), not here after backoff.
 

@@ -4,13 +4,13 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
+use crate::exec::decision::ApprovalRequest;
+use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::channel::{ChannelId, ConversationId, UserId};
 use crate::gateway::channel_approval::{
     ApprovalAction, AuthorizationResult, PendingApproval as ChannelPendingApproval,
 };
 use crate::gateway::channel_registry::ChannelRegistry;
-use crate::exec::decision::ApprovalRequest;
-use crate::exec::socket::ApprovalDecisionType;
 use chrono::{DateTime, Utc};
 
 const DELIVERY_TIMEOUT_SECS: u64 = 30;
@@ -18,7 +18,9 @@ const DELIVERY_TIMEOUT_SECS: u64 = 30;
 fn sanitize_channel_error(e: &crate::gateway::channel::ChannelError) -> String {
     use crate::gateway::channel::ChannelError;
     match e {
-        ChannelError::SendFailed(_) | ChannelError::ReceiveFailed(_) => "Failed to communicate with channel".to_string(),
+        ChannelError::SendFailed(_) | ChannelError::ReceiveFailed(_) => {
+            "Failed to communicate with channel".to_string()
+        }
         ChannelError::NotConnected(_) => "Channel not connected".to_string(),
         ChannelError::AuthFailed(_) => "Authentication failed".to_string(),
         ChannelError::RateLimited { .. } => "Rate limited".to_string(),
@@ -132,12 +134,15 @@ impl ChannelApprovalBridge {
             }
         };
 
-        self.pending_approvals.write().await.push(PendingApprovalState {
-            approval_id: pending.approval_id.clone(),
-            channel_id: channel_id.clone(),
-            conversation_id: conversation_id.clone(),
-            expires_at: pending.expires_at,
-        });
+        self.pending_approvals
+            .write()
+            .await
+            .push(PendingApprovalState {
+                approval_id: pending.approval_id.clone(),
+                channel_id: channel_id.clone(),
+                conversation_id: conversation_id.clone(),
+                expires_at: pending.expires_at,
+            });
 
         Some(ChannelApprovalResult {
             approval_id: pending.approval_id,
@@ -176,7 +181,9 @@ impl ChannelApprovalBridge {
             }
         };
 
-        let auth_result = capability.authorize_actor(actor_user_id, ApprovalAction::Approve).await;
+        let auth_result = capability
+            .authorize_actor(actor_user_id, ApprovalAction::Approve)
+            .await;
 
         match auth_result {
             AuthorizationResult::Authorized => {
@@ -190,7 +197,12 @@ impl ChannelApprovalBridge {
                 let pending_approval_id = format!("tg-{}", uuid::Uuid::new_v4());
 
                 let rendered = capability
-                    .render_approval_for_actor(&conversation_id, &approval_req, actor_user_id, &pending_approval_id)
+                    .render_approval_for_actor(
+                        &conversation_id,
+                        &approval_req,
+                        actor_user_id,
+                        &pending_approval_id,
+                    )
                     .await;
 
                 match rendered {
@@ -200,12 +212,15 @@ impl ChannelApprovalBridge {
                             Ok(_result) => {
                                 let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
 
-                                self.pending_approvals.write().await.push(PendingApprovalState {
-                                    approval_id: pending_approval_id.clone(),
-                                    channel_id: channel_id.clone(),
-                                    conversation_id: conversation_id.clone(),
-                                    expires_at,
-                                });
+                                self.pending_approvals
+                                    .write()
+                                    .await
+                                    .push(PendingApprovalState {
+                                        approval_id: pending_approval_id.clone(),
+                                        channel_id: channel_id.clone(),
+                                        conversation_id: conversation_id.clone(),
+                                        expires_at,
+                                    });
 
                                 Some(ChannelApprovalResult {
                                     approval_id: pending_approval_id,
@@ -280,14 +295,14 @@ impl ChannelApprovalBridge {
         }
     }
 
-    pub async fn resolve_approval(
-        &self,
-        approval_id: &str,
-        action: ApprovalAction,
-    ) -> Option<()> {
+    pub async fn resolve_approval(&self, approval_id: &str, action: ApprovalAction) -> Option<()> {
         let pending = {
             let mut approvals = self.pending_approvals.write().await;
-            match approvals.iter().find(|p| p.approval_id == approval_id).cloned() {
+            match approvals
+                .iter()
+                .find(|p| p.approval_id == approval_id)
+                .cloned()
+            {
                 Some(p) => {
                     if p.expires_at < Utc::now() {
                         tracing::warn!(approval_id = %approval_id, "Approval expired - removing");
@@ -301,7 +316,11 @@ impl ChannelApprovalBridge {
         };
 
         let channel = {
-            match self.registry.get(&ChannelId::new(&pending.channel_id)).await {
+            match self
+                .registry
+                .get(&ChannelId::new(&pending.channel_id))
+                .await
+            {
                 Some(c) => c,
                 None => return None,
             }
@@ -362,7 +381,10 @@ impl ChannelApprovalBridge {
     }
 
     pub async fn remove_pending(&self, approval_id: &str) {
-        self.pending_approvals.write().await.retain(|p| p.approval_id != approval_id);
+        self.pending_approvals
+            .write()
+            .await
+            .retain(|p| p.approval_id != approval_id);
     }
 }
 

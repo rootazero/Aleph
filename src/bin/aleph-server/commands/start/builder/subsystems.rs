@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
+use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
-use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
 use alephcore::gateway::security::{PairingManager, TokenManager};
 use alephcore::gateway::GatewayServer;
@@ -253,7 +253,8 @@ pub(in crate::commands::start) async fn initialize_channels(
         inject_channel_secrets(&inst.id, &mut config_with_secrets, &vault);
 
         if let Some(mut channel) =
-            create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone()).await
+            create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone())
+                .await
         {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
@@ -447,31 +448,36 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         let gen_cfg = &cfg.generation;
         {
             // Helper: resolve api_key from config or vault
-            let resolve_key = |name: &str, pcfg: &alephcore::GenerationProviderConfig| -> Option<String> {
-                if let Some(ref key) = pcfg.api_key {
-                    if !key.is_empty() {
-                        return Some(key.clone());
+            let resolve_key =
+                |name: &str, pcfg: &alephcore::GenerationProviderConfig| -> Option<String> {
+                    if let Some(ref key) = pcfg.api_key {
+                        if !key.is_empty() {
+                            return Some(key.clone());
+                        }
                     }
-                }
-                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
-                    let val = secret.expose().to_string();
-                    if !val.is_empty() {
-                        return Some(val);
+                    if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                        let val = secret.expose().to_string();
+                        if !val.is_empty() {
+                            return Some(val);
+                        }
                     }
-                }
-                None
-            };
+                    None
+                };
 
             let transcription_provider = gen_cfg
                 .default_transcription_provider
                 .as_ref()
                 .and_then(|default_name| {
-                    gen_cfg.transcription_providers.get_key_value(default_name)
+                    gen_cfg
+                        .transcription_providers
+                        .get_key_value(default_name)
                         .filter(|(_, pcfg)| pcfg.enabled)
                         .and_then(|(name, pcfg)| resolve_key(name, pcfg).map(|key| (key, pcfg)))
                 })
                 .or_else(|| {
-                    gen_cfg.transcription_providers.iter()
+                    gen_cfg
+                        .transcription_providers
+                        .iter()
                         .find_map(|(name, pcfg)| {
                             if pcfg.enabled {
                                 resolve_key(name, pcfg).map(|key| (key, pcfg))
@@ -482,10 +488,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 });
 
             if let Some((key, pcfg)) = transcription_provider {
-                let base = pcfg
-                    .base_url
-                    .as_deref()
-                    .unwrap_or("https://api.openai.com");
+                let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
                 let resolved =
                     alephcore::generation::providers::url_normalize::resolve_base_url(base);
                 let stt_endpoint =

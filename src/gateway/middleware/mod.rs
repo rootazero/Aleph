@@ -32,8 +32,8 @@ pub mod handler_service;
 pub mod metrics;
 pub mod rate_limit;
 pub mod request_state;
-pub mod traits;
 pub mod trace;
+pub mod traits;
 pub mod validate;
 
 pub use auth::{AuthLayer, AuthService};

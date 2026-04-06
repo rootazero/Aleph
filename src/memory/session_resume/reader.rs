@@ -84,9 +84,7 @@ mod tests {
 
         writer.write(&make_snapshot("old", "Old session")).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(15));
-        writer
-            .write(&make_snapshot("new", "New session"))
-            .unwrap();
+        writer.write(&make_snapshot("new", "New session")).unwrap();
 
         let latest = reader.load_latest("none").unwrap();
         assert_eq!(latest.session_id, "new");

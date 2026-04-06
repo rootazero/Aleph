@@ -802,11 +802,9 @@ fn contains_http_status(msg: &str, code: u16) -> bool {
     let mut search_from = 0;
     while let Some(pos) = msg[search_from..].find(&code_str) {
         let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0
-            || !msg.as_bytes()[abs_pos - 1].is_ascii_digit();
+        let before_ok = abs_pos == 0 || !msg.as_bytes()[abs_pos - 1].is_ascii_digit();
         let after_pos = abs_pos + code_str.len();
-        let after_ok = after_pos >= msg.len()
-            || !msg.as_bytes()[after_pos].is_ascii_digit();
+        let after_ok = after_pos >= msg.len() || !msg.as_bytes()[after_pos].is_ascii_digit();
         if before_ok && after_ok {
             return true;
         }

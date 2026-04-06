@@ -4,9 +4,8 @@
 //! dependency — this module is testable in plain `cargo test`.
 
 use aleph_protocol::{
-    AgentTraceEvent, AgentTracePresentation, AgentTracePresentationLabels,
-    AgentTracePresentationPreset, AgentTracePresentationStatus,
-    present_agent_trace_event_with_labels_and_preset,
+    present_agent_trace_event_with_labels_and_preset, AgentTraceEvent, AgentTracePresentation,
+    AgentTracePresentationLabels, AgentTracePresentationPreset, AgentTracePresentationStatus,
 };
 
 use crate::models::{TraceNode, TraceNodeType, TraceStatus};
@@ -62,12 +61,11 @@ pub fn trace_node_from_event(
     step: u64,
     labels: &TraceLabels,
 ) -> Option<TraceNode> {
-    let presentation: AgentTracePresentation =
-        present_agent_trace_event_with_labels_and_preset(
-            event,
-            &labels.inner,
-            AgentTracePresentationPreset::PanelTrace,
-        )?;
+    let presentation: AgentTracePresentation = present_agent_trace_event_with_labels_and_preset(
+        event,
+        &labels.inner,
+        AgentTracePresentationPreset::PanelTrace,
+    )?;
 
     Some(TraceNode {
         id: format!("step-{}", step),

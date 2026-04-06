@@ -80,7 +80,10 @@ impl std::fmt::Debug for SwarmConfig {
             .field("min_events_for_summary", &self.min_events_for_summary)
             .field("context_window_size", &self.context_window_size)
             .field("memory_capacity", &self.memory_capacity)
-            .field("intelligence_provider", &self.intelligence_provider.is_some())
+            .field(
+                "intelligence_provider",
+                &self.intelligence_provider.is_some(),
+            )
             .finish()
     }
 }
@@ -206,7 +209,10 @@ impl SwarmCoordinator {
     /// pick up the provider on its next summarization cycle.
     ///
     /// Returns `true` if the provider was successfully set.
-    pub fn set_intelligence_provider(&self, provider: Arc<dyn crate::providers::AiProvider>) -> bool {
+    pub fn set_intelligence_provider(
+        &self,
+        provider: Arc<dyn crate::providers::AiProvider>,
+    ) -> bool {
         self.aggregator.set_intelligence_provider(provider)
     }
 

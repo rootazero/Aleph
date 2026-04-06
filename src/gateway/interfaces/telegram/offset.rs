@@ -82,7 +82,10 @@ impl OffsetTracker {
                     new_offset = update_id,
                     "Offset advanced"
                 );
-                if let Err(e) = self.db.set_channel_offset(&self.channel_id, bot_id, update_id) {
+                if let Err(e) = self
+                    .db
+                    .set_channel_offset(&self.channel_id, bot_id, update_id)
+                {
                     tracing::error!(
                         channel_id = %self.channel_id,
                         update_id = update_id,

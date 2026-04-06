@@ -118,9 +118,10 @@ impl TokenTracker {
         let mut best_match: Option<(&str, &ModelLimit)> = None;
         for (key, limit) in &self.model_limits {
             if model.starts_with(key.as_str())
-                && best_match.is_none_or(|(k, _)| key.len() > k.len()) {
-                    best_match = Some((key.as_str(), limit));
-                }
+                && best_match.is_none_or(|(k, _)| key.len() > k.len())
+            {
+                best_match = Some((key.as_str(), limit));
+            }
         }
         if let Some((_, limit)) = best_match {
             return limit.clone();

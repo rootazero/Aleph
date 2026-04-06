@@ -828,10 +828,25 @@ mod tests {
         assert_eq!(config.weekly_enabled(), config.weekly_enabled);
         assert_eq!(config.weekly_interval_days(), config.weekly_interval_days);
         assert!((config.cluster_dbscan_eps() - config.cluster_dbscan_eps).abs() < f32::EPSILON);
-        assert_eq!(config.cluster_dbscan_min_samples(), config.cluster_dbscan_min_samples);
-        assert!((config.drift_similarity_threshold() - config.drift_similarity_threshold).abs() < f32::EPSILON);
-        assert_eq!(config.drift_max_pairs_per_run(), config.drift_max_pairs_per_run);
-        assert_eq!(config.synthesis_min_cluster_size(), config.synthesis_min_cluster_size);
-        assert_eq!(config.synthesis_max_insights(), config.synthesis_max_insights);
+        assert_eq!(
+            config.cluster_dbscan_min_samples(),
+            config.cluster_dbscan_min_samples
+        );
+        assert!(
+            (config.drift_similarity_threshold() - config.drift_similarity_threshold).abs()
+                < f32::EPSILON
+        );
+        assert_eq!(
+            config.drift_max_pairs_per_run(),
+            config.drift_max_pairs_per_run
+        );
+        assert_eq!(
+            config.synthesis_min_cluster_size(),
+            config.synthesis_min_cluster_size
+        );
+        assert_eq!(
+            config.synthesis_max_insights(),
+            config.synthesis_max_insights
+        );
     }
 }

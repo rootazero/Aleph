@@ -289,7 +289,9 @@ impl CompactionStrategy for ContextCompactor {
     > {
         Box::pin(async move {
             let before = ctx.pressure.ratio;
-            let result = self.compact(&mut ctx.messages, ctx.fresh_tail_count).await?;
+            let result = self
+                .compact(&mut ctx.messages, ctx.fresh_tail_count)
+                .await?;
             let freed = result.tokens_before.saturating_sub(result.tokens_after);
             ctx.pressure.used_tokens = ctx.pressure.used_tokens.saturating_sub(freed);
             ctx.pressure.ratio = if ctx.pressure.budget_tokens == 0 {

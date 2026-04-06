@@ -81,7 +81,9 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // Explore agent - read-only tools
         AgentDef::new("explore", AgentMode::SubAgent)
             .with_description("Read-only codebase exploration specialist")
-            .with_when_to_use("When you need to search, read, or understand code without modifying anything")
+            .with_when_to_use(
+                "When you need to search, read, or understand code without modifying anything",
+            )
             .with_prompt_sections(vec!["explore_constraints".into()])
             .with_allowed_tools(vec![
                 "glob".into(),
@@ -109,7 +111,9 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // Researcher agent - search and web
         AgentDef::new("researcher", AgentMode::SubAgent)
             .with_description("Web and document research specialist")
-            .with_when_to_use("When you need to search the web, fetch URLs, or gather external information")
+            .with_when_to_use(
+                "When you need to search the web, fetch URLs, or gather external information",
+            )
             .with_prompt_sections(vec!["researcher_protocol".into()])
             .with_allowed_tools(vec![
                 "search".into(),
@@ -126,7 +130,9 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         // Plan agent - read-only planner
         AgentDef::new("plan", AgentMode::SubAgent)
             .with_description("Read-only planning and analysis specialist")
-            .with_when_to_use("When you need to analyze requirements, design architecture, or create plans")
+            .with_when_to_use(
+                "When you need to analyze requirements, design architecture, or create plans",
+            )
             .with_prompt_sections(vec!["plan_protocol".into()])
             .with_allowed_tools(vec![
                 "glob".into(),
@@ -279,7 +285,11 @@ mod tests {
         let registry = AgentRegistry::with_builtins();
         let subagents = registry.list_subagents();
         for agent in &subagents {
-            assert!(!agent.description.is_empty(), "Agent '{}' should have a description", agent.id);
+            assert!(
+                !agent.description.is_empty(),
+                "Agent '{}' should have a description",
+                agent.id
+            );
         }
     }
 
@@ -288,7 +298,11 @@ mod tests {
         let registry = AgentRegistry::with_builtins();
         let subagents = registry.list_subagents();
         for agent in &subagents {
-            assert!(agent.when_to_use.is_some(), "Agent '{}' should have when_to_use", agent.id);
+            assert!(
+                agent.when_to_use.is_some(),
+                "Agent '{}' should have when_to_use",
+                agent.id
+            );
         }
     }
 

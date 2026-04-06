@@ -225,11 +225,7 @@ pub fn present_agent_trace_event(
         AgentTraceEvent::TurnStateEntered { state, iteration } => Some(AgentTracePresentation {
             kind: event.kind().into(),
             status: AgentTracePresentationStatus::InProgress,
-            content: format!(
-                "{} (iteration {})",
-                labels.state_label(state),
-                iteration
-            ),
+            content: format!("{} (iteration {})", labels.state_label(state), iteration),
             duration_ms: None,
         }),
 
@@ -380,7 +376,8 @@ pub fn summarize_tool_output(output: &str, limit: usize) -> String {
 /// Summarize a `AgentTraceToolResult` into a short string.
 pub fn summarize_tool_result(result: &AgentTraceToolResult, limit: usize) -> String {
     match result {
-        AgentTraceToolResult::Success { output } | AgentTraceToolResult::SuccessAndStopLoop { output } => {
+        AgentTraceToolResult::Success { output }
+        | AgentTraceToolResult::SuccessAndStopLoop { output } => {
             let text = compact_json(output);
             truncate(&text, limit)
         }
@@ -417,10 +414,7 @@ fn compact_value(v: &Value) -> String {
     match v {
         Value::String(s) => {
             if s.chars().count() > 60 {
-                let boundary = s
-                    .char_indices()
-                    .nth(57)
-                    .map_or(s.len(), |(i, _)| i);
+                let boundary = s.char_indices().nth(57).map_or(s.len(), |(i, _)| i);
                 format!("\"{}...\"", &s[..boundary])
             } else {
                 format!("\"{}\"", s)
@@ -557,7 +551,9 @@ mod tests {
     #[test]
     fn present_turn_started() {
         let event = AgentTraceEvent::TurnStarted { iteration: 1 };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug)
+                .unwrap();
         assert_eq!(p.kind, "turn_started");
         assert_eq!(p.status, AgentTracePresentationStatus::Info);
         assert!(p.content.contains("iteration 1"));
@@ -569,7 +565,9 @@ mod tests {
             iteration: 2,
             state: AgentTraceState::Think,
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::CliCompact).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::CliCompact)
+                .unwrap();
         assert_eq!(p.status, AgentTracePresentationStatus::InProgress);
         assert!(p.content.contains("Thinking"));
     }
@@ -584,7 +582,9 @@ mod tests {
                 input: json!({"path": "/tmp/x"}),
             },
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug)
+                .unwrap();
         assert!(p.content.contains("read_file"));
         assert_eq!(p.status, AgentTracePresentationStatus::InProgress);
     }
@@ -603,7 +603,9 @@ mod tests {
                 output: json!("file contents"),
             },
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug)
+                .unwrap();
         assert_eq!(p.status, AgentTracePresentationStatus::Success);
         assert_eq!(p.duration_ms, Some(42));
     }
@@ -623,7 +625,9 @@ mod tests {
                 retryable: false,
             },
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::CliCompact).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::CliCompact)
+                .unwrap();
         assert_eq!(p.status, AgentTracePresentationStatus::Failed);
     }
 
@@ -637,7 +641,9 @@ mod tests {
             hit_limit: false,
             final_text: Some("Done.".into()),
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::PanelTrace).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::PanelTrace)
+                .unwrap();
         assert_eq!(p.status, AgentTracePresentationStatus::Success);
         assert!(p.content.contains("iterations: 3"));
         assert!(p.content.contains("Done."));
@@ -656,7 +662,9 @@ mod tests {
                 total_tokens: 1200,
             },
         };
-        let p = present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug).unwrap();
+        let p =
+            present_agent_trace_event_with_preset(&event, AgentTracePresentationPreset::TuiDebug)
+                .unwrap();
         assert_eq!(p.status, AgentTracePresentationStatus::Success);
         assert!(p.content.contains("tools: 2/3"));
     }

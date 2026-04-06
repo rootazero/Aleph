@@ -1,8 +1,8 @@
 //! Version Handler
 
-use serde_json::{json, Value};
-use super::schema::{HandlerSchema, NoParams};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::schema::{HandlerSchema, NoParams};
+use serde_json::{json, Value};
 
 pub struct VersionHandler;
 
@@ -11,10 +11,7 @@ impl HandlerSchema for VersionHandler {
     const METHOD: &'static str = "version";
     const DESCRIPTION: &'static str = "Returns version information about the Gateway server";
 
-    async fn handle_with_params(
-        id: Option<Value>,
-        _params: Self::Params,
-    ) -> JsonRpcResponse {
+    async fn handle_with_params(id: Option<Value>, _params: Self::Params) -> JsonRpcResponse {
         JsonRpcResponse::success(
             id,
             json!({

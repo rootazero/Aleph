@@ -17,17 +17,16 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use super::agent_runtime::SharedSnapshot;
 use super::context_budget::diagnostics::ContextDiagnostics;
 use super::context_budget::pipeline::{
     CompactionPipeline, ImageStripper, ResultClearing, RoundDrop, ToolCompactStage,
 };
 use super::context_budget::pressure::PressureSensor;
-use super::tool_info::ToolInfo;
-use crate::thinker::prompt_builder::PromptBuilder;
-use super::agent_runtime::SharedSnapshot;
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
+use super::tool_info::ToolInfo;
 use super::tool_pipeline::PipelineOutcome;
 use super::tool_pipeline::ToolPipeline;
 use super::trace::{
@@ -40,6 +39,7 @@ use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
+use crate::thinker::prompt_builder::PromptBuilder;
 use futures::stream::BoxStream;
 
 // =============================================================================
@@ -1015,10 +1015,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .context_budget
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
-                let pressure = budget
-                    .as_ref()
-                    .and_then(|b| b.last_pressure())
-                    .cloned();
+                let pressure = budget.as_ref().and_then(|b| b.last_pressure()).cloned();
                 let level = pressure
                     .as_ref()
                     .map(|p| super::compaction::PressureLevel::from_ratio(p.ratio))
@@ -1041,8 +1038,10 @@ impl<P: LoopProvider> AgentLoop<P> {
                     match execute_result {
                         Ok(result) => {
                             if result.pressure_reduced() {
-                                let mut budget =
-                                    self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut budget = self
+                                    .context_budget
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 if let Some(ref mut b) = *budget {
                                     b.notify_compaction_success();
                                 }
@@ -2193,11 +2192,7 @@ impl<P: LoopProvider> AgentLoop<P> {
     ///
     /// Synchronous write is acceptable here — we're at loop exit, no more LLM
     /// calls or tool execution pending. The write is < 1ms for a small JSON file.
-    fn maybe_write_session_snapshot(
-        &self,
-        progress: &LoopProgress,
-        messages: &[UnifiedMessage],
-    ) {
+    fn maybe_write_session_snapshot(&self, progress: &LoopProgress, messages: &[UnifiedMessage]) {
         // Only write snapshots for root agents, not subagents
         if self.chain.depth > 0 {
             return;
@@ -2230,9 +2225,8 @@ impl<P: LoopProvider> AgentLoop<P> {
 
         let summary_truncated: String = summary.chars().take(500).collect();
 
-        let key_decisions = crate::memory::session_resume::SessionSnapshot::extract_decisions(
-            &summary_truncated,
-        );
+        let key_decisions =
+            crate::memory::session_resume::SessionSnapshot::extract_decisions(&summary_truncated);
 
         let snapshot = crate::memory::session_resume::SessionSnapshot {
             session_id: self.chain.chain_id.clone(),
@@ -2259,10 +2253,10 @@ impl<P: LoopProvider> AgentLoop<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinker::prompt_builder::PromptConfig;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, TokenUsage};
     use crate::providers::message::ContentBlock;
     use crate::sync_primitives::{Arc, Mutex};
+    use crate::thinker::prompt_builder::PromptConfig;
     use serde_json::json;
     use tokio_util::sync::CancellationToken;
 

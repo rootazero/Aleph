@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 
 use crate::screen_types::{ScreenRecordConfig, ScreenRecordResult};
-use crate::{DisplayInfo, MouseButton, OcrResult, PressAction, Result, ScreenRegion, Screenshot, WindowInfo};
+use crate::{
+    DisplayInfo, MouseButton, OcrResult, PressAction, Result, ScreenRegion, Screenshot, WindowInfo,
+};
 
 /// Screen perception and input automation.
 #[async_trait]
@@ -56,7 +58,9 @@ pub trait ScreenCapability: Send + Sync {
 
     /// Get current mouse cursor position.
     async fn cursor_position(&self) -> Result<(f64, f64)> {
-        Err(crate::DesktopError::NotImplemented("cursor_position".into()))
+        Err(crate::DesktopError::NotImplemented(
+            "cursor_position".into(),
+        ))
     }
 
     /// Press/release mouse button independently.
@@ -85,7 +89,9 @@ pub trait ScreenCapability: Send + Sync {
     /// Write text to system clipboard.
     async fn clipboard_write(&self, text: &str) -> Result<()> {
         let _ = text;
-        Err(crate::DesktopError::NotImplemented("clipboard_write".into()))
+        Err(crate::DesktopError::NotImplemented(
+            "clipboard_write".into(),
+        ))
     }
 
     /// List all connected displays.

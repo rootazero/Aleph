@@ -213,12 +213,10 @@ impl Channel for TelegramChannel {
                                     reachable += 1;
                                 }
                                 Ok(Err(e)) => {
-                                    warnings
-                                        .push(format!("Group {} unreachable: {}", gid, e));
+                                    warnings.push(format!("Group {} unreachable: {}", gid, e));
                                 }
                                 Err(_) => {
-                                    warnings
-                                        .push(format!("Group {} check timed out", gid));
+                                    warnings.push(format!("Group {} check timed out", gid));
                                 }
                             }
                         }
@@ -505,7 +503,14 @@ impl Channel for TelegramChannel {
         let status = self.channel_state.status_handle();
         let offset = self.offset_tracker.clone();
         let ec = self.error_cooldown.clone();
-        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx, offset, ec));
+        tokio::spawn(polling::run_polling_loop(
+            bot,
+            handler,
+            status,
+            shutdown_rx,
+            offset,
+            ec,
+        ));
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
@@ -586,24 +591,28 @@ impl Channel for TelegramChannel {
         ))
     }
 
-    fn approval_capability(&self) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
-        Some(Arc::new(crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
-            Arc::new(TelegramChannel {
-                info: self.info.clone(),
-                config: self.config.clone(),
-                channel_state: ChannelState::new(100),
-                callback_tx: self.callback_tx.clone(),
-                callback_rx: None,
-                shutdown_tx: None,
-                bot: self.bot.clone(),
-                tool_registry: self.tool_registry.clone(),
-                access: self.access.clone(),
-                error_cooldown: self.error_cooldown.clone(),
-                offset_tracker: self.offset_tracker.clone(),
-                state_db: self.state_db.clone(),
-            }),
-            self.access.clone(),
-        )))
+    fn approval_capability(
+        &self,
+    ) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
+        Some(Arc::new(
+            crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
+                Arc::new(TelegramChannel {
+                    info: self.info.clone(),
+                    config: self.config.clone(),
+                    channel_state: ChannelState::new(100),
+                    callback_tx: self.callback_tx.clone(),
+                    callback_rx: None,
+                    shutdown_tx: None,
+                    bot: self.bot.clone(),
+                    tool_registry: self.tool_registry.clone(),
+                    access: self.access.clone(),
+                    error_cooldown: self.error_cooldown.clone(),
+                    offset_tracker: self.offset_tracker.clone(),
+                    state_db: self.state_db.clone(),
+                }),
+                self.access.clone(),
+            ),
+        ))
     }
 }
 

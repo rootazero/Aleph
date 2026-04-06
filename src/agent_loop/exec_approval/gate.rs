@@ -2,17 +2,13 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 
-use crate::agent_loop::exec_approval::types::{ApprovalAction, ApprovalConfig, ApprovalDecision};
 use crate::agent_loop::exec_approval::parser::parse_approval;
+use crate::agent_loop::exec_approval::types::{ApprovalAction, ApprovalConfig, ApprovalDecision};
 use crate::providers::adapter::ProviderResponse;
 
 #[async_trait]
 pub trait ApprovalRequester: Send + Sync {
-    async fn request_approval(
-        &self,
-        tool_name: &str,
-        reason: &str,
-    ) -> ApprovalOutcome;
+    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +44,11 @@ impl ApprovalGate {
         self
     }
 
-    pub fn parse_and_decide(&self, response: &ProviderResponse, tool_names: &[&str]) -> ApprovalDecision {
+    pub fn parse_and_decide(
+        &self,
+        response: &ProviderResponse,
+        tool_names: &[&str],
+    ) -> ApprovalDecision {
         let decision = parse_approval(&response.text);
         let decision = self.apply_safety_floor(decision, tool_names);
         tracing::info!(
@@ -59,14 +59,18 @@ impl ApprovalGate {
         decision
     }
 
-    fn apply_safety_floor(&self, mut decision: ApprovalDecision, tool_names: &[&str]) -> ApprovalDecision {
+    fn apply_safety_floor(
+        &self,
+        mut decision: ApprovalDecision,
+        tool_names: &[&str],
+    ) -> ApprovalDecision {
         if self.config.always_confirm.is_empty() {
             return decision;
         }
 
-        let needs_override = tool_names.iter().any(|name| {
-            self.config.always_confirm.iter().any(|c| c == name)
-        });
+        let needs_override = tool_names
+            .iter()
+            .any(|name| self.config.always_confirm.iter().any(|c| c == name));
 
         if needs_override {
             decision.action = ApprovalAction::AskUser;
@@ -97,8 +101,12 @@ impl ApprovalGate {
     }
 
     pub fn should_retry(&self, decision: &ApprovalDecision) -> bool {
-        matches!(decision.action, ApprovalAction::Block { action: crate::agent_loop::exec_approval::types::BlockAction::Retry })
-            && self.retry_count < 2
+        matches!(
+            decision.action,
+            ApprovalAction::Block {
+                action: crate::agent_loop::exec_approval::types::BlockAction::Retry
+            }
+        ) && self.retry_count < 2
     }
 
     pub fn record_retry(&mut self) {
@@ -138,7 +146,7 @@ mod tests {
         let config = ApprovalConfig::default();
         let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
-            r#"<exec-approval>{"action":"auto_execute","reason":"safe"}</exec-approval>"#
+            r#"<exec-approval>{"action":"auto_execute","reason":"safe"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &[]);
         assert!(matches!(decision.action, ApprovalAction::AutoExecute));
@@ -149,7 +157,7 @@ mod tests {
         let config = ApprovalConfig::default();
         let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
-            r#"<exec-approval>{"action":"ask_user","reason":"uncertain"}</exec-approval>"#
+            r#"<exec-approval>{"action":"ask_user","reason":"uncertain"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &[]);
         assert!(matches!(decision.action, ApprovalAction::AskUser));
@@ -162,7 +170,7 @@ mod tests {
         config.always_confirm.insert("bash_exec".to_string());
         let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
-            r#"<exec-approval>{"action":"auto_execute","reason":"safe"}</exec-approval>"#
+            r#"<exec-approval>{"action":"auto_execute","reason":"safe"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &["bash_exec"]);
         assert!(matches!(decision.action, ApprovalAction::AskUser));
@@ -173,7 +181,7 @@ mod tests {
         let config = ApprovalConfig::default();
         let mut gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
-            r#"<exec-approval>{"action":"block","block_action":"retry","reason":"alternative"}</exec-approval>"#
+            r#"<exec-approval>{"action":"block","block_action":"retry","reason":"alternative"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &[]);
         assert!(gate.should_retry(&decision));
@@ -191,12 +199,14 @@ mod tests {
         let config = ApprovalConfig::default();
         let gate = ApprovalGate::new(config, None);
         let response = make_response_with_approval(
-            r#"<exec-approval>{"action":"block","block_action":"notify","reason":"dangerous"}</exec-approval>"#
+            r#"<exec-approval>{"action":"block","block_action":"notify","reason":"dangerous"}</exec-approval>"#,
         );
         let decision = gate.parse_and_decide(&response, &[]);
         assert!(matches!(
             decision.action,
-            ApprovalAction::Block { action: BlockAction::Notify }
+            ApprovalAction::Block {
+                action: BlockAction::Notify
+            }
         ));
         assert!(gate.should_request_approval(&decision));
     }

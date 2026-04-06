@@ -408,7 +408,10 @@ mod tests {
             }
         }
 
-        assert_eq!(ctrl.try_pair(111, &code, "test-channel").await, PairingResult::Expired);
+        assert_eq!(
+            ctrl.try_pair(111, &code, "test-channel").await,
+            PairingResult::Expired
+        );
     }
 
     #[tokio::test]

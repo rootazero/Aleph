@@ -9,7 +9,7 @@ use tower::{Layer, Service};
 use tracing::warn;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::gateway::rate_limiter::{RateLimiter, RateLimitKey, scope_for_method};
+use crate::gateway::rate_limiter::{scope_for_method, RateLimitKey, RateLimiter};
 
 #[derive(Clone)]
 pub struct RateLimitLayer {
@@ -79,8 +79,6 @@ where
             return Box::pin(async move { Ok(response) });
         }
 
-        Box::pin(async move {
-            inner_mut.call(req).await
-        })
+        Box::pin(async move { inner_mut.call(req).await })
     }
 }

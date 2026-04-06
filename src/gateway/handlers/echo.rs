@@ -1,10 +1,10 @@
 //! Echo Handler
 
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use super::schema::HandlerSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use super::schema::HandlerSchema;
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct EchoParams(pub Option<Value>);
@@ -22,10 +22,7 @@ impl HandlerSchema for EchoHandler {
     const METHOD: &'static str = "echo";
     const DESCRIPTION: &'static str = "Echoes back the request parameters for testing purposes";
 
-    async fn handle_with_params(
-        id: Option<Value>,
-        params: Self::Params,
-    ) -> JsonRpcResponse {
+    async fn handle_with_params(id: Option<Value>, params: Self::Params) -> JsonRpcResponse {
         JsonRpcResponse::success(id, json!({ "echo": params.0 }))
     }
 }
@@ -38,7 +35,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::super::schema::TypedHandler;
-    use super::{JsonRpcRequest, EchoHandler};
+    use super::{EchoHandler, JsonRpcRequest};
     use serde_json::json;
 
     #[tokio::test]

@@ -80,8 +80,10 @@ struct ParsedRequest<'a> {
 fn parse_http_request(data: &[u8]) -> Option<ParsedRequest<'_>> {
     // Find body start by looking for \r\n\r\n sequence
     let body_separator = b"\r\n\r\n";
-    let body_start = data.windows(4)
-        .position(|window| window == body_separator)? + 4;
+    let body_start = data
+        .windows(4)
+        .position(|window| window == body_separator)?
+        + 4;
 
     let headers_section = &data[..body_start - 4];
     let headers_str = std::str::from_utf8(headers_section).ok()?;
@@ -276,8 +278,8 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
                 }
             };
 
-            let resolved_name = sender_name
-                .or_else(|| ctx.user_cache.get(&sender_id).and_then(|p| p.name.clone()));
+            let resolved_name =
+                sender_name.or_else(|| ctx.user_cache.get(&sender_id).and_then(|p| p.name.clone()));
 
             if let Some(ref name) = resolved_name {
                 ctx.user_cache.insert(UserProfile {
@@ -333,7 +335,12 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
             tracing::info!("Feishu bot removed from chat {}", chat_id);
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
         }
-        FeishuEvent::ReactionCreated { message_id, chat_id, emoji, operator_id } => {
+        FeishuEvent::ReactionCreated {
+            message_id,
+            chat_id,
+            emoji,
+            operator_id,
+        } => {
             if !ctx.config.reaction_notifications {
                 return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string();
             }
@@ -347,7 +354,9 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
                     return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string();
                 }
             };
-            let is_bot_message = original_msg.sender.as_ref()
+            let is_bot_message = original_msg
+                .sender
+                .as_ref()
                 .and_then(|s| s.sender_id.as_ref())
                 .and_then(|id| id.open_id.as_ref())
                 .map(|id| id.as_str() == ctx.bot_open_id.as_str())
@@ -355,13 +364,16 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
             if !is_bot_message {
                 tracing::debug!(
                     "Ignoring reaction on non-bot message {} by {}",
-                    message_id, operator_id
+                    message_id,
+                    operator_id
                 );
                 return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string();
             }
             let synthetic_id = format!("{}:reaction:{}", message_id, emoji);
             let content = format!("[reacted with {} to message {}]", emoji, message_id);
-            let resolved_chat_id = chat_id.clone().unwrap_or_else(|| format!("p2p:{}", operator_id));
+            let resolved_chat_id = chat_id
+                .clone()
+                .unwrap_or_else(|| format!("p2p:{}", operator_id));
             let conversation_id = resolved_chat_id.clone();
             let inbound = InboundMessage {
                 id: MessageId::new(&synthetic_id),
@@ -382,15 +394,25 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
             }
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
         }
-        FeishuEvent::ReactionDeleted { message_id, emoji, .. } => {
+        FeishuEvent::ReactionDeleted {
+            message_id, emoji, ..
+        } => {
             tracing::debug!("Feishu reaction deleted: {} on {}", emoji, message_id);
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
         }
-        FeishuEvent::BotMenu { event_key, operator_id, .. } => {
+        FeishuEvent::BotMenu {
+            event_key,
+            operator_id,
+            ..
+        } => {
             tracing::info!("Feishu bot menu event: {} by {}", event_key, operator_id);
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
         }
-        FeishuEvent::DriveComment { event_id, file_token, .. } => {
+        FeishuEvent::DriveComment {
+            event_id,
+            file_token,
+            ..
+        } => {
             tracing::info!("Feishu drive comment: {} on file {}", event_id, file_token);
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
         }

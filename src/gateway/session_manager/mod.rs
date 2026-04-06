@@ -77,7 +77,6 @@ pub enum SessionState {
     Stopped,
 }
 
-
 impl std::fmt::Display for SessionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -353,23 +352,22 @@ impl SessionManager {
 
     /// Migrate existing sessions table to add state column
     fn migrate_add_state_column(conn: &Connection) -> Result<(), SessionManagerError> {
-        let has_state: Result<bool, _> = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name='state'",
-                [],
-                |row| row.get(0),
-            );
+        let has_state: Result<bool, _> = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name='state'",
+            [],
+            |row| row.get(0),
+        );
 
         match has_state {
             Ok(true) => {}
             Ok(false) => {
-                conn.execute("ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'", [])
-                    .map_err(|e| {
-                        SessionManagerError::DatabaseError(format!(
-                            "Failed to add state column: {}",
-                            e
-                        ))
-                    })?;
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'",
+                    [],
+                )
+                .map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Failed to add state column: {}", e))
+                })?;
                 tracing::info!("Migrated sessions table: added state column");
             }
             Err(e) => {
@@ -377,13 +375,13 @@ impl SessionManager {
                     error = %e,
                     "Failed to check if state column exists - assuming it doesn't"
                 );
-                conn.execute("ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'", [])
-                    .map_err(|e| {
-                        SessionManagerError::DatabaseError(format!(
-                            "Failed to add state column: {}",
-                            e
-                        ))
-                    })?;
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'",
+                    [],
+                )
+                .map_err(|e| {
+                    SessionManagerError::DatabaseError(format!("Failed to add state column: {}", e))
+                })?;
             }
         }
 

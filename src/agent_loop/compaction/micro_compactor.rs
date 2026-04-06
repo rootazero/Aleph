@@ -287,8 +287,7 @@ impl CompactionStrategy for MicroCompactor {
             for entry in &candidates {
                 // Stop once pressure drops below 0.70.
                 let budget = ctx.pressure.budget_tokens.max(1) as f64;
-                let current_pressure =
-                    pressure_before - (freed_tokens as f64 / budget);
+                let current_pressure = pressure_before - (freed_tokens as f64 / budget);
                 if current_pressure < 0.70 {
                     break;
                 }
@@ -361,10 +360,7 @@ mod tests {
             Importance::Medium
         );
         // High: memory tool name
-        assert_eq!(
-            classify_importance("memory", "saved", 1),
-            Importance::High
-        );
+        assert_eq!(classify_importance("memory", "saved", 1), Importance::High);
         // High: content contains error keyword
         assert_eq!(
             classify_importance("run_code", "error: panicked", 1),

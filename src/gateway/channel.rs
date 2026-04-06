@@ -219,6 +219,9 @@ pub enum MessageMeta {
         sender_name: Option<String>,
         date: Option<DateTime<Utc>>,
     },
+    /// Slack `app_mention` event — message contains a bot mention.
+    /// This bypasses mention-gating since Slack has already validated the mention.
+    AppMention,
 }
 
 /// Message received from a channel

@@ -24,9 +24,7 @@ impl StateDatabase {
             })?;
         let rows = stmt
             .query_map(params![channel_id], |row| row.get(0))
-            .map_err(|e| {
-                AlephError::config(format!("Failed to load paired users: {}", e))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to load paired users: {}", e)))?;
         let mut user_ids = Vec::new();
         for row in rows {
             user_ids.push(row.map_err(|e| {

@@ -133,9 +133,8 @@ impl ComputerUseLock {
         }
 
         if self.lock_path.exists() {
-            fs::remove_file(&self.lock_path).map_err(|e| {
-                format!("ComputerUseLock: failed to remove lock file: {e}")
-            })?;
+            fs::remove_file(&self.lock_path)
+                .map_err(|e| format!("ComputerUseLock: failed to remove lock file: {e}"))?;
         }
 
         self.held = false;
@@ -158,9 +157,8 @@ impl ComputerUseLock {
     fn write_lock_file(&self) -> Result<(), String> {
         // Ensure parent directory exists.
         if let Some(parent) = self.lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!("ComputerUseLock: failed to create lock directory: {e}")
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("ComputerUseLock: failed to create lock directory: {e}"))?;
         }
 
         let info = LockInfo {
@@ -236,7 +234,8 @@ mod tests {
         let mut lock = make_lock("session-reentrant", &dir);
 
         lock.acquire().expect("first acquire should succeed");
-        lock.acquire().expect("second acquire (re-entrant) should succeed");
+        lock.acquire()
+            .expect("second acquire (re-entrant) should succeed");
         assert!(lock.is_held());
     }
 

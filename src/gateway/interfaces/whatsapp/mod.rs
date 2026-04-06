@@ -36,7 +36,9 @@ pub mod history_buffer;
 pub mod media;
 pub mod reactions;
 
-pub use config::{WhatsAppConfig, WhatsAppAccountConfig, AccessConfig, DeliveryConfig, ReactionConfig};
+pub use config::{
+    AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppAccountConfig, WhatsAppConfig,
+};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,

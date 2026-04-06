@@ -15,8 +15,10 @@ use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
+use super::agent_runtime::{
+    AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, SharedSnapshot, ToolRegistryFactory,
+};
 use super::background_tracker::BackgroundAgentTracker;
-use super::agent_runtime::{AgentRuntime, AgentRuntimeConfig, SharedSnapshot, SafetyGuardFactory, ToolRegistryFactory};
 use super::subagent_teammates::TeammateManager;
 use super::tool::{LoopTool, ToolResult};
 use crate::agents::AgentRegistry;
@@ -34,7 +36,11 @@ enum SubagentAction {
     /// Check status of a background sub-agent.
     CheckStatus(String),
     /// Send a message to a named teammate.
-    SendMessage { to: String, text: String, team_name: String },
+    SendMessage {
+        to: String,
+        text: String,
+        team_name: String,
+    },
     /// Read inbox messages.
     ReadInbox { team_name: String },
 }
@@ -157,10 +163,7 @@ impl SubagentTool {
 /// Parse the input JSON into a SubagentAction.
 fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     // Determine action from explicit field, falling back to legacy heuristics.
-    let action = input
-        .get("action")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
 
     match action {
         "send_message" => {
@@ -275,7 +278,9 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
     // Named teammates always run in background — override explicitly at parse time
     let run_in_background = if name.is_some() {
         if !run_in_background {
-            tracing::info!("Named teammates always run in background — overriding run_in_background to true");
+            tracing::info!(
+                "Named teammates always run in background — overriding run_in_background to true"
+            );
         }
         true
     } else {
@@ -380,7 +385,11 @@ impl LoopTool for SubagentTool {
 
         // Handle non-run actions
         let args = match action {
-            SubagentAction::SendMessage { to, text, team_name } => {
+            SubagentAction::SendMessage {
+                to,
+                text,
+                team_name,
+            } => {
                 let router = match &self.message_router {
                     Some(r) => r.clone(),
                     None => {
@@ -437,8 +446,7 @@ impl LoopTool for SubagentTool {
                     Some(i) => i.clone(),
                     None => {
                         return ToolResult::Error {
-                            error: "read_inbox requires an inbox (not configured)"
-                                .to_string(),
+                            error: "read_inbox requires an inbox (not configured)".to_string(),
                             retryable: false,
                         };
                     }
@@ -606,8 +614,11 @@ impl LoopTool for SubagentTool {
             let request_id = uuid::Uuid::new_v4().to_string();
             let cancel_token = CancellationToken::new();
 
-            self.background_tracker
-                .register(request_id.clone(), cancel_token.clone(), args.task.clone());
+            self.background_tracker.register(
+                request_id.clone(),
+                cancel_token.clone(),
+                args.task.clone(),
+            );
 
             // Compute fork decision and clone snapshot BEFORE moving into spawn
             let should_fork_flag = self.should_fork(&args);
@@ -643,13 +654,8 @@ impl LoopTool for SubagentTool {
                     prompt_snapshot: snapshot,
                 };
 
-                let runtime = AgentRuntime::new(
-                    provider,
-                    factory,
-                    safety_factory,
-                    child_chain,
-                    cancel_token,
-                );
+                let runtime =
+                    AgentRuntime::new(provider, factory, safety_factory, child_chain, cancel_token);
 
                 let result = AssertUnwindSafe(runtime.run(runtime_config))
                     .catch_unwind()
@@ -929,7 +935,11 @@ mod tests {
         .unwrap();
 
         match action {
-            SubagentAction::SendMessage { to, text, team_name } => {
+            SubagentAction::SendMessage {
+                to,
+                text,
+                team_name,
+            } => {
                 assert_eq!(to, "builder-1");
                 assert_eq!(text, "please review the PR");
                 assert_eq!(team_name, "alpha");
@@ -1111,10 +1121,7 @@ mod tests {
             .await;
         match result {
             ToolResult::Error { error, .. } => {
-                assert!(
-                    error.contains("inbox"),
-                    "unexpected error: {error}"
-                );
+                assert!(error.contains("inbox"), "unexpected error: {error}");
             }
             _ => panic!("expected error when inbox not configured"),
         }

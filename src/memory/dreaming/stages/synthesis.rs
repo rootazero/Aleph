@@ -101,8 +101,7 @@ impl DreamStage for DeepSynthesisStage {
                 continue;
             }
 
-            let embeddings: Vec<Vec<f32>> =
-                with_emb.iter().map(|(_, e)| (*e).clone()).collect();
+            let embeddings: Vec<Vec<f32>> = with_emb.iter().map(|(_, e)| (*e).clone()).collect();
             let emb_to_idx: Vec<usize> = with_emb.iter().map(|(i, _)| *i).collect();
 
             let labels = dbscan(&embeddings, SYNTHESIS_EPS, min_cluster_size);
@@ -127,14 +126,10 @@ impl DreamStage for DeepSynthesisStage {
                     member_indices.iter().map(|&i| group_facts[i]).collect();
 
                 // Compute average confidence
-                let avg_confidence = cluster_facts
-                    .iter()
-                    .map(|f| f.confidence)
-                    .sum::<f32>()
+                let avg_confidence = cluster_facts.iter().map(|f| f.confidence).sum::<f32>()
                     / cluster_facts.len() as f32;
 
-                let source_ids: Vec<String> =
-                    cluster_facts.iter().map(|f| f.id.clone()).collect();
+                let source_ids: Vec<String> = cluster_facts.iter().map(|f| f.id.clone()).collect();
 
                 // Build combined content for theme
                 let combined: String = cluster_facts
@@ -175,17 +170,13 @@ impl DreamStage for DeepSynthesisStage {
                 .and_then(|s| s.parse::<FactType>().ok())
                 .unwrap_or(FactType::Other);
 
-            let synthesized = MemoryFact::new(
-                content,
-                fact_type,
-                insight.source_fact_ids.clone(),
-            )
-            .with_fact_source(FactSource::Synthesis)
-            .with_tier(MemoryTier::Core)
-            .with_layer(MemoryLayer::L0Abstract)
-            .with_scope(MemoryScope::Global)
-            .with_specificity(FactSpecificity::Abstract)
-            .with_confidence(insight.confidence);
+            let synthesized = MemoryFact::new(content, fact_type, insight.source_fact_ids.clone())
+                .with_fact_source(FactSource::Synthesis)
+                .with_tier(MemoryTier::Core)
+                .with_layer(MemoryLayer::L0Abstract)
+                .with_scope(MemoryScope::Global)
+                .with_specificity(FactSpecificity::Abstract)
+                .with_confidence(insight.confidence);
 
             if let Err(e) = ctx.database.insert_fact(&synthesized).await {
                 warn!(error = %e, "DeepSynthesisStage: failed to insert synthesized fact");
@@ -360,11 +351,11 @@ mod tests {
 
     #[tokio::test]
     async fn should_run_false_for_daily_via_trait() {
+        use super::DreamContext;
         use crate::memory::decay::DecayConfig;
+        use crate::memory::dreaming::stages::drift::DriftAction;
         use crate::memory::graph::{GraphDecayConfig, GraphStore};
         use crate::sync_primitives::Arc;
-        use super::DreamContext;
-        use crate::memory::dreaming::stages::drift::DriftAction;
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
@@ -392,16 +383,19 @@ mod tests {
         };
 
         let stage = DeepSynthesisStage;
-        assert!(!stage.should_run(&ctx).await, "Daily runs should skip deep synthesis");
+        assert!(
+            !stage.should_run(&ctx).await,
+            "Daily runs should skip deep synthesis"
+        );
     }
 
     #[tokio::test]
     async fn should_run_true_for_weekly_via_trait() {
+        use super::DreamContext;
         use crate::memory::decay::DecayConfig;
+        use crate::memory::dreaming::stages::drift::DriftAction;
         use crate::memory::graph::{GraphDecayConfig, GraphStore};
         use crate::sync_primitives::Arc;
-        use super::DreamContext;
-        use crate::memory::dreaming::stages::drift::DriftAction;
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
@@ -429,7 +423,10 @@ mod tests {
         };
 
         let stage = DeepSynthesisStage;
-        assert!(stage.should_run(&ctx).await, "Weekly runs should execute deep synthesis");
+        assert!(
+            stage.should_run(&ctx).await,
+            "Weekly runs should execute deep synthesis"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -438,11 +435,11 @@ mod tests {
 
     #[tokio::test]
     async fn execute_skips_when_too_few_ltm_facts() {
+        use super::DreamContext;
         use crate::memory::decay::DecayConfig;
+        use crate::memory::dreaming::stages::drift::DriftAction;
         use crate::memory::graph::{GraphDecayConfig, GraphStore};
         use crate::sync_primitives::Arc;
-        use super::DreamContext;
-        use crate::memory::dreaming::stages::drift::DriftAction;
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())

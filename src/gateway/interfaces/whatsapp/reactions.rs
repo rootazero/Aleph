@@ -62,16 +62,19 @@ impl ReactionHandler {
             runtime,
         }
     }
-    
+
     pub async fn send_ack(&self, msg: &InboundMessage) -> Result<(), String> {
-        if !matches!(self.level, ReactionLevel::Ack | ReactionLevel::Minimal | ReactionLevel::Extensive) {
+        if !matches!(
+            self.level,
+            ReactionLevel::Ack | ReactionLevel::Minimal | ReactionLevel::Extensive
+        ) {
             return Ok(());
         }
-        
+
         let Some(config) = &self.ack_config else {
             return Ok(());
         };
-        
+
         if msg.is_group {
             if !matches!(config.group, GroupReactionMode::Always) {
                 return Ok(());
@@ -79,7 +82,7 @@ impl ReactionHandler {
         } else if !config.direct {
             return Ok(());
         }
-        
+
         self.runtime
             .send_reaction(
                 msg.conversation_id.as_str(),
@@ -88,10 +91,10 @@ impl ReactionHandler {
             )
             .await
             .map_err(|e| e.to_string())?;
-        
+
         Ok(())
     }
-    
+
     pub fn should_agent_react(&self, msg: &InboundMessage) -> bool {
         match self.level {
             ReactionLevel::Off | ReactionLevel::Ack => false,
@@ -99,7 +102,7 @@ impl ReactionHandler {
             ReactionLevel::Extensive => true,
         }
     }
-    
+
     fn should_minimal_react(&self, _msg: &InboundMessage) -> bool {
         false
     }

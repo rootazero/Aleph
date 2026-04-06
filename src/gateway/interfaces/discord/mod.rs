@@ -346,7 +346,7 @@ impl EventHandler for Handler {
         }
     }
 
-async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
+    async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
         let serenity::all::Interaction::Command(command) = interaction else {
             return;
         };
@@ -439,7 +439,11 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
             return;
         }
         let channel_id = new_channel.id.get();
-        tracing::debug!("Thread created: {} in channel {}", channel_id, new_channel.parent_id.map(|p| p.get()).unwrap_or(0));
+        tracing::debug!(
+            "Thread created: {} in channel {}",
+            channel_id,
+            new_channel.parent_id.map(|p| p.get()).unwrap_or(0)
+        );
 
         let binding = ThreadBinding::new(
             channel_id,
@@ -455,7 +459,12 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
             .insert(channel_id, binding);
     }
 
-    async fn thread_update(&self, _ctx: Context, _old_channel: Option<GuildChannel>, new_channel: GuildChannel) {
+    async fn thread_update(
+        &self,
+        _ctx: Context,
+        _old_channel: Option<GuildChannel>,
+        new_channel: GuildChannel,
+    ) {
         if !self.config.intents.guild_threads {
             return;
         }
@@ -466,12 +475,23 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
         }
     }
 
-    async fn thread_delete(&self, _ctx: Context, channel: PartialGuildChannel, _channel_as_thread: Option<GuildChannel>) {
+    async fn thread_delete(
+        &self,
+        _ctx: Context,
+        channel: PartialGuildChannel,
+        _channel_as_thread: Option<GuildChannel>,
+    ) {
         if !self.config.intents.guild_threads {
             return;
         }
         let channel_id = channel.id.get();
-        if self.thread_bindings.write().await.remove(&channel_id).is_some() {
+        if self
+            .thread_bindings
+            .write()
+            .await
+            .remove(&channel_id)
+            .is_some()
+        {
             tracing::debug!("Thread deleted: {}", channel_id);
         }
     }

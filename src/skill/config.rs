@@ -44,8 +44,7 @@ pub struct SkillEntryConfig {
 }
 
 /// Root config, persisted as TOML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillsConfig {
     #[serde(default)]
     pub install_preferences: InstallPreferences,
@@ -69,8 +68,7 @@ impl SkillsConfig {
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let content = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp_path = path.with_extension("toml.tmp");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

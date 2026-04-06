@@ -2,8 +2,8 @@
 
 use serde_json::json;
 
-use crate::gateway::middleware::request_state::get_global_registry;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use crate::gateway::middleware::request_state::get_global_registry;
 
 pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
     match get_global_registry() {
@@ -44,7 +44,10 @@ mod tests {
         // When registry is not initialized, we get an error
         // This is expected in unit tests
         if response.is_error() {
-            assert_eq!(response.error.clone().unwrap().message, "Request state registry not initialized");
+            assert_eq!(
+                response.error.clone().unwrap().message,
+                "Request state registry not initialized"
+            );
         }
     }
 }

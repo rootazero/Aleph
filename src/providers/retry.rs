@@ -67,9 +67,7 @@ fn is_retryable_with_policy(error: &AlephError, policy: &RetryPolicy) -> bool {
 /// rate limits indicate quota exhaustion and retrying amplifies the problem.
 fn is_overloaded_message(message: &str) -> bool {
     let lower = message.to_lowercase();
-    lower.contains("overloaded")
-        || lower.contains("exhausted")
-        || lower.contains("capacity")
+    lower.contains("overloaded") || lower.contains("exhausted") || lower.contains("capacity")
 }
 
 /// Extended retryable check that returns the reason if retryable

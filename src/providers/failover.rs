@@ -322,10 +322,7 @@ impl FailoverProvider {
     ///
     /// Returns `Some((provider, name))` if the provider is available for requests,
     /// `None` if the circuit is Open and cooldown hasn't expired.
-    async fn try_acquire_provider(
-        &self,
-        index: usize,
-    ) -> Option<(Arc<dyn AiProvider>, String)> {
+    async fn try_acquire_provider(&self, index: usize) -> Option<(Arc<dyn AiProvider>, String)> {
         let mut providers = self.providers.write().await;
         let state = providers.get_mut(index)?;
 
@@ -372,8 +369,7 @@ impl FailoverProvider {
             match state.health.circuit {
                 CircuitState::HalfOpen => {
                     // Probe failed → back to Open with doubled cooldown
-                    let new_cooldown =
-                        (state.health.cooldown * 2).min(MAX_COOLDOWN);
+                    let new_cooldown = (state.health.cooldown * 2).min(MAX_COOLDOWN);
                     state.health.cooldown = new_cooldown;
                     state.health.circuit = CircuitState::Open;
                     tracing::warn!(

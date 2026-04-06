@@ -169,7 +169,9 @@ pub trait ChannelApprovalCapability: Send + Sync {
     ) -> ChannelResult<RenderedApproval> {
         // Default implementation: render normally and check authorization
         let rendered = self.render_approval(conversation_id, request).await?;
-        let auth_result = self.authorize_actor(actor_user_id, ApprovalAction::Approve).await;
+        let auth_result = self
+            .authorize_actor(actor_user_id, ApprovalAction::Approve)
+            .await;
 
         match auth_result {
             AuthorizationResult::Authorized => Ok(rendered),
@@ -277,9 +279,18 @@ mod tests {
 
     #[test]
     fn test_authorization_result_variants() {
-        assert!(matches!(AuthorizationResult::Authorized, AuthorizationResult::Authorized));
-        assert!(matches!(AuthorizationResult::Denied, AuthorizationResult::Denied));
-        assert!(matches!(AuthorizationResult::NotAuthenticated, AuthorizationResult::NotAuthenticated));
+        assert!(matches!(
+            AuthorizationResult::Authorized,
+            AuthorizationResult::Authorized
+        ));
+        assert!(matches!(
+            AuthorizationResult::Denied,
+            AuthorizationResult::Denied
+        ));
+        assert!(matches!(
+            AuthorizationResult::NotAuthenticated,
+            AuthorizationResult::NotAuthenticated
+        ));
     }
 
     #[test]

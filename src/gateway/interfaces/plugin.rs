@@ -8,10 +8,7 @@ type ChannelFactoryFn = fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactor
 static PLUGINS: std::sync::LazyLock<std::sync::RwLock<HashMap<&'static str, ChannelFactoryFn>>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
 
-pub fn register(
-    channel_type: &'static str,
-    create: ChannelFactoryFn,
-) {
+pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
     let mut guard = PLUGINS.write().unwrap();
     if guard.contains_key(channel_type) {
         panic!(
@@ -22,9 +19,7 @@ pub fn register(
     guard.insert(channel_type, create);
 }
 
-pub fn get_factory(
-    channel_type: &str,
-) -> Option<ChannelFactoryFn> {
+pub fn get_factory(channel_type: &str) -> Option<ChannelFactoryFn> {
     PLUGINS.read().unwrap().get(channel_type).copied()
 }
 
@@ -32,10 +27,7 @@ pub fn channel_types() -> Vec<&'static str> {
     PLUGINS.read().unwrap().keys().copied().collect()
 }
 
-pub fn create(
-    channel_type: &str,
-    config: ChannelConfig,
-) -> ChannelResult<Arc<dyn ChannelFactory>> {
+pub fn create(channel_type: &str, config: ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>> {
     let creator = get_factory(channel_type).ok_or_else(|| {
         crate::gateway::channel::ChannelError::ConfigError(format!(
             "No plugin registered for channel type: {channel_type}"
@@ -49,7 +41,9 @@ mod tests {
     use super::*;
 
     fn test_creator(_config: ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>> {
-        Err(crate::gateway::channel::ChannelError::ConfigError("test".into()))
+        Err(crate::gateway::channel::ChannelError::ConfigError(
+            "test".into(),
+        ))
     }
 
     #[test]

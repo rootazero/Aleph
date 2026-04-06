@@ -196,7 +196,11 @@ impl PromptLayer for AgentRoleLayer {
     }
 
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Basic, AssemblyPath::Soul, AssemblyPath::Context]
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+        ]
     }
 
     /// Excluded from Minimal prompts — only active for Full and Compact.

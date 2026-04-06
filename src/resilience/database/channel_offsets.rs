@@ -25,9 +25,7 @@ impl StateDatabase {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|e| {
-                AlephError::config(format!("Failed to get channel offset: {}", e))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to get channel offset: {}", e)))?;
         Ok(result)
     }
 

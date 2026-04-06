@@ -215,7 +215,10 @@ impl AgentRuntime {
     }
 
     /// Fresh-path execution: build everything from the agent definition.
-    async fn execute_fresh_path(&self, config: &AgentRuntimeConfig) -> Result<LoopRunResult, String> {
+    async fn execute_fresh_path(
+        &self,
+        config: &AgentRuntimeConfig,
+    ) -> Result<LoopRunResult, String> {
         // Resolve model: explicit arg > agent_def.model_hint > default
         let resolved_model = config
             .model
@@ -232,8 +235,8 @@ impl AgentRuntime {
         registry.retain(|name| config.agent_def.is_tool_allowed(name));
 
         // Build prompt builder for sub-agent via thinker pipeline
-        let prompt_builder = PromptBuilder::new(PromptConfig::default())
-            .with_agent(config.agent_def.clone());
+        let prompt_builder =
+            PromptBuilder::new(PromptConfig::default()).with_agent(config.agent_def.clone());
 
         // Build loop config from agent definition
         let loop_config = LoopConfig {

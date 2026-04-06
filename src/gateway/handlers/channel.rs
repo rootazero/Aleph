@@ -10,7 +10,9 @@ use tracing::debug;
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
-use crate::gateway::channel::{ChannelHealth, ChannelId, ChannelInfo, ChannelStatus, HealthStatus, OutboundMessage};
+use crate::gateway::channel::{
+    ChannelHealth, ChannelId, ChannelInfo, ChannelStatus, HealthStatus, OutboundMessage,
+};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
@@ -335,7 +337,8 @@ pub async fn handle_start(
         inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
 
         if let Some(mut new_channel) =
-            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()).await
+            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone())
+                .await
         {
             // Re-attach ToolRegistry for telegram channels so slash commands are registered
             if channel_type == "telegram" {
@@ -384,8 +387,8 @@ pub async fn create_channel_from_config(
     channel_type: &str,
     config: Value,
 ) -> Option<Box<dyn crate::gateway::channel::Channel>> {
-    use crate::gateway::interfaces::plugin;
     use crate::gateway::channel::ChannelConfig;
+    use crate::gateway::interfaces::plugin;
 
     let channel_config = ChannelConfig {
         id: id.to_string(),
@@ -738,7 +741,9 @@ pub(crate) struct ChannelHealthResponse {
 }
 
 impl From<(&ChannelId, &str, ChannelStatus, &ChannelHealth)> for ChannelHealthResponse {
-    fn from((id, channel_type, status, health): (&ChannelId, &str, ChannelStatus, &ChannelHealth)) -> Self {
+    fn from(
+        (id, channel_type, status, health): (&ChannelId, &str, ChannelStatus, &ChannelHealth),
+    ) -> Self {
         Self {
             id: id.as_str().to_string(),
             channel_type: channel_type.to_string(),
@@ -807,7 +812,12 @@ pub async fn handle_health(
             } else {
                 ChannelHealth::new()
             };
-            health_infos.push(ChannelHealthResponse::from((channel_id, channel_type, status, &health)));
+            health_infos.push(ChannelHealthResponse::from((
+                channel_id,
+                channel_type,
+                status,
+                &health,
+            )));
         }
 
         JsonRpcResponse::success(

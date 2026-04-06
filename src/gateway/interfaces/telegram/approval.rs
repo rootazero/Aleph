@@ -3,14 +3,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 
+use crate::exec::approval::types::ApprovalRequest;
 use crate::gateway::channel::{
     Channel, ChannelResult, ConversationId, InlineKeyboard, OutboundMessage, UserId,
 };
 use crate::gateway::channel_approval::{
-    ApprovalAction, AuthorizationResult, ChannelApprovalCapability, PendingApproval, RenderedApproval,
+    ApprovalAction, AuthorizationResult, ChannelApprovalCapability, PendingApproval,
+    RenderedApproval,
 };
 use crate::gateway::interfaces::telegram::{AccessController, TelegramChannel};
-use crate::exec::approval::types::ApprovalRequest;
 
 pub struct TelegramChannelApprovalCapability {
     channel: Arc<TelegramChannel>,
@@ -69,9 +70,7 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         let approval_id = format!("tg-{}", uuid::Uuid::new_v4());
         let expires_at = Utc::now() + Duration::minutes(5);
 
-        let rendered = self
-            .render_approval(conversation_id, request)
-            .await?;
+        let rendered = self.render_approval(conversation_id, request).await?;
 
         let result = self.channel.send(rendered.message).await?;
 
@@ -117,8 +116,14 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         let text = self.render_approval_text(request);
 
         let keyboard = InlineKeyboard::new()
-            .button("✅ Approve", Self::approval_callback_data(ApprovalAction::Approve, &approval_id))
-            .button("❌ Deny", Self::approval_callback_data(ApprovalAction::Deny, &approval_id));
+            .button(
+                "✅ Approve",
+                Self::approval_callback_data(ApprovalAction::Approve, &approval_id),
+            )
+            .button(
+                "❌ Deny",
+                Self::approval_callback_data(ApprovalAction::Deny, &approval_id),
+            );
 
         let mut message = OutboundMessage::text(conversation_id.as_str(), text);
         message.inline_keyboard = Some(keyboard);
@@ -153,15 +158,23 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         actor_user_id: &UserId,
         approval_id: &str,
     ) -> ChannelResult<RenderedApproval> {
-        let auth_result = self.authorize_actor(actor_user_id, ApprovalAction::Approve).await;
+        let auth_result = self
+            .authorize_actor(actor_user_id, ApprovalAction::Approve)
+            .await;
 
         let text = self.render_approval_text(request);
 
         match auth_result {
             AuthorizationResult::Authorized => {
                 let keyboard = InlineKeyboard::new()
-                    .button("✅ Approve", Self::approval_callback_data(ApprovalAction::Approve, approval_id))
-                    .button("❌ Deny", Self::approval_callback_data(ApprovalAction::Deny, approval_id));
+                    .button(
+                        "✅ Approve",
+                        Self::approval_callback_data(ApprovalAction::Approve, approval_id),
+                    )
+                    .button(
+                        "❌ Deny",
+                        Self::approval_callback_data(ApprovalAction::Deny, approval_id),
+                    );
 
                 let mut message = OutboundMessage::text(conversation_id.as_str(), text);
                 message.inline_keyboard = Some(keyboard);

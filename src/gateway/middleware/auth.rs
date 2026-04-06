@@ -63,8 +63,6 @@ where
         let inner = self.inner.clone();
         let mut inner_mut = std::mem::replace(&mut self.inner, inner);
 
-        Box::pin(async move {
-            inner_mut.call(req).await
-        })
+        Box::pin(async move { inner_mut.call(req).await })
     }
 }

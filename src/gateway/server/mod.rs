@@ -492,8 +492,7 @@ mod tests {
             Arc::new(RateLimiter::new(RateLimitConfig::default())),
         );
         let response =
-            handler::process_request(r#"{"jsonrpc":"2.0","method":"health","id":1}"#, &chain)
-                .await;
+            handler::process_request(r#"{"jsonrpc":"2.0","method":"health","id":1}"#, &chain).await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();
         assert!(parsed.is_success());
