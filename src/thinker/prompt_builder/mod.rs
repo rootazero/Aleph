@@ -96,6 +96,9 @@ pub struct PromptConfig {
     pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
     /// Available agent catalog entries for AgentCatalogLayer.
     pub available_agents: Option<Vec<crate::thinker::prompt_layer::AgentCatalogEntry>>,
+    /// MCP server instructions for prompt injection.
+    /// Collected from connected MCP servers via `McpClient::collect_instructions()`.
+    pub mcp_instructions: Option<Vec<crate::thinker::prompt_layer::McpServerInstruction>>,
 }
 
 impl Default for PromptConfig {
@@ -115,6 +118,7 @@ impl Default for PromptConfig {
             native_tools_enabled: false,
             eligible_skills: None,
             available_agents: None,
+            mcp_instructions: None,
         }
     }
 }
@@ -174,6 +178,10 @@ impl PromptBuilder {
             Some(agent) => input.with_agent_def(agent),
             None => input,
         };
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline.execute_cached(path, &input)
     }
 
@@ -201,6 +209,10 @@ impl PromptBuilder {
         profile: Option<&ProfileConfig>,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul).with_profile(profile);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -250,6 +262,10 @@ impl PromptBuilder {
         soul: &SoulManifest,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul).with_agent_def(agent_def);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -262,6 +278,10 @@ impl PromptBuilder {
         tools: &[ToolInfo],
     ) -> String {
         let input = LayerInput::basic(&self.config, tools).with_agent_def(agent_def);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
@@ -274,6 +294,10 @@ impl PromptBuilder {
         let input = match &self.soul {
             Some(soul) => LayerInput::soul(&self.config, tools, soul),
             None => LayerInput::basic(&self.config, tools),
+        };
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
         };
         let stable_prefix = self.pipeline.execute_stable_only(path, &input);
         PromptSnapshot {
@@ -294,6 +318,10 @@ impl PromptBuilder {
             None => LayerInput::basic(&self.config, tools),
         }
         .with_agent_def(agent_def);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
 
         let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
         let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
@@ -323,6 +351,10 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline
             .execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
@@ -343,6 +375,10 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline
             .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
@@ -365,6 +401,10 @@ impl PromptBuilder {
             .with_workspace_opt(workspace)
             .with_inbound_opt(inbound)
             .with_memory_context_opt(memory_context);
+        let input = match &self.config.mcp_instructions {
+            Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
