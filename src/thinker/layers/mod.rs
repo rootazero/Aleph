@@ -12,6 +12,7 @@ mod generation_models;
 mod language;
 mod runtime_capabilities;
 mod mcp_instructions;
+mod mcp_tool_index;
 mod skill_instructions;
 
 // --- Behavior layers ---
