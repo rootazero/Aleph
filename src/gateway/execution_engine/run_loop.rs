@@ -270,7 +270,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         let sub_tool_registry_ref = self.tool_registry.clone();
         let sub_working_dir_ref = default_working_dir.clone();
-        let sub_tool_factory: crate::agent_loop::subagent_tool::ToolRegistryFactory = Arc::new({
+        let sub_tool_factory: crate::agent_loop::agent_runtime::ToolRegistryFactory = Arc::new({
             let sub_tool_registry = sub_tool_registry_ref.clone();
             let sub_allowed = sub_allowed_tools.clone();
             let sub_dir = sub_working_dir_ref.clone();
@@ -279,7 +279,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         });
 
-        let sub_safety_factory: crate::agent_loop::subagent_tool::SafetyGuardFactory = Arc::new({
+        let sub_safety_factory: crate::agent_loop::agent_runtime::SafetyGuardFactory = Arc::new({
             let global_perms = self.global_tool_permissions.clone();
             let agent_perms_clone = agent.config().tool_permissions();
             move || SafetyGuard::from_permissions(&global_perms, &agent_perms_clone)
