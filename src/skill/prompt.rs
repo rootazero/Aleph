@@ -7,7 +7,9 @@ use crate::domain::skill::SkillManifest;
 pub const DEFERRED_LOADING_GUIDANCE: &str =
     "To use a skill, first call the `skill_read` tool with the skill name \
      to load its full instructions, then follow those instructions. \
-     Use `skill_list` to discover available skills if needed.";
+     Use `skill_list` to discover available skills if needed.\n\n\
+     When a user's request matches a skill's <when> trigger, proactively \
+     invoke that skill without waiting for an explicit request.";
 
 /// Build an XML fragment listing the given skills for injection into a system prompt.
 ///
@@ -37,6 +39,11 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
         buf.push_str("    <description>");
         buf.push_str(&escape_xml(skill.description()));
         buf.push_str("</description>\n");
+        if let Some(when) = skill.when_to_use() {
+            buf.push_str("    <when>");
+            buf.push_str(&escape_xml(when));
+            buf.push_str("</when>\n");
+        }
         buf.push_str("  </skill>\n");
     }
 
@@ -135,5 +142,44 @@ mod tests {
         let xml = build_skills_prompt_xml(&[&skill]);
         assert!(xml.contains("<name>A &amp; B</name>"));
         assert!(xml.contains("&lt;tags&gt;"));
+    }
+
+    #[test]
+    fn xml_includes_when_to_use() {
+        let mut skill = make_skill("Code Review", "Reviews code quality");
+        skill.set_when_to_use("When code has been modified".to_string());
+        let xml = build_skills_prompt_xml(&[&skill]);
+
+        assert!(xml.contains("<when>When code has been modified</when>"));
+    }
+
+    #[test]
+    fn xml_omits_when_tag_if_none() {
+        let skill = make_skill("Simple", "A simple skill");
+        let xml = build_skills_prompt_xml(&[&skill]);
+
+        assert!(!xml.contains("<when>"));
+        assert!(xml.contains("<name>Simple</name>"));
+    }
+
+    #[test]
+    fn xml_escapes_when_to_use() {
+        let mut skill = make_skill("Test", "Test skill");
+        skill.set_when_to_use("When <user> asks & needs help".to_string());
+        let xml = build_skills_prompt_xml(&[&skill]);
+
+        assert!(xml.contains("<when>When &lt;user&gt; asks &amp; needs help</when>"));
+    }
+
+    #[test]
+    fn deferred_loading_guidance_includes_proactive_trigger() {
+        assert!(
+            DEFERRED_LOADING_GUIDANCE.contains("proactively"),
+            "Guidance should mention proactive invocation"
+        );
+        assert!(
+            DEFERRED_LOADING_GUIDANCE.contains("<when>"),
+            "Guidance should reference the <when> trigger tag"
+        );
     }
 }
