@@ -13,8 +13,7 @@ pub mod context_compactor;
 pub mod factory;
 mod loop_core;
 pub mod model_behaviors;
-mod prompt_builder;
-pub mod prompt_sections;
+
 pub mod provider_bridge;
 pub mod retry;
 mod safety;
@@ -48,9 +47,7 @@ pub use context_budget::{
 pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, ContextCompactor};
 pub use factory::LoopFactory;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
-pub use prompt_builder::{
-    PromptBudget, PromptBuilder, PromptResult, PromptSection, Stability, ToolInfo,
-};
+pub use tool_info::ToolInfo;
 pub use provider_bridge::AiProviderBridge;
 pub use retry::{
     backoff_delay, classify_error, classify_exhausted_error, parse_token_gap, retry_async,

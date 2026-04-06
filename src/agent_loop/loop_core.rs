@@ -22,7 +22,8 @@ use super::context_budget::pipeline::{
     CompactionPipeline, ImageStripper, MicroCompact, RoundDrop, ToolCompactStage,
 };
 use super::context_budget::pressure::PressureSensor;
-use super::prompt_builder::{PromptBuilder, ToolInfo};
+use super::tool_info::ToolInfo;
+use crate::thinker::prompt_builder::PromptBuilder;
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
@@ -1713,10 +1714,15 @@ impl<P: LoopProvider> AgentLoop<P> {
         if let Some(handle) = prefetch_handle {
             match handle.await {
                 Ok(Some(new_skills)) => {
-                    self.prompt_builder.register(
-                        crate::agent_loop::prompt_sections::discovered_skills::render(&new_skills),
-                    );
-                    *system_prompt = self.prompt_builder.build().prompt;
+                    if !new_skills.is_empty() {
+                        let lines: Vec<String> = new_skills
+                            .iter()
+                            .map(|s| format!("- **{}**: {}", s.name, s.description))
+                            .collect();
+                        let content = format!("## Discovered Skills\n{}", lines.join("\n"));
+                        system_prompt.push_str("\n\n---\n\n");
+                        system_prompt.push_str(&content);
+                    }
                     if let Some(ref prefetcher) = self.skill_prefetcher {
                         prefetcher.commit(new_skills);
                     }
@@ -2002,14 +2008,50 @@ impl<P: LoopProvider> AgentLoop<P> {
                 parameters_schema: Some(td.parameters.clone()),
             })
             .collect();
-        // Register tools and session guidance into prompt builder
-        self.prompt_builder
-            .register(crate::agent_loop::prompt_sections::tools::render(
-                &tool_infos,
-            ));
+        // Build base prompt via the pipeline, then append dynamic sections
+        let mut system_prompt = self.prompt_builder.build_system_prompt(&tool_infos);
+
+        // Append session guidance (tool-aware behavioral hints)
         let tool_names: Vec<&str> = tool_infos.iter().map(|t| t.name.as_str()).collect();
-        self.prompt_builder
-            .register(crate::agent_loop::prompt_sections::session_guidance::render(&tool_names));
+        {
+            let has = |prefix: &str| tool_names.iter().any(|t| t.starts_with(prefix));
+            let mut rules: Vec<String> = Vec::new();
+            if has("skill_") {
+                rules.push(
+                    "- /<skill-name> is shorthand for users to invoke a skill. \
+                     When a user message starts with /, use the skill tool to execute it."
+                        .into(),
+                );
+            }
+            if has("subagent") || has("agent_") {
+                rules.push(
+                    "- Use the agent/sub-agent tool for complex, multi-step sub-tasks. \
+                     Launch multiple agents concurrently for independent tasks."
+                        .into(),
+                );
+            }
+            if tool_names.contains(&"session_search") {
+                rules.push(
+                    "- Use session_search to find information from past conversations \
+                     before asking the user to repeat themselves."
+                        .into(),
+                );
+            }
+            if has("memory_") {
+                rules.push(
+                    "- Save user corrections and preferences to memory immediately. \
+                     This prevents repeating mistakes in future sessions."
+                        .into(),
+                );
+            }
+            if !rules.is_empty() {
+                let guidance_content = format!("# Session Guidance\n\n{}", rules.join("\n"));
+                system_prompt.push_str("\n\n---\n\n");
+                system_prompt.push_str(&guidance_content);
+            }
+        }
+
+        // Append environment info
         if let Some(ref ctx) = self.session_context {
             let env = crate::context::EnvironmentInfo {
                 cwd: ctx.cwd.clone(),
@@ -2022,18 +2064,32 @@ impl<P: LoopProvider> AgentLoop<P> {
                 model_name: None,
                 knowledge_cutoff: None,
             };
-            self.prompt_builder
-                .register(crate::agent_loop::prompt_sections::environment::render(
-                    &env,
-                ));
+            {
+                let mut lines = Vec::new();
+                lines.push(format!("- Working directory: {}", env.cwd));
+                lines.push(format!("- Is git repository: {}", env.is_git));
+                if let Some(branch) = &env.git_branch {
+                    lines.push(format!("- Git branch: {}", branch));
+                }
+                lines.push(format!("- Platform: {}", env.os));
+                lines.push(format!("- OS Version: {}", env.os_version));
+                lines.push(format!("- Shell: {}", env.shell));
+                lines.push(format!("- Date: {}", env.date));
+                if let Some(model) = &env.model_name {
+                    lines.push(format!("- Model: {}", model));
+                }
+                if let Some(cutoff) = &env.knowledge_cutoff {
+                    lines.push(format!("- Knowledge cutoff: {}", cutoff));
+                }
+                let env_content = format!("# Environment\n\n{}", lines.join("\n"));
+                system_prompt.push_str("\n\n---\n\n");
+                system_prompt.push_str(&env_content);
+            }
         }
-        let prompt_result = self.prompt_builder.build();
-        if !prompt_result.truncated_sections.is_empty() {
-            tracing::warn!(truncated = ?prompt_result.truncated_sections, "prompt budget enforcement removed sections");
-        }
+
         let mut runtime = LoopRuntime {
             messages,
-            system_prompt: prompt_result.prompt,
+            system_prompt,
             tool_defs: self
                 .tool_registry
                 .read()
@@ -2114,6 +2170,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, TokenUsage};
     use crate::providers::message::ContentBlock;
     use crate::sync_primitives::{Arc, Mutex};
@@ -2322,7 +2379,7 @@ mod tests {
         AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -2437,7 +2494,7 @@ mod tests {
                 r.register(Box::new(EchoTool));
                 r
             },
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 5,
@@ -2480,7 +2537,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             LoopToolRegistry::new(),
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::new(
                 vec![r"rm\s+-rf\s+/".to_string()],
                 std::collections::HashMap::new(),
@@ -2573,7 +2630,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -2682,7 +2739,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 25,
@@ -2776,7 +2833,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 25,
@@ -2833,7 +2890,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -2997,7 +3054,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3107,7 +3164,7 @@ mod tests {
                 r.register(Box::new(EchoTool));
                 r
             },
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3162,7 +3219,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3247,7 +3304,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3344,7 +3401,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3398,7 +3455,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 25,
@@ -3458,7 +3515,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -3907,7 +3964,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             provider,
             LoopToolRegistry::new(),
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 5,
@@ -3967,7 +4024,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             OverloadedProvider,
             LoopToolRegistry::new(),
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig::default(),
             CancellationToken::new(),
@@ -4001,7 +4058,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             OverloadedProvider,
             LoopToolRegistry::new(),
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig::default(),
             CancellationToken::new(),

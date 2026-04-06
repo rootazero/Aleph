@@ -46,7 +46,7 @@ pub struct SessionContext {
 // Dynamic section renderers
 // =============================================================================
 
-use super::prompt_builder::ToolInfo;
+use super::tool_info::ToolInfo;
 
 /// Render environment info section from SessionContext.
 pub fn render_environment(ctx: &SessionContext) -> String {
