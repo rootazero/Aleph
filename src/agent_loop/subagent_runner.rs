@@ -6,13 +6,13 @@
 use tokio_util::sync::CancellationToken;
 
 use super::loop_core::{AgentLoop, LoopConfig, NoopCallback};
-use super::prompt_builder::{PromptBuilder, PromptSection, Stability};
 use super::provider_bridge::AiProviderBridge;
 use super::safety::SafetyGuard;
 use super::tool::LoopToolRegistry;
 use crate::agents::AgentDef;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
 /// Factory that builds a fresh LoopToolRegistry for the sub-agent.
 ///
@@ -56,19 +56,10 @@ pub async fn run_subagent(
     let mut registry = (tool_registry_factory)();
     registry.retain(|name| agent_def.is_tool_allowed(name));
 
-    // Build prompt for sub-agent via Section Registry.
-    let mut prompt_builder = PromptBuilder::for_agent(&agent_def);
-
-    // Inject parent context if provided
-    if let Some(summary) = context_summary {
-        prompt_builder.register(PromptSection {
-            name: "parent_context".to_string(),
-            stability: Stability::Dynamic,
-            priority: 500,
-            protected: false,
-            content: format!("## Context from parent agent\n\n{}", summary),
-        });
-    }
+    // Build prompt builder for sub-agent via thinker pipeline.
+    // AgentRoleLayer fires automatically when agent_def is attached.
+    let prompt_builder = PromptBuilder::new(PromptConfig::default())
+        .with_agent(agent_def.clone());
 
     // Build loop config from agent definition
     let config = LoopConfig {
@@ -87,10 +78,16 @@ pub async fn run_subagent(
     )
     .with_chain(child_chain);
 
+    // Prepend parent context to the task message if provided
+    let effective_task = match context_summary {
+        Some(summary) => format!("## Context from parent agent\n\n{}\n\n---\n\n{}", summary, task),
+        None => task,
+    };
+
     let mut callback = NoopCallback;
     let timeout_duration = std::time::Duration::from_secs(timeout_secs);
     let run_result =
-        tokio::time::timeout(timeout_duration, agent_loop.run(&task, &mut callback)).await;
+        tokio::time::timeout(timeout_duration, agent_loop.run(&effective_task, &mut callback)).await;
 
     match run_result {
         Err(_elapsed) => Err(format!("Sub-agent timed out after {}s", timeout_secs)),

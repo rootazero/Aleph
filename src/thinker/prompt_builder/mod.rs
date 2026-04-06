@@ -105,19 +105,65 @@ impl Default for PromptConfig {
 pub struct PromptBuilder {
     config: PromptConfig,
     pipeline: PromptPipeline,
+    /// Optional agent definition for sub-agent prompt assembly.
+    /// When set, `build_system_prompt` will inject agent role via `AgentRoleLayer`.
+    agent_def: Option<crate::agents::AgentDef>,
+    /// Optional soul manifest for identity/personality.
+    /// When set, `build_system_prompt` uses the Soul assembly path.
+    soul: Option<SoulManifest>,
 }
 
 impl PromptBuilder {
     /// Create a new prompt builder
     pub fn new(config: PromptConfig) -> Self {
         let pipeline = PromptPipeline::default_layers();
-        Self { config, pipeline }
+        Self {
+            config,
+            pipeline,
+            agent_def: None,
+            soul: None,
+        }
+    }
+
+    /// Attach an agent definition for sub-agent prompt assembly.
+    ///
+    /// When set, `build_system_prompt` injects the agent's role header
+    /// and protocol sections via `AgentRoleLayer`.
+    pub fn with_agent(mut self, agent_def: crate::agents::AgentDef) -> Self {
+        self.agent_def = Some(agent_def);
+        self
+    }
+
+    /// Attach a soul manifest for identity/personality injection.
+    ///
+    /// When set, `build_system_prompt` uses the Soul assembly path,
+    /// injecting soul content at the top of the prompt.
+    pub fn with_soul(mut self, soul: SoulManifest) -> Self {
+        self.soul = Some(soul);
+        self
     }
 
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
-        let input = LayerInput::basic(&self.config, tools);
-        self.pipeline.execute(AssemblyPath::Basic, &input)
+        match (&self.soul, &self.agent_def) {
+            (Some(soul), Some(agent)) => {
+                let input = LayerInput::soul(&self.config, tools, soul)
+                    .with_agent_def(agent);
+                self.pipeline.execute(AssemblyPath::Soul, &input)
+            }
+            (Some(soul), None) => {
+                let input = LayerInput::soul(&self.config, tools, soul);
+                self.pipeline.execute(AssemblyPath::Soul, &input)
+            }
+            (None, Some(agent)) => {
+                let input = LayerInput::basic(&self.config, tools).with_agent_def(agent);
+                self.pipeline.execute(AssemblyPath::Basic, &input)
+            }
+            (None, None) => {
+                let input = LayerInput::basic(&self.config, tools);
+                self.pipeline.execute(AssemblyPath::Basic, &input)
+            }
+        }
     }
 
     /// Build system prompt with hydrated tools from semantic retrieval
@@ -179,6 +225,44 @@ impl PromptBuilder {
         }
 
         prompt
+    }
+
+    /// Build system prompt for a sub-agent.
+    ///
+    /// Injects the agent's role header and protocol sections via `AgentRoleLayer`.
+    /// This replaces the old `agent_loop::PromptBuilder::for_agent()`.
+    pub fn build_for_agent(
+        &self,
+        agent_def: &crate::agents::AgentDef,
+        tools: &[ToolInfo],
+        soul: &SoulManifest,
+    ) -> String {
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_agent_def(agent_def);
+        self.pipeline.execute(AssemblyPath::Soul, &input)
+    }
+
+    /// Build system prompt for a sub-agent (basic path, no soul).
+    ///
+    /// Lighter variant for sub-agents that don't have a SoulManifest.
+    pub fn build_for_agent_basic(
+        &self,
+        agent_def: &crate::agents::AgentDef,
+        tools: &[ToolInfo],
+    ) -> String {
+        let input = LayerInput::basic(&self.config, tools)
+            .with_agent_def(agent_def);
+        self.pipeline.execute(AssemblyPath::Basic, &input)
+    }
+
+    /// Access the underlying config (for reading).
+    pub fn config(&self) -> &PromptConfig {
+        &self.config
+    }
+
+    /// Access the underlying config mutably (for dynamic modifications).
+    pub fn config_mut(&mut self) -> &mut PromptConfig {
+        &mut self.config
     }
 
     /// Build system prompt with explicit mode control.

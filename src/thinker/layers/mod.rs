@@ -21,10 +21,14 @@ mod thinking_guidance;
 // --- Identity layer ---
 mod soul;
 
+// --- Agent role layer ---
+mod agent_role;
+
 // --- Profile layer ---
 pub mod profile;
 
 // --- Tool layers ---
+mod tool_usage_grammar;
 mod tools;
 
 // --- Context layers ---
@@ -65,9 +69,11 @@ pub use response_format::ResponseFormatLayer;
 pub use skill_mode::SkillModeLayer;
 pub use thinking_guidance::ThinkingGuidanceLayer;
 
+pub use agent_role::AgentRoleLayer;
 pub use profile::ProfileLayer;
 pub use soul::SoulLayer;
 
+pub use tool_usage_grammar::ToolUsageGrammarLayer;
 pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 

@@ -99,6 +99,7 @@ impl MemoryContextProvider {
         let mut ctx = MemoryContext {
             facts: facts.unwrap_or_default(),
             memory_summaries: memories.unwrap_or_default(),
+            structured_index: None,
         };
 
         // 4. Truncate to character budget

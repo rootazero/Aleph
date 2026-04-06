@@ -137,6 +137,7 @@ mod tests {
             name: "memory_store".into(),
             description: "Store memory".into(),
             parameters_schema: None,
+            usage_hint: None,
         }];
         assert!(render_session_guidance(&tools).is_none());
     }
@@ -147,6 +148,7 @@ mod tests {
             name: "browser_open".into(),
             description: "Open browser".into(),
             parameters_schema: None,
+            usage_hint: None,
         }];
         let result = render_session_guidance(&tools).unwrap();
         assert!(result.contains("browser") || result.contains("Browser"));
@@ -158,6 +160,7 @@ mod tests {
             name: "subagent".into(),
             description: "Run subagent".into(),
             parameters_schema: None,
+            usage_hint: None,
         }];
         let result = render_session_guidance(&tools).unwrap();
         assert!(

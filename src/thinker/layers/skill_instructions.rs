@@ -110,6 +110,7 @@ mod tests {
             name: name.to_string(),
             description: "tool desc".to_string(),
             parameters_schema: None,
+            usage_hint: None,
         }
     }
 

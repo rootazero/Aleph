@@ -13,8 +13,8 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use crate::agent_loop::loop_core::{AgentLoop, LoopConfig, NoopCallback};
-    use crate::agent_loop::prompt_builder::PromptBuilder;
     use crate::agent_loop::provider_bridge::AiProviderBridge;
+    use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
     use crate::agent_loop::safety::SafetyGuard;
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::providers::adapter::{
@@ -163,7 +163,7 @@ mod tests {
         AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -968,7 +968,7 @@ mod tests {
             AgentLoop::new(
                 bridge,
                 registry,
-                PromptBuilder::new(),
+                PromptBuilder::new(PromptConfig::default()),
                 SafetyGuard::default_guard(),
                 LoopConfig {
                     max_iterations: 10,
@@ -1063,7 +1063,7 @@ mod tests {
             AgentLoop::new(
                 bridge,
                 registry,
-                PromptBuilder::new(),
+                PromptBuilder::new(PromptConfig::default()),
                 SafetyGuard::default_guard(),
                 LoopConfig {
                     max_iterations: 10,
@@ -1134,7 +1134,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -1200,7 +1200,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -1276,7 +1276,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -1342,7 +1342,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -1428,7 +1428,7 @@ mod tests {
         let mut agent = AgentLoop::new(
             bridge,
             registry,
-            PromptBuilder::new(),
+            PromptBuilder::new(PromptConfig::default()),
             SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
@@ -1531,7 +1531,7 @@ mod tests {
             AgentLoop::new(
                 bridge,
                 registry,
-                PromptBuilder::new(),
+                PromptBuilder::new(PromptConfig::default()),
                 SafetyGuard::default_guard(),
                 LoopConfig {
                     max_iterations: 10,

@@ -7,7 +7,17 @@ use super::layers::*;
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::RwLock;
+
+/// Cache hit/miss statistics for [`PromptPipeline::execute_cached`].
+#[derive(Debug, Clone, Default)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub entries: usize,
+}
 
 /// Composable prompt assembly engine.
 ///
@@ -17,13 +27,19 @@ use std::path::PathBuf;
 /// single `String`.
 pub struct PromptPipeline {
     layers: Vec<Box<dyn PromptLayer>>,
+    cache: RwLock<HashMap<&'static str, String>>,
+    stats: RwLock<(u64, u64)>, // (hits, misses)
 }
 
 impl PromptPipeline {
     /// Create a new pipeline, sorting layers by ascending priority.
     pub fn new(mut layers: Vec<Box<dyn PromptLayer>>) -> Self {
         layers.sort_by_key(|l| l.priority());
-        Self { layers }
+        Self {
+            layers,
+            cache: RwLock::new(HashMap::new()),
+            stats: RwLock::new((0, 0)),
+        }
     }
 
     /// Execute the pipeline for the given `path` and `input`.
@@ -99,7 +115,7 @@ impl PromptPipeline {
             .iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
-        let protected = &[50u32, 75, 100, 500, 501, 1200];
+        let protected = &[50u32, 55, 75, 100, 500, 501, 1200];
         let (prompt, stats) = enforce_budget(&refs, budget.max_total_chars, protected);
 
         PromptResult {
@@ -183,17 +199,19 @@ impl PromptPipeline {
             .collect()
     }
 
-    /// Create a pipeline pre-loaded with the 25 default layers.
+    /// Create a pipeline pre-loaded with the 29 default layers.
     ///
     /// Layer order (by priority):
     ///
     /// **Stable zone** (cacheable):
     ///   50  SoulLayer
+    ///   55  AgentRoleLayer
     ///   75  ProfileLayer
     ///  100  RoleLayer
     ///  300  EnvironmentLayer
     ///  400  RuntimeCapabilitiesLayer
     ///  500  ToolsLayer + HydratedToolsLayer
+    ///  550  ToolUsageGrammarLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
     ///  710  HeartbeatLayer
@@ -219,6 +237,7 @@ impl PromptPipeline {
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
+            Box::new(AgentRoleLayer),
             Box::new(InboundContextLayer),
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
@@ -228,6 +247,7 @@ impl PromptPipeline {
             Box::new(RuntimeCapabilitiesLayer),
             Box::new(ToolsLayer),
             Box::new(HydratedToolsLayer),
+            Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
             Box::new(HeartbeatLayer),
@@ -254,6 +274,80 @@ impl PromptPipeline {
         self.layers.push(Box::new(layer));
         self.layers.sort_by_key(|l| l.priority());
         self
+    }
+
+    /// Execute with section-level caching for Stable layers.
+    pub fn execute_cached(&self, path: AssemblyPath, input: &LayerInput) -> String {
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+        let mut output = String::with_capacity(16384);
+        let mut to_cache: Vec<(&'static str, String)> = Vec::new();
+
+        for layer in &self.layers {
+            if !layer.paths().contains(&path) {
+                continue;
+            }
+
+            if layer.stability() == LayerStability::Stable {
+                if let Some(cached) = cache.get(layer.name()) {
+                    output.push_str(cached);
+                    if let Ok(mut s) = self.stats.write() {
+                        s.0 += 1;
+                    }
+                    continue;
+                }
+            }
+
+            let mut section = String::new();
+            layer.inject(&mut section, input);
+            if let Ok(mut s) = self.stats.write() {
+                s.1 += 1;
+            }
+
+            if layer.stability() == LayerStability::Stable && !section.is_empty() {
+                to_cache.push((layer.name(), section.clone()));
+            }
+
+            output.push_str(&section);
+        }
+
+        drop(cache);
+        if !to_cache.is_empty() {
+            if let Ok(mut w) = self.cache.write() {
+                for (name, content) in to_cache {
+                    w.insert(name, content);
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Invalidate a specific layer's cache entry by name.
+    pub fn invalidate(&self, layer_name: &str) {
+        if let Ok(mut w) = self.cache.write() {
+            w.retain(|k, _| *k != layer_name);
+        }
+    }
+
+    /// Invalidate all cached sections and reset statistics.
+    pub fn invalidate_all(&self) {
+        if let Ok(mut w) = self.cache.write() {
+            w.clear();
+        }
+        if let Ok(mut s) = self.stats.write() {
+            *s = (0, 0);
+        }
+    }
+
+    /// Cache hit/miss statistics.
+    pub fn cache_stats(&self) -> CacheStats {
+        let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());
+        let stats = self.stats.read().unwrap_or_else(|e| e.into_inner());
+        CacheStats {
+            hits: stats.0,
+            misses: stats.1,
+            entries: cache.len(),
+        }
     }
 
     /// Number of registered layers (test helper).
@@ -371,7 +465,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 27);
+        assert_eq!(pipeline.layer_count(), 29);
     }
 
     #[test]
@@ -624,6 +718,47 @@ mod budget_tests {
 
         // Minimal should still have content (response format at minimum)
         assert!(!minimal.prompt.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
+
+    #[test]
+    fn cached_execute_returns_same_result() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let r1 = pipeline.execute_cached(AssemblyPath::Basic, &input);
+        let r2 = pipeline.execute_cached(AssemblyPath::Basic, &input);
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn invalidate_clears_cache() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
+        pipeline.invalidate_all();
+        assert_eq!(pipeline.cache_stats().entries, 0);
+    }
+
+    #[test]
+    fn second_call_hits_cache() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
+        let s1 = pipeline.cache_stats();
+        let _ = pipeline.execute_cached(AssemblyPath::Basic, &input);
+        let s2 = pipeline.cache_stats();
+        assert!(s2.hits > s1.hits, "Second call should have cache hits");
     }
 }
 

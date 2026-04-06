@@ -111,16 +111,16 @@ mod tests {
                 ai_output: "Use aleph.toml...".to_string(),
                 score: 0.8,
             }],
+            structured_index: None,
         };
 
         let input = LayerInput::basic(&config, &[]).with_memory_context(&ctx);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
-        assert!(out.contains("## Relevant Memory"));
-        assert!(out.contains("**Facts:**"));
+        assert!(out.contains("## Memory Context"));
+        assert!(out.contains("### Relevant Memories (semantic)"));
         assert!(out.contains("User prefers dark mode"));
-        assert!(out.contains("**Past Conversations:**"));
         assert!(out.contains("[2026-03-05]"));
         assert!(out.contains("How to configure embedding?"));
     }

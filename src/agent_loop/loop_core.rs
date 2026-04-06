@@ -2006,6 +2006,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                 name: td.name.clone(),
                 description: td.description.clone(),
                 parameters_schema: Some(td.parameters.clone()),
+                usage_hint: None,
             })
             .collect();
         // Build base prompt via the pipeline, then append dynamic sections

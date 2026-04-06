@@ -173,8 +173,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
         use crate::agent_loop::{
             adapters::build_registry_from_tools, provider_bridge::AiProviderBridge, AgentLoop,
-            LoopConfig, PromptBuilder, SafetyGuard,
+            LoopConfig, SafetyGuard,
         };
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -412,7 +413,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .unwrap_or_else(|| self.provider_registry.default_provider());
 
             // Resolve model behavior: config override > protocol auto-mapping
-            let behavior_content = {
+            let _behavior_content = {
                 let behavior_name = provider
                     .model_behavior_override()
                     .or_else(|| protocol_to_behavior(provider.protocol()));
@@ -484,31 +485,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 "Agent loop: built tool registry"
             );
 
-            // Build prompt builder
-            let mut prompt_builder = if resolved_soul.is_empty() {
-                PromptBuilder::new()
-                    .with_default_identity()
-                    .with_default_behavior_sections()
-            } else {
-                PromptBuilder::new()
-                    .with_soul(&resolved_soul)
-                    .with_default_behavior_sections()
-            };
-            if let Some(ref skills) = eligible_skills {
-                let active_tools: Vec<&str> =
-                    allowed_tools.iter().map(|t| t.name.as_str()).collect();
-                prompt_builder = prompt_builder.with_skills(skills, &active_tools);
-            }
+            // Build prompt builder via thinker pipeline.
+            // Pipeline layers handle soul, skills, tools, etc. during assembly.
+            let mut config = PromptConfig::default();
             if let Some(custom_instructions) = agent.config().system_prompt.as_deref() {
-                prompt_builder.register(
-                    crate::agent_loop::prompt_sections::custom_instructions::render(
-                        custom_instructions,
-                    ),
-                );
+                config.custom_instructions = Some(custom_instructions.to_string());
             }
-            if let Some(ref content) = behavior_content {
-                prompt_builder = prompt_builder.with_model_behavior(content);
+            if let Some(ref skills) = eligible_skills {
+                config.eligible_skills = Some(skills.clone());
             }
+            let prompt_builder = if resolved_soul.is_empty() {
+                PromptBuilder::new(config)
+            } else {
+                PromptBuilder::new(config).with_soul(resolved_soul.clone())
+            };
 
             // Safety guard from merged global + agent permissions
             let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);

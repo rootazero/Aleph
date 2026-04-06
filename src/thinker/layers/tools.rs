@@ -149,6 +149,7 @@ mod tests {
             name: "bash".to_string(),
             description: "Run shell commands".to_string(),
             parameters_schema: Some(serde_json::json!({"command": "string"})),
+            usage_hint: None,
         }];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();
@@ -226,6 +227,7 @@ mod tests {
             name: "bash".to_string(),
             description: "Run shell commands".to_string(),
             parameters_schema: Some(serde_json::json!({"command": "string"})),
+            usage_hint: None,
         }];
         let input = LayerInput::basic(&config, &tools);
         let mut out = String::new();

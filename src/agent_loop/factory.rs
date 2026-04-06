@@ -12,10 +12,10 @@ use crate::tools::AlephToolDyn;
 
 use super::adapters::BuiltinToolAdapter;
 use super::loop_core::{AgentLoop, LoopConfig};
-use super::prompt_builder::PromptBuilder;
 use super::provider_bridge::AiProviderBridge;
 use super::safety::SafetyGuard;
 use super::tool::LoopToolRegistry;
+use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
 /// Factory that assembles a `AgentLoop` from existing Aleph services.
 pub struct LoopFactory;
@@ -44,12 +44,12 @@ impl LoopFactory {
             registry.register(Box::new(BuiltinToolAdapter::new(tool_dyn)));
         }
 
-        // Build prompt from soul or defaults
+        // Build prompt builder via thinker pipeline.
+        // Soul and behavioral sections are handled by pipeline layers
+        // (SoulLayer, RoleLayer, etc.) when build_system_prompt() is called.
         let prompt_builder = match soul {
-            Some(s) => PromptBuilder::new()
-                .with_soul(s)
-                .with_default_behavior_sections(),
-            None => PromptBuilder::new().with_default_behavior_sections(),
+            Some(s) => PromptBuilder::new(PromptConfig::default()).with_soul(s.clone()),
+            None => PromptBuilder::new(PromptConfig::default()),
         };
 
         // Safety guard with sensible defaults

@@ -7,6 +7,7 @@ use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
 use crate::agent_loop::ToolInfo;
+use crate::agents::AgentDef;
 use crate::dispatcher::tool_index::HydrationResult;
 
 /// Whether a layer's content is stable across requests or changes per request.
@@ -65,6 +66,11 @@ pub struct LayerInput<'a> {
     /// `<session_context>` block in the message history.  The
     /// `SessionContextGuideLayer` uses this flag to inject usage guidance.
     pub has_session_summaries: bool,
+    /// Agent definition for sub-agent prompt assembly.
+    ///
+    /// When set, `AgentRoleLayer` injects the role header and protocol
+    /// sections declared in `agent_def.prompt_sections`.
+    pub agent_def: Option<&'a AgentDef>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -82,6 +88,7 @@ impl<'a> LayerInput<'a> {
             workspace: None,
             memory_context: None,
             has_session_summaries: false,
+            agent_def: None,
         }
     }
 
@@ -99,6 +106,7 @@ impl<'a> LayerInput<'a> {
             workspace: None,
             memory_context: None,
             has_session_summaries: false,
+            agent_def: None,
         }
     }
 
@@ -116,6 +124,7 @@ impl<'a> LayerInput<'a> {
             workspace: None,
             memory_context: None,
             has_session_summaries: false,
+            agent_def: None,
         }
     }
 
@@ -133,6 +142,7 @@ impl<'a> LayerInput<'a> {
             workspace: None,
             memory_context: None,
             has_session_summaries: false,
+            agent_def: None,
         }
     }
 
@@ -190,6 +200,12 @@ impl<'a> LayerInput<'a> {
     /// Signal that the conversation contains compressed session summaries.
     pub fn with_session_summaries(mut self, has: bool) -> Self {
         self.has_session_summaries = has;
+        self
+    }
+
+    /// Attach an agent definition for sub-agent prompt assembly.
+    pub fn with_agent_def(mut self, agent_def: &'a AgentDef) -> Self {
+        self.agent_def = Some(agent_def);
         self
     }
 
