@@ -211,7 +211,6 @@ impl PromptPipeline {
     ///  300  EnvironmentLayer
     ///  400  RuntimeCapabilitiesLayer
     ///  500  ToolsLayer + HydratedToolsLayer
-    ///  505  AgentCatalogLayer
     ///  550  ToolUsageGrammarLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
@@ -230,6 +229,7 @@ impl PromptPipeline {
     ///
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
+    /// 1704  AgentCatalogLayer
     /// 1705  McpInstructionsLayer
     /// 1706  McpToolIndexLayer
     /// 1710  VoiceModeLayer
@@ -828,7 +828,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
         assert!(dynamic_names.contains(&"mcp_tool_index"));
-        assert_eq!(dynamic_names.len(), 9, "Exactly 9 dynamic layers expected");
+        assert!(dynamic_names.contains(&"agent_catalog"));
+        assert_eq!(dynamic_names.len(), 10, "Exactly 10 dynamic layers expected");
     }
 
     #[test]

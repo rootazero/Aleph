@@ -55,7 +55,7 @@ impl PromptLayer for McpToolIndexLayer {
                 output.push_str("- ");
                 output.push_str(&tool.tool_name);
                 output.push_str(" — ");
-                output.push_str(&tool.description);
+                output.push_str(&tool.description.replace('\n', " "));
                 output.push('\n');
             }
             output.push('\n');

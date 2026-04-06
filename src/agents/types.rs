@@ -11,6 +11,15 @@ pub enum AgentMode {
     SubAgent,
 }
 
+impl std::fmt::Display for AgentMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Primary => write!(f, "Primary"),
+            Self::SubAgent => write!(f, "SubAgent"),
+        }
+    }
+}
+
 /// Context mode for sub-agents
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[derive(Default)]
@@ -22,6 +31,15 @@ pub enum ContextMode {
     Summary,
 }
 
+
+impl std::fmt::Display for ContextMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fresh => write!(f, "Fresh"),
+            Self::Summary => write!(f, "Summary"),
+        }
+    }
+}
 
 /// Definition of an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]

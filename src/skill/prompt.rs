@@ -51,12 +51,7 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
     buf
 }
 
-/// Escape XML special characters.
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
+use crate::thinker::xml_util::escape_xml;
 
 #[cfg(test)]
 mod tests {

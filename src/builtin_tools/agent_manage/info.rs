@@ -106,11 +106,11 @@ impl AlephTool for AgentInfoTool {
             id: agent_def.id,
             description: agent_def.description,
             when_to_use: agent_def.when_to_use,
-            mode: format!("{:?}", agent_def.mode),
+            mode: agent_def.mode.to_string(),
             allowed_tools: agent_def.allowed_tools,
             denied_tools: agent_def.denied_tools,
             max_iterations: agent_def.max_iterations,
-            context_mode: format!("{:?}", agent_def.context_mode),
+            context_mode: agent_def.context_mode.to_string(),
             model_hint: agent_def.model_hint,
             token_budget: agent_def.token_budget,
         })

@@ -33,6 +33,7 @@ pub mod soul;
 pub mod streaming;
 pub mod user_profile;
 pub mod virtual_tools;
+pub(crate) mod xml_util;
 
 use crate::sync_primitives::Arc;
 

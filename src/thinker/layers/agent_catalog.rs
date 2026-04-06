@@ -1,6 +1,7 @@
-//! AgentCatalogLayer — sub-agent catalog index for primary agent awareness (priority 505)
+//! AgentCatalogLayer — sub-agent catalog index for primary agent awareness (priority 1704)
 
-use crate::thinker::prompt_layer::{AgentCatalogEntry, AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_layer::{AgentCatalogEntry, AssemblyPath, LayerInput, LayerStability, PromptLayer};
+use crate::thinker::xml_util::escape_xml;
 use crate::thinker::prompt_mode::PromptMode;
 
 pub struct AgentCatalogLayer;
@@ -10,7 +11,10 @@ impl PromptLayer for AgentCatalogLayer {
         "agent_catalog"
     }
     fn priority(&self) -> u32 {
-        505
+        1704
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
@@ -67,12 +71,6 @@ fn build_agent_catalog_xml(agents: &[&AgentCatalogEntry]) -> String {
     }
     buf.push_str("</available_agents>");
     buf
-}
-
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -183,8 +181,8 @@ mod tests {
     }
 
     #[test]
-    fn priority_is_505() {
-        assert_eq!(AgentCatalogLayer.priority(), 505);
+    fn priority_is_1704() {
+        assert_eq!(AgentCatalogLayer.priority(), 1704);
     }
 
     #[test]
