@@ -46,15 +46,19 @@ impl PromptLayer for ToolUsageGrammarLayer {
         for (name, hint) in &hints {
             if !hint.prefer_over.is_empty() {
                 let alternatives = hint.prefer_over.join(", ");
-                let scenario = hint
-                    .prefer_for
-                    .first()
-                    .map(|s| s.as_str())
-                    .unwrap_or("this task");
-                output.push_str(&format!(
-                    "- For {}, use `{}` instead of {}\n",
-                    scenario, name, alternatives
-                ));
+                if hint.prefer_for.is_empty() {
+                    output.push_str(&format!(
+                        "- Use `{}` instead of {}\n",
+                        name, alternatives
+                    ));
+                } else {
+                    for scenario in &hint.prefer_for {
+                        output.push_str(&format!(
+                            "- For {}, use `{}` instead of {}\n",
+                            scenario, name, alternatives
+                        ));
+                    }
+                }
             }
         }
         output.push_str("- Prefer parallel tool calls when tasks are independent\n\n");

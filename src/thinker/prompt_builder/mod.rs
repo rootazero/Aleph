@@ -145,25 +145,15 @@ impl PromptBuilder {
 
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
-        match (&self.soul, &self.agent_def) {
-            (Some(soul), Some(agent)) => {
-                let input = LayerInput::soul(&self.config, tools, soul)
-                    .with_agent_def(agent);
-                self.pipeline.execute(AssemblyPath::Soul, &input)
-            }
-            (Some(soul), None) => {
-                let input = LayerInput::soul(&self.config, tools, soul);
-                self.pipeline.execute(AssemblyPath::Soul, &input)
-            }
-            (None, Some(agent)) => {
-                let input = LayerInput::basic(&self.config, tools).with_agent_def(agent);
-                self.pipeline.execute(AssemblyPath::Basic, &input)
-            }
-            (None, None) => {
-                let input = LayerInput::basic(&self.config, tools);
-                self.pipeline.execute(AssemblyPath::Basic, &input)
-            }
-        }
+        let (path, input) = match &self.soul {
+            Some(soul) => (AssemblyPath::Soul, LayerInput::soul(&self.config, tools, soul)),
+            None => (AssemblyPath::Basic, LayerInput::basic(&self.config, tools)),
+        };
+        let input = match &self.agent_def {
+            Some(agent) => input.with_agent_def(agent),
+            None => input,
+        };
+        self.pipeline.execute_cached(path, &input)
     }
 
     /// Build system prompt with hydrated tools from semantic retrieval
@@ -173,7 +163,7 @@ impl PromptBuilder {
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
         let input = LayerInput::hydration(&self.config, hydration);
-        self.pipeline.execute(AssemblyPath::Hydration, &input)
+        self.pipeline.execute_cached(AssemblyPath::Hydration, &input)
     }
 
     /// Build system prompt with soul section at the top
@@ -189,7 +179,7 @@ impl PromptBuilder {
         profile: Option<&ProfileConfig>,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul).with_profile(profile);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
+        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt with hooks applied.
@@ -239,7 +229,7 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_agent_def(agent_def);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
+        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt for a sub-agent (basic path, no soul).
@@ -252,7 +242,7 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::basic(&self.config, tools)
             .with_agent_def(agent_def);
-        self.pipeline.execute(AssemblyPath::Basic, &input)
+        self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
     /// Access the underlying config (for reading).
@@ -318,7 +308,7 @@ impl PromptBuilder {
             .with_workspace_opt(workspace)
             .with_inbound_opt(inbound)
             .with_memory_context_opt(memory_context);
-        self.pipeline.execute(AssemblyPath::Soul, &input)
+        self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
     /// Build system prompt using ResolvedContext
@@ -332,6 +322,6 @@ impl PromptBuilder {
         ctx: &super::context::ResolvedContext,
     ) -> String {
         let input = LayerInput::context(&self.config, ctx);
-        self.pipeline.execute(AssemblyPath::Context, &input)
+        self.pipeline.execute_cached(AssemblyPath::Context, &input)
     }
 }

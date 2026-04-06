@@ -89,10 +89,12 @@ impl MemoryContext {
             output.push('\n');
         }
 
-        // Taxonomy guidelines
-        output.push_str("### Memory Guidelines\n\n");
-        output.push_str("Memory categories: user (preferences), project (goals/status), feedback (corrections), reference (external pointers).\n");
-        output.push_str("Save important context. Update stale memories. Delete outdated ones.\n\n");
+        // Taxonomy guidelines (only when vector retrieval is active)
+        if has_vector {
+            output.push_str("### Memory Guidelines\n\n");
+            output.push_str("Memory categories: user (preferences), project (goals/status), feedback (corrections), reference (external pointers).\n");
+            output.push_str("Save important context. Update stale memories. Delete outdated ones.\n\n");
+        }
 
         output
     }
