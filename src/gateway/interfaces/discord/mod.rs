@@ -435,6 +435,9 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
     }
 
     async fn thread_create(&self, _ctx: Context, new_channel: GuildChannel) {
+        if !self.config.intents.guild_threads {
+            return;
+        }
         let channel_id = new_channel.id.get();
         tracing::debug!("Thread created: {} in channel {}", channel_id, new_channel.parent_id.map(|p| p.get()).unwrap_or(0));
 
@@ -453,6 +456,9 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
     }
 
     async fn thread_update(&self, _ctx: Context, _old_channel: Option<GuildChannel>, new_channel: GuildChannel) {
+        if !self.config.intents.guild_threads {
+            return;
+        }
         let channel_id = new_channel.id.get();
         if let Some(binding) = self.thread_bindings.write().await.get_mut(&channel_id) {
             binding.name = new_channel.name.clone();
@@ -461,6 +467,9 @@ async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
     }
 
     async fn thread_delete(&self, _ctx: Context, channel: PartialGuildChannel, _channel_as_thread: Option<GuildChannel>) {
+        if !self.config.intents.guild_threads {
+            return;
+        }
         let channel_id = channel.id.get();
         if self.thread_bindings.write().await.remove(&channel_id).is_some() {
             tracing::debug!("Thread deleted: {}", channel_id);

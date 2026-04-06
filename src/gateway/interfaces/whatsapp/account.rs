@@ -9,18 +9,13 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum AccountState {
+    #[default]
     Disconnected,
     Connecting,
     Connected { since: DateTime<Utc> },
     Error { message: String, since: DateTime<Utc> },
-}
-
-impl Default for AccountState {
-    fn default() -> Self {
-        Self::Disconnected
-    }
 }
 
 pub struct WhatsAppAccount {

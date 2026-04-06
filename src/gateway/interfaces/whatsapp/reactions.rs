@@ -7,19 +7,14 @@ use crate::gateway::interfaces::whatsapp::baileys_runtime::WhatsAppRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactionLevel {
     Off,
-    Ack,
+    #[default]
     Minimal,
+    Ack,
     Extensive,
-}
-
-impl Default for ReactionLevel {
-    fn default() -> Self {
-        Self::Minimal
-    }
 }
 
 /// Acknowledgment reaction configuration
@@ -40,18 +35,13 @@ impl Default for AckReactionConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupReactionMode {
-    Never,
+    #[default]
     Mentions,
+    Never,
     Always,
-}
-
-impl Default for GroupReactionMode {
-    fn default() -> Self {
-        Self::Mentions
-    }
 }
 
 pub struct ReactionHandler {

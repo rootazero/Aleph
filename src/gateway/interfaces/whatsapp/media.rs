@@ -90,28 +90,38 @@ impl MediaProcessor {
         })
     }
     
-    async fn process_audio_ogg(&self, _attachment: &Attachment) -> Result<OutboundMedia> {
+    async fn process_audio_ogg(&self, attachment: &Attachment) -> Result<OutboundMedia> {
+        let data = self.read_file(attachment).await?;
         Ok(OutboundMedia {
-            data: Vec::new(),
+            data,
             mime_type: "audio/ogg; codecs=opus".to_string(),
             is_voice_note: true,
         })
     }
-    
+
     async fn process_document(&self, attachment: &Attachment) -> Result<OutboundMedia> {
+        let data = self.read_file(attachment).await?;
         Ok(OutboundMedia {
-            data: Vec::new(),
+            data,
             mime_type: attachment.mime_type.clone(),
             is_voice_note: false,
         })
     }
-    
+
     async fn process_video(&self, attachment: &Attachment) -> Result<OutboundMedia> {
+        let data = self.read_file(attachment).await?;
         Ok(OutboundMedia {
-            data: Vec::new(),
+            data,
             mime_type: attachment.mime_type.clone(),
             is_voice_note: false,
         })
+    }
+
+    async fn read_file(&self, attachment: &Attachment) -> Result<Vec<u8>> {
+        let Some(path) = &attachment.path else {
+            return Err(anyhow::anyhow!("No path for attachment"));
+        };
+        Ok(tokio::fs::read(path).await?)
     }
 }
 

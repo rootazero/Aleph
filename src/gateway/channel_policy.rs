@@ -36,10 +36,11 @@ impl std::fmt::Display for E164Number {
 }
 
 /// DM (direct message) access policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DmPolicy {
     /// First message requires pairing approval
+    #[default]
     Pairing,
     /// Only explicitly allowlisted senders
     Allowlist,
@@ -49,28 +50,17 @@ pub enum DmPolicy {
     Disabled,
 }
 
-impl Default for DmPolicy {
-    fn default() -> Self {
-        Self::Pairing
-    }
-}
-
 /// Group access policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupPolicy {
+    /// Only explicitly allowlisted senders
+    #[default]
+    Allowlist,
     /// Anyone can send
     Open,
-    /// Only allowlisted senders
-    Allowlist,
     /// No group messages
     Disabled,
-}
-
-impl Default for GroupPolicy {
-    fn default() -> Self {
-        Self::Allowlist
-    }
 }
 
 /// Policy evaluation result

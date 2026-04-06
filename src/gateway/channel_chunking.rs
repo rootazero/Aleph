@@ -77,11 +77,9 @@ impl WhatsAppChunker {
         let mut current = String::with_capacity(limit);
 
         for line in text.lines() {
-            if current.len() + line.len() + 1 > limit {
-                if !current.is_empty() {
-                    chunks.push(current.clone());
-                    current.clear();
-                }
+            if current.len() + line.len() + 1 > limit && !current.is_empty() {
+                chunks.push(current.clone());
+                current.clear();
             }
             if !current.is_empty() {
                 current.push('\n');
@@ -97,7 +95,7 @@ impl WhatsAppChunker {
     }
 
     pub fn chunk_by_newline(text: &str, limit: usize) -> Vec<String> {
-        let paragraphs: Vec<String> = text.split("\n\n").map(|s| s.to_string()).collect();
+        let paragraphs: Vec<&str> = text.split("\n\n").collect();
 
         let mut chunks = Vec::new();
         let mut current = String::new();
@@ -107,16 +105,17 @@ impl WhatsAppChunker {
                 if !current.is_empty() {
                     current.push_str("\n\n");
                 }
-                current.push_str(&para);
+                current.push_str(para);
             } else {
                 if !current.is_empty() {
                     chunks.push(current.clone());
+                    current.clear();
                 }
-                current = if para.len() > limit {
-                    Self::chunk_by_length(&para, limit).join("\n\n")
+                if para.len() > limit {
+                    chunks.extend(Self::chunk_by_length(para, limit));
                 } else {
-                    para
-                };
+                    current.push_str(para);
+                }
             }
         }
 
