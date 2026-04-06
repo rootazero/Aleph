@@ -24,6 +24,7 @@ use super::context_budget::pipeline::{
 use super::context_budget::pressure::PressureSensor;
 use super::tool_info::ToolInfo;
 use crate::thinker::prompt_builder::PromptBuilder;
+use super::agent_runtime::SharedSnapshot;
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
@@ -693,6 +694,8 @@ pub struct AgentLoop<P: LoopProvider> {
     session_context: Option<super::sections::SessionContext>,
     /// Optional approval gate for two-phase exec approval.
     approval_gate: Option<crate::agent_loop::exec_approval::ApprovalGate>,
+    /// Shared prompt snapshot for fork path. Written once after first prompt assembly.
+    shared_snapshot: Option<SharedSnapshot>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -753,6 +756,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             skill_prefetcher: None,
             session_context: None,
             approval_gate: None,
+            shared_snapshot: None,
         }
     }
 
@@ -873,6 +877,16 @@ impl<P: LoopProvider> AgentLoop<P> {
             Arc::clone(&self.safety_guard),
             self.chain.chain_id.clone(),
         ));
+        self
+    }
+
+    /// Attach a shared prompt snapshot for the fork path.
+    ///
+    /// The snapshot is written once after the first prompt assembly and reused
+    /// by sub-agents spawned via [`SubagentTool`] to avoid redundant prompt
+    /// rebuilds.
+    pub fn with_shared_snapshot(mut self, snapshot: SharedSnapshot) -> Self {
+        self.shared_snapshot = Some(snapshot);
         self
     }
 
@@ -2097,6 +2111,15 @@ impl<P: LoopProvider> AgentLoop<P> {
                 .unwrap_or_else(|e| e.into_inner())
                 .tool_definitions(),
         };
+
+        // Capture prompt snapshot for fork path (once)
+        if let Some(ref shared) = self.shared_snapshot {
+            let mut guard = shared.write().unwrap_or_else(|e| e.into_inner());
+            if guard.is_none() {
+                *guard = Some(self.prompt_builder.capture_snapshot(&tool_infos));
+            }
+        }
+
         let mut progress = LoopProgress::default();
         let mut exit_decision = LoopExitDecision::default();
 
