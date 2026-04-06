@@ -154,26 +154,29 @@ impl CompactionStage for ImageStripper {
 }
 
 // =============================================================================
-// Stage 1: MicroCompact
+// Stage 1: ResultClearing
 // =============================================================================
 
-/// Clears the text of old tool results that have already been consumed by the
-/// LLM (i.e. an assistant message follows them), replacing them with a small
-/// marker to reclaim token budget.
-pub struct MicroCompact;
+/// Tiered clearing of old tool results based on message age.
+///
+/// - Within fresh_tail: keep original
+/// - Outside fresh_tail, within half-life: compress via per-tool semantic compressor
+/// - Beyond half-life: replace with ultra-compact one-liner
+pub struct ResultClearing;
 
-const CLEARED_MARKER: &str = "[Old result cleared]";
-
-impl CompactionStage for MicroCompact {
+impl CompactionStage for ResultClearing {
     fn name(&self) -> &'static str {
-        "micro_compact"
+        "result_clearing"
     }
 
     fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize {
         let partition = partition_fresh_tail(messages, fresh_tail_count);
+        if partition == 0 {
+            return 0;
+        }
 
-        // Collect candidate indices: tool results in the compressible zone that
-        // have been consumed (an assistant turn follows them).
+        let half_life = partition / 2;
+
         let candidates: Vec<usize> = (0..partition)
             .filter(|&i| messages[i].is_tool_result() && is_tool_result_consumed(messages, i))
             .collect();
@@ -181,23 +184,29 @@ impl CompactionStage for MicroCompact {
         let mut total_freed: usize = 0;
 
         for idx in candidates {
-            let old_content = match messages[idx].tool_result_info() {
-                Some((_, content)) => content,
+            let (tool_name, old_content) = match messages[idx].tool_result_info() {
+                Some((n, c)) => (n.to_owned(), c),
                 None => continue,
             };
 
-            // Skip if already compacted.
-            if old_content == CLEARED_MARKER {
-                continue;
-            }
-
             let old_tokens = estimate_tokens_smart(&old_content);
-            let marker_tokens = estimate_tokens_smart(CLEARED_MARKER);
-            // Only replace when we actually free tokens — replacing short
-            // content with a longer marker increases context pressure.
-            if old_tokens > marker_tokens {
-                messages[idx].replace_tool_result_content(CLEARED_MARKER.to_string());
-                total_freed += old_tokens - marker_tokens;
+
+            let compressed = if idx < half_life {
+                // Beyond half-life (oldest) → ultra-compact one-liner
+                crate::memory::session_compactor::tool_compactor::compress_to_oneliner(
+                    &tool_name, &old_content,
+                )
+            } else {
+                // Within half-life → semantic per-tool compression
+                crate::memory::session_compactor::tool_compactor::compress_tool_result(
+                    &tool_name, &old_content,
+                )
+            };
+
+            let new_tokens = estimate_tokens_smart(&compressed);
+            if new_tokens < old_tokens {
+                messages[idx].replace_tool_result_content(compressed);
+                total_freed += old_tokens - new_tokens;
             }
         }
 
@@ -454,27 +463,31 @@ mod tests {
     }
 
     #[test]
-    fn microcompact_clears_old_consumed_tool_results() {
+    fn result_clearing_compresses_old_consumed_tool_results() {
         let mut msgs = vec![
             UnifiedMessage::user("do something"),
             UnifiedMessage::tool_result("c1", "Bash", &"x".repeat(2000), false),
             UnifiedMessage::assistant("I processed it"),
             UnifiedMessage::user("latest"),
         ];
-        let stage = MicroCompact;
+        let stage = ResultClearing;
         let freed = stage.compact(&mut msgs, 1);
         let (_, content) = msgs[1].tool_result_info().unwrap();
-        assert_eq!(content, "[Old result cleared]");
+        // Tool result at index 1, partition=3, half_life=1 → idx >= half_life → semantic
+        assert!(
+            content.starts_with("[Command output,"),
+            "expected semantic compression, got: {content}"
+        );
         assert!(freed > 0);
     }
 
     #[test]
-    fn microcompact_preserves_unconsumed_tool_results() {
+    fn result_clearing_preserves_unconsumed_tool_results() {
         let mut msgs = vec![
             UnifiedMessage::user("do something"),
             UnifiedMessage::tool_result("c1", "Bash", &"x".repeat(2000), false),
         ];
-        let stage = MicroCompact;
+        let stage = ResultClearing;
         let freed = stage.compact(&mut msgs, 0);
         let (_, content) = msgs[1].tool_result_info().unwrap();
         assert_eq!(content, "x".repeat(2000));
@@ -482,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn microcompact_preserves_fresh_tail() {
+    fn result_clearing_preserves_fresh_tail() {
         let mut msgs = vec![
             UnifiedMessage::user("old"),
             UnifiedMessage::tool_result("c1", "Bash", &"z".repeat(200), false),
@@ -491,13 +504,52 @@ mod tests {
             UnifiedMessage::tool_result("c2", "Read", &"y".repeat(2000), false),
             UnifiedMessage::assistant("new reply"),
         ];
-        let stage = MicroCompact;
+        let stage = ResultClearing;
         let freed = stage.compact(&mut msgs, 3); // last 3 are fresh
         let (_, content) = msgs[4].tool_result_info().unwrap();
         assert_eq!(content, "y".repeat(2000)); // fresh tail untouched
         let (_, old) = msgs[1].tool_result_info().unwrap();
-        assert_eq!(old, "[Old result cleared]"); // old one cleared (200 chars > marker)
+        // partition=3, half_life=1, idx=1 → idx >= half_life → semantic compression
+        assert!(
+            old.starts_with("[Command output,"),
+            "expected semantic compression, got: {old}"
+        );
         assert!(freed > 0);
+    }
+
+    #[test]
+    fn result_clearing_tiered_oldest_gets_oneliner_newer_gets_semantic() {
+        // Build a conversation with two consumed tool results at different ages.
+        let mut msgs = vec![
+            // Oldest round
+            UnifiedMessage::user("first request"),
+            UnifiedMessage::tool_result("c1", "Read", &"fn main() {}\n".repeat(100), false),
+            UnifiedMessage::assistant("read it"),
+            // Middle round
+            UnifiedMessage::user("second request"),
+            UnifiedMessage::tool_result("c2", "Grep", &"match1\nmatch2\nmatch3\n".repeat(50), false),
+            UnifiedMessage::assistant("searched it"),
+            // Fresh tail
+            UnifiedMessage::user("latest"),
+        ];
+        let stage = ResultClearing;
+        // fresh_tail=1 → partition=6, half_life=3
+        let freed = stage.compact(&mut msgs, 1);
+        assert!(freed > 0);
+
+        // Index 1 (< half_life=3) → oneliner
+        let (_, oldest) = msgs[1].tool_result_info().unwrap();
+        assert!(
+            oldest.starts_with("[Read:"),
+            "oldest should be oneliner, got: {oldest}"
+        );
+
+        // Index 4 (>= half_life=3) → semantic compression
+        let (_, newer) = msgs[4].tool_result_info().unwrap();
+        assert!(
+            newer.starts_with("[Search result,"),
+            "newer should be semantic, got: {newer}"
+        );
     }
 
     #[test]
@@ -515,7 +567,7 @@ mod tests {
         };
         let freed = stage.compact(&mut msgs, 1);
         let (_, content) = msgs[1].tool_result_info().unwrap();
-        // Should be compressed to summary like "[Read file, ...]" or "[Old result cleared]"
+        // Should be compressed to summary like "[Read file, ...]"
         assert!(
             content.len() < 200,
             "should be compressed, got len: {}",

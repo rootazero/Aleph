@@ -100,6 +100,33 @@ fn compress_generic(content: &str) -> String {
     )
 }
 
+/// Ultra-compact one-liner summary for very old tool results.
+pub fn compress_to_oneliner(tool_name: &str, content: &str) -> String {
+    let name = tool_name.to_ascii_lowercase();
+    if name.contains("read") || name.contains("glob") {
+        let lines = content.lines().count();
+        let lang = detect_language(content);
+        format!("[{tool_name}: {lines} lines, {lang}]")
+    } else if name.contains("grep") || name.contains("search") {
+        let n = content.lines().filter(|l| !l.trim().is_empty()).count();
+        format!("[{tool_name}: {n} matches]")
+    } else if name.contains("bash") || name.contains("shell") {
+        let n = content.lines().count();
+        format!("[{tool_name}: {n} lines output]")
+    } else if name.contains("subagent") {
+        compress_subagent(content)
+    } else {
+        format!("[{tool_name}: {} chars]", content.len())
+    }
+}
+
+/// Compress a subagent tool result into a structured one-liner.
+pub fn compress_subagent(content: &str) -> String {
+    let first_line = content.lines().next().unwrap_or("completed");
+    let brief = safe_truncate(first_line, 80);
+    format!("[Subagent: {brief}]")
+}
+
 /// Truncate `s` to at most `n` *bytes* at a valid UTF-8 char boundary.
 fn safe_truncate(s: &str, n: usize) -> &str {
     if s.len() <= n {
@@ -132,6 +159,8 @@ pub fn compress_tool_result(tool_name: &str, content: &str) -> String {
         compress_bash(content)
     } else if name.contains("webfetch") || name.contains("web_fetch") || name.contains("fetch") {
         compress_web(content)
+    } else if name.contains("subagent") {
+        compress_subagent(content)
     } else {
         // Generic: only compress if content is large (> 500 estimated tokens at ratio 3.5)
         let tok = estimate_tokens(content, 3.5);
@@ -397,6 +426,64 @@ mod tests {
         // Should not be compressed because it is unconsumed
         let (_, content) = messages[1].tool_result_info().unwrap();
         assert_eq!(content, large, "unconsumed tool result was modified");
+    }
+
+    // --- safe_truncate ---
+
+    // --- compress_to_oneliner ---
+
+    #[test]
+    fn test_oneliner_read() {
+        let content = "fn main() {\n    println!(\"hello\");\n}\n";
+        let result = compress_to_oneliner("Read", content);
+        assert!(result.starts_with("[Read:"), "got: {result}");
+        assert!(result.contains("3 lines"), "got: {result}");
+        assert!(result.contains("rust"), "got: {result}");
+    }
+
+    #[test]
+    fn test_oneliner_grep() {
+        let content = "src/foo.rs:10: let x = 1;\nsrc/bar.rs:5: let y = 2;\n";
+        let result = compress_to_oneliner("Grep", content);
+        assert!(result.starts_with("[Grep:"), "got: {result}");
+        assert!(result.contains("2 matches"), "got: {result}");
+    }
+
+    #[test]
+    fn test_oneliner_bash() {
+        let content = "line1\nline2\nline3\n";
+        let result = compress_to_oneliner("Bash", content);
+        assert!(result.starts_with("[Bash:"), "got: {result}");
+        assert!(result.contains("3 lines output"), "got: {result}");
+    }
+
+    #[test]
+    fn test_oneliner_subagent() {
+        let content = "Task completed successfully\nDetails here";
+        let result = compress_to_oneliner("SubagentTool", content);
+        assert!(result.starts_with("[Subagent:"), "got: {result}");
+        assert!(result.contains("Task completed"), "got: {result}");
+    }
+
+    #[test]
+    fn test_oneliner_generic() {
+        let content = "some output data";
+        let result = compress_to_oneliner("CustomTool", content);
+        assert!(result.starts_with("[CustomTool:"), "got: {result}");
+        assert!(result.contains("chars"), "got: {result}");
+    }
+
+    // --- compress_subagent ---
+
+    #[test]
+    fn test_compress_subagent_truncates_long_content() {
+        let long_first_line = "A".repeat(200);
+        let content = format!("{long_first_line}\nmore lines");
+        let result = compress_subagent(&content);
+        assert!(result.starts_with("[Subagent:"), "got: {result}");
+        // The brief should be truncated to at most 80 bytes
+        let inner = result.trim_start_matches("[Subagent: ").trim_end_matches(']');
+        assert!(inner.len() <= 80, "inner too long ({}): {inner}", inner.len());
     }
 
     // --- safe_truncate ---

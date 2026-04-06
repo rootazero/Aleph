@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::context_budget::diagnostics::ContextDiagnostics;
 use super::context_budget::pipeline::{
-    CompactionPipeline, ImageStripper, MicroCompact, RoundDrop, ToolCompactStage,
+    CompactionPipeline, ImageStripper, ResultClearing, RoundDrop, ToolCompactStage,
 };
 use super::context_budget::pressure::PressureSensor;
 use super::tool_info::ToolInfo;
@@ -712,7 +712,7 @@ impl<P: LoopProvider> AgentLoop<P> {
     ) -> Self {
         let pipeline = CompactionPipeline::new(vec![
             Box::new(ImageStripper),
-            Box::new(MicroCompact),
+            Box::new(ResultClearing),
             Box::new(ToolCompactStage {
                 token_budget: config.token_budget as u64,
                 threshold: 0.70,
