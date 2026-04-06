@@ -51,6 +51,7 @@ pub mod gateway_route;
 pub mod generation;
 pub mod heartbeat_manage;
 pub mod invalid;
+pub mod mcp_discover;
 pub mod mcp_prompt;
 pub mod mcp_resource;
 pub mod mcp_wrapper;
@@ -122,6 +123,7 @@ pub use heartbeat_manage::{
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
 pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
+pub use mcp_discover::{McpToolSchemaArgs, McpToolSchemaOutput, McpToolSchemaTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
 pub use mcp_wrapper::McpToolWrapper;
