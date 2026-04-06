@@ -45,6 +45,36 @@ pub struct DiscordConfig {
     /// Gateway intents to request
     #[serde(default)]
     pub intents: IntentsConfig,
+
+    /// Thread binding configuration
+    #[serde(default)]
+    pub threads: ThreadConfig,
+}
+
+/// Thread binding configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadConfig {
+    /// Enable automatic thread binding
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Auto-create threads for new conversations
+    #[serde(default)]
+    pub auto_create: bool,
+
+    /// Channel IDs where auto-threading is enabled (empty = all)
+    #[serde(default)]
+    pub auto_create_channels: Vec<u64>,
+}
+
+impl Default for ThreadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_create: false,
+            auto_create_channels: Vec::new(),
+        }
+    }
 }
 
 /// Gateway intents configuration
@@ -65,6 +95,10 @@ pub struct IntentsConfig {
     /// Receive guild member events
     #[serde(default)]
     pub guild_members: bool,
+
+    /// Receive guild thread events
+    #[serde(default)]
+    pub guild_threads: bool,
 }
 
 impl Default for IntentsConfig {
@@ -74,6 +108,7 @@ impl Default for IntentsConfig {
             direct_messages: true,
             message_content: true,
             guild_members: false,
+            guild_threads: false,
         }
     }
 }
@@ -99,6 +134,7 @@ impl Default for DiscordConfig {
             slash_commands_enabled: true,
             send_typing: true,
             intents: IntentsConfig::default(),
+            threads: ThreadConfig::default(),
         }
     }
 }

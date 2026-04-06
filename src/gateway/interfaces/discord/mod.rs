@@ -41,13 +41,53 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{mpsc, oneshot, RwLock};
 
+use std::collections::HashMap;
+
 use serenity::{
     all::{
-        ChannelId as SerenityChannelId, Context, CreateAttachment, CreateMessage, EditMessage,
-        EventHandler, GatewayIntents, Message, MessageId as SerenityMessageId, Ready,
+        ChannelId as SerenityChannelId, CommandDataOptionValue, Context, CreateAttachment,
+        CreateMessage, EditMessage, EventHandler, GatewayIntents, GuildChannel, Interaction,
+        Message, MessageId as SerenityMessageId, PartialGuildChannel, Ready,
     },
     Client,
 };
+
+/// Thread binding - links a Discord thread to a conversation
+#[derive(Debug, Clone)]
+pub struct ThreadBinding {
+    /// Discord thread ID
+    pub thread_id: u64,
+    /// Bound conversation ID
+    pub conversation_id: ConversationId,
+    /// Guild ID where the thread exists
+    pub guild_id: u64,
+    /// Parent channel ID
+    pub parent_channel_id: u64,
+    /// Thread name
+    pub name: String,
+    /// When the binding was created
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+impl ThreadBinding {
+    /// Create a new thread binding from thread details
+    pub fn new(
+        thread_id: u64,
+        conversation_id: ConversationId,
+        guild_id: u64,
+        parent_channel_id: u64,
+        name: String,
+    ) -> Self {
+        Self {
+            thread_id,
+            conversation_id,
+            guild_id,
+            parent_channel_id,
+            name,
+            created_at: Utc::now(),
+        }
+    }
+}
 
 /// Discord channel implementation
 pub struct DiscordChannel {
@@ -151,6 +191,7 @@ struct Handler {
     config: DiscordConfig,
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
+    thread_bindings: Arc<RwLock<HashMap<u64, ThreadBinding>>>,
 }
 
 #[async_trait]
@@ -304,6 +345,127 @@ impl EventHandler for Handler {
             let _ = msg.channel_id.broadcast_typing(&ctx.http).await;
         }
     }
+
+async fn interaction_create(&self, _ctx: Context, interaction: Interaction) {
+        let serenity::all::Interaction::Command(command) = interaction else {
+            return;
+        };
+
+        if !self.config.slash_commands_enabled {
+            tracing::debug!("Slash command ignored (disabled in config)");
+            return;
+        }
+
+        if let Some(guild_id) = command.guild_id {
+            if !self.config.is_guild_allowed(guild_id.get()) {
+                tracing::debug!(
+                    "Slash command from guild {} ignored (not in allowlist)",
+                    guild_id
+                );
+                return;
+            }
+        }
+
+        tracing::info!(
+            "Slash command: /{} from user {}",
+            command.data.name,
+            command.user.name
+        );
+
+        let args: Vec<(String, String)> = command
+            .data
+            .options
+            .iter()
+            .filter_map(|opt| {
+                let value = match &opt.value {
+                    CommandDataOptionValue::String(s) => s.clone(),
+                    CommandDataOptionValue::Integer(i) => i.to_string(),
+                    CommandDataOptionValue::Boolean(b) => b.to_string(),
+                    CommandDataOptionValue::User(u) => u.to_string(),
+                    CommandDataOptionValue::Channel(c) => c.to_string(),
+                    CommandDataOptionValue::Role(r) => r.to_string(),
+                    CommandDataOptionValue::Mentionable(m) => m.to_string(),
+                    CommandDataOptionValue::Number(n) => n.to_string(),
+                    CommandDataOptionValue::Attachment(a) => a.to_string(),
+                    _ => return None,
+                };
+                Some((opt.name.clone(), value))
+            })
+            .collect();
+
+        let args_text = args
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let text = format!("/{} {}", command.data.name, args_text);
+
+        // Build conversation ID
+        let conversation_id = if let Some(guild_id) = command.guild_id {
+            ConversationId::new(guild_id.to_string())
+        } else {
+            ConversationId::new(format!("dm:{}", command.user.id))
+        };
+
+        let inbound = InboundMessage {
+            id: MessageId::new(command.id.to_string()),
+            channel_id: ChannelId::new("discord"),
+            conversation_id,
+            sender_id: UserId::new(command.user.id.to_string()),
+            sender_name: Some(command.user.name.clone()),
+            text,
+            attachments: vec![],
+            timestamp: Utc::now(),
+            reply_to: None,
+            is_group: command.guild_id.is_some(),
+            raw: Some(serde_json::json!({
+                "command_id": command.data.id.to_string(),
+                "command_name": command.data.name,
+                "guild_id": command.guild_id.map(|g| g.to_string()),
+                "channel_id": command.channel_id.to_string(),
+                "args": args,
+            })),
+            metadata: vec![],
+        };
+
+        if let Err(e) = self.inbound_tx.send(inbound).await {
+            tracing::error!("Failed to send inbound Discord interaction: {}", e);
+        }
+    }
+
+    async fn thread_create(&self, _ctx: Context, new_channel: GuildChannel) {
+        let channel_id = new_channel.id.get();
+        tracing::debug!("Thread created: {} in channel {}", channel_id, new_channel.parent_id.map(|p| p.get()).unwrap_or(0));
+
+        let binding = ThreadBinding::new(
+            channel_id,
+            ConversationId::new(channel_id.to_string()),
+            new_channel.guild_id.get(),
+            new_channel.parent_id.map(|p| p.get()).unwrap_or(0),
+            new_channel.name.clone(),
+        );
+
+        self.thread_bindings
+            .write()
+            .await
+            .insert(channel_id, binding);
+    }
+
+    async fn thread_update(&self, _ctx: Context, _old_channel: Option<GuildChannel>, new_channel: GuildChannel) {
+        let channel_id = new_channel.id.get();
+        if let Some(binding) = self.thread_bindings.write().await.get_mut(&channel_id) {
+            binding.name = new_channel.name.clone();
+            tracing::debug!("Thread updated: {} ({})", channel_id, new_channel.name);
+        }
+    }
+
+    async fn thread_delete(&self, _ctx: Context, channel: PartialGuildChannel, _channel_as_thread: Option<GuildChannel>) {
+        let channel_id = channel.id.get();
+        if self.thread_bindings.write().await.remove(&channel_id).is_some() {
+            tracing::debug!("Thread deleted: {}", channel_id);
+        }
+    }
 }
 
 #[async_trait]
@@ -346,6 +508,7 @@ impl Channel for DiscordChannel {
             config: self.config.clone(),
             status: self.channel_state.status_handle(),
             bot_user_id: Arc::new(RwLock::new(None)),
+            thread_bindings: Arc::new(RwLock::new(HashMap::new())),
         };
 
         // Build client

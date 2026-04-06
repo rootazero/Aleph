@@ -29,7 +29,14 @@ pub mod pairing;
 #[cfg(unix)]
 pub mod rpc_client;
 
-pub use config::WhatsAppConfig;
+pub mod account;
+pub mod account_registry;
+pub mod baileys_runtime;
+pub mod history_buffer;
+pub mod media;
+pub mod reactions;
+
+pub use config::{WhatsAppConfig, WhatsAppAccountConfig, AccessConfig, DeliveryConfig, ReactionConfig};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,

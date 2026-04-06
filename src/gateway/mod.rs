@@ -57,6 +57,8 @@ pub mod session_manager;
 pub mod bind_mode;
 pub mod channel;
 pub mod channel_approval;
+pub mod channel_policy;
+pub mod channel_chunking;
 pub mod coalescer;
 pub mod channel_registry;
 pub mod device_store;
