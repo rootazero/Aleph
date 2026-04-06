@@ -306,9 +306,49 @@ fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     }
 }
 
+/// Maximum transcript directories to retain per session.
+const MAX_TRANSCRIPT_DIRS: usize = 50;
+
+/// Clean up old transcript directories, retaining only the most recent
+/// [`MAX_TRANSCRIPT_DIRS`] session directories under the transcripts root.
+fn cleanup_old_transcripts(base_dir: &std::path::Path) {
+    // base_dir is ~/.aleph/data/transcripts/{session_id}/
+    // We clean at the parent level: ~/.aleph/data/transcripts/
+    let parent = match base_dir.parent() {
+        Some(p) => p,
+        None => return,
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+
+    let mut dirs: Vec<(std::path::PathBuf, std::time::SystemTime)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((e.path(), modified))
+        })
+        .collect();
+
+    if dirs.len() <= MAX_TRANSCRIPT_DIRS {
+        return;
+    }
+
+    dirs.sort_by_key(|(_, t)| *t);
+    let to_remove = dirs.len() - MAX_TRANSCRIPT_DIRS;
+    for (path, _) in dirs.into_iter().take(to_remove) {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
 /// Persist a subagent transcript to disk for future retrieval.
 /// Writes to `~/.aleph/data/transcripts/{session_id}/{agent_id}.json`.
 /// Best-effort: errors are logged but not propagated.
+///
+/// Synchronous write is acceptable here — we're at loop exit after the
+/// subagent loop completes, no more LLM calls or tool execution pending.
+/// The write is < 1ms for a small JSON file.
 fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
     let base = match dirs::home_dir() {
         Some(h) => h.join(".aleph/data/transcripts").join(session_id),
@@ -328,6 +368,7 @@ fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
                 tracing::warn!(path = %path.display(), error = %e, "Failed to write transcript");
             } else {
                 tracing::debug!(path = %path.display(), "Transcript persisted");
+                cleanup_old_transcripts(&base);
             }
         }
         Err(e) => tracing::warn!(error = %e, "Failed to serialize transcript"),

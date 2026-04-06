@@ -33,11 +33,11 @@ const MAX_DECISIONS: usize = 10;
 impl SessionSnapshot {
     /// Extract key decision sentences from a summary string.
     ///
-    /// Splits on '.', filters for sentences containing decision marker
+    /// Splits on `. ` (dot-space), filters for sentences containing decision marker
     /// keywords, and caps the result at [`MAX_DECISIONS`].
     pub fn extract_decisions(summary: &str) -> Vec<String> {
         summary
-            .split('.')
+            .split(". ")
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .filter(|sentence| {

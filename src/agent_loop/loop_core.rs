@@ -2190,6 +2190,9 @@ impl<P: LoopProvider> AgentLoop<P> {
     }
 
     /// Write a session snapshot if this is a root-level agent (depth 0).
+    ///
+    /// Synchronous write is acceptable here — we're at loop exit, no more LLM
+    /// calls or tool execution pending. The write is < 1ms for a small JSON file.
     fn maybe_write_session_snapshot(
         &self,
         progress: &LoopProgress,
