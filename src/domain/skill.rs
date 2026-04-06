@@ -404,6 +404,8 @@ pub struct SkillManifest {
     homepage: Option<String>,
     /// UI emoji icon.
     emoji: Option<String>,
+    /// Trigger hint — describes when this skill should be proactively invoked.
+    when_to_use: Option<String>,
 }
 
 impl SkillManifest {
@@ -430,6 +432,7 @@ impl SkillManifest {
             primary_env: None,
             homepage: None,
             emoji: None,
+            when_to_use: None,
         }
     }
 
@@ -500,6 +503,11 @@ impl SkillManifest {
         self.emoji.as_deref()
     }
 
+    /// When this skill should be proactively invoked.
+    pub fn when_to_use(&self) -> Option<&str> {
+        self.when_to_use.as_deref()
+    }
+
     /// Override priority (delegates to `SkillSource::priority()`).
     pub fn priority(&self) -> u8 {
         self.source.priority()
@@ -565,6 +573,11 @@ impl SkillManifest {
     /// Set the UI emoji icon.
     pub fn set_emoji(&mut self, emoji: String) {
         self.emoji = Some(emoji);
+    }
+
+    /// Set the when_to_use trigger hint.
+    pub fn set_when_to_use(&mut self, hint: String) {
+        self.when_to_use = Some(hint);
     }
 }
 
@@ -647,6 +660,31 @@ mod tests {
         assert_eq!(manifest.primary_env(), Some("OPENAI_API_KEY"));
         assert_eq!(manifest.homepage(), Some("https://openai.com"));
         assert_eq!(manifest.emoji(), Some("🔍"));
+    }
+
+    #[test]
+    fn test_skill_manifest_when_to_use_default() {
+        let manifest = SkillManifest::new(
+            "test",
+            "Test Skill",
+            "A test skill",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        assert!(manifest.when_to_use().is_none());
+    }
+
+    #[test]
+    fn test_skill_manifest_set_when_to_use() {
+        let mut manifest = SkillManifest::new(
+            "test",
+            "Test Skill",
+            "A test skill",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        manifest.set_when_to_use("When code needs review".to_string());
+        assert_eq!(manifest.when_to_use(), Some("When code needs review"));
     }
 
     // === Task 2 tests ===
