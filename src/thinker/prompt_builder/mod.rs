@@ -13,6 +13,8 @@ use crate::agent_loop::ToolInfo;
 use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
 
+use crate::agents::AgentDef;
+
 use super::identity_files::IdentityFiles;
 use super::inbound_context::InboundContext;
 use super::prompt_budget::{PromptResult, TokenBudget};
@@ -20,6 +22,19 @@ use super::prompt_layer::{AssemblyPath, LayerInput};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
+
+/// Parent agent's stable prompt snapshot for fork path reuse.
+///
+/// Contains the output of all `LayerStability::Stable` layers for a given
+/// assembly path. Subagents using the fork path prepend this prefix and
+/// only rebuild dynamic layers (agent role, session context, memory, etc.).
+#[derive(Debug, Clone)]
+pub struct PromptSnapshot {
+    /// Stable layers assembly output.
+    pub stable_prefix: String,
+    /// Source assembly path.
+    pub path: AssemblyPath,
+}
 
 /// System prompt part with optional cache flag
 ///
@@ -243,6 +258,40 @@ impl PromptBuilder {
         let input = LayerInput::basic(&self.config, tools)
             .with_agent_def(agent_def);
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
+    }
+
+    /// Capture the current stable layers output as a reusable snapshot.
+    pub fn capture_snapshot(&self, tools: &[ToolInfo]) -> PromptSnapshot {
+        let path = match &self.soul {
+            Some(_) => AssemblyPath::Soul,
+            None => AssemblyPath::Basic,
+        };
+        let input = match &self.soul {
+            Some(soul) => LayerInput::soul(&self.config, tools, soul),
+            None => LayerInput::basic(&self.config, tools),
+        };
+        let stable_prefix = self.pipeline.execute_stable_only(path, &input);
+        PromptSnapshot { stable_prefix, path }
+    }
+
+    /// Build a sub-agent prompt by reusing the snapshot's stable prefix.
+    pub fn build_from_snapshot(
+        &self,
+        snapshot: &PromptSnapshot,
+        agent_def: &AgentDef,
+        tools: &[ToolInfo],
+    ) -> String {
+        let input = match &self.soul {
+            Some(soul) => LayerInput::soul(&self.config, tools, soul),
+            None => LayerInput::basic(&self.config, tools),
+        }
+        .with_agent_def(agent_def);
+
+        let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
+        let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
+        result.push_str(&snapshot.stable_prefix);
+        result.push_str(&dynamic_suffix);
+        result
     }
 
     /// Access the underlying config (for reading).
