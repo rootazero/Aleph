@@ -2,6 +2,7 @@
 
 pub mod create;
 pub mod delete;
+pub mod info;
 pub mod list;
 
 use crate::sync_primitives::Arc;
@@ -56,6 +57,7 @@ pub fn new_tool_policy_handle() -> ToolPolicyHandle {
 
 pub use create::{AgentCreateArgs, AgentCreateOutput, AgentCreateTool};
 pub use delete::{AgentDeleteArgs, AgentDeleteOutput, AgentDeleteTool};
+pub use info::{AgentInfoArgs, AgentInfoOutput, AgentInfoTool};
 pub use list::{AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool};
 
 #[cfg(test)]
