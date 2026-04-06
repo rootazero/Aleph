@@ -1,4 +1,4 @@
-//! McpToolIndexLayer — MCP server tool index injection (priority 1065)
+//! McpToolIndexLayer — MCP server tool index injection (priority 1706)
 
 use crate::thinker::prompt_layer::{
     AssemblyPath, LayerInput, LayerStability, McpToolIndexEntry, PromptLayer,
@@ -13,7 +13,7 @@ impl PromptLayer for McpToolIndexLayer {
         "mcp_tool_index"
     }
     fn priority(&self) -> u32 {
-        1065
+        1706
     }
     fn stability(&self) -> LayerStability {
         LayerStability::Dynamic
@@ -146,8 +146,8 @@ mod tests {
     }
 
     #[test]
-    fn priority_is_1065() {
-        assert_eq!(McpToolIndexLayer.priority(), 1065);
+    fn priority_is_1706() {
+        assert_eq!(McpToolIndexLayer.priority(), 1706);
     }
 
     #[test]

@@ -199,7 +199,7 @@ impl PromptPipeline {
             .collect()
     }
 
-    /// Create a pipeline pre-loaded with the 31 default layers.
+    /// Create a pipeline pre-loaded with the 33 default layers.
     ///
     /// Layer order (by priority):
     ///
@@ -211,6 +211,7 @@ impl PromptPipeline {
     ///  300  EnvironmentLayer
     ///  400  RuntimeCapabilitiesLayer
     ///  500  ToolsLayer + HydratedToolsLayer
+    ///  505  AgentCatalogLayer
     ///  550  ToolUsageGrammarLayer
     ///  600  SecurityLayer
     ///  700  ProtocolTokensLayer
@@ -230,6 +231,7 @@ impl PromptPipeline {
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
     /// 1705  McpInstructionsLayer
+    /// 1706  McpToolIndexLayer
     /// 1710  VoiceModeLayer
     /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
@@ -242,6 +244,7 @@ impl PromptPipeline {
             Box::new(AgentRoleLayer),
             Box::new(InboundContextLayer),
             Box::new(McpInstructionsLayer),
+            Box::new(McpToolIndexLayer),
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
@@ -250,6 +253,7 @@ impl PromptPipeline {
             Box::new(RuntimeCapabilitiesLayer),
             Box::new(ToolsLayer),
             Box::new(HydratedToolsLayer),
+            Box::new(AgentCatalogLayer),
             Box::new(ToolUsageGrammarLayer),
             Box::new(SecurityLayer),
             Box::new(ProtocolTokensLayer),
@@ -469,7 +473,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 31);
+        assert_eq!(pipeline.layer_count(), 33);
     }
 
     #[test]
@@ -525,6 +529,8 @@ mod mode_tests {
             "generation_models",
             "skill_instructions",
             "mcp_instructions",
+            "mcp_tool_index",
+            "agent_catalog",
             "session_resume",
             "special_actions",
             "guidelines",
@@ -821,7 +827,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
-        assert_eq!(dynamic_names.len(), 8, "Exactly 8 dynamic layers expected");
+        assert!(dynamic_names.contains(&"mcp_tool_index"));
+        assert_eq!(dynamic_names.len(), 9, "Exactly 9 dynamic layers expected");
     }
 
     #[test]
