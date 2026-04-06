@@ -22,7 +22,6 @@ pub mod skill_prefetch;
 pub mod stop_hooks;
 pub mod streaming_bridge;
 pub mod agent_runtime;
-pub mod subagent_runner;
 pub mod subagent_teammates;
 pub mod subagent_tool;
 mod tool;
