@@ -51,6 +51,8 @@ pub struct McpServerConnection {
     cached_resources: RwLock<Vec<crate::mcp::types::McpResource>>,
     /// Cached prompts list
     cached_prompts: RwLock<Vec<crate::mcp::prompts::McpPrompt>>,
+    /// Cached server instructions (from initialize response)
+    cached_instructions: RwLock<Option<String>>,
     /// Connection state
     state: RwLock<ConnectionState>,
 }
@@ -144,6 +146,7 @@ impl McpServerConnection {
             cached_tools: RwLock::new(Vec::new()),
             cached_resources: RwLock::new(Vec::new()),
             cached_prompts: RwLock::new(Vec::new()),
+            cached_instructions: RwLock::new(None),
             state: RwLock::new(ConnectionState::Connecting),
         };
 
@@ -192,6 +195,12 @@ impl McpServerConnection {
         {
             let mut caps = self.capabilities.write().await;
             *caps = Some(init_result.capabilities);
+        }
+
+        // Store instructions (if provided by server)
+        {
+            let mut inst = self.cached_instructions.write().await;
+            *inst = init_result.instructions.clone();
         }
 
         // Send initialized notification (per JSON-RPC spec, notifications have no id)
@@ -395,6 +404,11 @@ impl McpServerConnection {
     /// Get cached prompts list
     pub async fn list_prompts(&self) -> Vec<crate::mcp::prompts::McpPrompt> {
         self.cached_prompts.read().await.clone()
+    }
+
+    /// Get server-provided instructions (if any).
+    pub async fn instructions(&self) -> Option<String> {
+        self.cached_instructions.read().await.clone()
     }
 
     /// Check if this connection provides a specific tool
