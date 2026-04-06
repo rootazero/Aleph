@@ -13,18 +13,15 @@ pub enum AgentMode {
 
 /// Context mode for sub-agents
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ContextMode {
     /// Start with a fresh context (no parent history)
+    #[default]
     Fresh,
     /// Receive a summary of parent context
     Summary,
 }
 
-impl Default for ContextMode {
-    fn default() -> Self {
-        Self::Fresh
-    }
-}
 
 /// Definition of an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]

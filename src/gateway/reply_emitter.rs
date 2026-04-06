@@ -731,7 +731,7 @@ impl ReplyEmitter {
         let is_first_send = !self.has_sent.load(Ordering::SeqCst);
         self.has_sent.store(true, Ordering::SeqCst);
 
-        let content = self.format_content(&content, is_first_send);
+        let content = self.format_content(content, is_first_send);
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();

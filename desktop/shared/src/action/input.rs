@@ -4,8 +4,8 @@ use enigo::{Axis, Coordinate, Direction, Keyboard, Mouse};
 use tracing::info;
 
 use super::{new_enigo, to_enigo_button, validate_coordinate};
-use crate::error::Result;
 use crate::error::DesktopError;
+use crate::error::Result;
 use crate::MouseButton;
 
 /// Move the mouse to (x, y) and click the specified button.
@@ -183,7 +183,7 @@ pub fn drag(
         Some(ms) if ms > 0 => {
             // Cap at 600 steps (10 seconds at 60fps) to prevent excessive iteration
             // from malicious or erroneous duration values.
-            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().min(600.0).max(1.0) as u64;
+            let steps = ((ms as f64 / 1000.0) * 60.0).ceil().clamp(1.0, 600.0) as u64;
             let step_delay = Duration::from_millis(ms / steps.max(1));
             for i in 1..=steps {
                 let t = i as f64 / steps as f64;
@@ -201,9 +201,7 @@ pub fn drag(
         _ => {
             enigo
                 .move_mouse(ex, ey, Coordinate::Abs)
-                .map_err(|e| {
-                    DesktopError::InputFailed(format!("Failed to move to end: {e}"))
-                })?;
+                .map_err(|e| DesktopError::InputFailed(format!("Failed to move to end: {e}")))?;
         }
     }
 
@@ -211,7 +209,14 @@ pub fn drag(
         .button(enigo::Button::Left, Direction::Release)
         .map_err(|e| DesktopError::InputFailed(format!("Failed to release after drag: {e}")))?;
 
-    info!(start_x, start_y, end_x, end_y, ?duration_ms, "Drag performed");
+    info!(
+        start_x,
+        start_y,
+        end_x,
+        end_y,
+        ?duration_ms,
+        "Drag performed"
+    );
     Ok(())
 }
 
@@ -237,12 +242,7 @@ pub fn cursor_position() -> Result<(f64, f64)> {
 }
 
 /// Press, release, or click a mouse button at (x, y).
-pub fn mouse_button(
-    x: f64,
-    y: f64,
-    button: MouseButton,
-    action: crate::PressAction,
-) -> Result<()> {
+pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAction) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
     let btn = to_enigo_button(button);

@@ -100,6 +100,7 @@ impl McpStartupReport {
 ///
 /// Clients (Swift, Kotlin, etc.) implement this trait to receive
 /// callbacks when hotkeys are detected, states change, or errors occur.
+#[allow(dead_code)]
 pub trait InternalEventHandler: Send + Sync {
     /// Called when the processing state changes
     fn on_state_changed(&self, state: ProcessingState);

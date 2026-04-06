@@ -1079,6 +1079,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(session_manager.clone()),
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
         args.daemon,
     )
     .await;

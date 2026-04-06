@@ -41,7 +41,7 @@ impl IdCardRule {
     fn is_valid_region(id: &str) -> bool {
         id.get(..2)
             .and_then(|s| s.parse::<u8>().ok())
-            .map_or(false, |region| VALID_REGIONS.contains(&region))
+            .is_some_and(|region| VALID_REGIONS.contains(&region))
     }
 
     /// Validate birth date (digits 6-13, YYYYMMDD)

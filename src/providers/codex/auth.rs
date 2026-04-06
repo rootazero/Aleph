@@ -337,7 +337,7 @@ impl CodexAuth {
             let body = response.text().await.unwrap_or_default();
             return Err(AlephError::authentication(
                 "chatgpt",
-                &format!("Token exchange failed ({}): {}", status, body),
+                format!("Token exchange failed ({}): {}", status, body),
             ));
         }
 
@@ -392,7 +392,7 @@ impl CodexAuth {
             let body_text = response.text().await.unwrap_or_default();
             return Err(AlephError::authentication(
                 "chatgpt",
-                &format!(
+                format!(
                     "Token refresh failed ({}): {}. Re-authentication may be required.",
                     status, body_text
                 ),

@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
 use super::channel::{
-    Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelHealth,
+    Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory,
     ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus,
     InboundMessage, OutboundMessage, SendResult,
 };

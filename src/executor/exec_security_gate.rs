@@ -6,11 +6,13 @@
 //! 3. Sandbox execution for Safe/Caution (macOS only)
 //! 4. SecretMasker applied to all ToolSuccess outputs
 
+use crate::gateway::channel_registry::ChannelRegistry;
 use crate::sync_primitives::Arc;
 
 use serde_json::Value;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
 use crate::exec::sandbox::SandboxManager;
@@ -37,6 +39,9 @@ pub struct ExecSecurityGate {
     sandbox_manager: Option<Arc<SandboxManager>>,
     masker: SecretMasker,
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
+    #[allow(dead_code)]
+    channel_registry: Option<Arc<ChannelRegistry>>,
+    channel_bridge: Option<Arc<ChannelApprovalBridge>>,
 }
 
 impl ExecSecurityGate {
@@ -51,6 +56,26 @@ impl ExecSecurityGate {
             sandbox_manager,
             masker: SecretMasker::new(),
             audit_log: None,
+            channel_registry: None,
+            channel_bridge: None,
+        }
+    }
+
+    /// Create a new gate with approval manager, sandbox, and channel registry for native delivery.
+    pub fn with_channel_registry(
+        approval_manager: Arc<ExecApprovalManager>,
+        sandbox_manager: Option<Arc<SandboxManager>>,
+        channel_registry: Arc<ChannelRegistry>,
+    ) -> Self {
+        let channel_bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
+        Self {
+            security_kernel: SecurityKernel::default(),
+            approval_manager,
+            sandbox_manager,
+            masker: SecretMasker::new(),
+            audit_log: None,
+            channel_registry: Some(channel_registry),
+            channel_bridge: Some(channel_bridge),
         }
     }
 
@@ -233,6 +258,37 @@ impl ExecSecurityGate {
         // Create the approval record (does not yet register for waiting — just builds the record)
         let record = self.approval_manager.create(&request, timeout_ms);
         let record_id = record.id.clone();
+
+        // Try to deliver approval via channel (Telegram, Discord, etc.)
+        // If successful, the approval UI is shown via inline keyboard
+        // The user clicks approve/deny which resolves via callback handler
+        if let Some(ref bridge) = self.channel_bridge {
+            match bridge.request_approval(&request).await {
+                Some(result) if result.delivered => {
+                    info!(
+                        cmd = %cmd,
+                        id = %record_id,
+                        channel_id = %result.channel_id,
+                        "Approval delivered via channel - waiting for user decision"
+                    );
+                }
+                Some(result) => {
+                    info!(
+                        cmd = %cmd,
+                        id = %record_id,
+                        reason = ?result.reason,
+                        "Channel delivery failed - using IPC fallback"
+                    );
+                }
+                None => {
+                    debug!(
+                        cmd = %cmd,
+                        id = %record_id,
+                        "No channel capability available for approval delivery"
+                    );
+                }
+            }
+        }
 
         info!(
             cmd = %cmd,

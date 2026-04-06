@@ -31,6 +31,7 @@ pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
 ///
 /// This is a module-level async function so it can be spawned in a
 /// background tokio task (which requires `'static`).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_subagent(
     provider: Arc<dyn AiProvider>,
     agent_def: AgentDef,

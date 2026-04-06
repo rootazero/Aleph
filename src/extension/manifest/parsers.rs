@@ -131,7 +131,7 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
             }
 
             let fm: T = serde_yaml::from_str(fm_str)
-                .with_context(|| format!("Failed to parse YAML frontmatter"))?;
+                .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
             Ok((fm, body))
         }
         None => Ok((T::default(), content.to_string())),

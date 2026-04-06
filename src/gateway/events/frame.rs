@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::exec::socket::ApprovalDecisionType;
 use crate::gateway::event_emitter::{RunSummary, StreamEvent, ToolResult};
 use crate::gateway::{ChannelId, ChannelStatus};
 
@@ -134,6 +135,28 @@ pub enum GatewayEventFrame {
     },
     PairingCompleted {
         device_id: String,
+    },
+    ApprovalRequested {
+        approval_id: String,
+        session_key: String,
+        channel_id: String,
+        conversation_id: String,
+    },
+    ApprovalResolved {
+        approval_id: String,
+        session_key: String,
+        decision: ApprovalDecisionType,
+        resolved_by: Option<String>,
+    },
+    ApprovalExpired {
+        approval_id: String,
+        session_key: String,
+    },
+    SessionLifecycleChanged {
+        session_key: String,
+        old_state: Option<String>,
+        new_state: String,
+        reason: Option<String>,
     },
 }
 
@@ -314,6 +337,10 @@ impl GatewayEventFrame {
             GatewayEventFrame::ConfigChanged { .. } => "config.changed",
             GatewayEventFrame::PairingRequested { .. } => "pairing.requested",
             GatewayEventFrame::PairingCompleted { .. } => "pairing.completed",
+            GatewayEventFrame::ApprovalRequested { .. } => "approval.requested",
+            GatewayEventFrame::ApprovalResolved { .. } => "approval.resolved",
+            GatewayEventFrame::ApprovalExpired { .. } => "approval.expired",
+            GatewayEventFrame::SessionLifecycleChanged { .. } => "session.lifecycle.changed",
         }
         .to_string()
     }

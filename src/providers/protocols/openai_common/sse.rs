@@ -28,11 +28,7 @@ pub fn sse_line_stream(response: reqwest::Response) -> BoxStream<'static, Result
                 // Process complete lines from buffer.
                 // Only process up to the last newline — everything after is
                 // a partial line (possibly with incomplete UTF-8 at the end).
-                loop {
-                    let newline_pos = match buf_guard.iter().position(|&b| b == b'\n') {
-                        Some(pos) => pos,
-                        None => break,
-                    };
+                while let Some(newline_pos) = buf_guard.iter().position(|&b| b == b'\n') {
 
                     let line_bytes = buf_guard[..newline_pos].to_vec();
                     buf_guard.drain(..=newline_pos);

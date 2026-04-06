@@ -218,6 +218,7 @@ where
 ///
 /// Same as `handle_run_with_engine` but accepts `chat.send` param format
 /// (message instead of input) and returns chat-friendly response.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_chat_send_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
     engine: Arc<ExecutionEngine<P, R>>,

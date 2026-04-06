@@ -277,7 +277,7 @@ impl Default for NaiveBayesClassifier {
 }
 
 // NOTE: Disabled — FeatureExtractor has been removed. Tests need rewrite.
-#[cfg(all(test, feature = "DISABLED"))]
+#[cfg(all(test, feature = "disabled-tests"))]
 mod tests {
     use super::*;
     use crate::engine::FeatureExtractor;

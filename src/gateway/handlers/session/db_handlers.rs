@@ -62,6 +62,7 @@ pub async fn handle_list_db(
                             .unwrap_or_default(),
                         topic,
                         status,
+                        state: m.state.map(|s| s.to_string()),
                     }
                 })
                 .collect();

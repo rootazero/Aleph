@@ -10,16 +10,13 @@ use std::path::Path;
 /// Node.js package manager preference.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum NodeManager {
+    #[default]
     Npm,
     Pnpm,
     Yarn,
     Bun,
-}
-impl Default for NodeManager {
-    fn default() -> Self {
-        Self::Npm
-    }
 }
 
 /// Global install preferences.
@@ -48,19 +45,12 @@ pub struct SkillEntryConfig {
 
 /// Root config, persisted as TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SkillsConfig {
     #[serde(default)]
     pub install_preferences: InstallPreferences,
     #[serde(default)]
     pub entries: HashMap<String, SkillEntryConfig>,
-}
-impl Default for SkillsConfig {
-    fn default() -> Self {
-        Self {
-            install_preferences: InstallPreferences::default(),
-            entries: HashMap::new(),
-        }
-    }
 }
 
 /// Update request for a single skill's config.
@@ -80,7 +70,7 @@ impl SkillsConfig {
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let content = toml::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let tmp_path = path.with_extension("toml.tmp");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;

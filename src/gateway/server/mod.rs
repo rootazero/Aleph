@@ -21,7 +21,6 @@ use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::event_scope::EventScopeGuard;
 use super::handlers::events::SubscriptionManager;
 use super::handlers::HandlerRegistry;
-use super::middleware::MiddlewareChain;
 use super::lane::{LaneConfig, LaneManager};
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};

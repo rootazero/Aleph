@@ -5,7 +5,7 @@ use tracing::{debug, info};
 
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
-    SessionSearchResult, StoredMessage,
+    SessionSearchResult, SessionState, StoredMessage,
 };
 use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
@@ -30,10 +30,14 @@ impl SessionManager {
         let existing: Option<SessionMetadata> = conn
             .query_row(
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at
+                        message_count, total_tokens, auto_reset_at, state
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 |row| {
+                    let state_str: Option<String> = row.get(8)?;
+                    let state = state_str
+                        .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+                        .unwrap_or_default();
                     Ok(SessionMetadata {
                         key: row.get(0)?,
                         agent_id: row.get(1)?,
@@ -43,27 +47,39 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
+                        state: Some(state),
                         metadata_json: None,
                     })
                 },
             )
             .ok();
 
-        if let Some(meta) = existing {
-            // Update last_active_at
-            conn.execute(
-                "UPDATE sessions SET last_active_at = ? WHERE key = ?",
+        if let Some(mut meta) = existing {
+            // Transition Created or Idle -> Active
+            let state_update = conn.execute(
+                "UPDATE sessions SET last_active_at = ?, state = 'active' WHERE key = ? AND state IN ('created', 'idle')",
                 params![now, &key_str],
-            )
-            .ok();
+            );
+            if state_update.map(|n| n == 0).unwrap_or(false) {
+                // State was not 'created' or 'idle' (e.g., already 'active' or 'running')
+                // Just update last_active_at
+                conn.execute(
+                    "UPDATE sessions SET last_active_at = ? WHERE key = ?",
+                    params![now, &key_str],
+                )
+                .ok();
+            } else {
+                // State was updated to 'active' - reflect this in returned metadata
+                meta.state = Some(SessionState::Active);
+            }
 
             return Ok(meta);
         }
 
         // Create new session
         conn.execute(
-            "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (key, agent_id, session_type, created_at, last_active_at, state)
+             VALUES (?, ?, ?, ?, ?, 'created')",
             params![&key_str, &agent_id, &session_type, now, now],
         )
         .map_err(|e| SessionManagerError::DatabaseError(format!("Insert failed: {}", e)))?;
@@ -79,6 +95,7 @@ impl SessionManager {
             message_count: 0,
             total_tokens: 0,
             auto_reset_at: None,
+            state: Some(SessionState::Created),
             metadata_json: None,
         })
     }
@@ -118,12 +135,33 @@ impl SessionManager {
             )
             .ok();
 
-            // Update session stats
-            conn.execute(
-                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1 WHERE key = ?",
-                params![now, &key_str],
-            )
-            .ok();
+            // Only transition to Running if current state allows it
+            // Valid: Created, Active, Idle (Running -> Running is also fine)
+            // Invalid: Error, Stopped (terminal states)
+            let valid_transition: bool = conn
+                .query_row(
+                    "SELECT state FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| {
+                        let state_str: Option<String> = row.get(0)?;
+                        Ok(state_str.map(|s| s != "stopped" && s != "error").unwrap_or(true))
+                    },
+                )
+                .unwrap_or(true);
+
+            if valid_transition {
+                conn.execute(
+                    "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, state = 'running' WHERE key = ?",
+                    params![now, &key_str],
+                )
+                .ok();
+            } else {
+                conn.execute(
+                    "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1 WHERE key = ?",
+                    params![now, &key_str],
+                )
+                .ok();
+            }
 
             // Check if compaction needed
             let count: i64 = conn
@@ -217,7 +255,7 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         conn.execute(
-            "UPDATE sessions SET message_count = 0, last_active_at = ? WHERE key = ?",
+            "UPDATE sessions SET message_count = 0, last_active_at = ?, state = 'created' WHERE key = ?",
             params![chrono::Utc::now().timestamp(), &key_str],
         )
         .ok();
@@ -273,13 +311,16 @@ impl SessionManager {
             let mut stmt = conn
                 .prepare(
                     "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at, metadata
+                            message_count, total_tokens, auto_reset_at, state, metadata
                      FROM sessions WHERE agent_id = ? ORDER BY last_active_at DESC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
                 .query_map(params![id], |row| {
+                    let state_str: String = row.get(8)?;
+                    let state = serde_json::from_str(&format!("\"{}\"", state_str))
+                        .unwrap_or_default();
                     Ok(SessionMetadata {
                         key: row.get(0)?,
                         agent_id: row.get(1)?,
@@ -289,7 +330,8 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
-                        metadata_json: row.get(8)?,
+                        state: Some(state),
+                        metadata_json: row.get(9)?,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -299,13 +341,16 @@ impl SessionManager {
             let mut stmt = conn
                 .prepare(
                     "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at, metadata
+                            message_count, total_tokens, auto_reset_at, state, metadata
                      FROM sessions ORDER BY last_active_at DESC",
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
                 .query_map([], |row| {
+                    let state_str: String = row.get(8)?;
+                    let state = serde_json::from_str(&format!("\"{}\"", state_str))
+                        .unwrap_or_default();
                     Ok(SessionMetadata {
                         key: row.get(0)?,
                         agent_id: row.get(1)?,
@@ -315,7 +360,8 @@ impl SessionManager {
                         message_count: row.get(5)?,
                         total_tokens: row.get(6)?,
                         auto_reset_at: row.get(7)?,
-                        metadata_json: row.get(8)?,
+                        state: Some(state),
+                        metadata_json: row.get(9)?,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -457,7 +503,19 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
-        // Get existing metadata
+        // Check current state - can't close if already stopped
+        let current_state: Option<String> = conn
+            .query_row(
+                "SELECT state FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if current_state.as_deref() == Some("stopped") {
+            return Ok(());
+        }
+
         let existing_json: Option<String> = conn
             .query_row(
                 "SELECT metadata FROM sessions WHERE key = ?",
@@ -484,7 +542,7 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         conn.execute(
-            "UPDATE sessions SET metadata = ? WHERE key = ?",
+            "UPDATE sessions SET metadata = ?, state = 'stopped' WHERE key = ?",
             params![&meta_json, &key_str],
         )
         .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -712,5 +770,157 @@ impl SessionManager {
             };
 
         Ok(results)
+    }
+
+    /// Set session lifecycle state
+    pub async fn set_state(
+        &self,
+        key: &SessionKey,
+        state: SessionState,
+    ) -> Result<(), SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        conn.execute(
+            "UPDATE sessions SET state = ? WHERE key = ?",
+            params![state.to_string(), &key_str],
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {}", e)))?;
+
+        debug!("Session {} transitioned to {}", key_str, state);
+        Ok(())
+    }
+
+    /// Get current session state
+    pub async fn get_state(
+        &self,
+        key: &SessionKey,
+    ) -> Result<SessionState, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let state_str: Option<String> = conn
+            .query_row(
+                "SELECT state FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .ok();
+
+        match state_str {
+            Some(s) => {
+                match serde_json::from_str::<SessionState>(&format!("\"{}\"", s)) {
+                    Ok(state) => Ok(state),
+                    Err(e) => {
+                        tracing::warn!(
+                            key = %key_str,
+                            state = %s,
+                            error = %e,
+                            "Failed to parse session state, returning Created"
+                        );
+                        Ok(SessionState::Created)
+                    }
+                }
+            }
+            None => {
+                tracing::debug!(
+                    key = %key_str,
+                    "Session state is NULL, returning Created"
+                );
+                Ok(SessionState::Created)
+            }
+        }
+    }
+
+    /// Transition session to error state with optional error message
+    pub async fn set_error(
+        &self,
+        key: &SessionKey,
+        _error_msg: Option<&str>,
+    ) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Error).await
+    }
+
+    /// Transition session to stopped state (permanent)
+    pub async fn stop(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Stopped).await
+    }
+
+    /// Transition session to idle state (after running completes)
+    pub async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Idle).await
+    }
+
+    /// Transition session to running state (agent loop active)
+    pub async fn set_running(&self, key: &SessionKey) -> Result<(), SessionManagerError> {
+        self.set_state(key, SessionState::Running).await
+    }
+
+    /// Count sessions by state
+    pub async fn count_by_state(
+        &self,
+        state: SessionState,
+    ) -> Result<usize, SessionManagerError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE state = ?",
+                params![state.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        Ok(count as usize)
+    }
+
+    /// List sessions filtered by state
+    pub async fn list_by_state(
+        &self,
+        state: SessionState,
+    ) -> Result<Vec<SessionMetadata>, SessionManagerError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT key, agent_id, session_type, created_at, last_active_at,
+                        message_count, total_tokens, auto_reset_at, state
+                 FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![state.to_string()], |row| {
+                let state_str: String = row.get(8)?;
+                let state = serde_json::from_str(&format!("\"{}\"", state_str))
+                    .unwrap_or_default();
+                Ok(SessionMetadata {
+                    key: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    session_type: row.get(2)?,
+                    created_at: row.get(3)?,
+                    last_active_at: row.get(4)?,
+                    message_count: row.get(5)?,
+                    total_tokens: row.get(6)?,
+                    auto_reset_at: row.get(7)?,
+                    state: Some(state),
+                    metadata_json: None,
+                })
+            })
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }

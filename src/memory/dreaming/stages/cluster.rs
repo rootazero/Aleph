@@ -127,11 +127,10 @@ pub fn dbscan(points: &[Vec<f32>], eps: f32, min_samples: usize) -> Vec<i32> {
             let q_neighbors = range_query(points, q, eps);
             if q_neighbors.len() >= min_samples {
                 for &neighbor in &q_neighbors {
-                    if labels[neighbor] == -2 || labels[neighbor] == -1 {
-                        if !seed_set.contains(&neighbor) {
+                    if (labels[neighbor] == -2 || labels[neighbor] == -1)
+                        && !seed_set.contains(&neighbor) {
                             seed_set.push(neighbor);
                         }
-                    }
                 }
             }
         }

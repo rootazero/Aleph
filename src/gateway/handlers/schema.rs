@@ -156,7 +156,7 @@ impl<H: HandlerSchema> TypedHandler<H> {
     /// Get handler metadata (method, description, schema).
     pub fn info() -> HandlerInfo {
         let schema = schemars::schema_for!(H::Params);
-        let schema_json = serde_json::to_value(&schema).unwrap_or_else(|_| Value::Null);
+        let schema_json = serde_json::to_value(&schema).unwrap_or(Value::Null);
 
         HandlerInfo {
             method: H::METHOD.to_string(),

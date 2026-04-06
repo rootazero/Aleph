@@ -3,15 +3,14 @@ use std::sync::Arc;
 
 use crate::gateway::channel::{ChannelConfig, ChannelFactory, ChannelResult};
 
-static PLUGINS: std::sync::LazyLock<
-    std::sync::RwLock<
-        HashMap<&'static str, fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>>,
-    >,
-> = std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+type ChannelFactoryFn = fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>;
+
+static PLUGINS: std::sync::LazyLock<std::sync::RwLock<HashMap<&'static str, ChannelFactoryFn>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
 
 pub fn register(
     channel_type: &'static str,
-    create: fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>,
+    create: ChannelFactoryFn,
 ) {
     let mut guard = PLUGINS.write().unwrap();
     if guard.contains_key(channel_type) {
@@ -25,7 +24,7 @@ pub fn register(
 
 pub fn get_factory(
     channel_type: &str,
-) -> Option<fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>> {
+) -> Option<ChannelFactoryFn> {
     PLUGINS.read().unwrap().get(channel_type).copied()
 }
 

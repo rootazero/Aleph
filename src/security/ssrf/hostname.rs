@@ -31,8 +31,8 @@ pub(crate) fn is_allowlisted(hostname: &str, allowed_hosts: &[String]) -> bool {
     let hostname_lower = hostname.to_lowercase();
     for pattern in allowed_hosts {
         let pattern_lower = pattern.to_lowercase();
-        if pattern_lower.starts_with("*.") {
-            let base = &pattern_lower[2..]; // strip "*."
+        if let Some(base) = pattern_lower.strip_prefix("*.") {
+            // strip "*."
             if hostname_lower == base || hostname_lower.ends_with(&format!(".{}", base)) {
                 return true;
             }

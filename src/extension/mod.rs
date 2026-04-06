@@ -352,13 +352,11 @@ impl ExtensionManager {
             self.discovery.discover_plugins(),
         ];
 
-        for dirs_result in all_dirs {
-            if let Ok(dirs) = dirs_result {
-                for d in dirs {
-                    let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                    if seen.insert(canonical) {
-                        result.push(d.path);
-                    }
+        for dirs in all_dirs.into_iter().flatten() {
+            for d in dirs {
+                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                if seen.insert(canonical) {
+                    result.push(d.path);
                 }
             }
         }

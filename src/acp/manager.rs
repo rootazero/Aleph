@@ -158,7 +158,7 @@ pub struct AcpHarnessManager {
     /// Active sessions for NativeAcp harnesses, keyed by (harness_id, cwd).
     sessions: RwLock<HashMap<SessionKey, AcpSession>>,
     /// Optional persistence callback for session state changes.
-    persistence_hook: RwLock<Option<Arc<dyn Fn(super::AcpSessionEvent) + Send + Sync>>>,
+    persistence_hook: RwLock<Option<super::PersistenceHook>>,
 }
 
 impl Default for AcpHarnessManager {
@@ -443,7 +443,7 @@ impl AcpHarnessManager {
     /// Set the persistence hook for session state changes.
     pub async fn set_persistence_hook(
         &self,
-        hook: Arc<dyn Fn(super::AcpSessionEvent) + Send + Sync>,
+        hook: super::PersistenceHook,
     ) {
         let mut h = self.persistence_hook.write().await;
         *h = Some(hook);

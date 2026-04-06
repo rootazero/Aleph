@@ -35,5 +35,8 @@ pub enum AcpSessionEvent {
     },
 }
 
+/// Persistence hook for session state changes.
+pub type PersistenceHook = Arc<dyn Fn(AcpSessionEvent) + Send + Sync>;
+
 /// Callback for real-time ACP streaming chunks.
 pub type AcpChunkCallback = Arc<dyn Fn(&str) + Send + Sync>;

@@ -39,6 +39,58 @@ pub struct SessionSearchResult {
     pub topic: Option<String>,
 }
 
+/// Session lifecycle state.
+///
+/// Represents the explicit state machine for session lifecycle management.
+/// This enables better session tracking, debugging, and automated cleanup.
+///
+/// # State Diagram
+///
+/// ```text
+///  Created → Active ↔ Idle ↔ Running → Error → Stopped
+///                 ↑                   ↓
+///                 └───────────────────┘
+/// ```
+///
+/// - **Created**: Session initialized but not yet used
+/// - **Active**: Session is actively processing requests
+/// - **Idle**: Session has messages but no recent activity
+/// - **Running**: Agent loop is currently executing
+/// - **Error**: Session encountered an error (recoverable)
+/// - **Stopped**: Session is permanently closed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum SessionState {
+    /// Session initialized but not yet used
+    #[default]
+    Created,
+    /// Session is actively processing requests
+    Active,
+    /// Session has messages but no recent activity
+    Idle,
+    /// Agent loop is currently executing
+    Running,
+    /// Session encountered an error (recoverable)
+    Error,
+    /// Session is permanently closed
+    Stopped,
+}
+
+
+impl std::fmt::Display for SessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionState::Created => write!(f, "created"),
+            SessionState::Active => write!(f, "active"),
+            SessionState::Idle => write!(f, "idle"),
+            SessionState::Running => write!(f, "running"),
+            SessionState::Error => write!(f, "error"),
+            SessionState::Stopped => write!(f, "stopped"),
+        }
+    }
+}
+
 /// Session metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -50,6 +102,9 @@ pub struct SessionMetadata {
     pub message_count: i64,
     pub total_tokens: i64,
     pub auto_reset_at: Option<i64>,
+    /// Current lifecycle state of the session
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionState>,
     /// Raw metadata JSON string from the sessions table
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_json: Option<String>,
@@ -238,6 +293,7 @@ impl SessionManager {
                 message_count INTEGER DEFAULT 0,
                 total_tokens INTEGER DEFAULT 0,
                 auto_reset_at INTEGER,
+                state TEXT DEFAULT 'created',
                 metadata TEXT
             );
 
@@ -254,6 +310,7 @@ impl SessionManager {
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_key);
             CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active_at);
+            CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                 content,
@@ -286,6 +343,48 @@ impl SessionManager {
                 count = backfill_count,
                 "Backfilled FTS5 index with existing messages"
             );
+        }
+
+        // Migrate existing sessions to add state column if missing
+        Self::migrate_add_state_column(conn)?;
+
+        Ok(())
+    }
+
+    /// Migrate existing sessions table to add state column
+    fn migrate_add_state_column(conn: &Connection) -> Result<(), SessionManagerError> {
+        let has_state: Result<bool, _> = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name='state'",
+                [],
+                |row| row.get(0),
+            );
+
+        match has_state {
+            Ok(true) => {}
+            Ok(false) => {
+                conn.execute("ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'", [])
+                    .map_err(|e| {
+                        SessionManagerError::DatabaseError(format!(
+                            "Failed to add state column: {}",
+                            e
+                        ))
+                    })?;
+                tracing::info!("Migrated sessions table: added state column");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to check if state column exists - assuming it doesn't"
+                );
+                conn.execute("ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'", [])
+                    .map_err(|e| {
+                        SessionManagerError::DatabaseError(format!(
+                            "Failed to add state column: {}",
+                            e
+                        ))
+                    })?;
+            }
         }
 
         Ok(())

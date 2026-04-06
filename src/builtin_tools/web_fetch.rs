@@ -174,14 +174,13 @@ impl WebFetchTool {
             return Err(ToolError::Execution(error_msg));
         }
 
-        let html_content = String::from_utf8_lossy(&bytes).to_string();
+        let html_content = String::from_utf8_lossy(bytes).to_string();
 
         debug!("Fetched {} bytes from {}", html_content.len(), args.url);
 
         // Safety gate: reject oversized HTML
-        Self::validate_html_safety(&html_content).map_err(|e| {
+        Self::validate_html_safety(&html_content).inspect_err(|e| {
             notify_tool_result(Self::NAME, &e.to_string(), false);
-            e
         })?;
 
         // Extract title from raw HTML (before pre-cleaning)

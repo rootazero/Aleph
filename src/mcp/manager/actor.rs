@@ -381,7 +381,7 @@ impl McpManagerActor {
         // Update health state (insert if not yet tracked)
         self.health_states
             .entry(server_id.to_string())
-            .or_insert_with(ServerHealth::default)
+            .or_default()
             .mark_restarting();
 
         // Broadcast restarting event

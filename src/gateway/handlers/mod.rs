@@ -123,7 +123,6 @@ use std::pin::Pin;
 use super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
 };
-use schema::HandlerSchema;
 
 /// Resolve a secret from the vault by its full key. Returns `None` on missing or error.
 pub(crate) fn resolve_vault_secret(key: &str, vault: &SharedTokenManager) -> Option<String> {

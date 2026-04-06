@@ -132,7 +132,7 @@ fn compress_snapshot(output: &str) -> String {
                 && trimmed
                     .as_bytes()
                     .get(role.len())
-                    .map_or(false, |&b| b == b' ' || b == b'"')
+                    .is_some_and(|&b| b == b' ' || b == b'"')
         });
         if is_interactive {
             kept.push(line);

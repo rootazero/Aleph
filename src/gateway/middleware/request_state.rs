@@ -139,7 +139,7 @@ impl Clone for RequestStateData {
 
 impl RequestStateData {
     /// Create a new RequestStateData in the Pending state.
-    pub fn new(request_id: Uuid) -> Self {
+    pub fn new(_request_id: Uuid) -> Self {
         let now = current_timestamp_ms();
         Self {
             state: AtomicU64::new(RequestState::Pending.as_u8() as u64),

@@ -86,7 +86,7 @@ impl AgentEnvStore {
                     default_model, system_prompt_override, allowed_tools
              FROM agent_envs WHERE id = ? AND archived = 0",
             params![id],
-            |row| Self::row_to_agent_env(row),
+            Self::row_to_agent_env,
         );
 
         match result {

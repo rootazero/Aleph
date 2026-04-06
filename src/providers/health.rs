@@ -55,8 +55,10 @@ const MAX_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// Tracks the health state of a single provider.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum ProviderHealth {
     /// Provider is operating normally
+    #[default]
     Healthy,
     /// Provider has experienced transient failures but may recover
     Degraded {
@@ -68,11 +70,6 @@ pub enum ProviderHealth {
     Unavailable { since: Instant, reason: String },
 }
 
-impl Default for ProviderHealth {
-    fn default() -> Self {
-        Self::Healthy
-    }
-}
 
 impl ProviderHealth {
     /// Whether this provider can accept requests right now.

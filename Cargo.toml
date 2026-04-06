@@ -119,6 +119,8 @@ loom = ["dep:loom"]
 test-helpers = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
+# Disabled test modules awaiting rewrite
+disabled-tests = []
 
 [dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }

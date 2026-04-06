@@ -187,6 +187,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
     // Create teams evolution stores (artifact, event log, message, session) sharing the same DB file.
     // These stores power the team messaging, inbox, session coordination, and artifact tools.
+    #[allow(clippy::type_complexity)]
     let (artifact_store, event_store, message_store, session_store): (
         Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
         Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
@@ -356,7 +357,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // the coordinator is lost. This only fails if the injector Arc was
         // already shared (i.e. start() was called), which hasn't happened yet.
         let coordinator =
-            if let (Some(ref ib), Some(ref ts)) = (inbox.as_ref(), team_store.as_ref()) {
+            if let (Some(ib), Some(ts)) = (inbox.as_ref(), team_store.as_ref()) {
                 use alephcore::teams::context::TeamInboxContextProvider;
                 let mut inbox_provider =
                     TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
@@ -978,42 +979,58 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             use alephcore::media::whisper::WhisperTranscription;
 
             // Look up transcription provider from the dedicated transcription_providers config.
+            // api_key is #[serde(skip)] and injected from vault at runtime,
+            // so we must resolve it from the vault (gen:<provider_name>) before checking.
             let transcription: Option<Box<dyn TranscriptionService>> = {
                 let gen_cfg = &app_config.generation;
+
+                // Helper: resolve api_key from vault for a transcription provider
+                let resolve_key = |name: &str, pcfg: &alephcore::GenerationProviderConfig| -> Option<String> {
+                    // Use config api_key if present
+                    if let Some(ref key) = pcfg.api_key {
+                        if !key.is_empty() {
+                            return Some(key.clone());
+                        }
+                    }
+                    // Fall back to vault
+                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name)) {
+                        let val = secret.expose().to_string();
+                        if !val.is_empty() {
+                            return Some(val);
+                        }
+                    }
+                    None
+                };
+
                 let tcfg = gen_cfg
                     .default_transcription_provider
                     .as_ref()
                     .and_then(|name| {
-                        gen_cfg.transcription_providers.get(name).filter(|pcfg| {
-                            pcfg.enabled
-                                && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
-                        })
+                        gen_cfg.transcription_providers.get(name)
+                            .filter(|pcfg| pcfg.enabled)
+                            .and_then(|pcfg| resolve_key(name, pcfg).map(|key| (key, pcfg)))
                     })
                     .or_else(|| {
-                        gen_cfg.transcription_providers.values().find(|pcfg| {
-                            pcfg.enabled
-                                && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
-                        })
+                        gen_cfg.transcription_providers.iter()
+                            .find_map(|(name, pcfg)| {
+                                if pcfg.enabled {
+                                    resolve_key(name, pcfg).map(|key| (key, pcfg))
+                                } else {
+                                    None
+                                }
+                            })
                     });
 
-                if let Some(pcfg) = tcfg {
-                    if let Some(ref key) = pcfg.api_key {
-                        if !key.is_empty() {
-                            let whisper = WhisperTranscription::new(
-                                key.clone(),
-                                pcfg.base_url.clone(),
-                                pcfg.models.first().cloned(),
-                            );
-                            if !daemon {
-                                println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
-                            }
-                            Some(Box::new(whisper))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
+                if let Some((key, pcfg)) = tcfg {
+                    let whisper = WhisperTranscription::new(
+                        key,
+                        pcfg.base_url.clone(),
+                        pcfg.models.first().cloned(),
+                    );
+                    if !daemon {
+                        println!("  MediaProcessor: Whisper transcription enabled (from transcription provider)");
                     }
+                    Some(Box::new(whisper))
                 } else {
                     None
                 }

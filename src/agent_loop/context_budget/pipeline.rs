@@ -64,6 +64,7 @@ impl CompactionPipeline {
     /// early (the stage is *not* run).
     ///
     /// Returns a `PipelineResult` describing what happened.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         &self,
         messages: &mut [UnifiedMessage],
@@ -285,8 +286,8 @@ impl CompactionStage for RoundDrop {
         let mut rounds: Vec<std::ops::Range<usize>> = Vec::new();
         let mut round_start: Option<usize> = None;
 
-        for i in 0..partition {
-            if messages[i].is_user() {
+        for (i, msg) in messages[..partition].iter().enumerate() {
+            if msg.is_user() {
                 if let Some(start) = round_start {
                     rounds.push(start..i);
                 }

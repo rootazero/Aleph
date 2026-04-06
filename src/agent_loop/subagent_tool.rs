@@ -190,7 +190,7 @@ fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         .map(|s| s.to_string());
 
     if let Some(rid) = request_id {
-        if task.is_none() || task.as_ref().map_or(false, |t| t.trim().is_empty()) {
+        if task.is_none() || task.as_ref().is_some_and(|t| t.trim().is_empty()) {
             return Ok(SubagentAction::CheckStatus(rid));
         }
     }

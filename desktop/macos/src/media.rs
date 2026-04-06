@@ -8,6 +8,7 @@
 //! Audio device listing uses CoreAudio C FFI directly.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use aleph_desktop::media_types::*;
@@ -16,6 +17,8 @@ use aleph_desktop::Result;
 use async_trait::async_trait;
 use base64::Engine;
 use tracing::{debug, warn};
+
+type PhotoDataSlot = Arc<std::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
 
 // ---------------------------------------------------------------------------
 // CoreAudio C FFI for audio device listing
@@ -103,10 +106,12 @@ mod av_capture_delegates {
     use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSURL};
     use std::sync::{Arc, Condvar, Mutex};
 
+    type PhotoDelegateData = Arc<Mutex<Option<Result<Vec<u8>, String>>>>;
+
     // ── Photo capture delegate ──────────────────────────────────
 
     pub struct PhotoDelegateIvars {
-        pub data: Arc<Mutex<Option<Result<Vec<u8>, String>>>>,
+        pub data: PhotoDelegateData,
         pub signal: Arc<(Mutex<bool>, Condvar)>,
     }
 
@@ -286,8 +291,7 @@ fn snap_native_blocking() -> Result<CameraSnapResult> {
     std::thread::sleep(Duration::from_millis(500));
 
     // 7. Create delegate with signal channel
-    let data_slot: Arc<Mutex<Option<std::result::Result<Vec<u8>, String>>>> =
-        Arc::new(Mutex::new(None));
+    let data_slot: PhotoDataSlot = Arc::new(Mutex::new(None));
     let signal = Arc::new((Mutex::new(false), Condvar::new()));
 
     let delegate_ivars = PhotoDelegateIvars {
@@ -552,7 +556,7 @@ async fn record_audio_with_ffmpeg(config: &AudioRecordConfig) -> Result<AudioRec
     );
 
     let output = tokio::process::Command::new("ffmpeg")
-        .args(&args)
+        .args(args)
         .output()
         .await
         .map_err(|e| {

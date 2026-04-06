@@ -34,6 +34,9 @@ pub struct SessionInfo {
     /// Session status (e.g. "closed")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Current lifecycle state
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 /// Session history message
@@ -170,6 +173,7 @@ impl SessionStore {
             last_active_at: data.last_active_at.to_rfc3339(),
             topic: None,
             status: None,
+            state: None,
         }
     }
 }

@@ -159,6 +159,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
     /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,

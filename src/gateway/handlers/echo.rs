@@ -1,13 +1,9 @@
 //! Echo Handler
 
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::future::Future;
-use std::pin::Pin;
-
-use super::schema::{HandlerSchema, TypedHandler};
+use super::schema::HandlerSchema;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -26,16 +22,11 @@ impl HandlerSchema for EchoHandler {
     const METHOD: &'static str = "echo";
     const DESCRIPTION: &'static str = "Echoes back the request parameters for testing purposes";
 
-    fn handle_with_params(
+    async fn handle_with_params(
         id: Option<Value>,
         params: Self::Params,
-    ) -> impl Future<Output = JsonRpcResponse> + Send + 'static
-    where
-        Self: Sized,
-    {
-        async move {
-            JsonRpcResponse::success(id, json!({ "echo": params.0 }))
-        }
+    ) -> JsonRpcResponse {
+        JsonRpcResponse::success(id, json!({ "echo": params.0 }))
     }
 }
 

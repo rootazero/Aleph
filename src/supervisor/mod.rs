@@ -13,5 +13,5 @@ pub mod pty;
 pub mod types;
 
 // NOTE: Disabled — ClaudeSupervisor types have been removed. Tests need rewrite.
-#[cfg(all(test, feature = "DISABLED"))]
+#[cfg(all(test, feature = "disabled-tests"))]
 mod tests;

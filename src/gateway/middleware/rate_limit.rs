@@ -9,7 +9,7 @@ use tower::{Layer, Service};
 use tracing::warn;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::gateway::rate_limiter::{RateLimiter, RateLimitKey, RateLimitScope, scope_for_method};
+use crate::gateway::rate_limiter::{RateLimiter, RateLimitKey, scope_for_method};
 
 #[derive(Clone)]
 pub struct RateLimitLayer {

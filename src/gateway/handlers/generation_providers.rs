@@ -107,6 +107,7 @@ fn get_typed_provider_map<'a>(
         "video" => &config.video_providers,
         "speech" => &config.speech_providers,
         "audio" => &config.audio_providers,
+        "transcription" => &config.transcription_providers,
         _ => &config.providers, // fallback to legacy
     }
 }
@@ -121,6 +122,7 @@ fn get_typed_provider_map_mut<'a>(
         "video" => &mut config.video_providers,
         "speech" => &mut config.speech_providers,
         "audio" => &mut config.audio_providers,
+        "transcription" => &mut config.transcription_providers,
         _ => &mut config.providers,
     }
 }
@@ -139,6 +141,9 @@ fn find_provider_type(config: &GenerationConfig, name: &str) -> Option<String> {
     if config.audio_providers.contains_key(name) {
         return Some("audio".to_string());
     }
+    if config.transcription_providers.contains_key(name) {
+        return Some("transcription".to_string());
+    }
     // Legacy: derive from capabilities
     if let Some(cfg) = config.providers.get(name) {
         if let Some(gen_type) = cfg.capabilities.first() {
@@ -156,6 +161,7 @@ fn provider_exists(config: &GenerationConfig, name: &str) -> bool {
         || config.video_providers.contains_key(name)
         || config.speech_providers.contains_key(name)
         || config.audio_providers.contains_key(name)
+        || config.transcription_providers.contains_key(name)
         || config.providers.contains_key(name)
 }
 
@@ -165,6 +171,7 @@ fn parse_generation_type(s: &str) -> GenerationType {
         "video" => GenerationType::Video,
         "speech" => GenerationType::Speech,
         "audio" => GenerationType::Audio,
+        "transcription" => GenerationType::Transcription,
         _ => GenerationType::Image,
     }
 }
@@ -199,6 +206,9 @@ pub async fn handle_list(
             }
             if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Speech);
+            }
+            if cfg.generation.default_transcription_provider.as_deref() == Some(name.as_str()) {
+                is_default_for.push(GenerationType::Transcription);
             }
 
             let mut cfg_clone = provider_config;
@@ -282,6 +292,9 @@ pub async fn handle_get(
             }
             if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Speech);
+            }
+            if cfg.generation.default_transcription_provider.as_deref() == Some(name.as_str()) {
+                is_default_for.push(GenerationType::Transcription);
             }
 
             let mut cfg_clone = provider_config;
@@ -554,6 +567,9 @@ pub async fn handle_delete(
         }
         if cfg.generation.default_speech_provider.as_deref() == Some(&params.name) {
             default_for.push("speech");
+        }
+        if cfg.generation.default_transcription_provider.as_deref() == Some(&params.name) {
+            default_for.push("transcription");
         }
 
         if !default_for.is_empty() {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::channel::{ChannelError, ChannelResult, ConversationId, InlineKeyboard, OutboundMessage, UserId};
+use super::channel::{ChannelResult, ConversationId, OutboundMessage, UserId};
 use crate::exec::approval::types::ApprovalRequest;
 
 /// Action that can be taken on an approval request
@@ -153,6 +153,36 @@ pub trait ChannelApprovalCapability: Send + Sync {
         conversation_id: &ConversationId,
         request: &ApprovalRequest,
     ) -> ChannelResult<RenderedApproval>;
+
+    /// Render the approval UI for a specific actor, checking authorization first.
+    ///
+    /// If the actor is not authorized, returns `RenderedApproval` with no interactive buttons.
+    /// If authorized, returns the full approval UI with approve/deny buttons.
+    ///
+    /// The `approval_id` is used in callback data to identify which approval is being resolved.
+    async fn render_approval_for_actor(
+        &self,
+        conversation_id: &ConversationId,
+        request: &ApprovalRequest,
+        actor_user_id: &UserId,
+        _approval_id: &str,
+    ) -> ChannelResult<RenderedApproval> {
+        // Default implementation: render normally and check authorization
+        let rendered = self.render_approval(conversation_id, request).await?;
+        let auth_result = self.authorize_actor(actor_user_id, ApprovalAction::Approve).await;
+
+        match auth_result {
+            AuthorizationResult::Authorized => Ok(rendered),
+            AuthorizationResult::Denied | AuthorizationResult::NotAuthenticated => {
+                // Return rendered message without inline keyboard buttons
+                let message = rendered.message.clone();
+                Ok(RenderedApproval {
+                    message,
+                    callback_prefix: rendered.callback_prefix,
+                })
+            }
+        }
+    }
 
     /// Resolve a pending approval with the given action.
     ///

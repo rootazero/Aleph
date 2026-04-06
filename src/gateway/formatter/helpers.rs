@@ -493,7 +493,7 @@ pub(super) fn repair_html_tags(html: &str) -> String {
             if is_close {
                 // Close tag: unwind stack to find matching open tag
                 if let Some(idx) = stack.iter().rposition(|&t| t == matched_tag) {
-                    let to_reopen: Vec<&str> = stack[idx + 1..].iter().copied().collect();
+                    let to_reopen: Vec<&str> = stack[idx + 1..].to_vec();
                     for &t in stack[idx + 1..].iter().rev() {
                         result.push_str(&format!("</{t}>"));
                     }

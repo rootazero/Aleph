@@ -38,6 +38,7 @@ use super::per_client_buffer::PerClientBuffer;
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
+    #[allow(dead_code)]
     handlers: Arc<HandlerRegistry>,
     middleware_chain: MiddlewareChain,
     event_bus: Arc<GatewayEventBus>,
@@ -617,7 +618,7 @@ async fn handle_connection(
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        buffer_metrics.add_overflow(n as u64);
+                        buffer_metrics.add_overflow(n);
                         debug!("Event forwarder lagged for {}, dropped {} events, total overflow={}", conn_id, n, buffer_metrics.overflow());
                         break;
                     }

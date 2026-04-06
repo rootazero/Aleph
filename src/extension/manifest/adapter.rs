@@ -55,6 +55,12 @@ pub struct AdapterRegistry {
     adapters: Vec<Box<dyn ManifestAdapter>>,
 }
 
+impl Default for AdapterRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdapterRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
@@ -85,7 +91,7 @@ impl AdapterRegistry {
     pub fn register(&mut self, adapter: Box<dyn ManifestAdapter>) {
         self.adapters.push(adapter);
         self.adapters
-            .sort_by(|a, b| b.priority().cmp(&a.priority()));
+            .sort_by_key(|a| std::cmp::Reverse(a.priority()));
     }
 
     /// Try each adapter in priority order; return the first successful parse.

@@ -72,6 +72,7 @@ impl Default for ApprovalDecision {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ApprovalConfig {
     pub always_confirm: HashSet<String>,
 }
@@ -82,13 +83,6 @@ impl ApprovalConfig {
     }
 }
 
-impl Default for ApprovalConfig {
-    fn default() -> Self {
-        Self {
-            always_confirm: HashSet::new(),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

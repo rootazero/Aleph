@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 
 use crate::gateway::channel::{
-    Channel, ChannelError, ChannelResult, ConversationId, InlineKeyboard, OutboundMessage, UserId,
+    Channel, ChannelResult, ConversationId, InlineKeyboard, OutboundMessage, UserId,
 };
 use crate::gateway::channel_approval::{
     ApprovalAction, AuthorizationResult, ChannelApprovalCapability, PendingApproval, RenderedApproval,
@@ -98,9 +98,7 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
                     let users = runtime_users.read().await;
                     users.contains(&uid)
                 };
-                if is_paired {
-                    AuthorizationResult::Authorized
-                } else if self.access.config().allowed_users.contains(&uid) {
+                if is_paired || self.access.config().allowed_users.contains(&uid) {
                     AuthorizationResult::Authorized
                 } else {
                     AuthorizationResult::Denied
@@ -146,5 +144,41 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
             let _ = msg_id;
         }
         Ok(())
+    }
+
+    async fn render_approval_for_actor(
+        &self,
+        conversation_id: &ConversationId,
+        request: &ApprovalRequest,
+        actor_user_id: &UserId,
+        approval_id: &str,
+    ) -> ChannelResult<RenderedApproval> {
+        let auth_result = self.authorize_actor(actor_user_id, ApprovalAction::Approve).await;
+
+        let text = self.render_approval_text(request);
+
+        match auth_result {
+            AuthorizationResult::Authorized => {
+                let keyboard = InlineKeyboard::new()
+                    .button("✅ Approve", Self::approval_callback_data(ApprovalAction::Approve, approval_id))
+                    .button("❌ Deny", Self::approval_callback_data(ApprovalAction::Deny, approval_id));
+
+                let mut message = OutboundMessage::text(conversation_id.as_str(), text);
+                message.inline_keyboard = Some(keyboard);
+
+                Ok(RenderedApproval {
+                    message,
+                    callback_prefix: "approval".to_string(),
+                })
+            }
+            AuthorizationResult::Denied | AuthorizationResult::NotAuthenticated => {
+                let message = OutboundMessage::text(conversation_id.as_str(), text);
+
+                Ok(RenderedApproval {
+                    message,
+                    callback_prefix: "approval".to_string(),
+                })
+            }
+        }
     }
 }

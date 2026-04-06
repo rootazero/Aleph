@@ -27,11 +27,11 @@ mod reflex_layer;
 mod rule_learner;
 
 // NOTE: Disabled — AtomicEngine types have been removed. Tests need rewrite.
-#[cfg(all(test, feature = "DISABLED"))]
+#[cfg(all(test, feature = "disabled-tests"))]
 mod integration_tests;
 
 // NOTE: Disabled — AtomicEngine types have been removed. Benchmarks need rewrite.
-#[cfg(all(test, feature = "DISABLED"))]
+#[cfg(all(test, feature = "disabled-tests"))]
 mod performance_benchmarks;
 
 pub use atomic_action::{AtomicAction, FileFilter, SearchPattern, SearchScope};

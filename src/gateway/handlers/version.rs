@@ -1,13 +1,7 @@
 //! Version Handler
 
-use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::future::Future;
-use std::pin::Pin;
-
-use super::schema::{HandlerSchema, NoParams, TypedHandler};
+use super::schema::{HandlerSchema, NoParams};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 pub struct VersionHandler;
@@ -17,23 +11,18 @@ impl HandlerSchema for VersionHandler {
     const METHOD: &'static str = "version";
     const DESCRIPTION: &'static str = "Returns version information about the Gateway server";
 
-    fn handle_with_params(
+    async fn handle_with_params(
         id: Option<Value>,
         _params: Self::Params,
-    ) -> impl Future<Output = JsonRpcResponse> + Send + 'static
-    where
-        Self: Sized,
-    {
-        async move {
-            JsonRpcResponse::success(
-                id,
-                json!({
-                    "name": "aleph-gateway",
-                    "version": env!("ALEPH_VERSION"),
-                    "protocol": "json-rpc-2.0"
-                }),
-            )
-        }
+    ) -> JsonRpcResponse {
+        JsonRpcResponse::success(
+            id,
+            json!({
+                "name": "aleph-gateway",
+                "version": env!("ALEPH_VERSION"),
+                "protocol": "json-rpc-2.0"
+            }),
+        )
     }
 }
 

@@ -128,11 +128,7 @@ impl ContextCompactor {
         }
 
         // Step 3: limit window and serialize
-        let window_start = if cut_end > self.config.max_window {
-            cut_end - self.config.max_window
-        } else {
-            0
-        };
+        let window_start = cut_end.saturating_sub(self.config.max_window);
         let window = &messages[window_start..cut_end];
         let transcript = serialize_transcript(window);
         let tokens_before = estimate_tokens(&transcript);

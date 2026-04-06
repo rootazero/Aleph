@@ -1,4 +1,4 @@
-use crate::providers::message::{ContentBlock, UnifiedMessage};
+use crate::providers::message::UnifiedMessage;
 
 pub struct RetryHandler {
     attempts: u8,

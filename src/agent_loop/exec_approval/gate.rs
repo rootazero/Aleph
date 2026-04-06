@@ -65,7 +65,7 @@ impl ApprovalGate {
         }
 
         let needs_override = tool_names.iter().any(|name| {
-            self.config.always_confirm.contains(&name.to_string())
+            self.config.always_confirm.iter().any(|c| c == name)
         });
 
         if needs_override {
