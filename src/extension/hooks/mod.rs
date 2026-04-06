@@ -140,6 +140,23 @@ impl Default for ActionResult {
     }
 }
 
+/// Hook-emitted permission decision for tool execution.
+///
+/// Follows the principle that hook `Allow` does NOT bypass settings-level
+/// deny rules — it only skips SafetyGuard blocked-pattern checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionDecision {
+    /// Hook vouches for safety — skip SafetyGuard blocked-pattern check,
+    /// but NOT settings-level deny rules.
+    Allow,
+    /// Force user confirmation before execution.
+    Ask { reason: String },
+    /// Temporary interception — retryable (maps to legacy `blocked`).
+    Block { reason: String },
+    /// Hard policy deny — not retryable (maps to legacy `denied`).
+    Deny { reason: String },
+}
+
 /// Hook execution result (aggregated from all matching hooks)
 #[derive(Debug, Default)]
 pub struct HookResult {
@@ -169,6 +186,9 @@ pub struct HookResult {
     pub deny_reason: Option<String>,
     /// Replacement for tool output text (last-writer-wins). Only effective in AfterToolCall/AfterToolCallFailure.
     pub updated_output: Option<String>,
+    /// Hook-emitted permission decision. Last writer wins across interceptor chain.
+    /// Supersedes legacy `blocked`/`denied` fields (preserved for backward compat).
+    pub permission_decision: Option<PermissionDecision>,
 }
 
 impl HookResult {
@@ -199,8 +219,12 @@ impl HookResult {
 /// Parse structured output from a command hook.
 ///
 /// Each line is parsed independently using a prefix protocol:
-/// - `block: <reason>` — block the tool call
+/// - `block: <reason>` — block the tool call (retryable)
+/// - `deny: <reason>` — deny the tool call (not retryable)
+/// - `allow` — skip SafetyGuard blocked-pattern checks
+/// - `ask: <reason>` — force user confirmation before execution
 /// - `update_input: <json>` — replace tool input arguments
+/// - `update_output: <text>` — replace tool output text
 /// - `context: <text>` — inject additional context for LLM
 /// - `prevent_continuation` — stop the agent loop
 /// - (no prefix) — treat as a message
@@ -212,11 +236,21 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
         }
 
         if let Some(reason) = trimmed.strip_prefix("block:") {
+            let reason = reason.trim().to_string();
             result.blocked = true;
-            result.block_reason = Some(reason.trim().to_string());
+            result.block_reason = Some(reason.clone());
+            result.permission_decision = Some(PermissionDecision::Block { reason });
         } else if let Some(reason) = trimmed.strip_prefix("deny:") {
+            let reason = reason.trim().to_string();
             result.denied = true;
-            result.deny_reason = Some(reason.trim().to_string());
+            result.deny_reason = Some(reason.clone());
+            result.permission_decision = Some(PermissionDecision::Deny { reason });
+        } else if trimmed == "allow" {
+            result.permission_decision = Some(PermissionDecision::Allow);
+        } else if let Some(reason) = trimmed.strip_prefix("ask:") {
+            result.permission_decision = Some(PermissionDecision::Ask {
+                reason: reason.trim().to_string(),
+            });
         } else if let Some(json_str) = trimmed.strip_prefix("update_input:") {
             match serde_json::from_str(json_str.trim()) {
                 Ok(val) => result.updated_input = Some(val),
@@ -717,5 +751,59 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("test output"));
+    }
+
+    #[test]
+    fn test_parse_command_output_allow() {
+        let mut result = HookResult::default();
+        parse_command_output("allow", &mut result);
+        assert_eq!(result.permission_decision, Some(PermissionDecision::Allow));
+    }
+
+    #[test]
+    fn test_parse_command_output_ask() {
+        let mut result = HookResult::default();
+        parse_command_output("ask: user must confirm destructive operation", &mut result);
+        assert_eq!(
+            result.permission_decision,
+            Some(PermissionDecision::Ask {
+                reason: "user must confirm destructive operation".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_command_output_deny_sets_permission_decision() {
+        let mut result = HookResult::default();
+        parse_command_output("deny: policy violation", &mut result);
+        assert!(result.denied);
+        assert_eq!(result.deny_reason, Some("policy violation".to_string()));
+        assert_eq!(
+            result.permission_decision,
+            Some(PermissionDecision::Deny {
+                reason: "policy violation".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_command_output_block_sets_permission_decision() {
+        let mut result = HookResult::default();
+        parse_command_output("block: temporary issue", &mut result);
+        assert!(result.blocked);
+        assert_eq!(result.block_reason, Some("temporary issue".to_string()));
+        assert_eq!(
+            result.permission_decision,
+            Some(PermissionDecision::Block {
+                reason: "temporary issue".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_permission_decision_last_writer_wins() {
+        let mut result = HookResult::default();
+        parse_command_output("deny: first\nallow", &mut result);
+        assert_eq!(result.permission_decision, Some(PermissionDecision::Allow));
     }
 }
