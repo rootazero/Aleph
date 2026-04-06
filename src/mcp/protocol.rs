@@ -46,6 +46,9 @@ pub struct InitializeResult {
     /// Server info
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_info: Option<ServerInfo>,
+    /// Optional instructions describing how to use the server's tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// Server capabilities
@@ -686,6 +689,38 @@ mod tests {
 
         let parsed: IncludeContext = serde_json::from_str("\"allServers\"").unwrap();
         assert_eq!(parsed, IncludeContext::AllServers);
+    }
+
+    #[test]
+    fn initialize_result_deserializes_with_instructions() {
+        let json = r#"{
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "test-server", "version": "1.0"},
+            "instructions": "Use the search tool to find documents before answering."
+        }"#;
+        let result: InitializeResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.protocol_version, "2024-11-05");
+        assert_eq!(
+            result.instructions,
+            Some("Use the search tool to find documents before answering.".to_string())
+        );
+    }
+
+    #[test]
+    fn initialize_result_deserializes_without_instructions() {
+        let json = r#"{
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "test-server"}
+        }"#;
+        let result: InitializeResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.protocol_version, "2024-11-05");
+        assert_eq!(result.instructions, None);
+
+        // Verify instructions is omitted when serialized as None
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(!serialized.contains("instructions"));
     }
 
     #[test]
