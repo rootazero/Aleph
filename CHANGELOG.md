@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.06]
+
+### Added
+- Session state machine: lifecycle states (Created → Active → Running → Idle → Stopped/Error) with enforced valid transitions in session manager
+- Channel approval system: ChannelApprovalCapability trait, ChannelApprovalBridge for routing tool approval requests through Telegram and other channels
+- Two-phase exec approval gate in agent loop with safety floor and retry logic
+- Gateway plugin registry infrastructure for ChannelPlugin system with channel health monitoring
+- OpenAPI 3.0 spec generation and schema introspection endpoints
+- Tower-style handler middleware chain with typestate request pipeline for JSON-RPC tracking
+- Unified typed channel event bus with backpressure-aware per-client buffers
+- Swarm intelligence layer: LLM summarization in aggregator, task context injection, critical event interrupt mechanism
+- TeammateManager for auto team creation and SubagentAction extensions (name/team_name, messaging)
+- Compaction pipeline: CompactionOrchestrator with MicroCompactor (3D scoring), ToolAwareChunker, ConstraintInjector, and recall_context builtin tool
+- DreamGate with 3-level cheap-to-expensive gate chain for memory dreaming
+- Dreaming staged pipeline: CollectStage, ConsolidateStage (STM→LTM), DeepSynthesisStage, DriftDetect
+- Desktop enhancements: multi-display support, ComputerUseLock, EscapeAbort, 8 new ScreenCapability methods (double_click, drag, hover, etc.)
+- Transcription as first-class GenerationType with dedicated provider config and voices_url support
+- Resilience: rate limit classification, circuit breaker, tool truncation, bootstrap budget
+- Code-block-aware sanitization and high-risk tool permissions
+- gateway_route builtin tool for channel plugin routing
+- Telegram edit-based streaming delivery with message coalescing and offset persistence
+
+### Fixed
+- Channel approval bridge: delivery timeouts, error sanitization, expired approval cleanup
+- Vault-based STT provider API key resolution at runtime (api_key is #[serde(skip)])
+- Compaction pressure sync, panic safety for mem::take and cleanup chain
+- 5 pre-existing test failures unrelated to compaction work
+- Telegram: saturating arithmetic for offset, typing breaker counter, EditedMessageIsTooLong handling
+- Swarm: wire AiProvider via OnceLock, close interrupt loop, pass agent_id to context injection
+- Subagent: team_id routing, error handling, race condition fixes
+- Desktop: safety comments, atomic ordering, drag cap, mutex warning
+- Sanitizer: zero-alloc byte-slice scanning, TOCTOU fix, double-backtick support
+- Gateway middleware P1/P2 fixes, lagged event count tracking
+- Transcription provider lookup checks API key before matching default
+
+### Changed
+- License changed from AGPL-3.0 to MIT
+- Removed dispatcher confirmation and integration modules
+- Gateway handlers (health, echo, version) migrated to HandlerSchema trait
+- Refactored desktop: split action.rs and perception.rs into sub-modules, removed legacy DesktopCapability trait
+- Extracted subagent_runner.rs from agent_loop, dreaming pipeline from monolithic dreaming.rs
+- Removed CompressionDaemon in favor of raw chunk storage for semantic recovery
+
 ## [2026.04.02]
 
 ### Added
