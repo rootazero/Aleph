@@ -170,6 +170,29 @@ impl SafetyGuard {
             }),
         }
     }
+
+    /// Check only permission rules (Allow/Ask/Deny) without blocked-pattern matching.
+    ///
+    /// Used when a hook has issued `PermissionDecision::Allow` — the hook vouches
+    /// that the tool call is safe (skipping pattern checks), but settings-level
+    /// deny/ask rules still apply unconditionally.
+    pub fn check_permissions_only(&self, call: &ToolCall) -> Result<(), SafetyError> {
+        let permission = self
+            .tool_permissions
+            .get(&call.name)
+            .copied()
+            .unwrap_or(self.default_permission);
+
+        match permission {
+            PermissionAction::Allow => Ok(()),
+            PermissionAction::Ask => Err(SafetyError::NeedsConfirmation {
+                tool: call.name.clone(),
+            }),
+            PermissionAction::Deny => Err(SafetyError::PolicyDenied {
+                tool: call.name.clone(),
+            }),
+        }
+    }
 }
 
 /// Recursively extract all string values from a JSON value into the haystack.
@@ -433,6 +456,44 @@ mod tests {
         assert!(guard.is_high_risk("file_delete"));
         assert!(!guard.is_high_risk("read_file"));
         assert!(!guard.is_high_risk("memory_search"));
+    }
+
+    #[test]
+    fn check_permissions_only_skips_blocked_patterns() {
+        let guard = SafetyGuard::new(
+            vec![r"dangerous".to_string()],
+            HashMap::new(),
+            PermissionAction::Allow,
+        );
+
+        let call = ToolCall {
+            name: "Bash".to_string(),
+            input: json!({"command": "dangerous command"}),
+        };
+
+        // Full check should block it
+        assert!(matches!(guard.check(&call), Err(SafetyError::Blocked { .. })));
+
+        // Permissions-only check should allow it (no pattern matching)
+        assert!(guard.check_permissions_only(&call).is_ok());
+    }
+
+    #[test]
+    fn check_permissions_only_still_enforces_deny() {
+        let perms = [("Bash".to_string(), PermissionAction::Deny)]
+            .into_iter()
+            .collect();
+        let guard = SafetyGuard::new(vec![], perms, PermissionAction::Allow);
+
+        let call = ToolCall {
+            name: "Bash".to_string(),
+            input: json!({}),
+        };
+
+        assert!(matches!(
+            guard.check_permissions_only(&call),
+            Err(SafetyError::PolicyDenied { .. })
+        ));
     }
 
     #[test]
