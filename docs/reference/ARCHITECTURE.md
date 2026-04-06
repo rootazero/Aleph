@@ -623,6 +623,121 @@ let result2 = executor.execute(&action2, &identity).await;
 
 ---
 
+## Prompt System
+
+The prompt system lives entirely in `src/thinker/`. The sole public entry point is `thinker::PromptBuilder`, which wraps a `PromptPipeline`. The old `agent_loop::PromptBuilder` has been removed.
+
+### PromptBuilder
+
+```rust
+// Standard usage
+let builder = PromptBuilder::new(config);
+let prompt = builder.build_system_prompt(&tools);
+
+// With soul identity
+let prompt = builder.build_system_prompt_with_soul(&tools, &soul, profile);
+
+// Sub-agent usage (replaces old prompt_sections::resolve())
+let prompt = builder.build_for_agent(&agent_def, &tools, &soul);
+
+// Mode + budget control
+let result = builder.build_with_budget(&tools, &soul, profile, PromptMode::Compact, &budget);
+```
+
+### 29 Layers (sorted by priority)
+
+**Stable zone** — content rarely changes, eligible for section-level caching (priorities 50–1600):
+
+| Priority | Layer | Notes |
+|----------|-------|-------|
+| 50 | `SoulLayer` | Identity / personality |
+| 55 | `AgentRoleLayer` | Sub-agent role header + protocol blocks (NEW) |
+| 75 | `ProfileLayer` | Workspace profile overlay |
+| 100 | `RoleLayer` | Base assistant role |
+| 300 | `EnvironmentLayer` | OS, date, working directory |
+| 400 | `RuntimeCapabilitiesLayer` | Python, Node.js, FFmpeg, etc. |
+| 500 | `ToolsLayer` | Tool definitions (text schema) |
+| 501 | `HydratedToolsLayer` | Semantic-retrieval tool definitions |
+| 550 | `ToolUsageGrammarLayer` | Data-driven tool usage conventions (NEW) |
+| 600 | `SecurityLayer` | Safety / security guidelines |
+| 700 | `ProtocolTokensLayer` | JSON-RPC protocol tokens |
+| 710 | `HeartbeatLayer` | Session keep-alive instructions |
+| 800 | `OperationalGuidelinesLayer` | Operational rules |
+| 900 | `CitationStandardsLayer` | Citation formatting |
+| 1000 | `GenerationModelsLayer` | Available image/video/audio models |
+| 1050 | `SkillInstructionsLayer` | Active skill instructions |
+| 1100 | `SpecialActionsLayer` | Special action syntax |
+| 1200 | `ResponseFormatLayer` | Response structure |
+| 1300 | `GuidelinesLayer` | General guidelines |
+| 1350 | `ThinkingGuidanceLayer` | Structured reasoning guidance |
+| 1400 | `SkillModeLayer` | Strict skill workflow enforcement |
+| 1500 | `CustomInstructionsLayer` | User custom instructions |
+| 1600 | `LanguageLayer` | Response language |
+
+**Dynamic zone** — per-request, never cached (priorities 1700–1750):
+
+| Priority | Layer | Notes |
+|----------|-------|-------|
+| 1700 | `InboundContextLayer` | Sender, channel, session metadata |
+| 1710 | `VoiceModeLayer` | Voice-specific response instructions |
+| 1720 | `RuntimeContextLayer` | Current time, session info |
+| 1730 | `IdentityFilesLayer` | SOUL.md, IDENTITY.md workspace files |
+| 1740 | `MemoryAugmentationLayer` | Dual-path memory injection (ENHANCED) |
+| 1750 | `SessionContextGuideLayer` | Compressed session context guidance |
+
+### Assembly Paths
+
+Each layer declares which paths it participates in; the pipeline filters by path at assembly time:
+
+| Path | Description |
+|------|-------------|
+| `Basic` | Minimal — config + tool list only |
+| `Hydration` | Tools come from semantic retrieval (`HydrationResult`) |
+| `Soul` | Soul-enriched — includes identity / personality |
+| `Context` | Context-aware — uses `ResolvedContext` |
+| `Cached` | Pre-cached stable prefix |
+
+### Prompt Modes
+
+| Mode | Behavior |
+|------|----------|
+| `Full` (default) | All 29 layers participate |
+| `Compact` | Excludes 14 heavy layers (runtime_context, environment, runtime_capabilities, protocol_tokens, heartbeat, operational_guidelines, citation_standards, generation_models, skill_instructions, special_actions, guidelines, thinking_guidance, skill_mode, poe_success_criteria) |
+| `Minimal` | Only 5 core layers: soul, tools, hydrated_tools, response_format, language |
+
+### Section-Level Caching
+
+`execute_cached()` caches the output of every `LayerStability::Stable` layer after the first call. Dynamic layers always recompute. ~23 of 29 layers are Stable. Cache management:
+
+```rust
+pipeline.invalidate("soul");    // Invalidate one layer by name
+pipeline.invalidate_all();      // Clear all cached sections
+pipeline.cache_stats();         // CacheStats { hits, misses, entries }
+```
+
+### AgentRoleLayer
+
+Replaces the old `prompt_sections::resolve()` function. When `LayerInput.agent_def` is set, this layer injects:
+- Role header from `AgentDef.role`
+- Protocol blocks declared in `AgentDef.prompt_sections` (e.g. `explore_constraints`, `coder_guidelines`, `researcher_protocol`, `verify_protocol`, `plan_protocol`)
+
+### ToolUsageGrammarLayer
+
+Reads `ToolInfo.usage_hint` fields (`prefer_for`, `prefer_over`) and generates data-driven "use X instead of Y" guidelines for the LLM. No hardcoded conventions — all tool usage rules come from tool definitions.
+
+### MemoryAugmentationLayer (Hybrid Injection)
+
+Supports dual-path memory injection:
+1. **Structured index** — reads `.aleph/MEMORY.md`, truncated to 200 lines
+2. **Vector retrieval** — top-K semantic search results from LanceDB
+3. Includes memory taxonomy guidelines for how to interpret and use memories
+
+### TokenBudget
+
+Default `max_total_chars` is 80,000. When the assembled prompt exceeds the budget, lower-priority layers are dropped. Protected priorities (50, 55, 75, 100, 500, 501, 1200) always survive enforcement. `PromptResult` includes `truncation_stats` listing which sections were removed.
+
+---
+
 ## See Also
 
 - [Agent System](AGENT_SYSTEM.md) - Agent loop internals
