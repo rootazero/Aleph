@@ -537,6 +537,58 @@ impl FeishuApi {
         self.parse_send_response(resp).await
     }
 
+    // ── Message Resource Download ──
+
+    #[allow(dead_code)]
+    pub async fn download_message_resource(
+        &self,
+        message_id: &str,
+        file_key: &str,
+        msg_type: &str,
+    ) -> Result<MessageResource, String> {
+        let token = self.auth.get_token().await?;
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{}/resources/{}",
+            self.base_url, message_id, file_key
+        );
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .query(&[("type", msg_type)])
+            .send()
+            .await
+            .map_err(|e| format!("Download resource failed: {e}"))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "Download resource HTTP {}: {}",
+                status, body
+            ));
+        }
+
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Read resource bytes failed: {e}"))?
+            .to_vec();
+
+        Ok(MessageResource {
+            bytes,
+            content_type,
+        })
+    }
+
     // ── Reactions ──
 
     /// Add an emoji reaction to a message. Returns reaction_id.
@@ -599,5 +651,122 @@ impl FeishuApi {
             return Err(format!("Remove reaction HTTP {}", resp.status()));
         }
         Ok(())
+    }
+
+    // ── Get Message ──
+
+    #[allow(dead_code)]
+    pub async fn get_message(&self, message_id: &str) -> Result<FeishuMessage, String> {
+        let token = self.auth.get_token().await?;
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{}",
+            self.base_url, message_id
+        );
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .query(&[("receive_id_type", "message_id")])
+            .send()
+            .await
+            .map_err(|e| format!("Get message failed: {e}"))?;
+
+        let msg_resp: GetMessageResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Get message parse failed: {e}"))?;
+
+        if msg_resp.code != 0 {
+            return Err(format!(
+                "Get message error: code={}, msg={}",
+                msg_resp.code, msg_resp.msg
+            ));
+        }
+
+        msg_resp
+            .data
+            .and_then(|d| d.message)
+            .ok_or_else(|| "No message data in response".to_string())
+    }
+
+    // ── Thread Messages ──
+
+    #[allow(dead_code)]
+    pub async fn list_thread_messages(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<FeishuThreadMessage>, String> {
+        let token = self.auth.get_token().await?;
+        let url = format!("{}/open-apis/im/v1/messages", self.base_url);
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .query(&[
+                ("container_id_type", "thread"),
+                ("container_id", thread_id),
+                ("sort_type", "ByCreateTimeDesc"),
+                ("page_size", &limit.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("List thread messages failed: {e}"))?;
+
+        let msg_resp: ListThreadMessagesResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("List thread messages parse failed: {e}"))?;
+
+        if msg_resp.code != 0 {
+            return Err(format!(
+                "List thread messages error: code={}, msg={}",
+                msg_resp.code, msg_resp.msg
+            ));
+        }
+
+        Ok(msg_resp.data.and_then(|d| d.items).unwrap_or_default())
+    }
+
+    // ── User Info ──
+
+    /// Fetch user info by open_id. Returns name if available.
+    pub async fn get_user_info(&self, open_id: &str) -> Result<Option<String>, String> {
+        let token = self.auth.get_token().await?;
+        let url = format!(
+            "{}/open-apis/contact/v3/users/{}",
+            self.base_url, open_id
+        );
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .query(&[("user_id_type", "open_id")])
+            .send()
+            .await
+            .map_err(|e| format!("User info request failed: {e}"))?;
+
+        let user_resp: UserInfoResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("User info parse failed: {e}"))?;
+
+        if user_resp.code != 0 {
+            tracing::debug!(
+                "User info error for {}: code={}, msg={}",
+                open_id,
+                user_resp.code,
+                user_resp.msg
+            );
+            return Ok(None);
+        }
+
+        let user = user_resp.data
+            .and_then(|d| d.user)
+            .ok_or_else(|| "No user data".to_string())?;
+        Ok(user.name.or(user.english_name))
     }
 }

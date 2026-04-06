@@ -1,16 +1,18 @@
 pub(crate) mod api;
 pub(crate) mod auth;
-pub mod config;
+pub(crate) mod config;
 mod dedup;
 pub(crate) mod events;
 pub(crate) mod streaming;
 pub(crate) mod types;
 mod user_cache;
+mod webhook;
 mod websocket;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{
@@ -24,7 +26,9 @@ use crate::thinker::interaction::{
 use api::{FeishuApi, FeishuSendError};
 use auth::TokenManager;
 pub use config::FeishuConfig;
+use dedup::MessageDedup;
 use user_cache::UserProfileCache;
+use webhook::WebhookContext;
 use websocket::WsLoopContext;
 
 /// Determine if the response should use a Feishu card for markdown rendering.
@@ -140,31 +144,54 @@ impl Channel for FeishuChannel {
 
         let bot_open_id = api.bot_open_id().await.unwrap_or_default();
 
-        let ws_url = api
-            .get_ws_endpoint()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("WS endpoint failed: {e}")))?;
-
         let user_cache = Arc::new(UserProfileCache::new());
+        let dedup = Arc::new(StdMutex::new(MessageDedup::new()));
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
         auth.spawn_token_refresh(shutdown_rx.clone());
 
-        let ws_ctx = WsLoopContext {
-            initial_ws_url: ws_url,
-            channel_id: self.info.id.clone(),
-            config: self.config.clone(),
-            bot_open_id,
-            sender: self.channel_state.sender(),
-            status_handle: self.channel_state.status_handle(),
-            shutdown_rx,
-            api: api.clone(),
-            user_cache: user_cache.clone(),
-        };
+        if self.config.is_webhook_mode() {
+            tracing::info!(
+                "Starting Feishu webhook server on {}:{}{}",
+                self.config.webhook_host,
+                self.config.webhook_port,
+                self.config.webhook_path
+            );
 
-        tokio::spawn(websocket::run_ws_loop(ws_ctx));
+            let webhook_ctx = WebhookContext {
+                config: self.config.clone(),
+                channel_id: self.info.id.clone(),
+                bot_open_id,
+                sender: self.channel_state.sender(),
+                status_handle: self.channel_state.status_handle(),
+                api: api.clone(),
+                user_cache: user_cache.clone(),
+                dedup,
+            };
+
+            tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+        } else {
+            let ws_url = api
+                .get_ws_endpoint()
+                .await
+                .map_err(|e| ChannelError::Internal(format!("WS endpoint failed: {e}")))?;
+
+            let ws_ctx = WsLoopContext {
+                initial_ws_url: ws_url,
+                channel_id: self.info.id.clone(),
+                config: self.config.clone(),
+                bot_open_id,
+                sender: self.channel_state.sender(),
+                status_handle: self.channel_state.status_handle(),
+                shutdown_rx,
+                api: api.clone(),
+                user_cache: user_cache.clone(),
+            };
+
+            tokio::spawn(websocket::run_ws_loop(ws_ctx));
+        }
 
         self.api = Some(api);
         self.user_cache = Some(user_cache);

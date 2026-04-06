@@ -25,9 +25,12 @@ pub struct Mention {
 
 // ── Events ──
 
+/// Feishu event types parsed from WebSocket frames.
+/// These cover the full set of events that Aleph can handle.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum FeishuEvent {
+    /// Incoming message in a chat
     MessageReceive {
         message_id: String,
         chat_id: String,
@@ -40,12 +43,58 @@ pub enum FeishuEvent {
         parent_id: Option<String>,
         root_id: Option<String>,
     },
+    /// Interactive card button/form submission
     CardAction {
         chat_id: String,
         sender_id: String,
         action_value: String,
         message_id: String,
     },
+    /// Bot was added to a chat
+    BotAdded {
+        chat_id: String,
+        operator_id: String,
+        operator_name: Option<String>,
+    },
+    /// Bot was removed from a chat
+    BotRemoved {
+        chat_id: String,
+        operator_id: Option<String>,
+    },
+    /// Reaction (emoji) added to a message
+    ReactionCreated {
+        message_id: String,
+        chat_id: Option<String>,
+        emoji: String,
+        operator_id: String,
+    },
+    /// Reaction (emoji) removed from a message
+    ReactionDeleted {
+        message_id: String,
+        chat_id: Option<String>,
+        emoji: String,
+        operator_id: String,
+        reaction_id: Option<String>,
+    },
+    /// Bot menu event (user clicked menu button in bot profile)
+    BotMenu {
+        event_key: String,
+        operator_id: String,
+        operator_name: Option<String>,
+        timestamp: i64,
+    },
+    /// Drive file comment notification
+    DriveComment {
+        event_id: String,
+        comment_id: String,
+        reply_id: Option<String>,
+        file_type: String,
+        file_token: String,
+        from_user_id: String,
+        mentioned: bool,
+        content: Option<String>,
+    },
+    /// Unrecognized event type (captured for logging)
     Unknown(String),
 }
 
@@ -110,6 +159,81 @@ pub struct UploadImageResponse {
 #[derive(Debug, Deserialize)]
 pub struct UploadImageData {
     pub image_key: Option<String>,
+}
+
+#[allow(dead_code)]
+pub struct MessageResource {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+}
+
+// ── Get Message ──
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GetMessageResponse {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<GetMessageData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GetMessageData {
+    pub message: Option<FeishuMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct FeishuMessage {
+    pub message_id: Option<String>,
+    pub root_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub chat_id: Option<String>,
+    pub msg_type: Option<String>,
+    pub content: Option<String>,
+    pub sender: Option<FeishuMessageSender>,
+}
+
+// ── Thread Messages ──
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ListThreadMessagesResponse {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<ListThreadMessagesData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ListThreadMessagesData {
+    pub items: Option<Vec<FeishuThreadMessage>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct FeishuThreadMessage {
+    pub message_id: Option<String>,
+    pub root_id: Option<String>,
+    pub parent_id: Option<String>,
+    pub create_time: Option<String>,
+    pub msg_type: Option<String>,
+    pub content: Option<String>,
+    pub sender: Option<FeishuMessageSender>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct FeishuMessageSender {
+    pub sender_id: Option<FeishuSenderId>,
+    pub sender_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct FeishuSenderId {
+    pub open_id: Option<String>,
 }
 
 // ── WebSocket Event Envelope ──
@@ -219,4 +343,37 @@ pub struct CardCreateData {
 pub struct TypingState {
     pub message_id: String,
     pub reaction_id: String,
+}
+
+// ── User Info ──
+
+#[derive(Debug, Deserialize)]
+pub struct UserInfoResponse {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<UserInfoData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserInfoData {
+    pub user: Option<UserInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct UserInfo {
+    pub open_id: Option<String>,
+    pub name: Option<String>,
+    pub english_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub avatar: Option<Avatar>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct Avatar {
+    pub avatar_72: Option<String>,
+    pub avatar_240: Option<String>,
+    pub avatar_640: Option<String>,
 }

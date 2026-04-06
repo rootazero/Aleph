@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 
+use crate::gateway::interfaces::feishu::api::FeishuApi;
+
 /// Cached user profile info from Feishu.
 #[derive(Debug, Clone)]
 pub struct UserProfile {
@@ -8,7 +10,7 @@ pub struct UserProfile {
     pub name: Option<String>,
 }
 
-/// Simple in-memory cache for Feishu user profiles.
+/// Simple in-memory cache for Feishu user profiles with async API lookup.
 pub struct UserProfileCache {
     cache: StdMutex<HashMap<String, UserProfile>>,
 }
@@ -30,6 +32,27 @@ impl UserProfileCache {
     pub fn insert(&self, profile: UserProfile) {
         let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(profile.open_id.clone(), profile);
+    }
+
+    /// Get user name: cache first, then API if not cached.
+    /// Updates cache with fetched info.
+    pub async fn get_name(&self, open_id: &str, api: &FeishuApi) -> Option<String> {
+        // Try cache first
+        if let Some(profile) = self.get(open_id) {
+            return profile.name.clone();
+        }
+
+        // Cache miss - fetch from API
+        if let Ok(Some(name)) = api.get_user_info(open_id).await {
+            let profile = UserProfile {
+                open_id: open_id.to_string(),
+                name: Some(name.clone()),
+            };
+            self.insert(profile);
+            return Some(name);
+        }
+
+        None
     }
 }
 

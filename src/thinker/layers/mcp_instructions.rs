@@ -1,7 +1,8 @@
-//! McpInstructionsLayer — MCP server instruction injection (priority 1060)
+//! McpInstructionsLayer — MCP server instruction injection (priority 1705)
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
+use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 
 pub struct McpInstructionsLayer;
 
@@ -10,7 +11,7 @@ impl PromptLayer for McpInstructionsLayer {
         "mcp_instructions"
     }
     fn priority(&self) -> u32 {
-        1060
+        1705
     }
     fn stability(&self) -> LayerStability {
         LayerStability::Dynamic
@@ -53,7 +54,8 @@ impl PromptLayer for McpInstructionsLayer {
             output.push_str("### ");
             output.push_str(&item.server_name);
             output.push('\n');
-            output.push_str(&item.instructions);
+            let sanitized = sanitize_for_prompt(&item.instructions, SanitizeLevel::Light);
+            output.push_str(&sanitized);
             output.push_str("\n\n");
         }
     }
@@ -124,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn priority_is_1060() {
-        assert_eq!(McpInstructionsLayer.priority(), 1060);
+    fn priority_is_1705() {
+        assert_eq!(McpInstructionsLayer.priority(), 1705);
     }
 }
