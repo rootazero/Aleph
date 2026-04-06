@@ -2183,7 +2183,69 @@ impl<P: LoopProvider> AgentLoop<P> {
                 .await;
         }
 
+        // Write session snapshot for root agents (depth 0) before returning.
+        self.maybe_write_session_snapshot(&progress, &runtime.messages);
+
         Ok(progress.finish(&self.chain, exit_decision.hit_limit))
+    }
+
+    /// Write a session snapshot if this is a root-level agent (depth 0).
+    fn maybe_write_session_snapshot(
+        &self,
+        progress: &LoopProgress,
+        messages: &[UnifiedMessage],
+    ) {
+        // Only write snapshots for root agents, not subagents
+        if self.chain.depth > 0 {
+            return;
+        }
+
+        let writer = match crate::memory::session_resume::SnapshotWriter::default_path() {
+            Some(w) => w,
+            None => return,
+        };
+
+        // Extract summary from recent assistant messages
+        let summary: String = messages
+            .iter()
+            .rev()
+            .filter(|m| m.is_assistant())
+            .take(3)
+            .filter_map(|m| {
+                let text = m.text_content();
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let summary_truncated: String = summary.chars().take(500).collect();
+
+        let key_decisions = crate::memory::session_resume::SessionSnapshot::extract_decisions(
+            &summary_truncated,
+        );
+
+        let snapshot = crate::memory::session_resume::SessionSnapshot {
+            session_id: self.chain.chain_id.clone(),
+            created_at: chrono::Utc::now(),
+            summary: summary_truncated,
+            key_decisions,
+            active_files: vec![],
+            tool_state: None,
+            pending_tasks: vec![],
+        };
+
+        if let Err(e) = writer.write(&snapshot) {
+            tracing::debug!(error = %e, "Failed to write session snapshot");
+        }
+
+        let _ = progress;
     }
 }
 
