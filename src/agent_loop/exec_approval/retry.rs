@@ -86,6 +86,7 @@ fn drain_last_assistant_round(messages: &mut Vec<UnifiedMessage>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::ContentBlock;
 
     fn make_assistant_message(content: &str) -> UnifiedMessage {
         UnifiedMessage::Assistant {

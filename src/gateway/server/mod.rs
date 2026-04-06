@@ -480,6 +480,7 @@ pub enum GatewayError {
 
 #[cfg(test)]
 mod tests {
+    use super::super::middleware::MiddlewareChain;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
     use super::*;
 
