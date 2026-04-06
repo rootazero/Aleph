@@ -94,6 +94,8 @@ pub struct PromptConfig {
     pub native_tools_enabled: bool,
     /// Eligible skills from SkillSystem v2 snapshot for scope-aware filtering.
     pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
+    /// Available agent catalog entries for AgentCatalogLayer.
+    pub available_agents: Option<Vec<crate::thinker::prompt_layer::AgentCatalogEntry>>,
 }
 
 impl Default for PromptConfig {
@@ -112,6 +114,7 @@ impl Default for PromptConfig {
             token_budget: TokenBudget::default(),
             native_tools_enabled: false,
             eligible_skills: None,
+            available_agents: None,
         }
     }
 }

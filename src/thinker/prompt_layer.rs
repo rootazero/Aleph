@@ -17,6 +17,22 @@ pub struct McpServerInstruction {
     pub instructions: String,
 }
 
+/// Lightweight agent catalog entry for prompt injection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCatalogEntry {
+    pub id: String,
+    pub description: String,
+    pub when_to_use: Option<String>,
+}
+
+/// Lightweight MCP tool index entry for prompt injection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolIndexEntry {
+    pub server_name: String,
+    pub tool_name: String,
+    pub description: String,
+}
+
 /// Whether a layer's content is stable across requests or changes per request.
 ///
 /// Used by the prompt cache optimisation to partition the system prompt
@@ -83,6 +99,8 @@ pub struct LayerInput<'a> {
     /// When set, `McpInstructionsLayer` injects per-server instruction
     /// blocks into the system prompt.
     pub mcp_instructions: Option<&'a [McpServerInstruction]>,
+    /// MCP tool index for prompt injection.
+    pub mcp_tool_index: Option<&'a [McpToolIndexEntry]>,
     /// Previous session snapshot for cross-session context restoration.
     ///
     /// When set, `SessionResumeLayer` injects the snapshot summary,
@@ -107,6 +125,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            mcp_tool_index: None,
             session_snapshot: None,
         }
     }
@@ -127,6 +146,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            mcp_tool_index: None,
             session_snapshot: None,
         }
     }
@@ -147,6 +167,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            mcp_tool_index: None,
             session_snapshot: None,
         }
     }
@@ -167,6 +188,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            mcp_tool_index: None,
             session_snapshot: None,
         }
     }
@@ -237,6 +259,12 @@ impl<'a> LayerInput<'a> {
     /// Attach MCP server instructions for prompt injection.
     pub fn with_mcp_instructions(mut self, instructions: &'a [McpServerInstruction]) -> Self {
         self.mcp_instructions = Some(instructions);
+        self
+    }
+
+    /// Attach MCP tool index for prompt injection.
+    pub fn with_mcp_tool_index(mut self, index: &'a [McpToolIndexEntry]) -> Self {
+        self.mcp_tool_index = Some(index);
         self
     }
 
