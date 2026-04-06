@@ -76,9 +76,12 @@ impl AgentRegistry {
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
         // Main agent - full access
-        AgentDef::new("main", AgentMode::Primary),
+        AgentDef::new("main", AgentMode::Primary)
+            .with_description("Primary agent that responds directly to user"),
         // Explore agent - read-only tools
         AgentDef::new("explore", AgentMode::SubAgent)
+            .with_description("Read-only codebase exploration specialist")
+            .with_when_to_use("When you need to search, read, or understand code without modifying anything")
             .with_prompt_sections(vec!["explore_constraints".into()])
             .with_allowed_tools(vec![
                 "glob".into(),
@@ -91,6 +94,8 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_max_iterations(20),
         // Coder agent - file operations
         AgentDef::new("coder", AgentMode::SubAgent)
+            .with_description("Code writing specialist with file operations")
+            .with_when_to_use("When you need to write, edit, or create code files")
             .with_prompt_sections(vec!["coder_guidelines".into()])
             .with_allowed_tools(vec![
                 "read_file".into(),
@@ -103,6 +108,8 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_max_iterations(30),
         // Researcher agent - search and web
         AgentDef::new("researcher", AgentMode::SubAgent)
+            .with_description("Web and document research specialist")
+            .with_when_to_use("When you need to search the web, fetch URLs, or gather external information")
             .with_prompt_sections(vec!["researcher_protocol".into()])
             .with_allowed_tools(vec![
                 "search".into(),
@@ -112,9 +119,14 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
             .with_max_iterations(15),
         // Default agent - general-purpose sub-agent
-        AgentDef::new("default", AgentMode::SubAgent).with_context_mode(ContextMode::Summary),
+        AgentDef::new("default", AgentMode::SubAgent)
+            .with_description("General-purpose sub-agent")
+            .with_when_to_use("When no specialized agent fits the task")
+            .with_context_mode(ContextMode::Summary),
         // Plan agent - read-only planner
         AgentDef::new("plan", AgentMode::SubAgent)
+            .with_description("Read-only planning and analysis specialist")
+            .with_when_to_use("When you need to analyze requirements, design architecture, or create plans")
             .with_prompt_sections(vec!["plan_protocol".into()])
             .with_allowed_tools(vec![
                 "glob".into(),
@@ -127,6 +139,8 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_context_mode(ContextMode::Summary),
         // Verify agent - adversarial verifier (read-only)
         AgentDef::new("verify", AgentMode::SubAgent)
+            .with_description("Adversarial verification specialist")
+            .with_when_to_use("When you need to independently verify that work was done correctly")
             .with_prompt_sections(vec!["verify_protocol".into()])
             .with_allowed_tools(vec!["*".into()])
             .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
@@ -258,6 +272,24 @@ mod tests {
         assert!(!verify.is_tool_allowed("edit_file")); // read-only: edit denied
         assert_eq!(verify.max_iterations, Some(25));
         assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);
+    }
+
+    #[test]
+    fn test_builtin_subagents_have_descriptions() {
+        let registry = AgentRegistry::with_builtins();
+        let subagents = registry.list_subagents();
+        for agent in &subagents {
+            assert!(!agent.description.is_empty(), "Agent '{}' should have a description", agent.id);
+        }
+    }
+
+    #[test]
+    fn test_builtin_subagents_have_when_to_use() {
+        let registry = AgentRegistry::with_builtins();
+        let subagents = registry.list_subagents();
+        for agent in &subagents {
+            assert!(agent.when_to_use.is_some(), "Agent '{}' should have when_to_use", agent.id);
+        }
     }
 
     #[test]
