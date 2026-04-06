@@ -199,7 +199,7 @@ impl PromptPipeline {
             .collect()
     }
 
-    /// Create a pipeline pre-loaded with the 30 default layers.
+    /// Create a pipeline pre-loaded with the 31 default layers.
     ///
     /// Layer order (by priority):
     ///
@@ -219,7 +219,6 @@ impl PromptPipeline {
     ///  900  CitationStandardsLayer
     /// 1000  GenerationModelsLayer
     /// 1050  SkillInstructionsLayer
-    /// 1060  McpInstructionsLayer
     /// 1100  SpecialActionsLayer
     /// 1200  ResponseFormatLayer
     /// 1300  GuidelinesLayer
@@ -230,16 +229,19 @@ impl PromptPipeline {
     ///
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
+    /// 1705  McpInstructionsLayer
     /// 1710  VoiceModeLayer
     /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
     /// 1740  MemoryAugmentationLayer
     /// 1750  SessionContextGuideLayer
+    /// 1760  SessionResumeLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
             Box::new(AgentRoleLayer),
             Box::new(InboundContextLayer),
+            Box::new(McpInstructionsLayer),
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
@@ -256,7 +258,6 @@ impl PromptPipeline {
             Box::new(CitationStandardsLayer),
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
-            Box::new(McpInstructionsLayer),
             Box::new(SpecialActionsLayer),
             Box::new(ResponseFormatLayer),
             Box::new(GuidelinesLayer),
@@ -266,6 +267,7 @@ impl PromptPipeline {
             Box::new(IdentityFilesLayer),
             Box::new(MemoryAugmentationLayer),
             Box::new(SessionContextGuideLayer),
+            Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
         ])
     }
@@ -467,7 +469,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 30);
+        assert_eq!(pipeline.layer_count(), 31);
     }
 
     #[test]
@@ -523,6 +525,7 @@ mod mode_tests {
             "generation_models",
             "skill_instructions",
             "mcp_instructions",
+            "session_resume",
             "special_actions",
             "guidelines",
             "thinking_guidance",
@@ -775,14 +778,9 @@ mod stability_tests {
         let pipeline = PromptPipeline::default_layers();
         let layers = pipeline.layer_info();
 
-        // McpInstructionsLayer is Dynamic at priority 1060 (within the stable zone)
-        // because its content changes per-request based on connected MCP servers.
-        // All other dynamic layers reside in the tail (priority >= 1700).
-        let exceptions = ["mcp_instructions"];
-
         let mut found_dynamic = false;
         for (priority, name, stability) in &layers {
-            if *stability == LayerStability::Dynamic && !exceptions.contains(name) {
+            if *stability == LayerStability::Dynamic {
                 found_dynamic = true;
             }
             if found_dynamic && *stability == LayerStability::Stable {
@@ -821,8 +819,9 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_augmentation"));
         assert!(dynamic_names.contains(&"session_context_guide"));
+        assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
-        assert_eq!(dynamic_names.len(), 7, "Exactly 7 dynamic layers expected");
+        assert_eq!(dynamic_names.len(), 8, "Exactly 8 dynamic layers expected");
     }
 
     #[test]

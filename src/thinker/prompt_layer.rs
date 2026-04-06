@@ -11,7 +11,7 @@ use crate::agents::AgentDef;
 use crate::dispatcher::tool_index::HydrationResult;
 
 /// MCP server instruction metadata for prompt injection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerInstruction {
     pub server_name: String,
     pub instructions: String,
@@ -83,6 +83,11 @@ pub struct LayerInput<'a> {
     /// When set, `McpInstructionsLayer` injects per-server instruction
     /// blocks into the system prompt.
     pub mcp_instructions: Option<&'a [McpServerInstruction]>,
+    /// Previous session snapshot for cross-session context restoration.
+    ///
+    /// When set, `SessionResumeLayer` injects the snapshot summary,
+    /// key decisions, active files, and pending tasks into the prompt.
+    pub session_snapshot: Option<&'a crate::memory::session_resume::SessionSnapshot>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -102,6 +107,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            session_snapshot: None,
         }
     }
 
@@ -121,6 +127,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            session_snapshot: None,
         }
     }
 
@@ -140,6 +147,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            session_snapshot: None,
         }
     }
 
@@ -159,6 +167,7 @@ impl<'a> LayerInput<'a> {
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
+            session_snapshot: None,
         }
     }
 
@@ -228,6 +237,15 @@ impl<'a> LayerInput<'a> {
     /// Attach MCP server instructions for prompt injection.
     pub fn with_mcp_instructions(mut self, instructions: &'a [McpServerInstruction]) -> Self {
         self.mcp_instructions = Some(instructions);
+        self
+    }
+
+    /// Attach a previous session snapshot for cross-session resume.
+    pub fn with_session_snapshot(
+        mut self,
+        snapshot: &'a crate::memory::session_resume::SessionSnapshot,
+    ) -> Self {
+        self.session_snapshot = Some(snapshot);
         self
     }
 

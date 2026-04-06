@@ -51,6 +51,9 @@ mod memory_augmentation;
 // --- Session context guide layer ---
 mod session_context_guide;
 
+// --- Session resume layer ---
+mod session_resume;
+
 // --- Bootstrap layer ---
 pub mod bootstrap;
 
@@ -90,4 +93,5 @@ pub use protocol_tokens::ProtocolTokensLayer;
 pub use runtime_context::RuntimeContextLayer;
 pub use security::SecurityLayer;
 pub use session_context_guide::SessionContextGuideLayer;
+pub use session_resume::SessionResumeLayer;
 pub use voice_mode::VoiceModeLayer;
