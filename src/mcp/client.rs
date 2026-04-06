@@ -265,6 +265,31 @@ impl McpClient {
         prompts
     }
 
+    /// Collect instructions from all connected MCP servers.
+    ///
+    /// Returns `McpServerInstruction` pairs for prompt injection via
+    /// `McpInstructionsLayer`. Only includes servers that provided
+    /// instructions during initialization.
+    pub async fn collect_instructions(
+        &self,
+    ) -> Vec<crate::thinker::prompt_layer::McpServerInstruction> {
+        let connections: Vec<_> = {
+            let servers = self.external_servers.read().await;
+            servers.values().cloned().collect()
+        };
+
+        let mut result = Vec::new();
+        for connection in &connections {
+            if let Some(inst) = connection.instructions().await {
+                result.push(crate::thinker::prompt_layer::McpServerInstruction {
+                    server_name: connection.name().to_string(),
+                    instructions: inst,
+                });
+            }
+        }
+        result
+    }
+
     /// Read a resource by URI
     ///
     /// The URI should include the server prefix (e.g., "server_name:file:///path")
