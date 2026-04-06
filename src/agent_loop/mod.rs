@@ -21,6 +21,7 @@ pub mod sections;
 pub mod skill_prefetch;
 pub mod stop_hooks;
 pub mod streaming_bridge;
+pub mod agent_runtime;
 pub mod subagent_runner;
 pub mod subagent_teammates;
 pub mod subagent_tool;
@@ -37,6 +38,7 @@ pub mod verify_stop_hook;
 #[cfg(test)]
 mod integration_probe;
 
+pub use agent_runtime::{AgentRuntime, AgentRuntimeConfig, SharedSnapshot};
 pub use chain_context::ChainContext;
 pub use context_budget::diagnostics::{ContextDiagnostics, DiagnosticsSnapshot};
 pub use context_budget::pipeline::{CompactionPipeline, CompactionStage, PipelineResult};
