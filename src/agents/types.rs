@@ -28,6 +28,10 @@ pub enum ContextMode {
 pub struct AgentDef {
     /// Unique identifier (e.g., "explore", "coder", "researcher")
     pub id: String,
+    /// One-line description for catalog index
+    pub description: String,
+    /// Usage trigger hint for the model
+    pub when_to_use: Option<String>,
     /// Agent mode
     pub mode: AgentMode,
     /// Prompt sections this agent needs (assembled by Section Registry)
@@ -51,6 +55,8 @@ impl AgentDef {
     pub fn new(id: impl Into<String>, mode: AgentMode) -> Self {
         Self {
             id: id.into(),
+            description: String::new(),
+            when_to_use: None,
             mode,
             prompt_sections: vec![],
             allowed_tools: vec!["*".into()],
@@ -60,6 +66,18 @@ impl AgentDef {
             model_hint: None,
             context_mode: ContextMode::default(),
         }
+    }
+
+    /// Set one-line description
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
+        self
+    }
+
+    /// Set usage trigger hint
+    pub fn with_when_to_use(mut self, hint: impl Into<String>) -> Self {
+        self.when_to_use = Some(hint.into());
+        self
     }
 
     /// Set allowed tools
@@ -223,5 +241,26 @@ mod tests {
     fn test_with_model_hint() {
         let agent = AgentDef::new("test", AgentMode::SubAgent).with_model_hint("fast");
         assert_eq!(agent.model_hint.as_deref(), Some("fast"));
+    }
+
+    #[test]
+    fn test_agent_def_description_default() {
+        let agent = AgentDef::new("test", AgentMode::SubAgent);
+        assert!(agent.description.is_empty());
+        assert!(agent.when_to_use.is_none());
+    }
+
+    #[test]
+    fn test_with_description() {
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_description("A test agent");
+        assert_eq!(agent.description, "A test agent");
+    }
+
+    #[test]
+    fn test_with_when_to_use() {
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_when_to_use("When you need testing");
+        assert_eq!(agent.when_to_use.as_deref(), Some("When you need testing"));
     }
 }
