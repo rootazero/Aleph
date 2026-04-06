@@ -450,6 +450,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // invocations produce consistent end-to-end chain tracing.
             let run_chain = crate::agent_loop::chain_context::ChainContext::new();
 
+            // Shared prompt snapshot for fork path — written once by AgentLoop,
+            // read by SubagentTool when spawning sub-agents.
+            let shared_snapshot: crate::agent_loop::agent_runtime::SharedSnapshot =
+                Arc::new(std::sync::RwLock::new(None));
+
             // Register subagent tool
             {
                 use crate::agent_loop::background_tracker::BackgroundAgentTracker;
@@ -466,6 +471,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     agent_registry,
                     background_tracker,
                 );
+                subagent_tool = subagent_tool.with_shared_snapshot(shared_snapshot.clone());
                 if let Some(ref mgr) = self.teammate_manager {
                     subagent_tool = subagent_tool.with_teammate_manager(mgr.clone());
                 }
@@ -581,7 +587,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .with_session_context(session_ctx)
             .with_context_compactor(context_compactor)
             .with_summary_provider(self.provider_registry.default_provider())
-            .with_stop_hooks(stop_hooks);
+            .with_stop_hooks(stop_hooks)
+            .with_shared_snapshot(shared_snapshot);
 
             if let Some(skill_system) = skill_system.as_ref() {
                 agent_loop =
