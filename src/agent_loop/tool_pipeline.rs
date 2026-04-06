@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -130,28 +131,29 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 2: Input schema validation (fast-fail before hooks)
         // -----------------------------------------------------------------
-        let _span2 = tracing::debug_span!("pipeline_validate").entered();
-        if let Some(tool) = registry.resolve(name) {
-            let schema = tool.schema();
-            if let Err(msg) = validate_input_fast(&schema, arguments) {
-                return PipelineOutcome {
-                    outcome: ToolOutcome {
-                        tool_id: id.to_string(),
-                        tool_name: name.to_string(),
-                        duration_ms: 0,
-                        output_text: format!("[VALIDATION_ERROR] {}", msg),
-                        is_error: true,
-                        should_stop: false,
-                        retryable: true,
-                    },
-                    additional_contexts: Vec::new(),
-                    prevent_continuation: false,
-                    hook_messages: Vec::new(),
-                };
+        {
+            let _span = tracing::info_span!("pipeline_validate").entered();
+            if let Some(tool) = registry.resolve(name) {
+                let schema = tool.schema();
+                if let Err(msg) = validate_input_fast(&schema, arguments) {
+                    return PipelineOutcome {
+                        outcome: ToolOutcome {
+                            tool_id: id.to_string(),
+                            tool_name: name.to_string(),
+                            duration_ms: 0,
+                            output_text: format!("[VALIDATION_ERROR] {}", msg),
+                            is_error: true,
+                            should_stop: false,
+                            retryable: true,
+                        },
+                        additional_contexts: Vec::new(),
+                        prevent_continuation: false,
+                        hook_messages: Vec::new(),
+                    };
+                }
             }
+            tracing::debug!("input validation passed");
         }
-        tracing::debug!("input validation passed");
-        drop(_span2);
 
         // -----------------------------------------------------------------
         // Stage 3: Pre-hooks (interceptors)
@@ -159,6 +161,7 @@ impl ToolPipeline {
         let effective_args = if self.has_hooks() {
             tracing::debug!("pipeline_pre_hooks: start");
             // Run interceptors — they can block or modify arguments.
+            let hook_start = Instant::now();
             let (ctx_after, interceptor_result) = match self
                 .hooks
                 .execute_interceptors(HookEvent::BeforeToolCall, base_ctx.clone())
@@ -170,6 +173,11 @@ impl ToolPipeline {
                     return self.blocked_outcome(id, name, msg);
                 }
             };
+            tracing::info!(
+                tool = name,
+                elapsed_ms = hook_start.elapsed().as_millis() as u64,
+                "pre-hooks completed"
+            );
 
             // Deny check first — policy refusal takes precedence over block
             if interceptor_result.denied {
@@ -220,36 +228,37 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         // Stage 4: Safety check
         // -----------------------------------------------------------------
-        let _span4 = tracing::debug_span!("pipeline_safety").entered();
-        let safety_call = SafetyToolCall {
-            name: name.to_string(),
-            input: effective_args.clone(),
-        };
-        if let Err(e) = self.safety.check(&safety_call) {
-            let msg = map_safety_error(&e);
-            return PipelineOutcome {
-                outcome: ToolOutcome {
-                    tool_id: id.to_string(),
-                    tool_name: name.to_string(),
-                    duration_ms: 0,
-                    output_text: msg,
-                    is_error: true,
-                    should_stop: false,
-                    retryable: false,
-                },
-                additional_contexts,
-                prevent_continuation,
-                hook_messages,
+        {
+            let _span = tracing::info_span!("pipeline_safety").entered();
+            let safety_call = SafetyToolCall {
+                name: name.to_string(),
+                input: effective_args.clone(),
             };
+            if let Err(e) = self.safety.check(&safety_call) {
+                let msg = map_safety_error(&e);
+                return PipelineOutcome {
+                    outcome: ToolOutcome {
+                        tool_id: id.to_string(),
+                        tool_name: name.to_string(),
+                        duration_ms: 0,
+                        output_text: msg,
+                        is_error: true,
+                        should_stop: false,
+                        retryable: false,
+                    },
+                    additional_contexts,
+                    prevent_continuation,
+                    hook_messages,
+                };
+            }
+            tracing::debug!("safety check passed");
         }
-
-        tracing::debug!("safety check passed");
-        drop(_span4);
 
         // -----------------------------------------------------------------
         // Stage 5: Execute tool with cancellation
         // -----------------------------------------------------------------
         tracing::debug!("pipeline_execute: start");
+        let exec_start = Instant::now();
         let result = tokio::select! {
             r = registry.execute(name, effective_args.clone()) => r,
             _ = cancel.cancelled() => {
@@ -269,8 +278,10 @@ impl ToolPipeline {
                 };
             }
         };
+        let exec_elapsed_ms = exec_start.elapsed().as_millis() as u64;
 
         let mut outcome = Self::map_result(id, name, &result);
+        outcome.duration_ms = exec_elapsed_ms;
 
         // -----------------------------------------------------------------
         // Stages 6 & 7: Post-hooks
@@ -285,6 +296,7 @@ impl ToolPipeline {
                 .with_tool_error(outcome.is_error);
 
             // Stage 6: AfterToolCall (always)
+            let post_hook_start = Instant::now();
             match self
                 .hooks
                 .execute(HookEvent::AfterToolCall, &post_ctx)
@@ -305,6 +317,11 @@ impl ToolPipeline {
                     tracing::warn!(tool = name, error = %e, "Post-hook execute failed");
                 }
             }
+            tracing::info!(
+                tool = name,
+                elapsed_ms = post_hook_start.elapsed().as_millis() as u64,
+                "post-hooks completed"
+            );
 
             // Stage 7: AfterToolCallFailure (only on error)
             if outcome.is_error {
