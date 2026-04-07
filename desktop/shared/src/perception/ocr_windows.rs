@@ -1,6 +1,8 @@
 //! Windows WinRT OCR implementation.
 
 #[allow(unused_imports)]
+use crate::error::{DesktopError, Result};
+#[allow(unused_imports)]
 use crate::OcrResult;
 
 /// Perform OCR using the Windows WinRT `OcrEngine` API.
