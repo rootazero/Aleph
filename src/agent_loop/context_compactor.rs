@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::agent_loop::compaction::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -136,11 +137,40 @@ impl ContextCompactor {
         // Step 4: build prompt with token budget
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
         let prompt = format!(
-            "Summarize the following conversation transcript in at most {} tokens.\n\
-             Preserve: key decisions, tool results, unresolved questions.\n\
-             Omit: greetings, filler, redundant confirmations.\n\n\
-             ---TRANSCRIPT---\n{}\n---END---",
-            token_budget, transcript
+            "Summarize the following conversation transcript in at most {token_budget} tokens.\n\
+             \n\
+             First, analyze the conversation in an <analysis> block (this will be stripped):\n\
+             \n\
+             <analysis>\n\
+             1. User's primary request and intent\n\
+             2. Key technical concepts and decisions made\n\
+             3. Files and code sections involved (preserve exact paths)\n\
+             4. Errors encountered and how they were resolved\n\
+             5. Problem-solving approaches tried (what worked, what didn't)\n\
+             </analysis>\n\
+             \n\
+             Then produce the final summary in a <summary> block using these MANDATORY sections:\n\
+             \n\
+             <summary>\n\
+             ## Primary Request\n\
+             [User's primary request and intent — never lose this]\n\
+             \n\
+             ## Key Decisions\n\
+             [Decisions made and their rationale]\n\
+             \n\
+             ## Files & Code\n\
+             [File paths and code sections involved — preserve exact paths]\n\
+             \n\
+             ## Current State\n\
+             [Most recent operations and current work state, detailed]\n\
+             \n\
+             ## Pending\n\
+             [Pending tasks, unresolved problems, and next steps]\n\
+             </summary>\n\
+             \n\
+             Omit: greetings, filler, redundant confirmations.{IDENTIFIER_PRESERVATION}\n\
+             \n\
+             ---TRANSCRIPT---\n{transcript}\n---END---"
         );
 
         // Step 5–7: attempt LLM call with timeout
@@ -148,7 +178,8 @@ impl ContextCompactor {
 
         match llm_result {
             Ok(Ok(summary)) if !summary.trim().is_empty() => {
-                // Success: drain old window, insert summary
+                // Success: strip analysis scratchpad, then drain old window and insert summary
+                let summary = strip_analysis_block(&summary);
                 let summary_msg = UnifiedMessage::user(format!("[Context Summary]\n{}", summary));
                 let tokens_after = estimate_tokens(&summary);
 
@@ -195,7 +226,7 @@ impl ContextCompactor {
     async fn call_llm(&self, prompt: &str) -> anyhow::Result<String> {
         let msgs = [UnifiedMessage::user(prompt)];
         let system =
-            "You are a precise conversation summarizer. Output only the summary, no preamble.";
+            "You are a precise conversation summarizer. Output the analysis block followed by the summary block. No other text.";
         let payload = RequestPayload::new(&msgs).with_system(Some(system));
         let response: ProviderResponse = self.provider.process(payload).await?;
         Ok(response.text.unwrap_or_default())
