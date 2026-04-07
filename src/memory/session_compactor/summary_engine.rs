@@ -5,7 +5,11 @@
 
 use super::context_window::estimate_tokens;
 use super::fallback::{target_tokens, FallbackLevel};
+use crate::agent_loop::compaction::summary_utils::IDENTIFIER_PRESERVATION;
 use crate::memory::{FactSource, FactType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
+
+// Re-export for backwards compatibility.
+pub use crate::agent_loop::compaction::summary_utils::strip_analysis_block;
 
 // ---------------------------------------------------------------------------
 // Depth-aware prompt templates
@@ -24,15 +28,23 @@ First, analyze the conversation in an <analysis> block (this will be stripped be
 5. Problem-solving approaches tried (what worked, what didn't)\n\
 </analysis>\n\
 \n\
-Then produce the final summary in a <summary> block:\n\
+Then produce the final summary in a <summary> block using these MANDATORY sections:\n\
 \n\
 <summary>\n\
-- Preserve ALL user message key points (never lose user intent)\n\
-- Key decisions and their rationale\n\
-- File operations with paths\n\
-- Current work state (most recent operations, detailed)\n\
-- Pending tasks and unresolved problems\n\
-- Next steps (quote from conversation where relevant)\n\
+## Primary Request\n\
+[User's primary request and intent — never lose this]\n\
+\n\
+## Key Decisions\n\
+[Decisions made and their rationale]\n\
+\n\
+## Files & Code\n\
+[File paths and code sections involved — preserve exact paths]\n\
+\n\
+## Current State\n\
+[Most recent operations and current work state, detailed]\n\
+\n\
+## Pending\n\
+[Pending tasks, unresolved problems, and next steps]\n\
 </summary>\n\
 \n\
 Omit: greetings, filler, repeated information, verbose tool outputs already summarized.";
@@ -55,20 +67,6 @@ Create a milestone summary from these session summaries. Preserve:\n\
 \n\
 Omit: individual operation details, file-level changes, resolved errors.";
 
-const IDENTIFIER_PRESERVATION: &str = "\n\n\
-## Identifier Preservation (MANDATORY)\n\
-When summarizing, you MUST preserve the following identifiers EXACTLY as they appear \
-in the original text — do not shorten, paraphrase, or reconstruct them:\n\
-- File paths (e.g., src/memory/store/lance/mod.rs)\n\
-- UUIDs and hashes (e.g., a1b2c3d4-...)\n\
-- URLs and endpoints (e.g., https://api.example.com/v1/...)\n\
-- Commit references (e.g., 0949c9fc)\n\
-- Version numbers (e.g., v2026.04.02)\n\
-- Configuration keys and environment variables\n\
-- Error codes and status codes\n\
-\n\
-If an identifier is not relevant to the summary's core meaning, omit it entirely \
-rather than abbreviating it.";
 
 /// Select the correct prompt template for a given depth.
 fn depth_prompt(depth: u32) -> &'static str {
@@ -79,27 +77,6 @@ fn depth_prompt(depth: u32) -> &'static str {
     }
 }
 
-/// Strip the `<analysis>...</analysis>` scratchpad from LLM summary output.
-///
-/// The analysis block gives the LLM reasoning space but should not enter
-/// the context window. If no analysis block is found, returns input unchanged.
-pub fn strip_analysis_block(text: &str) -> String {
-    if let Some(start) = text.find("<analysis>") {
-        if let Some(end) = text.find("</analysis>") {
-            let after_end = end + "</analysis>".len();
-            let mut result = String::new();
-            result.push_str(text[..start].trim());
-            if after_end < text.len() {
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                result.push_str(text[after_end..].trim());
-            }
-            return result;
-        }
-    }
-    text.to_string()
-}
 
 // ---------------------------------------------------------------------------
 // build_summary_prompt
@@ -259,8 +236,8 @@ mod tests {
         let messages = msgs(&[("user", "Hello"), ("assistant", "Hi there")]);
         let prompt = build_summary_prompt(&messages, 0, None, FallbackLevel::Normal);
         assert!(
-            prompt.contains("File operations"),
-            "leaf prompt should mention file operations"
+            prompt.contains("## Files & Code"),
+            "leaf prompt should mention Files & Code section"
         );
         assert!(
             !prompt.contains("milestone summary"),
