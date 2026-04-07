@@ -21,6 +21,7 @@ in the original text — do not shorten, paraphrase, or reconstruct them:\n\
 If an identifier is not relevant to the summary's core meaning, omit it entirely \
 rather than abbreviating it.";
 
+// ASSUMPTION: LLM output contains at most one <analysis>...</analysis> block with no nesting.
 /// Strip the `<analysis>...</analysis>` scratchpad from LLM summary output.
 ///
 /// The analysis block gives the LLM reasoning space but should not enter

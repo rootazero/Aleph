@@ -57,12 +57,17 @@ impl CacheMonitor {
     /// (indicating the stable portion of the prompt has been modified),
     /// and `false` on the first call or when the content is unchanged.
     pub fn update_stable_hash(&self, stable_content: &str) -> bool {
+        // Fast non-cryptographic hash for change detection within a single process.
+        //
+        // NOTE: `DefaultHasher` is NOT stable across Rust versions or process restarts.
+        // This is acceptable here because `CacheMonitor` is session-scoped and in-memory.
+        // Do NOT persist or compare hashes across processes.
         let mut hasher = DefaultHasher::new();
         stable_content.hash(&mut hasher);
         let new_hash = hasher.finish();
 
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let changed = state.stable_hash.map_or(false, |old| old != new_hash);
+        let changed = state.stable_hash.is_some_and(|old| old != new_hash);
         state.stable_hash = Some(new_hash);
         changed
     }
@@ -77,7 +82,7 @@ impl CacheMonitor {
 
         state.total_calls += 1;
 
-        let is_hit = cache_read_tokens.map_or(false, |t| t > 0);
+        let is_hit = cache_read_tokens.is_some_and(|t| t > 0);
         if is_hit {
             state.total_hits += 1;
             state.consecutive_misses = 0;
@@ -180,7 +185,10 @@ mod tests {
         // (consecutive_misses is back to 0, so 1 miss = 1 consecutive)
         monitor.record_cache_usage(None); // miss — consecutive=1, no warn
         let state = monitor.state.lock().unwrap();
-        assert_eq!(state.consecutive_misses, 1, "miss count should restart from 1 after compaction");
+        assert_eq!(
+            state.consecutive_misses, 1,
+            "miss count should restart from 1 after compaction"
+        );
     }
 
     #[test]

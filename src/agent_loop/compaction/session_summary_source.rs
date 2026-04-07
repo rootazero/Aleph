@@ -68,6 +68,11 @@ impl SessionSummarySource {
                 .then(b.created_at.cmp(&a.created_at))
         });
 
+        let cut_end = cut_end.min(messages.len());
+        if window_start >= cut_end {
+            return None;
+        }
+
         // Estimate the token cost of the window being replaced.
         let window_text: String = messages[window_start..cut_end]
             .iter()

@@ -71,10 +71,7 @@ impl FileContentTracker {
             line_count,
         };
 
-        let mut deque = self
-            .recent_reads
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut deque = self.recent_reads.lock().unwrap_or_else(|e| e.into_inner());
 
         // Deduplicate: remove an existing entry for the same path.
         if let Some(pos) = deque.iter().position(|r| r.path == path) {
@@ -102,10 +99,7 @@ impl Default for FileContentTracker {
 
 impl ConstraintSource for FileContentTracker {
     fn collect_constraints(&self) -> Vec<Constraint> {
-        let deque = self
-            .recent_reads
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let deque = self.recent_reads.lock().unwrap_or_else(|e| e.into_inner());
 
         deque
             .iter()
@@ -132,19 +126,23 @@ impl ConstraintSource for FileContentTracker {
 /// boundary where possible and appending `...[truncated]` when the content was
 /// shortened.
 fn truncate_preview(content: &str, max_chars: usize) -> String {
-    if content.len() <= max_chars {
+    if content.chars().count() <= max_chars {
         return content.to_string();
     }
 
-    // Walk backwards from max_chars to find a newline boundary.
-    let cut = content[..max_chars]
-        .rfind('\n')
-        .map(|pos| pos + 1) // include the newline itself
-        .unwrap_or(max_chars);
+    let byte_limit = content
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(content.len());
 
-    let mut result = content[..cut].to_string();
-    result.push_str("...[truncated]");
-    result
+    let cut = content[..byte_limit]
+        .rfind('\n')
+        .map(|pos| pos + 1)
+        .unwrap_or(byte_limit);
+
+    let truncated = content.get(..cut).unwrap_or(&content[..byte_limit]);
+    format!("{}...[truncated]", truncated)
 }
 
 // =============================================================================
@@ -178,8 +176,15 @@ mod tests {
         tracker.record_read("/src/lib.rs", "// version 2\n");
 
         let constraints = tracker.collect_constraints();
-        assert_eq!(constraints.len(), 1, "duplicate path should produce only one entry");
-        assert!(constraints[0].content.contains("version 2"), "content should be the latest");
+        assert_eq!(
+            constraints.len(),
+            1,
+            "duplicate path should produce only one entry"
+        );
+        assert!(
+            constraints[0].content.contains("version 2"),
+            "content should be the latest"
+        );
     }
 
     #[test]
@@ -190,17 +195,33 @@ mod tests {
         }
 
         let constraints = tracker.collect_constraints();
-        assert_eq!(constraints.len(), MAX_TRACKED_FILES, "should retain exactly MAX_TRACKED_FILES entries");
+        assert_eq!(
+            constraints.len(),
+            MAX_TRACKED_FILES,
+            "should retain exactly MAX_TRACKED_FILES entries"
+        );
 
         // The two oldest (/file_0.rs, /file_1.rs) should have been evicted.
-        let paths: Vec<&str> = constraints.iter().map(|c| {
-            // Extract path from "**<path>** (...)"
-            c.content.split("**").nth(1).unwrap_or("")
-        }).collect();
+        let paths: Vec<&str> = constraints
+            .iter()
+            .map(|c| {
+                // Extract path from "**<path>** (...)"
+                c.content.split("**").nth(1).unwrap_or("")
+            })
+            .collect();
 
-        assert!(!paths.contains(&"/file_0.rs"), "oldest entry should be evicted");
-        assert!(!paths.contains(&"/file_1.rs"), "second oldest entry should be evicted");
-        assert!(paths.contains(&"/file_6.rs"), "newest entry should be retained");
+        assert!(
+            !paths.contains(&"/file_0.rs"),
+            "oldest entry should be evicted"
+        );
+        assert!(
+            !paths.contains(&"/file_1.rs"),
+            "second oldest entry should be evicted"
+        );
+        assert!(
+            paths.contains(&"/file_6.rs"),
+            "newest entry should be retained"
+        );
     }
 
     #[test]

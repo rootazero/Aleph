@@ -98,12 +98,6 @@ impl ToolResultStore {
     }
 }
 
-impl Drop for ToolResultStore {
-    fn drop(&mut self) {
-        self.cleanup();
-    }
-}
-
 // =============================================================================
 // Standalone helpers
 // =============================================================================
@@ -118,7 +112,13 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 /// Replace characters unsafe for filenames with underscores.
 fn sanitize_for_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -133,9 +133,13 @@ mod tests {
 
     /// Build a test store rooted in a temp directory instead of ~/.aleph/.
     fn test_store(name: &str) -> (ToolResultStore, PathBuf) {
-        let base = std::env::temp_dir().join("aleph_test_tool_result_store").join(name);
+        let base = std::env::temp_dir()
+            .join("aleph_test_tool_result_store")
+            .join(name);
         std::fs::create_dir_all(&base).unwrap();
-        let store = ToolResultStore { base_dir: base.clone() };
+        let store = ToolResultStore {
+            base_dir: base.clone(),
+        };
         (store, base)
     }
 
@@ -175,7 +179,9 @@ mod tests {
             .join("aleph_test_tool_result_store")
             .join("cleanup_test");
         std::fs::create_dir_all(&base).unwrap();
-        let store = ToolResultStore { base_dir: base.clone() };
+        let store = ToolResultStore {
+            base_dir: base.clone(),
+        };
         assert!(base.exists());
         store.cleanup();
         assert!(!base.exists(), "cleanup should remove the base directory");
@@ -183,7 +189,8 @@ mod tests {
 
     #[test]
     fn extract_persisted_ref_finds_marker() {
-        let text = "some output\n[Full output persisted: /tmp/foo.txt (1234 tokens, bash)]\nmore text";
+        let text =
+            "some output\n[Full output persisted: /tmp/foo.txt (1234 tokens, bash)]\nmore text";
         let found = extract_persisted_ref(text);
         assert!(found.is_some(), "should find marker line");
         assert!(found.unwrap().contains("Full output persisted"));

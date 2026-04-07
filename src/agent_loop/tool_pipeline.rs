@@ -14,15 +14,15 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use serde_json::Value;
-use tracing::Instrument;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::agent_loop::compaction::file_content_tracker::FileContentTracker;
 use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
 use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
-use crate::agent_loop::tool_result_store::ToolResultStore;
 use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
+use crate::agent_loop::tool_result_store::ToolResultStore;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::tool_output::compressor::compress_tool_output;
@@ -158,7 +158,8 @@ impl ToolPipeline {
         // Stage 2: Input schema validation (fast-fail before hooks)
         // -----------------------------------------------------------------
         {
-            let _span = tracing::info_span!("pipeline.validate", tool = name, tool_id = id).entered();
+            let _span =
+                tracing::info_span!("pipeline.validate", tool = name, tool_id = id).entered();
             if let Some(tool) = registry.resolve(name) {
                 let schema = tool.schema();
                 if let Err(msg) = validate_input_fast(&schema, arguments) {
@@ -329,7 +330,11 @@ impl ToolPipeline {
             }
         }
 
-        let final_action = if needs_user_confirmation { "confirm" } else { "execute" };
+        let final_action = if needs_user_confirmation {
+            "confirm"
+        } else {
+            "execute"
+        };
         tracing::info!(
             tool = name,
             hook_decision = hook_decision_str.unwrap_or("none"),
@@ -369,11 +374,24 @@ impl ToolPipeline {
         let mut outcome = Self::map_result(id, name, &result, self.result_store.as_ref());
         outcome.duration_ms = exec_elapsed_ms;
 
+        // Record file reads for post-compaction recovery
+        if let Some(tracker) = &self.file_tracker {
+            if is_file_read_tool(name) && !outcome.is_error {
+                if let Some(path) = effective_args.get("file_path").and_then(|v| v.as_str()) {
+                    tracker.record_read(path, &outcome.output_text);
+                }
+            }
+        }
+
         // -----------------------------------------------------------------
         // Stages 6 & 7: Post-hooks
         // -----------------------------------------------------------------
         if self.has_hooks() {
-            let post_hooks_span = tracing::info_span!("pipeline.post_hooks", tool = name, is_error = outcome.is_error);
+            let post_hooks_span = tracing::info_span!(
+                "pipeline.post_hooks",
+                tool = name,
+                is_error = outcome.is_error
+            );
             // Build post context from effective_args (not base_ctx) so post-hooks
             // see the actual arguments the tool was invoked with.
             let post_ctx = self
@@ -491,14 +509,12 @@ impl ToolPipeline {
             ToolResult::Success { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let disk_ref = store.and_then(|s| {
-                    s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS)
-                });
-                let mut final_text = truncate_tool_result(&compressed);
-                if let Some(ref_marker) = disk_ref {
-                    final_text.push('\n');
-                    final_text.push_str(&ref_marker);
-                }
+                let final_text = match store
+                    .and_then(|s| s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS))
+                {
+                    Some(ref_marker) => ref_marker,
+                    None => truncate_tool_result(&compressed),
+                };
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
@@ -521,14 +537,12 @@ impl ToolPipeline {
             ToolResult::SuccessAndStopLoop { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let disk_ref = store.and_then(|s| {
-                    s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS)
-                });
-                let mut final_text = truncate_tool_result(&compressed);
-                if let Some(ref_marker) = disk_ref {
-                    final_text.push('\n');
-                    final_text.push_str(&ref_marker);
-                }
+                let final_text = match store
+                    .and_then(|s| s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS))
+                {
+                    Some(ref_marker) => ref_marker,
+                    None => truncate_tool_result(&compressed),
+                };
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
@@ -627,6 +641,12 @@ fn value_to_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+/// Check if a tool name corresponds to a file read operation.
+fn is_file_read_tool(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("read_file") || lower.contains("file_read") || lower == "read"
 }
 
 /// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_TOKENS`.
@@ -1234,14 +1254,8 @@ mod tests {
             .await;
 
         // Key assertion: needs_user_confirmation is true, NOT an error
-        assert!(
-            outcome.needs_user_confirmation,
-            "should need confirmation"
-        );
-        assert!(
-            outcome.confirmation_reason.is_some(),
-            "should have reason"
-        );
+        assert!(outcome.needs_user_confirmation, "should need confirmation");
+        assert!(outcome.confirmation_reason.is_some(), "should have reason");
         // The tool should NOT have been blocked
         assert!(
             !outcome.outcome.output_text.starts_with("[DENIED]"),
