@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::config::types::policies::ToolPermissionsConfig;
+use crate::config::types::policies::ToolSafetyPolicy;
 use crate::extension::PermissionAction;
 
 // =============================================================================
@@ -68,6 +69,7 @@ pub struct SafetyGuard {
     blocked_patterns: Vec<Regex>,
     tool_permissions: HashMap<String, PermissionAction>,
     default_permission: PermissionAction,
+    safety_policy: Option<ToolSafetyPolicy>,
 }
 
 impl SafetyGuard {
@@ -95,6 +97,32 @@ impl SafetyGuard {
             blocked_patterns,
             tool_permissions,
             default_permission,
+            safety_policy: None,
+        }
+    }
+
+    /// Create a guard from raw components with an optional safety policy.
+    pub fn with_policy(
+        blocked: Vec<String>,
+        tool_permissions: HashMap<String, PermissionAction>,
+        default_permission: PermissionAction,
+        safety_policy: Option<ToolSafetyPolicy>,
+    ) -> Self {
+        let blocked_patterns: Vec<Regex> = blocked
+            .into_iter()
+            .filter_map(|p| match Regex::new(&p) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!(pattern = %p, error = %e, "Failed to compile safety regex — pattern skipped");
+                    None
+                }
+            })
+            .collect();
+        Self {
+            blocked_patterns,
+            tool_permissions,
+            default_permission,
+            safety_policy,
         }
     }
 
@@ -119,15 +147,37 @@ impl SafetyGuard {
         Self::new(blocked, merged.overrides, merged.default)
     }
 
+    /// Infer permission for a tool based on keyword matching in the safety policy.
+    ///
+    /// Falls back to `self.default_permission` when no policy is set or no
+    /// keywords match.
+    fn infer_permission(&self, tool_name: &str) -> PermissionAction {
+        if let Some(ref policy) = self.safety_policy {
+            if policy.is_high_risk(tool_name) {
+                return PermissionAction::Ask;
+            }
+            if policy.is_low_risk(tool_name) {
+                return PermissionAction::Ask;
+            }
+            if policy.is_readonly(tool_name) {
+                return PermissionAction::Allow;
+            }
+            if policy.is_reversible(tool_name) {
+                return PermissionAction::Allow;
+            }
+        }
+        self.default_permission
+    }
+
     /// Check whether a tool name is classified as high-risk by the safety policy.
     ///
     /// This allows callers (e.g. tool_pipeline) to inspect risk level without
     /// performing a full safety check.
     pub fn is_high_risk(&self, tool_name: &str) -> bool {
-        matches!(
-            self.tool_permissions.get(tool_name),
-            Some(PermissionAction::Ask)
-        )
+        match self.tool_permissions.get(tool_name) {
+            Some(p) => *p == PermissionAction::Ask,
+            None => self.infer_permission(tool_name) == PermissionAction::Ask,
+        }
     }
 
     /// Check whether a tool call is safe to execute.
@@ -158,7 +208,7 @@ impl SafetyGuard {
             .tool_permissions
             .get(&call.name)
             .copied()
-            .unwrap_or(self.default_permission);
+            .unwrap_or_else(|| self.infer_permission(&call.name));
 
         match permission {
             PermissionAction::Allow => Ok(()),
@@ -181,7 +231,7 @@ impl SafetyGuard {
             .tool_permissions
             .get(&call.name)
             .copied()
-            .unwrap_or(self.default_permission);
+            .unwrap_or_else(|| self.infer_permission(&call.name));
 
         match permission {
             PermissionAction::Allow => Ok(()),
@@ -514,5 +564,100 @@ mod tests {
             matches!(result, Err(SafetyError::Blocked { .. })),
             "newline in command should still match blocked pattern"
         );
+    }
+
+    #[test]
+    fn test_infer_permission_high_risk_keyword() {
+        let policy = ToolSafetyPolicy::default();
+        let guard = SafetyGuard::with_policy(
+            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
+            Some(policy),
+        );
+        let call = ToolCall {
+            name: "file_delete".to_string(),
+            input: json!({}),
+        };
+        let err = guard.check(&call).unwrap_err();
+        assert!(matches!(err, SafetyError::NeedsConfirmation { .. }));
+    }
+
+    #[test]
+    fn test_infer_permission_readonly_keyword() {
+        let policy = ToolSafetyPolicy::default();
+        let guard = SafetyGuard::with_policy(
+            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
+            Some(policy),
+        );
+        let call = ToolCall {
+            name: "memory_search".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn test_infer_permission_low_risk_keyword() {
+        let policy = ToolSafetyPolicy::default();
+        let guard = SafetyGuard::with_policy(
+            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
+            Some(policy),
+        );
+        let call = ToolCall {
+            name: "email_send".to_string(),
+            input: json!({}),
+        };
+        let err = guard.check(&call).unwrap_err();
+        assert!(matches!(err, SafetyError::NeedsConfirmation { .. }));
+    }
+
+    #[test]
+    fn test_infer_permission_unknown_tool_uses_default() {
+        let policy = ToolSafetyPolicy::default();
+        let guard = SafetyGuard::with_policy(
+            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
+            Some(policy),
+        );
+        let call = ToolCall {
+            name: "foobar".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn test_explicit_override_beats_inference() {
+        let policy = ToolSafetyPolicy::default();
+        let perms = [("file_delete".to_string(), PermissionAction::Allow)]
+            .into_iter()
+            .collect();
+        let guard = SafetyGuard::with_policy(vec![], perms, PermissionAction::Allow, Some(policy));
+        let call = ToolCall {
+            name: "file_delete".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn test_no_policy_falls_back_to_default() {
+        let guard = SafetyGuard::with_policy(
+            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
+            None,
+        );
+        let call = ToolCall {
+            name: "file_delete".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
     }
 }
