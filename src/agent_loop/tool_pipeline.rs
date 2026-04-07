@@ -14,6 +14,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use serde_json::Value;
+use tracing::Instrument;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
@@ -139,7 +140,7 @@ impl ToolPipeline {
         // Stage 2: Input schema validation (fast-fail before hooks)
         // -----------------------------------------------------------------
         {
-            let _span = tracing::info_span!("pipeline_validate").entered();
+            let _span = tracing::info_span!("pipeline.validate", tool = name, tool_id = id).entered();
             if let Some(tool) = registry.resolve(name) {
                 let schema = tool.schema();
                 if let Err(msg) = validate_input_fast(&schema, arguments) {
@@ -161,19 +162,20 @@ impl ToolPipeline {
                     };
                 }
             }
-            tracing::debug!("input validation passed");
         }
 
         // -----------------------------------------------------------------
         // Stage 3: Pre-hooks (interceptors)
         // -----------------------------------------------------------------
+        let mut hook_decision_str: Option<&str> = None;
+
         let effective_args = if self.has_hooks() {
-            tracing::debug!("pipeline_pre_hooks: start");
+            let hooks_span = tracing::info_span!("pipeline.pre_hooks", tool = name);
             // Run interceptors — they can block or modify arguments.
-            let hook_start = Instant::now();
             let (ctx_after, interceptor_result) = match self
                 .hooks
                 .execute_interceptors(HookEvent::BeforeToolCall, base_ctx.clone())
+                .instrument(hooks_span.clone())
                 .await
             {
                 Ok(pair) => pair,
@@ -182,12 +184,6 @@ impl ToolPipeline {
                     return self.blocked_outcome(id, name, msg);
                 }
             };
-            tracing::info!(
-                tool = name,
-                elapsed_ms = hook_start.elapsed().as_millis() as u64,
-                "pre-hooks completed"
-            );
-
             // Resolve permission decision (new field takes precedence over legacy)
             let decision = interceptor_result.permission_decision.clone().or_else(|| {
                 if interceptor_result.denied {
@@ -227,6 +223,7 @@ impl ToolPipeline {
                     return self.blocked_outcome(id, name, msg);
                 }
                 Some(PermissionDecision::Ask { reason }) => {
+                    hook_decision_str = Some("ask");
                     // NOTE: Ask does NOT block execution. The tool runs normally
                     // and PipelineOutcome carries the confirmation request back to
                     // the caller (agent loop). The caller decides whether to surface
@@ -235,6 +232,7 @@ impl ToolPipeline {
                     confirmation_reason = Some(reason);
                 }
                 Some(PermissionDecision::Allow) => {
+                    hook_decision_str = Some("allow");
                     skip_safety_patterns = true;
                 }
                 None => {}
@@ -264,7 +262,7 @@ impl ToolPipeline {
         // Stage 4: Safety check
         // -----------------------------------------------------------------
         {
-            let _span = tracing::info_span!("pipeline_safety").entered();
+            let _span = tracing::info_span!("pipeline.safety", tool = name).entered();
             let safety_call = SafetyToolCall {
                 name: name.to_string(),
                 input: effective_args.clone(),
@@ -311,16 +309,24 @@ impl ToolPipeline {
                     }
                 }
             }
-            tracing::debug!("safety check passed");
         }
+
+        let final_action = if needs_user_confirmation { "confirm" } else { "execute" };
+        tracing::info!(
+            tool = name,
+            hook_decision = hook_decision_str.unwrap_or("none"),
+            safety_passed = true,
+            final_action = final_action,
+            "permission resolved"
+        );
 
         // -----------------------------------------------------------------
         // Stage 5: Execute tool with cancellation
         // -----------------------------------------------------------------
-        tracing::debug!("pipeline_execute: start");
+        let exec_span = tracing::info_span!("pipeline.execute", tool = name, tool_id = id);
         let exec_start = Instant::now();
         let result = tokio::select! {
-            r = registry.execute(name, effective_args.clone()) => r,
+            r = registry.execute(name, effective_args.clone()).instrument(exec_span) => r,
             _ = cancel.cancelled() => {
                 return PipelineOutcome {
                     outcome: ToolOutcome {
@@ -349,7 +355,7 @@ impl ToolPipeline {
         // Stages 6 & 7: Post-hooks
         // -----------------------------------------------------------------
         if self.has_hooks() {
-            tracing::debug!("pipeline_post_hooks: start");
+            let post_hooks_span = tracing::info_span!("pipeline.post_hooks", tool = name, is_error = outcome.is_error);
             // Build post context from effective_args (not base_ctx) so post-hooks
             // see the actual arguments the tool was invoked with.
             let post_ctx = self
@@ -358,10 +364,10 @@ impl ToolPipeline {
                 .with_tool_error(outcome.is_error);
 
             // Stage 6: AfterToolCall (always)
-            let post_hook_start = Instant::now();
             match self
                 .hooks
                 .execute(HookEvent::AfterToolCall, &post_ctx)
+                .instrument(post_hooks_span.clone())
                 .await
             {
                 Ok(post_result) => {
@@ -379,17 +385,12 @@ impl ToolPipeline {
                     tracing::warn!(tool = name, error = %e, "Post-hook execute failed");
                 }
             }
-            tracing::info!(
-                tool = name,
-                elapsed_ms = post_hook_start.elapsed().as_millis() as u64,
-                "post-hooks completed"
-            );
-
             // Stage 7: AfterToolCallFailure (only on error)
             if outcome.is_error {
                 match self
                     .hooks
                     .execute(HookEvent::AfterToolCallFailure, &post_ctx)
+                    .instrument(post_hooks_span.clone())
                     .await
                 {
                     Ok(fail_result) => {
@@ -412,8 +413,6 @@ impl ToolPipeline {
         if prevent_continuation {
             outcome.should_stop = true;
         }
-
-        tracing::debug!(is_error = outcome.is_error, "tool execution complete");
 
         PipelineOutcome {
             outcome,
