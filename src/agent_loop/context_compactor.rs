@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::agent_loop::compaction::session_summary_source::SessionSummarySource;
 use crate::agent_loop::compaction::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
@@ -18,6 +19,8 @@ pub enum CompactStrategy {
     LlmSummary,
     /// LLM call failed; fell back to keeping only the first line of each message.
     DeterministicTruncation,
+    /// Reused existing session summaries — zero API cost.
+    SessionMemoryReuse,
     /// Compaction was skipped entirely.
     Skipped { reason: String },
 }
@@ -90,6 +93,7 @@ impl ContextCompactor {
         &self,
         messages: &mut Vec<UnifiedMessage>,
         fresh_tail: usize,
+        summary_source: Option<&SessionSummarySource>,
     ) -> anyhow::Result<CompactResult> {
         let effective_tail = fresh_tail.max(self.config.fresh_tail);
 
@@ -130,6 +134,19 @@ impl ContextCompactor {
 
         // Step 3: limit window and serialize
         let window_start = cut_end.saturating_sub(self.config.max_window);
+
+        // Fast path: try to reuse existing session summaries (zero API cost)
+        if let Some(source) = summary_source {
+            if let Some(reuse_result) = source.try_reuse(messages, window_start, cut_end).await {
+                tracing::info!(
+                    tokens_before = reuse_result.tokens_before,
+                    tokens_after = reuse_result.tokens_after,
+                    "Compaction via session memory reuse (zero API cost)"
+                );
+                return Ok(reuse_result);
+            }
+        }
+
         let window = &messages[window_start..cut_end];
         let transcript = serialize_transcript(window);
         let tokens_before = estimate_tokens(&transcript);
@@ -321,7 +338,7 @@ impl CompactionStrategy for ContextCompactor {
         Box::pin(async move {
             let before = ctx.pressure.ratio;
             let result = self
-                .compact(&mut ctx.messages, ctx.fresh_tail_count)
+                .compact(&mut ctx.messages, ctx.fresh_tail_count, None)
                 .await?;
             let freed = result.tokens_before.saturating_sub(result.tokens_after);
             ctx.pressure.used_tokens = ctx.pressure.used_tokens.saturating_sub(freed);
@@ -375,7 +392,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, config);
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
 
         assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
         assert!(result.tokens_after < result.tokens_before);
@@ -396,7 +413,7 @@ mod tests {
 
         let mut messages = make_messages(4);
         let original_len = messages.len();
-        let result = compactor.compact(&mut messages, 6).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
 
         assert!(matches!(
             result.strategy_used,
@@ -416,7 +433,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, config);
 
         let mut messages = make_messages(12);
-        let result = compactor.compact(&mut messages, 6).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
 
         assert_eq!(
             result.strategy_used,
@@ -446,7 +463,7 @@ mod tests {
         }
         // Total: 8 messages. cut_end = 8 - 6 = 2. First starts with [Context Summary] and cut_end <= 2.
         let original_len = messages.len();
-        let result = compactor.compact(&mut messages, 6).await.unwrap();
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
 
         assert!(matches!(
             result.strategy_used,
