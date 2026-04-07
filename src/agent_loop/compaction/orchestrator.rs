@@ -17,6 +17,7 @@ use crate::agent_loop::compaction::types::{
 pub struct OrchestratorBuilder {
     strategies: Vec<Arc<dyn CompactionStrategy>>,
     cleanups: Vec<Arc<dyn PostCompactCleanup>>,
+    cache_monitor: Option<std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
 }
 
 impl OrchestratorBuilder {
@@ -32,11 +33,18 @@ impl OrchestratorBuilder {
         self
     }
 
+    /// Attach a cache monitor that is notified after each compaction.
+    pub fn cache_monitor(mut self, monitor: std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>) -> Self {
+        self.cache_monitor = Some(monitor);
+        self
+    }
+
     /// Consume the builder and produce a `CompactionOrchestrator`.
     pub fn build(self) -> CompactionOrchestrator {
         CompactionOrchestrator {
             strategies: self.strategies,
             cleanups: self.cleanups,
+            cache_monitor: self.cache_monitor,
         }
     }
 }
@@ -50,6 +58,7 @@ impl OrchestratorBuilder {
 pub struct CompactionOrchestrator {
     strategies: Vec<Arc<dyn CompactionStrategy>>,
     cleanups: Vec<Arc<dyn PostCompactCleanup>>,
+    cache_monitor: Option<std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
 }
 
 impl CompactionOrchestrator {
@@ -58,6 +67,7 @@ impl CompactionOrchestrator {
         OrchestratorBuilder {
             strategies: Vec::new(),
             cleanups: Vec::new(),
+            cache_monitor: None,
         }
     }
 
@@ -146,6 +156,10 @@ impl CompactionOrchestrator {
         };
 
         self.run_cleanups(&aggregate);
+
+        if let Some(monitor) = &self.cache_monitor {
+            monitor.notify_compaction();
+        }
 
         Ok(aggregate)
     }
