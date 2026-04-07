@@ -420,9 +420,20 @@ pub enum AgentInstanceError {
     SessionError(String),
 }
 
+/// Lazy-loaded agent entry: config-only until first access.
+enum AgentEntry {
+    /// Registered but not yet instantiated
+    Config {
+        config: AgentInstanceConfig,
+        session_manager: Arc<SessionManager>,
+    },
+    /// Fully instantiated
+    Instance(Arc<AgentInstance>),
+}
+
 /// Registry of agent instances
 pub struct AgentRegistry {
-    agents: Arc<RwLock<HashMap<String, Arc<AgentInstance>>>>,
+    agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
     default_agent: String,
 }
 
@@ -435,18 +446,77 @@ impl AgentRegistry {
         }
     }
 
-    /// Register an agent instance
+    /// Register an already-instantiated agent (for tests and dynamic creation)
     pub async fn register(&self, instance: AgentInstance) {
         let id = instance.id().to_string();
         let mut agents = self.agents.write().await;
-        agents.insert(id.clone(), Arc::new(instance));
+        agents.insert(id.clone(), AgentEntry::Instance(Arc::new(instance)));
         info!("Registered agent: {}", id);
     }
 
-    /// Get an agent by ID
+    /// Register an agent config for lazy instantiation on first access.
+    pub async fn register_config(
+        &self,
+        config: AgentInstanceConfig,
+        session_manager: Arc<SessionManager>,
+    ) {
+        let id = config.agent_id.clone();
+        let mut agents = self.agents.write().await;
+        agents.insert(
+            id.clone(),
+            AgentEntry::Config {
+                config,
+                session_manager,
+            },
+        );
+        info!("Registered agent config (lazy): {}", id);
+    }
+
+    /// Get an agent by ID, instantiating lazily if needed.
     pub async fn get(&self, agent_id: &str) -> Option<Arc<AgentInstance>> {
-        let agents = self.agents.read().await;
-        agents.get(agent_id).cloned()
+        // Fast path: read lock, return if already instantiated
+        {
+            let agents = self.agents.read().await;
+            match agents.get(agent_id) {
+                Some(AgentEntry::Instance(inst)) => return Some(Arc::clone(inst)),
+                Some(AgentEntry::Config { .. }) => { /* need to instantiate */ }
+                None => return None,
+            }
+        }
+
+        // Slow path: write lock, instantiate from config
+        let mut agents = self.agents.write().await;
+
+        // Re-check after acquiring write lock (TOCTOU race: another task may
+        // have instantiated between dropping read lock and acquiring write lock)
+        match agents.get(agent_id) {
+            Some(AgentEntry::Instance(inst)) => return Some(Arc::clone(inst)),
+            None => return None,
+            Some(AgentEntry::Config { .. }) => {}
+        }
+
+        // Take the Config entry out to consume it
+        let entry = agents.remove(agent_id)?;
+        let (config, session_manager) = match entry {
+            AgentEntry::Config {
+                config,
+                session_manager,
+            } => (config, session_manager),
+            AgentEntry::Instance(_) => unreachable!("checked above"),
+        };
+
+        let id = config.agent_id.clone();
+        match AgentInstance::new(config, session_manager) {
+            Ok(instance) => {
+                let arc = Arc::new(instance);
+                agents.insert(id, AgentEntry::Instance(Arc::clone(&arc)));
+                Some(arc)
+            }
+            Err(e) => {
+                warn!("Failed to lazily instantiate agent '{}': {}", id, e);
+                None
+            }
+        }
     }
 
     /// Get the default agent
@@ -454,7 +524,7 @@ impl AgentRegistry {
         self.get(&self.default_agent).await
     }
 
-    /// List all registered agents
+    /// List all registered agent IDs (both lazy and instantiated)
     pub async fn list(&self) -> Vec<String> {
         let agents = self.agents.read().await;
         agents.keys().cloned().collect()
@@ -463,13 +533,21 @@ impl AgentRegistry {
     /// Find an agent by display name (case-insensitive substring match).
     ///
     /// Returns the agent ID if a unique match is found.
+    /// Extracts display_name from either variant without instantiating.
     pub async fn find_by_name(&self, name: &str) -> Option<String> {
         let agents = self.agents.read().await;
         let name_lower = name.to_lowercase();
         let mut matched_id: Option<String> = None;
 
-        for (id, instance) in agents.iter() {
-            let display = instance.display_name().to_lowercase();
+        for (id, entry) in agents.iter() {
+            let display = match entry {
+                AgentEntry::Instance(inst) => inst.display_name().to_lowercase(),
+                AgentEntry::Config { config, .. } => config
+                    .display_name
+                    .as_deref()
+                    .unwrap_or(&config.agent_id)
+                    .to_lowercase(),
+            };
             if display == name_lower
                 || display.contains(&name_lower)
                 || name_lower.contains(&display)
@@ -489,18 +567,24 @@ impl AgentRegistry {
         matched_id
     }
 
-    /// Get the allowed_links for an agent (None = all allowed)
+    /// Get the allowed_links for an agent (None = all allowed).
+    /// Extracts from either variant without instantiating.
     pub async fn get_allowed_links(&self, agent_id: &str) -> Option<Option<Vec<String>>> {
         let agents = self.agents.read().await;
-        agents
-            .get(agent_id)
-            .map(|a| a.config().allowed_links.clone())
+        agents.get(agent_id).map(|entry| match entry {
+            AgentEntry::Instance(inst) => inst.config().allowed_links.clone(),
+            AgentEntry::Config { config, .. } => config.allowed_links.clone(),
+        })
     }
 
-    /// Remove an agent
+    /// Remove an agent (works for both lazy and instantiated entries)
     pub async fn remove(&self, agent_id: &str) -> Option<Arc<AgentInstance>> {
         let mut agents = self.agents.write().await;
-        agents.remove(agent_id)
+        match agents.remove(agent_id) {
+            Some(AgentEntry::Instance(inst)) => Some(inst),
+            Some(AgentEntry::Config { .. }) => None,
+            None => None,
+        }
     }
 
     /// Set the default agent
@@ -522,11 +606,15 @@ impl AgentRegistry {
         soul_content: &str,
         session_manager: Arc<super::session_manager::SessionManager>,
     ) -> Result<Arc<AgentInstance>, AgentInstanceError> {
-        if self.get(id).await.is_some() {
-            return Err(AgentInstanceError::InitFailed(format!(
-                "Agent '{}' already exists",
-                id
-            )));
+        // Check existence (works for both Config and Instance entries)
+        {
+            let agents = self.agents.read().await;
+            if agents.contains_key(id) {
+                return Err(AgentInstanceError::InitFailed(format!(
+                    "Agent '{}' already exists",
+                    id
+                )));
+            }
         }
 
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
@@ -558,11 +646,13 @@ impl AgentRegistry {
         };
 
         let instance = AgentInstance::new(config, session_manager)?;
-
-        self.register(instance).await;
-        let agent = self.get(id).await.unwrap();
+        let arc = Arc::new(instance);
+        {
+            let mut agents = self.agents.write().await;
+            agents.insert(id.to_string(), AgentEntry::Instance(Arc::clone(&arc)));
+        }
         info!("Dynamically created agent: {}", id);
-        Ok(agent)
+        Ok(arc)
     }
 }
 

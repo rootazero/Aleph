@@ -1075,46 +1075,30 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let agent_id = config.agent_id.clone();
                 let agent_workspace = config.workspace.clone();
                 let agent_model = config.model.clone();
-                match alephcore::gateway::AgentInstance::new(
-                    config,
-                    session_manager.clone(),
-                ) {
-                    Ok(instance) => {
-                        agent_registry.register(instance).await;
-                        // Emit lifecycle event
-                        let lifecycle_event =
-                            alephcore::gateway::agent_lifecycle::AgentLifecycleEvent::Registered {
-                                agent_id: agent_id.clone(),
-                                workspace: agent_workspace,
-                                model: agent_model,
-                            };
-                        let _ = event_bus.publish_json(&lifecycle_event);
-                        if !daemon {
-                            println!("  Registered agent: {} (config-driven)", agent_id);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
-                    }
+                agent_registry
+                    .register_config(config, session_manager.clone())
+                    .await;
+                // Emit lifecycle event
+                let lifecycle_event =
+                    alephcore::gateway::agent_lifecycle::AgentLifecycleEvent::Registered {
+                        agent_id: agent_id.clone(),
+                        workspace: agent_workspace,
+                        model: agent_model,
+                    };
+                let _ = event_bus.publish_json(&lifecycle_event);
+                if !daemon {
+                    println!("  Registered agent: {} (lazy)", agent_id);
                 }
             }
         } else {
             // Legacy path: use FullGatewayConfig agents
             for agent_config in full_config.get_agent_instance_configs() {
                 let agent_id = agent_config.agent_id.clone();
-                match alephcore::gateway::AgentInstance::new(
-                    agent_config,
-                    session_manager.clone(),
-                ) {
-                    Ok(agent) => {
-                        agent_registry.register(agent).await;
-                        if !daemon {
-                            println!("  Registered agent: {} (with SQLite persistence)", agent_id);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: Failed to create agent '{}': {}", agent_id, e);
-                    }
+                agent_registry
+                    .register_config(agent_config, session_manager.clone())
+                    .await;
+                if !daemon {
+                    println!("  Registered agent: {} (lazy)", agent_id);
                 }
             }
         }
