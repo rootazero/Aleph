@@ -1552,9 +1552,46 @@ impl<P: LoopProvider> AgentLoop<P> {
             for outcome in &outcomes {
                 let o = &outcome.outcome;
                 tools.last_tool_name = Some(o.tool_name.clone());
+
+                // Confirmation flow: if pipeline flagged confirmation needed,
+                // ask the channel before treating as error.
+                if outcome.needs_user_confirmation {
+                    let reason = outcome
+                        .confirmation_reason
+                        .as_deref()
+                        .unwrap_or("Tool requires confirmation");
+                    let tool_input = tool_args_by_id
+                        .get(o.tool_id.as_str())
+                        .copied()
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    let confirmed = callback.on_confirmation_needed(
+                        &o.tool_name,
+                        &tool_input,
+                        reason,
+                    );
+                    if !confirmed {
+                        // User rejected — override output to denial message
+                        let denial_msg = format!(
+                            "[DENIED] Tool '{}' requires user confirmation. Confirmation was rejected.",
+                            o.tool_name
+                        );
+                        callback.on_safety_block(&SafetyError::NeedsConfirmation {
+                            tool: o.tool_name.clone(),
+                        });
+                        messages.push(UnifiedMessage::tool_result(
+                            o.tool_id.clone(),
+                            o.tool_name.clone(),
+                            denial_msg,
+                            true,
+                        ));
+                        continue; // skip normal outcome processing for this tool
+                    }
+                    // If confirmed, fall through to normal processing — tool already executed
+                }
+
                 let is_safety_denial = o.is_error
                     && (o.output_text.starts_with("[BLOCKED]")
-                        || o.output_text.starts_with("[NEEDS_CONFIRMATION]")
                         || o.output_text.starts_with("[DENIED]"));
 
                 if !is_safety_denial {
@@ -1614,10 +1651,6 @@ impl<P: LoopProvider> AgentLoop<P> {
                             callback.on_safety_block(&SafetyError::Blocked {
                                 tool: o.tool_name.clone(),
                                 pattern: String::new(),
-                            });
-                        } else if o.output_text.starts_with("[NEEDS_CONFIRMATION]") {
-                            callback.on_safety_block(&SafetyError::NeedsConfirmation {
-                                tool: o.tool_name.clone(),
                             });
                         } else if o.output_text.starts_with("[DENIED]") {
                             callback.on_safety_block(&SafetyError::PolicyDenied {
