@@ -461,7 +461,7 @@ mod tests {
     use super::*;
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
     use crate::memory::cortex::types::ExperienceBuilder;
-    use crate::memory::store::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::providers::MockProvider;
     use rusqlite::Connection;
     use tempfile::TempDir;
@@ -474,10 +474,9 @@ mod tests {
 
         // Create temporary directory for memory backend
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("lance_db");
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let db_path = temp_dir.path().join("sqlite_db");
         let db: MemoryBackend = Arc::new(
-            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+            SqliteMemoryBackend::new(&db_path)
                 .unwrap(),
         );
 

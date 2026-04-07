@@ -1,6 +1,6 @@
 //! Memory Event Sourcing — Legacy Migration
 //!
-//! One-shot migration from the legacy CRUD-based LanceDB store to the
+//! One-shot migration from the legacy CRUD-based SQLite store to the
 //! event-sourced model. For each existing [`crate::memory::context::MemoryFact`],
 //! emits a [`super::MemoryEvent::FactMigrated`] event containing the full
 //! fact serialized as a JSON snapshot, establishing the initial event history.
@@ -29,7 +29,7 @@ pub struct MigrationReport {
 /// Migrates existing `MemoryFact`s into the event-sourced store.
 ///
 /// Accepts a `Vec<MemoryFact>` (or slice) so callers can provide facts from
-/// any source (LanceDB, a file, tests, etc.) without requiring a `MemoryStore`.
+/// any source (SQLite, a file, tests, etc.) without requiring a `MemoryStore`.
 pub struct EventSourcingMigration {
     db: Arc<StateDatabase>,
 }

@@ -516,6 +516,6 @@ pub fn graph_kind_for_fact_type(fact_type: &FactType) -> String {
 #[cfg(test)]
 mod tests {
 
-    // TODO: Tests need to be rewritten to use LanceMemoryBackend
+    // TODO: Tests need to be rewritten to use SqliteMemoryBackend
     // The old tests used StateDatabase with SQLite
 }

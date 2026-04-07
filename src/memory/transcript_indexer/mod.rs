@@ -17,18 +17,14 @@ mod semantic_tests;
 mod tests {
     use super::*;
     use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-    use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
+    use crate::memory::store::{SqliteMemoryBackend, MemoryBackend};
     use crate::memory::EmbeddingProvider;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
     fn create_test_db(temp_dir: &std::path::Path) -> MemoryBackend {
-        let db_path = temp_dir.join("lance_db");
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        Arc::new(
-            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
-                .unwrap(),
-        )
+        let db_path = temp_dir.join("sqlite_db");
+        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
     }
 
     // NOTE: test_index_turn_basic removed - requires StateDatabase-specific

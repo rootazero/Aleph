@@ -6,7 +6,7 @@
 #![allow(clippy::arc_with_non_send_sync)]
 use super::*;
 use crate::memory::cortex::types::{EvolutionStatus, Experience};
-use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
+use crate::memory::store::{SqliteMemoryBackend, MemoryBackend};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::{Arc, RwLock};
 use rusqlite::Connection;
@@ -21,11 +21,10 @@ use uuid::Uuid;
 /// Create a test database for testing
 fn create_test_db() -> (MemoryBackend, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let db_path = temp_dir.path().join("lance_db");
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    let db_path = temp_dir.path().join("sqlite_db");
     let db: MemoryBackend = Arc::new(
-        rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
-            .expect("Failed to create test database"),
+        SqliteMemoryBackend::new(&db_path)
+                .expect("Failed to create test database"),
     );
     (db, temp_dir)
 }

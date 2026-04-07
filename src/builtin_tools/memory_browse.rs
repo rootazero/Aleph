@@ -422,7 +422,7 @@ impl AlephTool for MemoryBrowseTool {
 mod tests {
     use crate::sync_primitives::Arc;
 
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::MemoryBackend;
     use crate::memory::{FactType, MemoryFact};
 
@@ -430,8 +430,7 @@ mod tests {
 
     async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
-            .await
+        let backend = SqliteMemoryBackend::new(temp_dir.path())
             .unwrap();
         (Arc::new(backend), temp_dir)
     }

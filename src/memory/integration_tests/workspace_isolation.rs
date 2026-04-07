@@ -10,7 +10,7 @@ mod tests {
     };
     use crate::memory::context::{FactType, MemoryFact};
     use crate::memory::namespace::NamespaceScope;
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
 
@@ -31,9 +31,8 @@ mod tests {
     #[tokio::test]
     async fn test_workspace_isolation_facts() {
         let tmp = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(tmp.path())
+                .unwrap();
 
         // Insert fact into workspace "ws-a"
         let emb_a = vec![0.9f32; 1024];
@@ -93,9 +92,8 @@ mod tests {
     #[tokio::test]
     async fn test_workspace_isolation_graph() {
         let tmp = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(tmp.path())
+                .unwrap();
 
         // Create "Bitcoin" node as kind="asset" in workspace ws-a
         let node_a = GraphNode {
@@ -158,9 +156,8 @@ mod tests {
     #[tokio::test]
     async fn test_default_workspace_backward_compat() {
         let tmp = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(tmp.path())
+                .unwrap();
 
         // Insert a fact with the default workspace (simulating legacy behavior)
         let emb = vec![0.5f32; 1024];

@@ -174,7 +174,7 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Database => {
-                    // LanceDB creates a directory, not a single file
+                    // SQLite creates a directory, not a single file
                     let db_path = self.config_dir.join("memory.lance");
                     if db_path.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&db_path).await {
@@ -255,14 +255,13 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn initialize_database(&self) -> Result<(), InitError> {
-        use crate::memory::store::lance::LanceMemoryBackend;
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
 
-        let db_path = self.config_dir.clone();
+        let db_path = self.config_dir.join("memory.db");
 
-        info!(path = ?db_path, "Initializing memory database (LanceDB)");
+        info!(path = ?db_path, "Initializing memory database (SQLite + sqlite-vec)");
 
-        let _db = LanceMemoryBackend::open_or_create(&db_path)
-            .await
+        let _db = SqliteMemoryBackend::new(&db_path)
             .map_err(|e| InitError::new("database", format!("Failed to create database: {}", e)))?;
 
         info!("Memory database initialized");

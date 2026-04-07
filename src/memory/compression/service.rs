@@ -553,8 +553,7 @@ mod tests {
     async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir) {
         let temp_dir = tempdir().unwrap();
         let database: MemoryBackend = Arc::new(
-            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
-                .await
+            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
                 .unwrap(),
         );
 

@@ -23,7 +23,7 @@ use tracing::{info, warn};
 /// window of `max_backups` files, automatically deleting the oldest when the
 /// limit is exceeded.
 pub struct MemoryBackupService {
-    /// Shared memory backend (LanceDB).
+    /// Shared memory backend (SQLite).
     database: MemoryBackend,
     /// Directory where backup files are stored.
     backup_dir: PathBuf,

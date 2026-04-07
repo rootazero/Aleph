@@ -274,7 +274,7 @@ pub struct DreamDaemon {
     is_running: AtomicBool,
     /// Optional event-sourcing command handler. When present, decay mutations
     /// are recorded as `StrengthDecayed` events in addition to the direct
-    /// LanceDB update path.
+    /// SQLite update path.
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
     /// Optional AI provider for LLM-powered dream stages (e.g. drift arbitration).
     provider: Option<Arc<dyn AiProvider>>,
@@ -744,13 +744,12 @@ mod consolidation_tests {
 #[cfg(test)]
 mod pipeline_integration_tests {
     use super::*;
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
 
     async fn create_test_context(activity_detected: bool) -> (DreamContext, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(tmp.path())
+                .unwrap();
         let database: MemoryBackend = Arc::new(backend);
         let graph_store = GraphStore::new(database.clone());
 

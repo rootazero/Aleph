@@ -201,8 +201,7 @@ mod tests {
     async fn create_test_detector() -> ConflictDetector {
         let temp_dir = tempdir().unwrap();
         let database: MemoryBackend = Arc::new(
-            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
-                .await
+            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
                 .unwrap(),
         );
         ConflictDetector::with_defaults(database)
@@ -229,8 +228,7 @@ mod tests {
     async fn test_conflict_detection_with_similar_fact() {
         let temp_dir = tempdir().unwrap();
         let database: MemoryBackend = Arc::new(
-            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
-                .await
+            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
                 .unwrap(),
         );
 

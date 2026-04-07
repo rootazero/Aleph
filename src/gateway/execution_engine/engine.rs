@@ -45,7 +45,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
     /// Compression service for turn-based fact extraction
     pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
-    /// Memory context provider for LanceDB-backed prompt augmentation
+    /// Memory context provider for SQLite-backed prompt augmentation
     pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
     /// Global tool permission policy
     pub(super) global_tool_permissions: crate::config::types::policies::ToolPermissionsConfig,
@@ -115,7 +115,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
-    /// Set a memory context provider for LanceDB-backed prompt augmentation.
+    /// Set a memory context provider for SQLite-backed prompt augmentation.
     pub fn with_memory_context_provider(
         mut self,
         provider: Arc<crate::thinker::MemoryContextProvider>,

@@ -192,7 +192,7 @@ impl SearchFilter {
 
     // -- filter expression -------------------------------------------------
 
-    /// Build a LanceDB (DataFusion SQL) filter expression.
+    /// Build a SQLite (DataFusion SQL) filter expression.
     ///
     /// Returns `None` when no constraints are set, meaning "match everything".
     /// String values use single quotes as required by DataFusion.
@@ -325,7 +325,7 @@ impl MemoryFilter {
         }
     }
 
-    /// Build a LanceDB (DataFusion SQL) filter expression.
+    /// Build a SQLite (DataFusion SQL) filter expression.
     ///
     /// Returns `None` when no constraints are set.
     pub fn to_lance_filter(&self) -> Option<String> {

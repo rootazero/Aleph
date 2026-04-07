@@ -1,6 +1,6 @@
 //! Pre-fetched memory context for prompt injection.
 //!
-//! Memory retrieval is async (embedding + LanceDB), but PromptLayer::inject()
+//! Memory retrieval is async (embedding + SQLite), but PromptLayer::inject()
 //! is sync. This struct holds pre-fetched results to bridge that gap.
 
 use crate::memory::store::types::ScoredFact;

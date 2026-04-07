@@ -229,7 +229,7 @@ impl MemorySearchTool {
     /// Get a shared handle to the current session key.
     ///
     /// The execution engine writes the active session's key string here after
-    /// session resolution. Used by scope="current_session" to filter LanceDB
+    /// session resolution. Used by scope="current_session" to filter SQLite
     /// facts under `aleph://session/{session_key}/`.
     pub fn default_session_key_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.default_session_key)

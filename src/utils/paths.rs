@@ -86,7 +86,7 @@ pub fn get_cache_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("cache"))
 }
 
-/// Get the path for the memory database directory (LanceDB)
+/// Get the path for the memory database directory (SQLite)
 ///
 /// Returns: `<config_dir>/memory/`
 ///

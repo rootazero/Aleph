@@ -958,7 +958,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        // Wire memory context provider for LanceDB-backed prompt augmentation
+        // Wire memory context provider for SQLite-backed prompt augmentation
         if let Some(ref emb) = embedder_out {
             let mcp = super::init_memory_context_provider(memory_db, emb.clone());
             engine = engine.with_memory_context_provider(mcp);

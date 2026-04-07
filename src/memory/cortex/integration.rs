@@ -185,8 +185,7 @@ mod tests {
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let backend =
-            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
-                .await
+            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
                 .unwrap();
         (Arc::new(backend), temp_dir)
     }

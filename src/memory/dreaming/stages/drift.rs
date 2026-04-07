@@ -470,9 +470,8 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .expect("lance backend");
+        let database = crate::memory::store::SqliteMemoryBackend::new(tmp.path())
+                .expect("sqlite backend");
         let database = Arc::new(database);
 
         let ctx = DreamContext {
@@ -563,9 +562,8 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .expect("lance backend");
+        let database = crate::memory::store::SqliteMemoryBackend::new(tmp.path())
+                .expect("sqlite backend");
         let database = Arc::new(database);
 
         // Create a fact with an embedding so that the vector_search path is exercised.

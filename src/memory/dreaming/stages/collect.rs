@@ -10,7 +10,7 @@ use crate::memory::namespace::NamespaceScope;
 /// Collects recent memories from the database into the pipeline context.
 ///
 /// With SessionStore removed, this stage is a no-op — raw memories
-/// are no longer stored in LanceDB.
+/// are no longer stored in SQLite.
 pub struct CollectStage;
 
 #[async_trait]

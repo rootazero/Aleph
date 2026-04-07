@@ -13,16 +13,15 @@ mod tests {
         ToolRetrieval, ToolRetrievalConfig,
     };
     use crate::memory::context::{FactType, MemoryFact};
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::MemoryBackend;
     use crate::sync_primitives::Arc;
 
     /// Create a test database using a temp directory for isolation
     async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
-            .await
-            .expect("Failed to create LanceDB backend");
+        let backend = SqliteMemoryBackend::new(temp_dir.path())
+            .expect("Failed to create SQLite backend");
         (Arc::new(backend), temp_dir)
     }
 

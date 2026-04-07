@@ -240,7 +240,7 @@ impl CortexDreamingService {
 
     /// Process a batch of candidate experiences
     async fn process_batch(
-        _db: &crate::memory::store::lance::LanceMemoryBackend,
+        _db: &crate::memory::store::sqlite::SqliteMemoryBackend,
         distillation_service: &Arc<RwLock<DistillationService>>,
         value_estimator: &CortexValueEstimator,
         config: &CortexDreamingConfig,
@@ -345,8 +345,7 @@ mod tests {
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let backend =
-            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
-                .await
+            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
                 .unwrap();
         (Arc::new(backend), temp_dir)
     }

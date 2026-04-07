@@ -24,7 +24,7 @@ fn test_memory_config_serialization() {
     let mem_config = MemoryConfig::default();
     let json = serde_json::to_string(&mem_config).unwrap();
     // No pre-filled providers — embedding list is empty by default
-    assert!(json.contains("lancedb"));
+    assert!(json.contains("sqlite-vec"));
     assert!(json.contains("dreaming"));
 }
 
@@ -34,7 +34,7 @@ fn test_memory_config_deserialization() {
         "enabled": false,
         "max_context_items": 10,
         "retention_days": 30,
-        "vector_db": "lancedb",
+        "vector_db": "sqlite-vec",
         "similarity_threshold": 0.8,
         "embedding": {
             "active_provider_id": "openai"
@@ -63,7 +63,7 @@ fn test_memory_config_deserialization() {
     assert_eq!(config.embedding.active_provider_id, "openai");
     assert_eq!(config.max_context_items, 10);
     assert_eq!(config.retention_days, 30);
-    assert_eq!(config.vector_db, "lancedb");
+    assert_eq!(config.vector_db, "sqlite-vec");
     assert_eq!(config.similarity_threshold, 0.8);
     assert!(!config.dreaming.enabled);
     assert_eq!(config.dreaming.window_start_local, "01:00");

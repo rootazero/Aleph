@@ -37,7 +37,7 @@ pub struct ContextAnchor {
 /// Default session ID for sessionless (single-turn) interactions
 pub const NO_SESSION: &str = "none";
 
-/// Deprecated alias — kept for Arrow backward compatibility with old LanceDB data
+/// Deprecated alias — kept for Arrow backward compatibility with old SQLite data
 pub const SINGLE_TURN_TOPIC_ID: &str = NO_SESSION;
 
 impl ContextAnchor {

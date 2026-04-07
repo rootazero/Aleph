@@ -217,7 +217,7 @@ Format:
 mod tests {
     use crate::sync_primitives::Arc;
 
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::MemoryFact;
 
     use super::*;
@@ -232,9 +232,8 @@ mod tests {
     #[tokio::test]
     async fn test_l1_generator_uses_scoped_prefix_query() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(temp_dir.path())
+                .unwrap();
         let db: MemoryBackend = Arc::new(backend);
 
         let mut target_l2 = MemoryFact::new("Target L2".into(), FactType::Preference, vec![])

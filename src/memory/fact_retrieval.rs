@@ -419,7 +419,7 @@ fn format_fact_with_source(fact: &MemoryFact) -> String {
 mod tests {
     use super::*;
     use crate::memory::context::FactType;
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
@@ -429,7 +429,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
         let database: MemoryBackend =
-            Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap());
+            Arc::new(SqliteMemoryBackend::new(&path).unwrap());
 
         let embedder: Arc<dyn EmbeddingProvider> =
             Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));

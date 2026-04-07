@@ -31,7 +31,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 ///
 /// Uses JSON merge to update only the fields provided by the caller,
 /// preserving any fields not present in the incoming payload (e.g.
-/// embedding, lancedb, scoring_pipeline, adaptive_retrieval, noise_filter).
+/// embedding, scoring_pipeline, adaptive_retrieval, noise_filter).
 pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,

@@ -6,16 +6,15 @@ mod tests {
 
     use crate::memory::context::FactType;
     use crate::memory::namespace::NamespaceScope;
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::{MemoryBackend, MemoryStore};
     use crate::memory::vfs::{bootstrap_agent_context, compute_directory_hash};
     use crate::memory::{FactSource, MemoryFact};
 
     async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
-            .await
-            .unwrap();
+        let backend = SqliteMemoryBackend::new(temp_dir.path())
+                .unwrap();
         (Arc::new(backend), temp_dir)
     }
 

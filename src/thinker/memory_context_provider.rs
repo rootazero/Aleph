@@ -1,6 +1,6 @@
 //! Async memory context provider — fetches relevant memories before prompt assembly.
 //!
-//! PromptLayer::inject() is sync, so we pre-fetch LanceDB results here
+//! PromptLayer::inject() is sync, so we pre-fetch SQLite results here
 //! and store them in MemoryContext for the layer to format.
 
 use super::memory_context::MemoryContext;

@@ -163,7 +163,7 @@ impl SessionCompactor {
 
     /// Assemble compressed history for a new agent loop turn.
     ///
-    /// 1. Query LanceDB for existing session summaries (scope=SessionLocal,
+    /// 1. Query SQLite for existing session summaries (scope=SessionLocal,
     ///    path prefix `aleph://session/{session_id}/`, is_valid=true).
     /// 2. Fetch fresh tail raw messages from the agent's session store.
     /// 3. Inject summaries as user-role messages wrapped in `<session_context>` XML.
@@ -310,7 +310,7 @@ impl SessionCompactor {
     /// 3. Generate d0 summaries for each chunk (deterministic fallback).
     /// 4. Check condensation triggers (d0→d1 when count ≥ d1_min_fanout,
     ///    d1→d2 when count ≥ d2_min_fanout).
-    /// 5. Store new facts in LanceDB and invalidate source facts on condensation.
+    /// 5. Store new facts in SQLite and invalidate source facts on condensation.
     pub async fn post_turn_compress(
         &self,
         agent: &AgentInstance,

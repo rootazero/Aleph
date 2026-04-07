@@ -81,7 +81,7 @@ pub struct LayerInput<'a> {
     pub inbound: Option<&'a InboundContext>,
     /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.)
     pub workspace: Option<&'a IdentityFiles>,
-    /// Pre-fetched memory context from LanceDB (facts + memory summaries).
+    /// Pre-fetched memory context from SQLite (facts + memory summaries).
     pub memory_context: Option<&'a super::memory_context::MemoryContext>,
     /// Whether the conversation history contains compressed session summaries.
     ///

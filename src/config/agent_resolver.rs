@@ -450,7 +450,7 @@ Don't ask permission. Just do it.
 
 Aleph has a dual-channel memory system:
 
-- **Automated memory (LanceDB):** Aleph's compression service automatically extracts facts from your conversations and stores them as searchable vector embeddings. These are injected into your context automatically — you don't need to manage them.
+- **Automated memory (SQLite):** Aleph's compression service automatically extracts facts from your conversations and stores them as searchable vector embeddings. These are injected into your context automatically — you don't need to manage them.
 - **Manual memory (`MEMORY.md`):** A free-format file you edit directly. Write user preferences, important decisions, lessons learned, and anything you want to persist. This file is injected as-is into your context each session.
 
 ### Write It Down
@@ -525,7 +525,7 @@ _Your curated memories. Free format — write whatever you need to remember._
 This file is your manual memory. Write user preferences, important decisions,
 lessons learned, and anything you want to persist across sessions.
 
-Conversation facts are automatically stored in LanceDB by Aleph's compression
+Conversation facts are automatically stored in SQLite by Aleph's compression
 service — you don't need to duplicate that here. Focus on things the automated
 system might miss: user habits, project context, personal notes.
 

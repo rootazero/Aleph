@@ -45,7 +45,7 @@ impl PromptLayer for OperationalGuidelinesLayer {
         output.push_str(
             "- Check desktop capability availability: inspect startup logs, platform support, and OS permissions\n",
         );
-        output.push_str("- Check LanceDB health: verify database file accessibility\n\n");
+        output.push_str("- Check SQLite health: verify database file accessibility\n\n");
 
         output.push_str("### When You Detect Issues\n");
         output.push_str(

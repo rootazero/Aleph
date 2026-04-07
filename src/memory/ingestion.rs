@@ -1,7 +1,7 @@
 /// Memory ingestion pipeline
 ///
 /// This module previously handled storage of raw memory entries (Layer 1)
-/// into LanceDB via SessionStore. Raw memory storage has been removed —
+/// into SQLite via SessionStore. Raw memory storage has been removed —
 /// facts (Layer 2) are now the primary retrieval target, and raw
 /// conversations are stored in SessionManager's SQLite.
 ///

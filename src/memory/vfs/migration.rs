@@ -2,7 +2,7 @@
 //!
 //! This was originally used to backfill aleph:// paths for facts stored
 //! in SQLite before the VFS system was introduced. Since the memory system
-//! has been migrated to LanceDB where all facts are created with paths,
+//! has been migrated to SQLite where all facts are created with paths,
 //! this function is now a no-op.
 
 use crate::error::AlephError;
@@ -11,7 +11,7 @@ use tracing::info;
 
 /// Migrate existing facts to have aleph:// paths based on their FactType.
 ///
-/// With the LanceDB backend, all facts are created with paths at insertion time,
+/// With the SQLite backend, all facts are created with paths at insertion time,
 /// so this function is a no-op. It is retained for backward compatibility.
 pub async fn migrate_existing_facts_to_paths(
     _database: &MemoryBackend,

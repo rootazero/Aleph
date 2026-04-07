@@ -358,9 +358,8 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .expect("lance backend");
+        let database = crate::memory::store::SqliteMemoryBackend::new(tmp.path())
+                .expect("sqlite backend");
         let database = Arc::new(database);
 
         let ctx = DreamContext {
@@ -398,9 +397,8 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .expect("lance backend");
+        let database = crate::memory::store::SqliteMemoryBackend::new(tmp.path())
+                .expect("sqlite backend");
         let database = Arc::new(database);
 
         let ctx = DreamContext {
@@ -442,9 +440,8 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let database = crate::memory::store::lance::LanceMemoryBackend::open_or_create(tmp.path())
-            .await
-            .expect("lance backend");
+        let database = crate::memory::store::SqliteMemoryBackend::new(tmp.path())
+                .expect("sqlite backend");
         let database = Arc::new(database);
 
         // The empty database has zero LTM facts — fewer than min_cluster_size (3).

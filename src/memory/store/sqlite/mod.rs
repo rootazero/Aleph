@@ -1,14 +1,15 @@
 //! SQLite + sqlite-vec memory backend.
 //!
-//! Replaces the LanceDB backend with a lightweight SQLite implementation
+//! Replaces the SQLite backend with a lightweight SQLite implementation
 //! that uses sqlite-vec for vector search and FTS5 for full-text search.
-//! Target: < 50 MB memory vs ~400 MB with LanceDB.
+//! Target: < 50 MB memory vs ~400 MB with SQLite.
 
 pub mod schema;
 pub mod vec;
 
 mod facts;
 mod graph;
+mod sessions;
 
 use crate::error::AlephError;
 use crate::sync_primitives::Mutex;

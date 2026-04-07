@@ -1,4 +1,4 @@
-//! MemoryAugmentationLayer — inject pre-fetched LanceDB memory context (priority 1575)
+//! MemoryAugmentationLayer — inject pre-fetched SQLite memory context (priority 1575)
 //!
 //! Sits between IdentityFilesLayer (1550) and LanguageLayer (1600).
 //! The async retrieval happens before prompt assembly; this layer only

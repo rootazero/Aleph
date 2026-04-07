@@ -2,7 +2,7 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::memory::store::lance::LanceMemoryBackend;
+use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
@@ -55,10 +55,10 @@ fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
     }
 }
 
-/// Helper to create test database (LanceDB-backed)
+/// Helper to create test database (SQLite-backed)
 async fn create_test_database() -> Result<(MemoryBackend, tempfile::TempDir)> {
     let temp_dir = tempfile::tempdir()?;
-    let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await?;
+    let backend = SqliteMemoryBackend::new(temp_dir.path())?;
     Ok((Arc::new(backend), temp_dir))
 }
 

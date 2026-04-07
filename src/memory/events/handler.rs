@@ -4,7 +4,7 @@
 //! 1. Build MemoryEvent from command
 //! 2. Append to SQLite event store
 //!
-//! Projection to LanceDB happens downstream.
+//! Projection to SQLite happens downstream.
 
 use crate::sync_primitives::Arc;
 use uuid::Uuid;

@@ -1,8 +1,7 @@
 //! Storage abstraction layer for the memory system.
 //!
 //! Provides the core storage trait definitions (`MemoryStore`, `GraphStore`)
-//! and supporting types used by LanceDB-backed (and any future)
-//! storage implementations.
+//! and supporting types used by SQLite-backed storage implementations.
 //!
 //! ## Trait Overview
 //!
@@ -11,11 +10,10 @@
 //! - **`GraphStore`** -- Knowledge graph node/edge management, entity resolution,
 //!   and temporal decay.
 
-pub mod lance;
 pub mod sqlite;
 pub mod types;
 
-pub use lance::LanceMemoryBackend;
+pub use sqlite::SqliteMemoryBackend;
 
 use async_trait::async_trait;
 
@@ -399,7 +397,7 @@ pub trait CompressionStore: Send + Sync {
 /// Append-only event log for memory domain events.
 ///
 /// This is the **source of truth** for all fact mutations. Events are
-/// stored in SQLite and projected to LanceDB for search.
+/// stored in SQLite and projected to the memory store for search.
 #[async_trait]
 pub trait MemoryEventStore: Send + Sync {
     // -- Write ---------------------------------------------------------------
@@ -466,6 +464,6 @@ use crate::sync_primitives::Arc;
 /// Unified memory backend — provides MemoryStore + GraphStore.
 ///
 /// This is the single entry point for all memory storage operations.
-/// Wraps `LanceMemoryBackend` in an `Arc` for shared ownership across
+/// Wraps `SqliteMemoryBackend` in an `Arc` for shared ownership across
 /// the agent loop, thinker, and other subsystems.
-pub type MemoryBackend = Arc<lance::LanceMemoryBackend>;
+pub type MemoryBackend = Arc<sqlite::SqliteMemoryBackend>;

@@ -73,17 +73,13 @@ impl MemoryRetrieval {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::store::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use uuid::Uuid;
 
     fn create_test_db() -> MemoryBackend {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_retrieval_{}", Uuid::new_v4()));
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        Arc::new(
-            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
-                .unwrap(),
-        )
+        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
     }
 
     fn create_test_model() -> Arc<dyn EmbeddingProvider> {

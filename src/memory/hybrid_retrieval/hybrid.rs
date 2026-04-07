@@ -470,7 +470,7 @@ mod tests {
     // HybridRetrieval tests require database setup
     // These tests verify the database-dependent functionality
 
-    use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
     async fn create_test_db() -> MemoryBackend {
@@ -478,7 +478,7 @@ mod tests {
         let path = temp_dir.path().to_path_buf();
         // Leak the temp_dir to prevent cleanup during test
         std::mem::forget(temp_dir);
-        Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap())
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
     }
 
     #[tokio::test]

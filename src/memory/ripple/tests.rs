@@ -2,7 +2,7 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::memory::store::lance::LanceMemoryBackend;
+use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
@@ -54,10 +54,10 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
     }
 }
 
-/// Helper to create a test database with facts (LanceDB-backed)
+/// Helper to create a test database with facts (SQLite-backed)
 async fn create_test_database_with_facts(facts: Vec<MemoryFact>) -> Result<MemoryBackend> {
     let temp_dir = tempfile::tempdir()?;
-    let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await?;
+    let backend = SqliteMemoryBackend::new(temp_dir.path())?;
     let db: MemoryBackend = Arc::new(backend);
 
     // Store all facts
@@ -65,7 +65,7 @@ async fn create_test_database_with_facts(facts: Vec<MemoryFact>) -> Result<Memor
         db.insert_fact(fact).await?;
     }
 
-    // NOTE: temp_dir is dropped here, but LanceDB keeps the files open.
+    // NOTE: temp_dir is dropped here, but SQLite keeps the files open.
     // For proper test isolation, we leak the tempdir to prevent premature cleanup.
     std::mem::forget(temp_dir);
 

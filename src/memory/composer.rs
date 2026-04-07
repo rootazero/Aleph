@@ -30,7 +30,7 @@ pub struct ComposedContext {
 /// Builds SearchFilters for layered memory retrieval.
 ///
 /// `ContextComposer` is a stateless utility that constructs the correct
-/// LanceDB filters for Core Memory loading and non-Core retrieval,
+/// SQLite filters for Core Memory loading and non-Core retrieval,
 /// respecting the scope stack (Global -> AgentEnv -> Persona).
 /// The actual async retrieval will be wired in a later phase.
 pub struct ContextComposer;

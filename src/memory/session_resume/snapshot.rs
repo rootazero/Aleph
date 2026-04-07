@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn extract_decisions_finds_markers() {
-        let summary = "We decided to use Rust. The team chose LanceDB for storage. \
+        let summary = "We decided to use Rust. The team chose SQLite for storage. \
                         Nothing special here. They confirmed the API design.";
         let decisions = SessionSnapshot::extract_decisions(summary);
         assert_eq!(decisions.len(), 3);

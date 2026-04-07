@@ -1,8 +1,9 @@
-//! DreamStore and CompressionStore implementations for LanceMemoryBackend.
+//! DreamStore and CompressionStore implementations for SqliteMemoryBackend.
 //!
-//! SessionStore has been removed — raw memory entry (Layer 1) storage
-//! is no longer provided by LanceDB. Raw conversations are stored
-//! in SessionManager's SQLite.
+//! These are minimal no-op implementations matching the previous SQLite
+//! behaviour. Dream status and compression timestamps are ephemeral
+//! (reset on restart). A proper persistent implementation can be added
+//! later using dedicated SQLite tables.
 
 use async_trait::async_trait;
 
@@ -11,24 +12,22 @@ use crate::memory::context::CompressionSession;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 use crate::memory::store::{CompressionStore, DreamStore};
 
-use super::LanceMemoryBackend;
+use super::SqliteMemoryBackend;
 
 // ============================================================================
 // DreamStore implementation
 // ============================================================================
 
 #[async_trait]
-impl DreamStore for LanceMemoryBackend {
+impl DreamStore for SqliteMemoryBackend {
     async fn get_dream_status(&self) -> Result<DreamStatus, AlephError> {
-        // NOTE: DreamStore is not yet persisted to LanceDB. Status resets on
-        // restart, meaning the DreamDaemon will run again on the first eligible
-        // window. This is safe but wasteful — a dedicated metadata table should
-        // be added when dream persistence becomes important.
+        // Dream status is ephemeral — resets on restart.
+        // The DreamDaemon will run again on the first eligible window.
         Ok(DreamStatus::default())
     }
 
     async fn set_dream_status(&self, _status: DreamStatus) -> Result<(), AlephError> {
-        // No-op: dream status is ephemeral (see get_dream_status note).
+        // No-op: dream status is ephemeral.
         Ok(())
     }
 
@@ -48,23 +47,17 @@ impl DreamStore for LanceMemoryBackend {
 // ============================================================================
 
 #[async_trait]
-impl CompressionStore for LanceMemoryBackend {
+impl CompressionStore for SqliteMemoryBackend {
     async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError> {
-        self.last_compression_ts
-            .store(timestamp, crate::sync_primitives::Ordering::Release);
-        tracing::debug!(timestamp, "Updated compression timestamp");
+        // Ephemeral — log only, not persisted across restarts.
+        tracing::debug!(timestamp, "Updated compression timestamp (ephemeral)");
+        let _ = timestamp;
         Ok(())
     }
 
     async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
-        let ts = self
-            .last_compression_ts
-            .load(crate::sync_primitives::Ordering::Acquire);
-        if ts == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(ts))
-        }
+        // Ephemeral — always returns None after restart.
+        Ok(None)
     }
 
     async fn record_compression_session(

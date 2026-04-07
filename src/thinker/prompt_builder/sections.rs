@@ -523,7 +523,7 @@ impl PromptBuilder {
         prompt.push_str(
             "- Check desktop capability availability: inspect startup logs, platform support, and OS permissions\n",
         );
-        prompt.push_str("- Check LanceDB health: verify database file accessibility\n\n");
+        prompt.push_str("- Check SQLite health: verify database file accessibility\n\n");
 
         prompt.push_str("### When You Detect Issues\n");
         prompt.push_str(
