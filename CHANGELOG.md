@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.07]
+
+### Added
+- Unified prompt system: PromptSnapshot, ToolUsageGrammarLayer, section caching, and hybrid memory injection replacing 26 legacy prompt_sections (~1000 lines removed)
+- AgentRuntime with fresh-path execution, transcript capture, and SharedSnapshot support for prompt fork path
+- SessionResumeLayer for cross-session context restoration with SnapshotWriter/SnapshotReader
+- AgentCatalogLayer and McpToolIndexLayer in thinker pipeline for on-demand agent/MCP discovery
+- MCP server instructions injection: cache instructions from initialize response, wire into prompt assembly
+- McpInstructionsLayer for MCP server instruction injection into prompts
+- mcp_tool_schema and agent_info builtin tools for on-demand discovery
+- Skill trigger enhancement: when_to_use field in SkillManifest, `<when>` tag in XML output
+- Agent descriptions and when_to_use metadata for builtin agents
+- Feishu webhook mode with multi-account support
+- Session snapshot written on root agent loop exit for cross-session resume
+- Subagent transcript persistence with key_findings extraction
+- MicroCompact upgrade to tiered ResultClearing with semantic compression
+- Tool pipeline: structured tracing spans for all stages, execution timing
+- Hook PermissionDecision enum (allow/ask/block/deny) integrated with SafetyGuard
+- SafetyGuard: ToolSafetyPolicy keyword inference, check_permissions_only() for hook Allow bypass
+- LoopCallback trait: on_confirmation_needed() for user confirmation routing
+- NeedsConfirmation routed to confirmation flow instead of hard deny
+- Matrix interface improvements with enhanced message operations
+- MS Teams interface improvements with Graph API and polling support
+- Channel secrets (bot_token, etc.) now visible in Panel via vault injection into config.get response
+
+### Fixed
+- Prompt builder: simplified builder API, wired cache, improved grammar layer
+- Pre-existing broken test imports updated for new prompt system
+- WhatsApp: stability fixes, escape_xml, Display impl, markdown handling
+- Slack: removed unused is_empty method
+- MS Teams streaming: removed unnecessary mut binding
+- Gateway: clippy lints and code quality improvements
+
+### Changed
+- Deleted old PromptBuilder and 26 prompt_sections in favor of unified pipeline
+- Extracted ToolInfo to standalone module for migration
+- Deleted subagent_runner.rs, migrated types to AgentRuntime
+- LoopCallback consumes needs_user_confirmation instead of silent denial
+
 ## [2026.04.06]
 
 ### Added
