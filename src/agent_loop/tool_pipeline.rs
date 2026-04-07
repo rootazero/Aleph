@@ -275,23 +275,41 @@ impl ToolPipeline {
                 self.safety.check(&safety_call)
             };
             if let Err(e) = safety_result {
-                let msg = map_safety_error(&e);
-                return PipelineOutcome {
-                    outcome: ToolOutcome {
-                        tool_id: id.to_string(),
-                        tool_name: name.to_string(),
-                        duration_ms: 0,
-                        output_text: msg,
-                        is_error: true,
-                        should_stop: false,
-                        retryable: false,
-                    },
-                    additional_contexts,
-                    prevent_continuation,
-                    hook_messages,
-                    needs_user_confirmation: false,
-                    confirmation_reason: None,
-                };
+                match e {
+                    SafetyError::NeedsConfirmation { ref tool } => {
+                        // Safety agrees tool needs confirmation.
+                        // Don't return error — route through confirmation flow.
+                        if !needs_user_confirmation {
+                            needs_user_confirmation = true;
+                            confirmation_reason =
+                                Some(format!("Tool '{}' is classified as high-risk", tool));
+                        }
+                        tracing::debug!(
+                            tool = name,
+                            "safety NeedsConfirmation routed to confirmation flow"
+                        );
+                    }
+                    _ => {
+                        // Blocked or PolicyDenied — hard stop
+                        let msg = map_safety_error(&e);
+                        return PipelineOutcome {
+                            outcome: ToolOutcome {
+                                tool_id: id.to_string(),
+                                tool_name: name.to_string(),
+                                duration_ms: 0,
+                                output_text: msg,
+                                is_error: true,
+                                should_stop: false,
+                                retryable: false,
+                            },
+                            additional_contexts,
+                            prevent_continuation,
+                            hook_messages,
+                            needs_user_confirmation: false,
+                            confirmation_reason: None,
+                        };
+                    }
+                }
             }
             tracing::debug!("safety check passed");
         }
@@ -1116,6 +1134,87 @@ mod tests {
                 .contains(&"failure observed".to_string()),
             "expected failure observed in contexts: {:?}",
             outcome.additional_contexts
+        );
+    }
+
+    #[tokio::test]
+    async fn test_hook_ask_plus_safety_ask_converge_to_confirmation() {
+        // SafetyGuard classifies "shell" as Ask
+        let perms = [("shell".to_string(), PermissionAction::Ask)]
+            .into_iter()
+            .collect();
+        let safety = Arc::new(SafetyGuard::new(vec![], perms, PermissionAction::Allow));
+
+        // Hook emits Ask decision
+        let hooks = vec![HookConfig {
+            event: HookEvent::BeforeToolCall,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Command {
+                command: "echo 'ask: confirm dangerous operation'".to_string(),
+            }],
+            plugin_name: "test".to_string(),
+            plugin_root: PathBuf::from("/tmp"),
+            handler: None,
+        }];
+        let hook_exec = Arc::new(HookExecutor::new(hooks));
+
+        let pipeline = ToolPipeline::new(hook_exec, safety, "test-session");
+        let cancel = CancellationToken::new();
+
+        // Need a tool registered as "shell"
+        struct ShellTool;
+        #[async_trait]
+        impl LoopTool for ShellTool {
+            fn name(&self) -> &str {
+                "shell"
+            }
+            fn description(&self) -> &str {
+                "shell tool"
+            }
+            fn schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult {
+                ToolResult::Success {
+                    output: json!("ok"),
+                }
+            }
+        }
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(ShellTool));
+        let registry = Arc::new(registry);
+
+        let outcome = pipeline
+            .execute(
+                "t1",
+                "shell",
+                &json!({"command": "echo hi"}),
+                &registry,
+                &cancel,
+            )
+            .await;
+
+        // Key assertion: needs_user_confirmation is true, NOT an error
+        assert!(
+            outcome.needs_user_confirmation,
+            "should need confirmation"
+        );
+        assert!(
+            outcome.confirmation_reason.is_some(),
+            "should have reason"
+        );
+        // The tool should NOT have been blocked
+        assert!(
+            !outcome.outcome.output_text.starts_with("[DENIED]"),
+            "should not be denied, got: {}",
+            outcome.outcome.output_text
+        );
+        assert!(
+            !outcome.outcome.output_text.starts_with("[BLOCKED]"),
+            "should not be blocked"
         );
     }
 }
