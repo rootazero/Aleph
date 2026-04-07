@@ -32,7 +32,7 @@ pub use message_ops::MatrixMessageOps;
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
-    SendResult,
+    SendResult, StreamProtocol,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -78,7 +78,6 @@ impl MatrixChannel {
         }
     }
 
-    /// Get Matrix-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
@@ -88,19 +87,180 @@ impl MatrixChannel {
             reactions: true,
             replies: true,
             editing: true,
-            deletion: false,
+            deletion: true,
             typing_indicator: true,
             read_receipts: true,
-            rich_text: true, // Matrix supports org.matrix.custom.html
+            rich_text: true,
             max_message_length: 65535,
-            max_attachment_size: 100 * 1024 * 1024, // 100MB
-            stream_protocol: Default::default(),
+            max_attachment_size: 100 * 1024 * 1024,
+            stream_protocol: StreamProtocol::EditBased,
         }
     }
 
     /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
+    }
+
+    async fn send_with_attachments(
+        &self,
+        message: OutboundMessage,
+    ) -> ChannelResult<SendResult> {
+        let room_id = message.conversation_id.as_str();
+        let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+
+        let mut last_result = None;
+
+        if !message.text.is_empty() {
+            last_result = Some(
+                MatrixMessageOps::send_message(
+                    &self.client,
+                    &self.config.homeserver_url,
+                    &self.config.access_token,
+                    room_id,
+                    &message.text,
+                    reply_to.as_deref(),
+                )
+                .await?,
+            );
+        }
+
+        for attachment in &message.attachments {
+            let (content, mime_type, filename) = self.prepare_attachment(attachment).await?;
+
+            let mxc_uri = MatrixMessageOps::upload_media(
+                &self.client,
+                &self.config.homeserver_url,
+                &self.config.access_token,
+                content,
+                &mime_type,
+                filename.as_deref(),
+            )
+            .await?;
+
+            let msgtype = match mime_type.starts_with("image/") {
+                true => "m.image",
+                false if mime_type.starts_with("audio/") => "m.audio",
+                false if mime_type.starts_with("video/") => "m.video",
+                _ => "m.file",
+            };
+
+            let body = serde_json::json!({
+                "msgtype": msgtype,
+                "body": filename.as_deref().unwrap_or("attachment"),
+                "url": mxc_uri,
+            });
+
+            let txn_id = uuid::Uuid::new_v4().to_string();
+            let url = format!(
+                "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+                self.config.homeserver_url,
+                room_id,
+                txn_id
+            );
+
+            let resp = self
+                .client
+                .put(&url)
+                .bearer_auth(&self.config.access_token)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("Matrix attachment send failed: {e}")))?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let resp_body = resp.text().await.unwrap_or_default();
+                return Err(ChannelError::SendFailed(format!(
+                    "Matrix attachment send failed ({status}): {resp_body}"
+                )));
+            }
+
+            let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
+                ChannelError::SendFailed(format!("Matrix attachment response parse failed: {e}"))
+            })?;
+
+            let event_id = resp_json["event_id"]
+                .as_str()
+                .unwrap_or(&txn_id)
+                .to_string();
+
+            last_result = Some(SendResult {
+                message_id: MessageId::new(event_id),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
+        last_result.ok_or_else(|| {
+            ChannelError::SendFailed("No message or attachments to send".to_string())
+        })
+    }
+
+    async fn prepare_attachment(
+        &self,
+        attachment: &crate::gateway::channel::Attachment,
+    ) -> ChannelResult<(Vec<u8>, String, Option<String>)> {
+        let filename = attachment
+            .filename
+            .as_deref()
+            .or_else(|| attachment.id.as_str().split('/').next_back())
+            .map(String::from);
+
+        if let Some(data) = &attachment.data {
+            return Ok((data.clone(), attachment.mime_type.clone(), filename));
+        }
+
+        if let Some(url) = &attachment.url {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                let resp = self
+                    .client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|e| ChannelError::ReceiveFailed(format!("Attachment download failed: {e}")))?;
+
+                if !resp.status().is_success() {
+                    return Err(ChannelError::ReceiveFailed(format!(
+                        "Attachment download failed: {}",
+                        resp.status()
+                    )));
+                }
+
+                let content_type = resp
+                    .headers()
+                    .get("Content-Type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(&attachment.mime_type)
+                    .to_string();
+
+                let bytes = resp.bytes().await.map_err(|e| {
+                    ChannelError::ReceiveFailed(format!("Attachment download body read failed: {e}"))
+                })?;
+
+                return Ok((bytes.to_vec(), content_type, filename));
+            }
+
+            if url.starts_with("mxc://") {
+                let (content, _) = MatrixMessageOps::download_media(
+                    &self.client,
+                    &self.config.homeserver_url,
+                    url,
+                )
+                .await?;
+                return Ok((content, attachment.mime_type.clone(), filename));
+            }
+        }
+
+        if let Some(path) = &attachment.path {
+            let content = tokio::fs::read(path).await.map_err(|e| {
+                ChannelError::ReceiveFailed(format!("Failed to read attachment file: {e}"))
+            })?;
+            return Ok((content, attachment.mime_type.clone(), filename));
+        }
+
+        Err(ChannelError::ReceiveFailed(
+            "Attachment has no content (no data, url, or path)".to_string(),
+        ))
     }
 }
 
@@ -185,7 +345,6 @@ impl Channel for MatrixChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        // Send typing indicator if enabled
         if self.config.send_typing {
             if let Some(ref uid) = *self.user_id.read().await {
                 let _ = MatrixMessageOps::send_typing(
@@ -201,12 +360,17 @@ impl Channel for MatrixChannel {
         }
 
         let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
+        let room_id = message.conversation_id.as_str();
+
+        if !message.attachments.is_empty() {
+            return self.send_with_attachments(message).await;
+        }
 
         MatrixMessageOps::send_message(
             &self.client,
             &self.config.homeserver_url,
             &self.config.access_token,
-            message.conversation_id.as_str(),
+            room_id,
             &message.text,
             reply_to.as_deref(),
         )
@@ -234,25 +398,50 @@ impl Channel for MatrixChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        // Matrix supports editing via m.replace relation, but full implementation
-        // requires matrix-sdk client integration.
-        let _ = (conversation_id, message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "Matrix message editing not yet implemented".to_string(),
-        ))
+        MatrixMessageOps::edit_message(
+            &self.client,
+            &self.config.homeserver_url,
+            &self.config.access_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+            new_text,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn react(
         &self,
-        _conversation_id: &ConversationId,
+        conversation_id: &ConversationId,
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        // Matrix supports reactions via m.reaction relation, but we need the room_id.
-        let _ = (message_id, reaction);
-        Err(ChannelError::UnsupportedFeature(
-            "Reactions require room context (conversation_id + event_id)".to_string(),
-        ))
+        MatrixMessageOps::send_reaction(
+            &self.client,
+            &self.config.homeserver_url,
+            &self.config.access_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+            reaction,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
+        MatrixMessageOps::delete_message(
+            &self.client,
+            &self.config.homeserver_url,
+            &self.config.access_token,
+            conversation_id.as_str(),
+            message_id.as_str(),
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -289,7 +478,7 @@ mod tests {
         assert!(caps.reactions);
         assert!(caps.replies);
         assert!(caps.editing);
-        assert!(!caps.deletion);
+        assert!(caps.deletion);
         assert!(caps.typing_indicator);
         assert!(caps.read_receipts);
         assert!(caps.rich_text);

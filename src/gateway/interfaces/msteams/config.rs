@@ -1,8 +1,77 @@
 //! Microsoft Teams Channel Configuration
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
+/// Reply style for group messages.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyStyle {
+    /// Reply in-thread to the user's message
+    #[default]
+    Thread,
+    /// Reply as top-level message in the channel
+    TopLevel,
+}
+
+/// Per-channel override settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelOverride {
+    /// Require bot @mention to respond (default: true for group chats)
+    #[serde(default)]
+    pub require_mention: Option<bool>,
+    /// Reply style override
+    #[serde(default)]
+    pub reply_style: Option<ReplyStyle>,
+}
+
+/// Per-team override settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamOverride {
+    /// Per-channel overrides
+    #[serde(default)]
+    pub channels: HashMap<String, ChannelOverride>,
+    /// Require bot @mention for this team (default: true for group chats)
+    #[serde(default)]
+    pub require_mention: Option<bool>,
+    /// Reply style for this team
+    #[serde(default)]
+    pub reply_style: Option<ReplyStyle>,
+}
+
 /// Teams channel configuration
+///
+/// ## Azure AD App Registration
+///
+/// The app uses the Bot Framework credentials (`app_id` / `app_password`) for both
+/// Bot Framework API calls and Microsoft Graph API calls via the `/.default` scope.
+/// All Graph permissions must be pre-configured in the Azure AD app:
+///
+/// | Operation | Required Permission |
+/// |---|---|
+/// | `lookup_user` | `User.Read.All` or `People.Read` |
+/// | `get_user` | `User.Read.All` |
+/// | `lookup_team` | `Group.Read.All` |
+/// | `list_team_channels` | `Channel.Read.All` |
+/// | `get_message` / `list_messages` | `ChannelMessage.Read.All` |
+/// | `download_media` / `upload_to_sharepoint` | `Files.ReadWrite.All` |
+///
+/// Add these under **API permissions** in the Azure portal (App registrations).
+/// The `ChannelMessage.Read.All` permission requires admin consent.
+///
+/// ## Example Configuration
+///
+/// ```toml
+/// [channels.msteams]
+/// enabled = true
+/// app_id = "YOUR-BOT-APP-ID"
+/// app_password = "YOUR-CLIENT-SECRET"
+/// tenant_id = "common"
+/// groups_allowed = true
+/// require_mention = false
+/// reply_style = "thread"
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MsTeamsConfig {
     /// Azure Bot App ID
@@ -24,6 +93,15 @@ pub struct MsTeamsConfig {
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
+    /// Require bot @mention in group chats to respond (default: true)
+    #[serde(default = "default_true")]
+    pub require_mention: bool,
+    /// Default reply style for group messages
+    #[serde(default)]
+    pub reply_style: ReplyStyle,
+    /// Per-team override settings (team_id -> config)
+    #[serde(default)]
+    pub teams: HashMap<String, TeamOverride>,
 }
 
 fn default_tenant() -> String {
@@ -45,6 +123,9 @@ impl Default for MsTeamsConfig {
             groups_allowed: true,
             webhook_path: default_webhook_path(),
             send_typing: true,
+            require_mention: true,
+            reply_style: ReplyStyle::default(),
+            teams: HashMap::new(),
         }
     }
 }
@@ -72,6 +153,34 @@ impl MsTeamsConfig {
             Some("groupChat") | Some("channel") => self.groups_allowed,
             _ => true,
         }
+    }
+
+    /// Get effective require_mention for a conversation.
+    ///
+    /// Returns the per-team setting if available, otherwise the global setting.
+    pub fn effective_require_mention(&self, team_id: Option<&str>) -> bool {
+        if let Some(team_id) = team_id {
+            if let Some(team) = self.teams.get(team_id) {
+                if let Some(require_mention) = team.require_mention {
+                    return require_mention;
+                }
+            }
+        }
+        self.require_mention
+    }
+
+    /// Get effective reply_style for a conversation.
+    ///
+    /// Returns the per-team setting if available, otherwise the global setting.
+    pub fn effective_reply_style(&self, team_id: Option<&str>) -> ReplyStyle {
+        if let Some(team_id) = team_id {
+            if let Some(team) = self.teams.get(team_id) {
+                if let Some(reply_style) = team.reply_style {
+                    return reply_style;
+                }
+            }
+        }
+        self.reply_style
     }
 }
 

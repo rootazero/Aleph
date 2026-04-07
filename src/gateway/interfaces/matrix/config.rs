@@ -32,6 +32,14 @@ pub struct MatrixConfig {
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
+
+    /// Enable mention gating - only process messages that @mention the bot
+    #[serde(default)]
+    pub mention_gating: bool,
+
+    /// Allowed user IDs (empty = allow all users)
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 impl Default for MatrixConfig {
@@ -42,6 +50,8 @@ impl Default for MatrixConfig {
             allowed_rooms: Vec::new(),
             sync_timeout_ms: 30000,
             send_typing: true,
+            mention_gating: false,
+            allowed_users: Vec::new(),
         }
     }
 }
@@ -68,6 +78,32 @@ impl MatrixConfig {
         } else {
             self.allowed_rooms.contains(&room_id.to_string())
         }
+    }
+
+    /// Check if a user ID is allowed
+    pub fn is_user_allowed(&self, user_id: &str) -> bool {
+        if self.allowed_users.is_empty() {
+            true
+        } else {
+            self.allowed_users.iter().any(|u| u == user_id)
+        }
+    }
+
+    pub fn check_mention(&self, body: &str, user_id: &str) -> bool {
+        if !self.mention_gating {
+            return true;
+        }
+
+        // Check for exact user_id as a Matrix mention (starts with @, contains :)
+        // Pattern: @userid:server - the mention ends at : or whitespace/punctuation
+        let stripped = user_id.trim_start_matches('@');
+        let mention_pattern = format!("@{}", stripped);
+        body.split_whitespace().any(|word| {
+            word == stripped
+                || word == mention_pattern
+                || word.starts_with(&format!("@{}:", stripped))
+                || word.starts_with(&format!("{}:", mention_pattern))
+        })
     }
 }
 
@@ -166,6 +202,8 @@ mod tests {
             allowed_rooms: vec!["!room1:matrix.org".to_string()],
             sync_timeout_ms: 60000,
             send_typing: false,
+            mention_gating: true,
+            allowed_users: vec!["@alice:matrix.org".to_string()],
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -176,6 +214,8 @@ mod tests {
         assert_eq!(deserialized.allowed_rooms, config.allowed_rooms);
         assert_eq!(deserialized.sync_timeout_ms, config.sync_timeout_ms);
         assert_eq!(deserialized.send_typing, config.send_typing);
+        assert_eq!(deserialized.mention_gating, config.mention_gating);
+        assert_eq!(deserialized.allowed_users, config.allowed_users);
     }
 
     #[test]
@@ -186,5 +226,7 @@ mod tests {
         assert_eq!(config.sync_timeout_ms, 30000);
         assert!(config.send_typing);
         assert!(config.allowed_rooms.is_empty());
+        assert!(!config.mention_gating);
+        assert!(config.allowed_users.is_empty());
     }
 }

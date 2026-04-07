@@ -40,6 +40,10 @@ pub struct Activity {
     pub members_added: Option<Vec<ChannelAccount>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub members_removed: Option<Vec<ChannelAccount>>,
+    #[serde(rename = "reactionsAdded", skip_serializing_if = "Option::is_none")]
+    pub reactions_added: Option<Vec<MessageReaction>>,
+    #[serde(rename = "reactionsRemoved", skip_serializing_if = "Option::is_none")]
+    pub reactions_removed: Option<Vec<MessageReaction>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_data: Option<serde_json::Value>,
 }
@@ -75,6 +79,12 @@ pub struct ConversationAccount {
     pub tenant_id: Option<String>,
     #[serde(rename = "isGroup", skip_serializing_if = "Option::is_none")]
     pub is_group: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageReaction {
+    #[serde(rename = "type")]
+    pub reaction_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +170,13 @@ pub fn strip_mentions(text: &str) -> String {
     RE.replace_all(text, "").trim().to_string()
 }
 
+use std::sync::LazyLock;
+static QUOTE_SENDER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)</strong>"#).unwrap()
+});
+static QUOTE_BODY_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"<p[^>]*itemprop=["']copy["'][^>]*>(.*?)</p>"#).unwrap());
+
 const STATUS_TEXTS: &[&str] = &[
     "Thinking...",
     "Working on that...",
@@ -174,6 +191,83 @@ pub fn pick_status_text() -> &'static str {
         .unwrap_or_default()
         .subsec_nanos() as usize;
     STATUS_TEXTS[seed % STATUS_TEXTS.len()]
+}
+
+/// Quote info extracted from a Teams HTML reply attachment.
+#[derive(Debug, Clone)]
+pub struct QuoteInfo {
+    pub sender: String,
+    pub body: String,
+}
+
+/// Decode common HTML entities to plain text.
+fn decode_html_entities(html: &str) -> String {
+    html.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&") // must be last to prevent double-decoding
+}
+
+/// Strip HTML tags, preserving text content.
+fn html_to_plain_text(html: &str) -> String {
+    decode_html_entities(
+        html.replace(
+            |c: char| c.is_ascii_alphanumeric() || c == ' ' || c == '\n',
+            " ",
+        )
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim(),
+    )
+}
+
+/// Extract quote info from MS Teams HTML reply attachments.
+///
+/// Teams wraps quoted content in a blockquote with itemtype="http://schema.skype.com/Reply".
+/// The sender is in `<strong itemprop="mri">` and body in `<p itemprop="copy">`.
+pub fn extract_quote_info(attachments: &[ActivityAttachment]) -> Option<QuoteInfo> {
+    for att in attachments {
+        let content = att.content.as_ref()?;
+
+        // Content might be a JSON object with text/body fields
+        let html = if let Some(obj) = content.as_object() {
+            obj.get("text")
+                .or_else(|| obj.get("body"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+        } else if let Some(s) = content.as_str() {
+            s
+        } else {
+            continue;
+        };
+
+        if !html.contains("schema.skype.com/Reply") {
+            continue;
+        }
+
+        // Extract sender from <strong itemprop="mri">
+        let sender = QUOTE_SENDER_RE
+            .captures(html)
+            .and_then(|c| c.get(1))
+            .map(|m| html_to_plain_text(m.as_str()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Extract body from <p itemprop="copy">
+        let body = QUOTE_BODY_RE
+            .captures(html)
+            .and_then(|c| c.get(1))
+            .map(|m| html_to_plain_text(m.as_str()))
+            .unwrap_or_default();
+
+        if !body.is_empty() {
+            return Some(QuoteInfo { sender, body });
+        }
+    }
+    None
 }
 
 #[cfg(test)]

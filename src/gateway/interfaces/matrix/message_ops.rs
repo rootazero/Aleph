@@ -18,6 +18,8 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// Matrix message length limit (characters).
 pub(crate) const MATRIX_MSG_LIMIT: usize = 65535;
+/// Matrix media upload maximum size (100MB).
+pub const MATRIX_MEDIA_MAX_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Matrix message operations helper.
 ///
@@ -133,6 +135,285 @@ impl MatrixMessageOps {
         last_result.ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
     }
 
+    /// Send a reaction (annotation) to a Matrix message.
+    ///
+    /// Uses `PUT /_matrix/client/v3/rooms/{room_id}/send/m.reaction/{txn_id}`.
+    /// Matrix reactions are annotations on existing events.
+    pub async fn send_reaction(
+        client: &reqwest::Client,
+        homeserver: &str,
+        token: &str,
+        room_id: &str,
+        event_id: &str,
+        reaction: &str,
+    ) -> Result<(), ChannelError> {
+        let txn_id = uuid::Uuid::new_v4().to_string();
+        let url = format!(
+            "{homeserver}/_matrix/client/v3/rooms/{room_id}/send/m.reaction/{txn_id}"
+        );
+
+        let body = serde_json::json!({
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": event_id,
+                "key": reaction
+            }
+        });
+
+        let resp = client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Matrix reaction failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Matrix reaction failed ({status}): {resp_body}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Delete a message in a Matrix room via redaction.
+    ///
+    /// Uses `PUT /_matrix/client/v3/rooms/{room_id}/redact/{event_id}/{txn_id}`.
+    pub async fn delete_message(
+        client: &reqwest::Client,
+        homeserver: &str,
+        token: &str,
+        room_id: &str,
+        event_id: &str,
+    ) -> Result<(), ChannelError> {
+        let txn_id = uuid::Uuid::new_v4().to_string();
+        let url = format!(
+            "{homeserver}/_matrix/client/v3/rooms/{room_id}/redact/{event_id}/{txn_id}"
+        );
+
+        let body = serde_json::json!({});
+
+        let resp = client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Matrix delete failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Matrix delete failed ({status}): {resp_body}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Edit an existing message in a Matrix room.
+    ///
+    /// Uses `PUT /_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}` with
+    /// `m.relates_to` containing `rel_type: "m.replace"` to signal an edit.
+    /// Formats the new text body as `org.matrix.custom.html` using Markdown.
+    pub async fn edit_message(
+        client: &reqwest::Client,
+        homeserver: &str,
+        token: &str,
+        room_id: &str,
+        event_id: &str,
+        new_text: &str,
+    ) -> Result<SendResult, ChannelError> {
+        let formatted_body = MessageFormatter::format(new_text, MarkupFormat::Markdown);
+        let chunks = MessageFormatter::split(&formatted_body, MATRIX_MSG_LIMIT);
+
+        if chunks.is_empty() {
+            return Err(ChannelError::SendFailed("No message content to send".to_string()));
+        }
+
+        let chunk = &chunks[0];
+        let txn_id = uuid::Uuid::new_v4().to_string();
+        let url = format!(
+            "{homeserver}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
+        );
+
+        let body = serde_json::json!({
+            "msgtype": "m.text",
+            "body": format!("* {}", chunk),
+            "format": "org.matrix.custom.html",
+            "formatted_body": chunk,
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": event_id
+            }
+        });
+
+        let resp = client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Matrix edit failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Matrix edit failed ({status}): {resp_body}"
+            )));
+        }
+
+        let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!("Matrix edit response parse failed: {e}"))
+        })?;
+
+        let event_id = resp_json["event_id"]
+            .as_str()
+            .unwrap_or(&txn_id)
+            .to_string();
+
+        Ok(SendResult {
+            message_id: MessageId::new(event_id),
+            timestamp: Utc::now(),
+        })
+    }
+
+    /// Upload media to Matrix Content Repository.
+    ///
+    /// Uses `POST /_matrix/media/v3/upload`.
+    /// Returns the `mxc://` URI for the uploaded content.
+    pub async fn upload_media(
+        client: &reqwest::Client,
+        homeserver: &str,
+        token: &str,
+        content: Vec<u8>,
+        mime_type: &str,
+        filename: Option<&str>,
+    ) -> Result<String, ChannelError> {
+        let url = format!("{homeserver}/_matrix/media/v3/upload");
+
+        let mut req = client.post(&url).bearer_auth(token);
+
+        if let Some(name) = filename {
+            req = req.query(&[("filename", name)]);
+        }
+
+        let resp = req
+            .header("Content-Type", mime_type)
+            .body(content)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Matrix media upload failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Matrix media upload failed ({status}): {resp_body}"
+            )));
+        }
+
+        let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
+            ChannelError::SendFailed(format!("Matrix media upload response parse failed: {e}"))
+        })?;
+
+        let mxc_uri = resp_json["content_uri"]
+            .as_str()
+            .ok_or_else(|| ChannelError::SendFailed("No content_uri in media upload response".to_string()))?;
+
+        Ok(mxc_uri.to_string())
+    }
+
+    /// Download media from Matrix Content Repository.
+    ///
+    /// Uses `GET /_matrix/media/v3/download/{serverName}/{mediaId}`.
+    /// Returns the media content and Content-Type header.
+    pub async fn download_media(
+        client: &reqwest::Client,
+        homeserver: &str,
+        mxc_uri: &str,
+    ) -> Result<(Vec<u8>, String), ChannelError> {
+        // Parse mxc://serverName/mediaId
+        let mxc_uri = mxc_uri.trim();
+        if !mxc_uri.starts_with("mxc://") {
+            return Err(ChannelError::ReceiveFailed(
+                "Invalid mxc:// URI format".to_string(),
+            ));
+        }
+
+        let path = &mxc_uri[6..];
+        let (server_name, media_id) = path
+            .split_once('/')
+            .ok_or_else(|| ChannelError::ReceiveFailed("Invalid mxc:// URI path".to_string()))?;
+
+        let encoded_server = percent_encoding::percent_encode(
+            server_name.as_bytes(),
+            percent_encoding::NON_ALPHANUMERIC,
+        );
+        let encoded_media = percent_encoding::percent_encode(
+            media_id.as_bytes(),
+            percent_encoding::NON_ALPHANUMERIC,
+        );
+
+        let url = format!(
+            "{homeserver}/_matrix/media/v3/download/{}/{}",
+            encoded_server, encoded_media
+        );
+
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ChannelError::ReceiveFailed(format!("Matrix media download failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::ReceiveFailed(format!(
+                "Matrix media download failed ({status}): {resp_body}"
+            )));
+        }
+
+        let content_type = resp
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        if let Some(len) = resp
+            .headers()
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            if len > MATRIX_MEDIA_MAX_SIZE {
+                return Err(ChannelError::ReceiveFailed(format!(
+                    "Media file too large: {} bytes (max {})",
+                    len, MATRIX_MEDIA_MAX_SIZE
+                )));
+            }
+        }
+
+        let bytes = resp.bytes().await.map_err(|e| {
+            ChannelError::ReceiveFailed(format!("Matrix media download body read failed: {e}"))
+        })?;
+
+        if bytes.len() as u64 > MATRIX_MEDIA_MAX_SIZE {
+            return Err(ChannelError::ReceiveFailed(format!(
+                "Media file too large: {} bytes (max {})",
+                bytes.len(), MATRIX_MEDIA_MAX_SIZE
+            )));
+        }
+
+        Ok((bytes.to_vec(), content_type))
+    }
+
     /// Send a typing indicator to a Matrix room.
     ///
     /// Uses `PUT /_matrix/client/v3/rooms/{room_id}/typing/{user_id}`.
@@ -175,12 +456,13 @@ impl MatrixMessageOps {
     /// Convert a Matrix room event to an `InboundMessage`.
     ///
     /// Returns `None` if the event should be ignored (own message,
-    /// filtered room, non-message event, etc.).
+    /// filtered room, non-message event, policy-gated, etc.).
     pub fn convert_room_event(
         event: &serde_json::Value,
         room_id: &str,
         channel_id: &ChannelId,
         own_user_id: &str,
+        config: Option<&MatrixConfig>,
     ) -> Option<InboundMessage> {
         // Only process m.room.message events
         let event_type = event["type"].as_str()?;
@@ -195,10 +477,24 @@ impl MatrixMessageOps {
             return None;
         }
 
+        // Apply user allowlist policy
+        if let Some(cfg) = config {
+            if !cfg.is_user_allowed(sender) {
+                return None;
+            }
+        }
+
         let content = &event["content"];
         let body = content["body"].as_str().unwrap_or("");
         if body.is_empty() {
             return None;
+        }
+
+        // Apply mention gating policy
+        if let Some(cfg) = config {
+            if !cfg.check_mention(body, own_user_id) {
+                return None;
+            }
         }
 
         let event_id = event["event_id"].as_str().unwrap_or("").to_string();
@@ -211,10 +507,28 @@ impl MatrixMessageOps {
             })
             .unwrap_or_else(Utc::now);
 
-        // Extract reply-to from m.relates_to.m.in_reply_to.event_id
-        let reply_to = content["m.relates_to"]["m.in_reply_to"]["event_id"]
-            .as_str()
+        // Extract reply-to and thread root from m.relates_to
+        let relates_to = content["m.relates_to"].as_object();
+        let reply_to = relates_to
+            .and_then(|r| r.get("m.in_reply_to"))
+            .and_then(|ir| ir.get("event_id"))
+            .and_then(|eid| eid.as_str())
             .map(|id| MessageId::new(id.to_string()));
+
+        // Extract thread root from m.relates_to when rel_type is "m.thread"
+        // This is stored in metadata for downstream processing
+        let thread_root = relates_to
+            .and_then(|r| r.get("rel_type"))
+            .and_then(|rt| if rt.as_str()? == "m.thread" { Some(()) } else { None })
+            .and_then(|_| relates_to)
+            .and_then(|r| r.get("event_id"))
+            .and_then(|eid| eid.as_str())
+            .map(|id| MessageId::new(id.to_string()));
+
+        let mut metadata = Vec::new();
+        if let Some(root) = thread_root {
+            metadata.push(crate::gateway::channel::MessageMeta::ThreadRoot(root));
+        }
 
         // Matrix rooms are always group conversations
         let is_group = true;
@@ -231,7 +545,7 @@ impl MatrixMessageOps {
             reply_to,
             is_group,
             raw: Some(event.clone()),
-            metadata: vec![],
+            metadata,
         })
     }
 
@@ -330,7 +644,7 @@ impl MatrixMessageOps {
                     if let Some(events) = room_data["timeline"]["events"].as_array() {
                         for event in events {
                             if let Some(inbound) =
-                                Self::convert_room_event(event, room_id, &channel_id, &own_user_id)
+                                Self::convert_room_event(event, room_id, &channel_id, &own_user_id, Some(&config))
                             {
                                 tracing::debug!(
                                     "Matrix message from {} in {}: {}",
@@ -376,6 +690,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         )
         .unwrap();
 
@@ -406,6 +721,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         );
         assert!(msg.is_none());
     }
@@ -428,6 +744,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         );
         assert!(msg.is_none());
     }
@@ -451,6 +768,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         );
         assert!(msg.is_none());
     }
@@ -479,6 +797,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         )
         .unwrap();
 
@@ -504,6 +823,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         )
         .unwrap();
 
@@ -528,6 +848,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         );
         assert!(msg.is_none());
     }
@@ -551,6 +872,7 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         )
         .unwrap();
 
@@ -577,9 +899,160 @@ mod tests {
             "!room1:matrix.org",
             &channel_id,
             "@bot:matrix.org",
+            None,
         )
         .unwrap();
 
         assert_eq!(msg.sender_name.as_deref(), Some("@alice:matrix.org"));
+    }
+
+    #[test]
+    fn test_convert_thread_root_extraction() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@user:matrix.org",
+            "event_id": "$thread_reply",
+            "origin_server_ts": 1700000002000_i64,
+            "content": {
+                "msgtype": "m.text",
+                "body": "Reply in thread",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread_root"
+                }
+            }
+        });
+
+        let channel_id = ChannelId::new("matrix");
+        let msg = MatrixMessageOps::convert_room_event(
+            &event,
+            "!room1:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            None,
+        )
+        .unwrap();
+
+        let has_thread_root = msg.metadata.iter().any(|m| {
+            matches!(m, crate::gateway::channel::MessageMeta::ThreadRoot(id) 
+                if id.as_str() == "$thread_root")
+        });
+        assert!(has_thread_root, "Expected ThreadRoot metadata with $thread_root");
+    }
+
+    #[test]
+    fn test_convert_policy_user_allowlist() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@stranger:matrix.org",
+            "event_id": "$event_blocked",
+            "origin_server_ts": 1700000000000_i64,
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello from stranger!"
+            }
+        });
+
+        let channel_id = ChannelId::new("matrix");
+        let config = MatrixConfig {
+            allowed_users: vec!["@allowed:matrix.org".to_string()],
+            ..Default::default()
+        };
+
+        let msg = MatrixMessageOps::convert_room_event(
+            &event,
+            "!room1:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        );
+        assert!(msg.is_none(), "Stranger should be blocked by allowlist");
+    }
+
+    #[test]
+    fn test_convert_policy_user_allowlist_allowed() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@allowed:matrix.org",
+            "event_id": "$event_allowed",
+            "origin_server_ts": 1700000000000_i64,
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello from allowed user!"
+            }
+        });
+
+        let channel_id = ChannelId::new("matrix");
+        let config = MatrixConfig {
+            allowed_users: vec!["@allowed:matrix.org".to_string()],
+            ..Default::default()
+        };
+
+        let msg = MatrixMessageOps::convert_room_event(
+            &event,
+            "!room1:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        );
+        assert!(msg.is_some(), "Allowed user should pass");
+    }
+
+    #[test]
+    fn test_convert_policy_mention_gating() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@user:matrix.org",
+            "event_id": "$event_no_mention",
+            "origin_server_ts": 1700000000000_i64,
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello without mention"
+            }
+        });
+
+        let channel_id = ChannelId::new("matrix");
+        let config = MatrixConfig {
+            mention_gating: true,
+            ..Default::default()
+        };
+
+        let msg = MatrixMessageOps::convert_room_event(
+            &event,
+            "!room1:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        );
+        assert!(msg.is_none(), "Message without mention should be blocked when gating enabled");
+    }
+
+    #[test]
+    fn test_convert_policy_mention_gating_pass() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@user:matrix.org",
+            "event_id": "$event_with_mention",
+            "origin_server_ts": 1700000000000_i64,
+            "content": {
+                "msgtype": "m.text",
+                "body": "Hello @bot:matrix.org how are you?"
+            }
+        });
+
+        let channel_id = ChannelId::new("matrix");
+        let config = MatrixConfig {
+            mention_gating: true,
+            ..Default::default()
+        };
+
+        let msg = MatrixMessageOps::convert_room_event(
+            &event,
+            "!room1:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        );
+        assert!(msg.is_some(), "Message with mention should pass when gating enabled");
     }
 }

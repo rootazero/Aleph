@@ -10,12 +10,21 @@
 //!    streamSequence: N) carrying accumulated text chunks.
 //! 3. `stream_finalize` — sends the final message activity with `streaminfo` (streamType: "final")
 //!    and an AI-generated entity, completing the stream.
+//!
+//! # Streaming Coalescing
+//!
+//! For efficiency, updates are coalesced to reduce HTTP requests:
+//! - Buffer accumulates text until `min_chars` (1500) threshold OR `idle_timeout` (1000ms)
+//! - On threshold: immediate flush of buffered text
+//! - On timeout: flush any buffered text
+//! - On finalize: immediate flush of remaining buffer
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 use tracing::warn;
 
 use crate::gateway::channel::{
@@ -238,15 +247,188 @@ impl NativeStreamHandler for MsTeamsStreamHandler {
     }
 }
 
+// ── Streaming Coalescer ────────────────────────────────────────────────────────
+
+/// Per-stream buffering state.
+struct PendingStream {
+    buffer: String,
+    sequence: u32,
+    idle_task: tokio::task::JoinHandle<()>,
+}
+
+impl PendingStream {
+    fn new(idle_task: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            buffer: String::new(),
+            sequence: 0,
+            idle_task,
+        }
+    }
+
+    fn take_buffer(&mut self) -> Option<(String, u32)> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        let text = std::mem::take(&mut self.buffer);
+        let sequence = self.sequence;
+        self.sequence = 0;
+        Some((text, sequence))
+    }
+}
+
+/// Coalescing wrapper for NativeStreamHandler that buffers updates.
+///
+/// Reduces HTTP request overhead by batching text chunks until:
+/// - `min_chars` (1500) threshold reached → immediate flush
+/// - `idle_timeout` (1000ms) elapsed → flush buffered text
+/// - `stream_finalize` called → flush remaining buffer
+pub struct StreamCoalescer<H: NativeStreamHandler> {
+    inner: H,
+    min_chars: usize,
+    idle_timeout: std::time::Duration,
+    pending: Arc<RwLock<HashMap<String, PendingStream>>>,
+}
+
+impl<H: NativeStreamHandler> StreamCoalescer<H> {
+    pub fn new(inner: H) -> Self {
+        Self {
+            inner,
+            min_chars: 1500,
+            idle_timeout: std::time::Duration::from_millis(1000),
+            pending: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn min_chars(mut self, min_chars: usize) -> Self {
+        self.min_chars = min_chars;
+        self
+    }
+
+    pub fn idle_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.idle_timeout = timeout;
+        self
+    }
+
+    async fn flush_buffered(
+        &self,
+        conversation_id: &ConversationId,
+        stream_id: &str,
+        pending: &mut PendingStream,
+    ) -> ChannelResult<()> {
+        let Some((text, sequence)) = pending.take_buffer() else {
+            return Ok(());
+        };
+        self.inner
+            .stream_update(conversation_id, stream_id, &text, sequence)
+            .await
+    }
+}
+
+#[async_trait]
+impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoalescer<H> {
+    async fn stream_start(
+        &self,
+        conversation_id: &ConversationId,
+        status_text: &str,
+    ) -> ChannelResult<String> {
+        let stream_id = self.inner.stream_start(conversation_id, status_text).await?;
+
+        let mut pending_map = self.pending.write().await;
+        if let Some(stale) = pending_map.remove(&stream_id) {
+            stale.idle_task.abort();
+        }
+
+        Ok(stream_id)
+    }
+
+    async fn stream_update(
+        &self,
+        conversation_id: &ConversationId,
+        stream_id: &str,
+        text: &str,
+        sequence: u32,
+    ) -> ChannelResult<()> {
+        let stream_key = stream_id.to_string();
+
+        let must_flush = {
+            let mut pending_map = self.pending.write().await;
+            let entry = pending_map.entry(stream_key.clone()).or_insert_with(|| {
+                PendingStream::new(tokio::spawn(async {}))
+            });
+            entry.buffer.push_str(text);
+            entry.sequence = sequence;
+            entry.buffer.len() >= self.min_chars
+        };
+
+        if must_flush {
+            let mut pending_map = self.pending.write().await;
+            if let Some(pending) = pending_map.get_mut(&stream_key) {
+                pending.idle_task.abort();
+                self.flush_buffered(conversation_id, &stream_key, pending)
+                    .await?;
+            }
+        } else {
+            let inner = self.inner.clone();
+            let conv = ConversationId::new(conversation_id.as_str().to_string());
+            let sid = stream_key.clone();
+            let timeout = self.idle_timeout;
+
+            let pending_map = self.pending.clone();
+            let new_task = tokio::spawn(async move {
+                let sleep_duration = sleep(timeout);
+                tokio::pin!(sleep_duration);
+                let _ = sleep_duration.await;
+
+                let mut map = pending_map.write().await;
+                if let Some(pending) = map.remove(&sid) {
+                    let _ = inner
+                        .stream_update(&conv, &sid, &pending.buffer, pending.sequence)
+                        .await;
+                }
+            });
+
+            let mut pending_map = self.pending.write().await;
+            if let Some(entry) = pending_map.get_mut(&stream_key) {
+                entry.idle_task.abort();
+                entry.idle_task = new_task;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn stream_finalize(
+        &self,
+        conversation_id: &ConversationId,
+        stream_id: &str,
+        message: OutboundMessage,
+    ) -> ChannelResult<SendResult> {
+        {
+            let mut pending_map = self.pending.write().await;
+            if let Some(mut pending) = pending_map.remove(stream_id) {
+                pending.idle_task.abort();
+                if let Some((text, seq)) = pending.take_buffer() {
+                    drop(pending_map);
+                    self.inner
+                        .stream_update(conversation_id, stream_id, &text, seq)
+                        .await?;
+                }
+            }
+        }
+
+        self.inner
+            .stream_finalize(conversation_id, stream_id, message)
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::gateway::interfaces::msteams::types::build_stream_info_entity;
 
-    /// Verify the entity JSON structure for each streamType variant.
     #[test]
     fn test_build_stream_info_entities() {
-        // Informative — no streamId, sequence 0
         let informative = build_stream_info_entity(None, "informative", 0);
         assert_eq!(informative["type"], "streaminfo");
         assert_eq!(informative["streamType"], "informative");
@@ -257,14 +439,12 @@ mod tests {
             "informative entity should not have streamId"
         );
 
-        // Streaming — has streamId and sequence
         let streaming = build_stream_info_entity(Some("stream-abc-123"), "streaming", 5);
         assert_eq!(streaming["type"], "streaminfo");
         assert_eq!(streaming["streamType"], "streaming");
         assert_eq!(streaming["streamId"], "stream-abc-123");
         assert_eq!(streaming["streamSequence"], 5);
 
-        // Final — has streamId, sequence resets to 0
         let final_entity = build_stream_info_entity(Some("stream-abc-123"), "final", 0);
         assert_eq!(final_entity["type"], "streaminfo");
         assert_eq!(final_entity["streamType"], "final");
@@ -272,7 +452,6 @@ mod tests {
         assert_eq!(final_entity["streamSequence"], 0);
     }
 
-    /// Verify AI-generated entity structure for final activities.
     #[test]
     fn test_build_ai_generated_entity_structure() {
         let ai_entity = build_ai_generated_entity();
@@ -283,11 +462,9 @@ mod tests {
         assert!(additional_types.contains(&serde_json::json!("AIGeneratedContent")));
     }
 
-    /// Verify that informative entity has no streamId key.
     #[test]
     fn test_informative_entity_no_stream_id() {
         let entity = build_stream_info_entity(None, "informative", 0);
-        // The key should be absent, not just null
         assert!(entity.as_object().unwrap().get("streamId").is_none());
     }
 }

@@ -222,6 +222,15 @@ pub enum MessageMeta {
     /// Slack `app_mention` event — message contains a bot mention.
     /// This bypasses mention-gating since Slack has already validated the mention.
     AppMention,
+    /// MS Teams quoted reply — message is a reply quoting this content.
+    Quote {
+        /// Display name of the quoted message author.
+        sender: Option<String>,
+        /// Plain-text body of the quoted message.
+        body: String,
+    },
+    /// Matrix thread root event ID — message is part of a thread.
+    ThreadRoot(MessageId),
 }
 
 /// Message received from a channel
@@ -269,6 +278,14 @@ impl InboundMessage {
         self.metadata
             .iter()
             .any(|m| matches!(m, MessageMeta::ForwardOrigin { .. }))
+    }
+
+    /// Returns the quoted reply content if present in metadata.
+    pub fn meta_quote(&self) -> Option<(&Option<String>, &str)> {
+        self.metadata.iter().find_map(|m| match m {
+            MessageMeta::Quote { sender, body } => Some((sender, body.as_str())),
+            _ => None,
+        })
     }
 }
 

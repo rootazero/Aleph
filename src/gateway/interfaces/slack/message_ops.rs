@@ -134,9 +134,6 @@ impl SlackDebouncer {
         let _ = self.inbound_tx.send(combined).await;
     }
 
-    fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 /// Slack message operations helper.

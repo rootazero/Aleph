@@ -5,6 +5,8 @@
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod graph;
+pub mod polls;
 pub mod streaming;
 pub mod types;
 
@@ -22,14 +24,15 @@ use tracing::{debug, info, warn};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelResult,
-    ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId, NativeStreamHandler,
-    OutboundMessage, SendResult, StreamProtocol, UserId,
+    ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId, MessageMeta,
+    NativeStreamHandler, OutboundMessage, SendResult, StreamProtocol, UserId,
 };
 use crate::gateway::webhook_receiver::WebhookHandler;
 use crate::sync_primitives::Arc;
 
 use self::api::BotFrameworkClient;
 use self::auth::{validate_service_url, JwtValidator, TokenCache};
+use self::graph::{GraphChannel, GraphClient, GraphGroup, GraphUser};
 use self::types::*;
 
 // ── ConversationReference ────────────────────────────────────────────────────
@@ -56,6 +59,7 @@ pub struct MsTeamsChannel {
     config: MsTeamsConfig,
     client: Arc<BotFrameworkClient>,
     jwt_validator: Arc<JwtValidator>,
+    graph_client: Arc<GraphClient>,
     conversation_refs: Arc<RwLock<HashMap<String, ConversationReference>>>,
     /// Reverse map: message_id → (conversation_id, inserted_at) for delete without conversation context
     sent_messages: Arc<RwLock<HashMap<String, (String, Instant)>>>,
@@ -65,6 +69,12 @@ impl MsTeamsChannel {
     /// Create a new Teams channel instance.
     pub fn new(id: &str, config: MsTeamsConfig) -> Self {
         let token_cache = Arc::new(TokenCache::new(
+            config.app_id.clone(),
+            config.app_password.clone(),
+            config.tenant_id.clone(),
+        ));
+
+        let graph_token_cache = Arc::new(self::graph::GraphTokenCache::new(
             config.app_id.clone(),
             config.app_password.clone(),
             config.tenant_id.clone(),
@@ -83,6 +93,7 @@ impl MsTeamsChannel {
             state: ChannelState::new(100),
             client: Arc::new(BotFrameworkClient::new(token_cache)),
             jwt_validator: Arc::new(JwtValidator::new(config.app_id.clone())),
+            graph_client: Arc::new(GraphClient::new(graph_token_cache)),
             config,
             conversation_refs: Arc::new(RwLock::new(HashMap::new())),
             sent_messages: Arc::new(RwLock::new(HashMap::new())),
@@ -95,7 +106,7 @@ impl MsTeamsChannel {
             images: true,
             audio: true,
             video: true,
-            reactions: false,
+            reactions: true,
             replies: true,
             editing: true,
             deletion: true,
@@ -143,6 +154,31 @@ impl MsTeamsChannel {
     async fn get_service_url(&self, conversation_id: &str) -> Option<String> {
         let refs = self.conversation_refs.read().await;
         refs.get(conversation_id).map(|r| r.service_url.clone())
+    }
+
+    // ── Directory / Graph API ───────────────────────────────────────────────
+
+    /// Search for users by name or email address.
+    pub async fn lookup_user(&self, query: &str) -> Result<Vec<GraphUser>, ChannelError> {
+        self.graph_client.search_users(query, 10).await
+    }
+
+    /// Look up a user by their Azure AD object ID or user principal name.
+    pub async fn get_user(&self, user_id: &str) -> Result<Option<GraphUser>, ChannelError> {
+        self.graph_client.get_user(user_id).await
+    }
+
+    /// Find teams matching the given name query.
+    pub async fn lookup_team(&self, team_name: &str) -> Result<Vec<GraphGroup>, ChannelError> {
+        self.graph_client.list_teams_by_name(team_name, 10).await
+    }
+
+    /// List all channels in a team.
+    pub async fn list_team_channels(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<GraphChannel>, ChannelError> {
+        self.graph_client.list_channels_for_team(team_id).await
     }
 
     /// Convert an OutboundMessage into a Bot Framework Activity.
@@ -415,6 +451,10 @@ impl WebhookHandler for MsTeamsChannel {
                 self.handle_conversation_update(activity);
                 Ok(vec![])
             }
+            "messageReaction" => {
+                self.handle_message_reaction(activity);
+                Ok(vec![])
+            }
             other => {
                 debug!(activity_type = %other, "Ignoring unhandled activity type");
                 Ok(vec![])
@@ -525,6 +565,23 @@ impl MsTeamsChannel {
             Some("groupChat") | Some("channel")
         );
 
+        // Extract quoted reply info from Teams HTML blockquotes
+        let metadata = activity
+            .attachments
+            .as_deref()
+            .and_then(extract_quote_info)
+            .map(|q| {
+                vec![MessageMeta::Quote {
+                    sender: if q.sender.is_empty() {
+                        None
+                    } else {
+                        Some(q.sender)
+                    },
+                    body: q.body,
+                }]
+            })
+            .unwrap_or_default();
+
         let msg = InboundMessage {
             id: MessageId::new(activity.id.as_deref().unwrap_or("unknown")),
             channel_id: self.info.id.clone(),
@@ -537,7 +594,7 @@ impl MsTeamsChannel {
             reply_to: activity.reply_to_id.as_deref().map(MessageId::new),
             is_group,
             raw: Some(serde_json::to_value(&activity).unwrap_or_default()),
-            metadata: vec![],
+            metadata,
         };
 
         Ok(vec![msg])
@@ -627,6 +684,39 @@ impl MsTeamsChannel {
             }
         });
     }
+
+    fn handle_message_reaction(&self, activity: Activity) {
+        let reactions_added = activity.reactions_added.as_deref();
+        let reactions_removed = activity.reactions_removed.as_deref();
+        let target_message_id = activity.reply_to_id.as_deref();
+        let from = activity.from.as_ref();
+
+        let from_info = from
+            .map(|f| format!("{} ({})", f.name.as_deref().unwrap_or("unknown"), f.id))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        if let Some(reactions) = reactions_added {
+            for reaction in reactions {
+                debug!(
+                    from = %from_info,
+                    reaction_type = %reaction.reaction_type,
+                    target_message_id = ?target_message_id,
+                    "Message reaction added"
+                );
+            }
+        }
+
+        if let Some(reactions) = reactions_removed {
+            for reaction in reactions {
+                debug!(
+                    from = %from_info,
+                    reaction_type = %reaction.reaction_type,
+                    target_message_id = ?target_message_id,
+                    "Message reaction removed"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -682,7 +772,7 @@ mod tests {
         assert!(caps.images);
         assert!(caps.audio);
         assert!(caps.video);
-        assert!(!caps.reactions);
+        assert!(caps.reactions);
         assert!(caps.replies);
         assert!(caps.editing);
         assert!(caps.deletion);
