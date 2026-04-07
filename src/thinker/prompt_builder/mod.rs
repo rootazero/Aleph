@@ -4,6 +4,7 @@
 //! including system prompts and message history.
 
 mod cache;
+pub mod cache_monitor;
 mod sections;
 
 #[cfg(test)]
