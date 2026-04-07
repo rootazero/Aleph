@@ -150,6 +150,7 @@ fn default_high_risk_keywords() -> Vec<String> {
         "remove",
         "drop",
         "shell",
+        "exec",
         "execute",
         "run_command",
         "bash",

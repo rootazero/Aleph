@@ -133,24 +133,39 @@ impl SafetyGuard {
     /// Truly destructive commands are also hard-blocked via pattern matching.
     pub fn default_guard() -> Self {
         let blocked = default_blocked_patterns();
-        let high_risk_permissions = default_high_risk_permissions();
-        Self::new(blocked, high_risk_permissions, PermissionAction::Allow)
+        Self::with_policy(
+            blocked,
+            HashMap::new(),
+            PermissionAction::Allow,
+            Some(ToolSafetyPolicy::default()),
+        )
     }
 
     /// Create a guard from global and agent-level permission configs.
     ///
     /// Merges the two layers (most restrictive wins) and combines with
     /// the default blocked patterns.
-    pub fn from_permissions(global: &ToolPermissionsConfig, agent: &ToolPermissionsConfig) -> Self {
+    pub fn from_permissions(
+        global: &ToolPermissionsConfig,
+        agent: &ToolPermissionsConfig,
+        safety_policy: Option<ToolSafetyPolicy>,
+    ) -> Self {
         let merged = ToolPermissionsConfig::merge(global, agent);
         let blocked = default_blocked_patterns();
-        Self::new(blocked, merged.overrides, merged.default)
+        Self::with_policy(blocked, merged.overrides, merged.default, safety_policy)
     }
 
     /// Infer permission for a tool based on keyword matching in the safety policy.
     ///
-    /// Falls back to `self.default_permission` when no policy is set or no
-    /// keywords match.
+    /// Priority order (first match wins):
+    /// 1. high_risk keywords (delete, shell, bash...) → Ask
+    /// 2. low_risk keywords (send, notify, post...) → Ask
+    /// 3. readonly keywords (search, query, read...) → Allow
+    /// 4. reversible keywords (create, write, edit...) → Allow
+    /// 5. No match → default_permission
+    ///
+    /// If a tool name matches multiple categories (e.g. "delete_and_send"),
+    /// the highest-priority match determines the result.
     fn infer_permission(&self, tool_name: &str) -> PermissionAction {
         if let Some(ref policy) = self.safety_policy {
             if policy.is_high_risk(tool_name) {
@@ -270,24 +285,6 @@ fn default_blocked_patterns() -> Vec<String> {
         r"dd\s+if=.*of=/dev/".to_string(),
         r">\s*/dev/sd".to_string(),
     ]
-}
-
-/// Build default permission overrides for high-risk tools.
-///
-/// Uses `ToolSafetyPolicy::default()` high-risk keywords to identify tools
-/// that should require confirmation by default. This bridges the existing
-/// safety inference system into the permission enforcement layer.
-/// Build default permission overrides for high-risk tools.
-///
-/// Known builtin tools whose names contain high-risk keywords
-/// (see `ToolSafetyPolicy::default().high_risk_keywords`) are mapped to `Ask`.
-fn default_high_risk_permissions() -> HashMap<String, PermissionAction> {
-    let high_risk_tools = ["bash_exec", "file_delete", "shell", "code_exec"];
-
-    high_risk_tools
-        .iter()
-        .map(|t| (t.to_string(), PermissionAction::Ask))
-        .collect()
 }
 
 // =============================================================================
@@ -469,7 +466,7 @@ mod tests {
                 .into_iter()
                 .collect(),
         };
-        let guard = SafetyGuard::from_permissions(&global, &agent);
+        let guard = SafetyGuard::from_permissions(&global, &agent, None);
 
         // shell: Ask from global
         let call = ToolCall {
@@ -564,6 +561,38 @@ mod tests {
             matches!(result, Err(SafetyError::Blocked { .. })),
             "newline in command should still match blocked pattern"
         );
+    }
+
+    #[test]
+    fn test_default_guard_uses_policy_inference() {
+        let guard = SafetyGuard::default_guard();
+
+        // "file_delete" is inferred as high-risk via keyword "delete" (not hardcoded)
+        let call = ToolCall {
+            name: "file_delete".to_string(),
+            input: json!({}),
+        };
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::NeedsConfirmation { .. })
+        ));
+
+        // "custom_destroy_tool" is also high-risk via keyword "destroy"
+        let call = ToolCall {
+            name: "custom_destroy_tool".to_string(),
+            input: json!({}),
+        };
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::NeedsConfirmation { .. })
+        ));
+
+        // "list_files" is readonly via keyword "list"
+        let call = ToolCall {
+            name: "list_files".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
     }
 
     #[test]

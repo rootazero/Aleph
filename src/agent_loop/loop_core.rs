@@ -1562,8 +1562,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         .unwrap_or("Tool requires confirmation");
                     let tool_input = tool_args_by_id
                         .get(o.tool_id.as_str())
-                        .copied()
-                        .cloned()
+                        .map(|v| (*v).clone())
                         .unwrap_or(serde_json::json!({}));
                     let confirmed = callback.on_confirmation_needed(
                         &o.tool_name,

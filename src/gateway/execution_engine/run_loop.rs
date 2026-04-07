@@ -26,6 +26,8 @@ use crate::gateway::streaming_sink::StreamingDeltaSink;
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
+use crate::config::types::policies::ToolSafetyPolicy;
+
 use super::engine::ExecutionEngine;
 
 #[derive(Clone)]
@@ -282,7 +284,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let sub_safety_factory: crate::agent_loop::agent_runtime::SafetyGuardFactory = Arc::new({
             let global_perms = self.global_tool_permissions.clone();
             let agent_perms_clone = agent.config().tool_permissions();
-            move || SafetyGuard::from_permissions(&global_perms, &agent_perms_clone)
+            move || SafetyGuard::from_permissions(&global_perms, &agent_perms_clone, Some(ToolSafetyPolicy::default()))
         });
 
         // Agent config values
@@ -507,7 +509,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             };
 
             // Safety guard from merged global + agent permissions
-            let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
+            let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms, Some(ToolSafetyPolicy::default()));
 
             let loop_config = LoopConfig {
                 max_iterations: max_loops,
