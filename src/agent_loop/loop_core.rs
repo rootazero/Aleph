@@ -638,6 +638,23 @@ pub trait LoopCallback: Send {
     fn on_stop_hook_block(&mut self, _reason: &str) {}
     fn on_stop_hook_error(&mut self, _hook_name: &str, _error: &str) {}
     fn on_tool_summary(&mut self, _summary: &str) {}
+
+    /// Request user confirmation for a high-risk tool call.
+    ///
+    /// Called when SafetyGuard or a Hook classifies a tool as needing
+    /// user confirmation before execution. Default returns `false` (reject),
+    /// preserving backward compatibility with all Channel implementations.
+    ///
+    /// Channels override this to implement their own confirmation UX:
+    /// CLI → stdin prompt, Telegram → inline keyboard, API → webhook.
+    fn on_confirmation_needed(
+        &mut self,
+        _tool_name: &str,
+        _tool_input: &Value,
+        _reason: &str,
+    ) -> bool {
+        false
+    }
 }
 
 /// No-op callback for when you don't need events.
@@ -2428,6 +2445,16 @@ mod tests {
         fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
             self.fallback_events
                 .push((reason.to_string(), fallback_model.to_string()));
+        }
+        fn on_confirmation_needed(
+            &mut self,
+            tool_name: &str,
+            _tool_input: &Value,
+            reason: &str,
+        ) -> bool {
+            self.safety_blocks
+                .push(format!("confirmation_needed: {} ({})", tool_name, reason));
+            false
         }
     }
 
@@ -4269,5 +4296,20 @@ mod tests {
         assert_eq!(callback.tool_starts, vec!["read_file"]);
         assert_eq!(callback.tool_dones, vec!["read_file"]);
         assert_eq!(callback.summaries, vec!["Looked up the file"]);
+    }
+
+    #[test]
+    fn test_confirmation_needed_calls_callback() {
+        let mut callback = TrackingCallback::default();
+        let result = callback.on_confirmation_needed(
+            "shell",
+            &serde_json::json!({"command": "rm -rf temp"}),
+            "high-risk tool",
+        );
+        assert!(!result);
+        assert!(callback
+            .safety_blocks
+            .iter()
+            .any(|s| s.contains("confirmation_needed")));
     }
 }
