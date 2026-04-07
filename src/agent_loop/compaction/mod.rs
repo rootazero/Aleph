@@ -9,6 +9,7 @@
 //! - [`types::CompactionContext`] / [`types::CompactionResult`] — data carriers
 
 pub mod constraint_injector;
+pub mod file_content_tracker;
 pub mod micro_compactor;
 pub mod orchestrator;
 pub mod summary_utils;
@@ -18,6 +19,7 @@ pub mod types;
 pub use constraint_injector::{
     Constraint, ConstraintCategory, ConstraintInjector, ConstraintSource,
 };
+pub use file_content_tracker::FileContentTracker;
 pub use micro_compactor::{
     classify_importance, format_compact_placeholder, Importance, MicroCompactor,
     MicroCompactorConfig, ToolOutputEntry,

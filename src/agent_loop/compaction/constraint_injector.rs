@@ -23,6 +23,8 @@ pub enum ConstraintCategory {
     ActiveTools,
     /// High-frequency user preferences retrieved from memory.
     UserPreference,
+    /// Recently read file content for post-compaction recovery.
+    RecentFile,
 }
 
 // =============================================================================
@@ -112,6 +114,12 @@ impl ConstraintInjector {
             .map(|c| c.content.as_str())
             .collect();
 
+        let file_items: Vec<&str> = constraints
+            .iter()
+            .filter(|c| c.category == ConstraintCategory::RecentFile)
+            .map(|c| c.content.as_str())
+            .collect();
+
         let mut body = String::new();
         body.push_str("## Active Constraints (auto-restored after compaction)\n");
 
@@ -134,6 +142,14 @@ impl ConstraintInjector {
             body.push_str("\n### Key Preferences\n");
             for item in &pref_items {
                 body.push_str(&format!("- {item}\n"));
+            }
+        }
+
+        if !file_items.is_empty() {
+            body.push_str("\n### Recently Read Files\n");
+            for item in &file_items {
+                body.push_str(item);
+                body.push('\n');
             }
         }
 
