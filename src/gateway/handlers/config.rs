@@ -407,11 +407,12 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_get_full_config(
     req: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<crate::gateway::security::SharedTokenManager>,
 ) -> JsonRpcResponse {
     let config_snapshot = config.read().await.clone();
 
     // Convert Config to JSON
-    let config_json = match serde_json::to_value(&config_snapshot) {
+    let mut config_json = match serde_json::to_value(&config_snapshot) {
         Ok(v) => v,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -421,6 +422,15 @@ pub async fn handle_get_full_config(
             );
         }
     };
+
+    // Inject vault secrets into channels so the panel can display masked values
+    if let Some(channels) = config_json.get_mut("channels") {
+        if let Some(channels_map) = channels.as_object_mut() {
+            for (channel_id, channel_config) in channels_map.iter_mut() {
+                super::channel::inject_channel_secrets(channel_id, channel_config, &vault);
+            }
+        }
+    }
 
     // If a specific section is requested, return just that section
     let section = req
@@ -811,6 +821,13 @@ model = "claude-opus-4-5"
 
     #[tokio::test]
     async fn test_handle_get_full_config() {
+        use crate::gateway::security::store::SecurityStore;
+        use crate::gateway::security::SharedTokenManager;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, dir.path().join("test.vault")));
+
         let config = Config::default();
         let config = Arc::new(RwLock::new(config));
 
@@ -821,7 +838,7 @@ model = "claude-opus-4-5"
             id: Some(json!(1)),
         };
 
-        let response = handle_get_full_config(req, config).await;
+        let response = handle_get_full_config(req, config, vault).await;
 
         assert!(response.error.is_none());
         assert!(response.result.is_some());

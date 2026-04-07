@@ -850,7 +850,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::security_config;
 
     // Config CRUD
-    register_handler!(server, "config.get", handle_get_full_config, config);
+    register_handler!(server, "config.get", handle_get_full_config, config, shared_token_mgr);
     register_handler!(
         server,
         "config.patch",
