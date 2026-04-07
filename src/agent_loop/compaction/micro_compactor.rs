@@ -10,6 +10,7 @@ use std::pin::Pin;
 use crate::agent_loop::compaction::types::{
     CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
 };
+use crate::agent_loop::tool_result_store::extract_persisted_ref;
 use crate::memory::session_compactor::context_window::estimate_tokens;
 
 // =============================================================================
@@ -139,6 +140,7 @@ pub fn format_compact_placeholder(
     original_tokens: usize,
     key_fields: Option<&[&str]>,
     success: bool,
+    original_content: Option<&str>,
 ) -> String {
     let mut lines = vec![
         format!("[Tool output compacted: {tool_name}]"),
@@ -153,6 +155,12 @@ pub fn format_compact_placeholder(
 
     let status = if success { "success" } else { "error" };
     lines.push(format!("- Status: {status}"));
+
+    if let Some(content) = original_content {
+        if let Some(ref_line) = extract_persisted_ref(content) {
+            lines.push(ref_line.to_string());
+        }
+    }
 
     lines.join("\n")
 }
@@ -300,7 +308,7 @@ impl CompactionStrategy for MicroCompactor {
 
                 let original_tokens = estimate_tokens(&original_content, ratio);
                 let placeholder =
-                    format_compact_placeholder(&entry.tool_name, original_tokens, None, true);
+                    format_compact_placeholder(&entry.tool_name, original_tokens, None, true, Some(&original_content));
                 let placeholder_tokens = estimate_tokens(&placeholder, ratio);
 
                 msg.replace_tool_result_content(placeholder);
@@ -406,6 +414,7 @@ mod tests {
             2500,
             Some(&["path", "content", "encoding"]),
             true,
+            None,
         );
         assert!(
             placeholder.contains("[Tool output compacted: read_file]"),
@@ -422,6 +431,23 @@ mod tests {
         assert!(
             placeholder.contains("success"),
             "missing status: {placeholder}"
+        );
+    }
+
+    #[test]
+    fn compact_placeholder_preserves_disk_ref() {
+        let ref_line = "[Full output persisted: /tmp/aleph/tool_results/sess/call_1_bash.txt (12000 tokens, bash)]";
+        let original_content = format!("some output\n{ref_line}\nmore text");
+        let placeholder = format_compact_placeholder(
+            "bash",
+            12000,
+            None,
+            true,
+            Some(&original_content),
+        );
+        assert!(
+            placeholder.contains(ref_line),
+            "placeholder must preserve the disk ref line: {placeholder}"
         );
     }
 }

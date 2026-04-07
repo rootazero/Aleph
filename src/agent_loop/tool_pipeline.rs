@@ -17,8 +17,10 @@ use serde_json::Value;
 use tracing::Instrument;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent_loop::compaction::file_content_tracker::FileContentTracker;
 use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
 use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
+use crate::agent_loop::tool_result_store::ToolResultStore;
 use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
@@ -62,6 +64,8 @@ pub struct ToolPipeline {
     safety: Arc<SafetyGuard>,
     session_id: RwLock<String>,
     working_dir: Option<PathBuf>,
+    result_store: Option<ToolResultStore>,
+    file_tracker: Option<Arc<FileContentTracker>>,
 }
 
 impl ToolPipeline {
@@ -76,12 +80,26 @@ impl ToolPipeline {
             safety,
             session_id: RwLock::new(session_id.into()),
             working_dir: None,
+            result_store: None,
+            file_tracker: None,
         }
     }
 
     /// Set an optional working directory passed to hook commands.
     pub fn with_working_dir(mut self, dir: PathBuf) -> Self {
         self.working_dir = Some(dir);
+        self
+    }
+
+    /// Attach a `ToolResultStore` for disk-offloading large tool results.
+    pub fn with_result_store(mut self, store: ToolResultStore) -> Self {
+        self.result_store = Some(store);
+        self
+    }
+
+    /// Attach a `FileContentTracker` for post-compaction file content recovery.
+    pub fn with_file_tracker(mut self, tracker: Arc<FileContentTracker>) -> Self {
+        self.file_tracker = Some(tracker);
         self
     }
 
@@ -348,7 +366,7 @@ impl ToolPipeline {
         };
         let exec_elapsed_ms = exec_start.elapsed().as_millis() as u64;
 
-        let mut outcome = Self::map_result(id, name, &result);
+        let mut outcome = Self::map_result(id, name, &result, self.result_store.as_ref());
         outcome.duration_ms = exec_elapsed_ms;
 
         // -----------------------------------------------------------------
@@ -463,12 +481,24 @@ impl ToolPipeline {
     /// truncated if they still exceed `MAX_TOOL_RESULT_TOKENS`. Error results
     /// are passed through unchanged (error messages are typically short and
     /// their completeness matters for debugging).
-    fn map_result(id: &str, name: &str, result: &ToolResult) -> ToolOutcome {
+    fn map_result(
+        id: &str,
+        name: &str,
+        result: &ToolResult,
+        store: Option<&ToolResultStore>,
+    ) -> ToolOutcome {
         match result {
             ToolResult::Success { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let final_text = truncate_tool_result(&compressed);
+                let disk_ref = store.and_then(|s| {
+                    s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS)
+                });
+                let mut final_text = truncate_tool_result(&compressed);
+                if let Some(ref_marker) = disk_ref {
+                    final_text.push('\n');
+                    final_text.push_str(&ref_marker);
+                }
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
@@ -491,7 +521,14 @@ impl ToolPipeline {
             ToolResult::SuccessAndStopLoop { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let final_text = truncate_tool_result(&compressed);
+                let disk_ref = store.and_then(|s| {
+                    s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS)
+                });
+                let mut final_text = truncate_tool_result(&compressed);
+                if let Some(ref_marker) = disk_ref {
+                    final_text.push('\n');
+                    final_text.push_str(&ref_marker);
+                }
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),

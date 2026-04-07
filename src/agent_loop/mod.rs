@@ -29,6 +29,7 @@ pub mod tool_info;
 pub mod tool_orchestrator;
 pub mod tool_pipeline;
 pub mod tool_refresh;
+pub mod tool_result_store;
 pub mod tool_summary;
 pub mod trace;
 pub mod truncation_recovery;
