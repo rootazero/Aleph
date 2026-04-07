@@ -284,7 +284,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let sub_safety_factory: crate::agent_loop::agent_runtime::SafetyGuardFactory = Arc::new({
             let global_perms = self.global_tool_permissions.clone();
             let agent_perms_clone = agent.config().tool_permissions();
-            move || SafetyGuard::from_permissions(&global_perms, &agent_perms_clone, Some(ToolSafetyPolicy::default()))
+            move || {
+                SafetyGuard::from_permissions(
+                    &global_perms,
+                    &agent_perms_clone,
+                    Some(ToolSafetyPolicy::default()),
+                )
+            }
         });
 
         // Agent config values
@@ -509,7 +515,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             };
 
             // Safety guard from merged global + agent permissions
-            let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms, Some(ToolSafetyPolicy::default()));
+            let safety = SafetyGuard::from_permissions(
+                &self.global_tool_permissions,
+                &agent_perms,
+                Some(ToolSafetyPolicy::default()),
+            );
 
             let loop_config = LoopConfig {
                 max_iterations: max_loops,
@@ -1209,31 +1219,18 @@ where
 
 /// Write a conversation turn to the memory system (Layer 1).
 ///
-/// Runs in a background task — failures are logged but never block the caller.
+/// With SessionStore removed, this is a no-op. Raw conversations are
+/// already stored in SessionManager's SQLite. Retained for API compatibility.
 pub(super) async fn write_conversation_memory(
-    memory_backend: crate::memory::store::MemoryBackend,
-    session_key: String,
-    agent_id: String,
-    user_input: String,
-    ai_output: String,
+    _memory_backend: crate::memory::store::MemoryBackend,
+    _session_key: String,
+    _agent_id: String,
+    _user_input: String,
+    _ai_output: String,
 ) {
-    use crate::memory::context::{ContextAnchor, MemoryEntry};
-
-    let context = ContextAnchor::with_session(session_key.clone(), session_key);
-    let mut entry = MemoryEntry::new(
-        uuid::Uuid::new_v4().to_string(),
-        context,
-        user_input,
-        ai_output,
-    );
-    entry.agent = agent_id;
-
-    use crate::memory::store::SessionStore;
-    if let Err(e) = memory_backend.insert_memory(&entry).await {
-        warn!("Failed to write conversation memory: {}", e);
-    } else {
-        debug!("Conversation memory saved to Layer 1");
-    }
+    // Raw memory persistence removed — SessionStore no longer exists.
+    // Conversations are stored in SessionManager's SQLite.
+    debug!("Conversation memory write skipped (SessionStore removed)");
 }
 
 /// Detect current git branch from workspace path.

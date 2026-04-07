@@ -7,7 +7,7 @@
 use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
 use crate::error::{AlephError, Result};
-use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::{EmbeddingProvider, MemoryRetrieval};
 use crate::payload::{AgentPayload, Capability};
@@ -121,11 +121,11 @@ impl CapabilityStrategy for MemoryStrategy {
     async fn health_check(&self) -> Result<bool> {
         // Check if database is accessible
         if let Some(db) = &self.memory_db {
-            // Try to get stats to verify db is healthy
-            match db.get_stats().await {
+            // Try to get fact stats to verify db is healthy
+            match db.get_fact_stats().await {
                 Ok(stats) => {
                     debug!(
-                        total_memories = stats.total_memories,
+                        total_facts = stats.total_facts,
                         "Memory database health check passed"
                     );
                 }

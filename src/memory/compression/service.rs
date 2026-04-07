@@ -14,7 +14,7 @@ use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::graph::GraphStore;
-use crate::memory::store::{CompressionStore, MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::{CompressionStore, MemoryBackend, MemoryStore};
 use crate::memory::vfs::L1Generator;
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
@@ -167,14 +167,12 @@ impl CompressionService {
             .await?
             .unwrap_or(0);
 
-        // 2. Get uncompressed memories
-        let memories = self
-            .database
-            .get_uncompressed_memories(last_timestamp, self.config.batch_size as usize)
-            .await?;
-
+        // Raw memory storage (SessionStore) has been removed — the compression
+        // pipeline no longer has a Layer 1 source to pull from. Return early.
+        let _ = last_timestamp;
+        let memories: Vec<crate::memory::context::MemoryEntry> = Vec::new();
         if memories.is_empty() {
-            tracing::debug!("No memories to compress");
+            tracing::debug!("No memories to compress (SessionStore removed)");
             return Ok(CompressionResult::empty());
         }
 
@@ -610,34 +608,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_signal_triggered_compression() {
-        let (service, database, _temp_dir) = create_test_service_with_tempdir().await;
+        let (service, _database, _temp_dir) = create_test_service_with_tempdir().await;
 
-        // Store a memory with learning signal
-        let context = crate::memory::context::ContextAnchor::now("test.txt".to_string());
-        // Create dummy embedding (1024-dim)
-        let embedding = vec![0.0f32; 1024];
-        let memory = crate::memory::context::MemoryEntry::with_embedding(
-            "mem-1".to_string(),
-            context,
-            "记住，我喜欢用 Vim".to_string(),
-            "好的，我记住了".to_string(),
-            embedding,
-        );
-
-        // Insert via database directly
-        database.insert_memory(&memory).await.unwrap();
-
-        // Check with signal detection
+        // With SessionStore removed, compression returns empty immediately.
+        // Verify it doesn't panic and handles signals gracefully.
         let message = "记住，我喜欢用 Vim";
         let result = service
             .check_and_compress_with_signal(message)
             .await
             .unwrap();
 
-        // Learning signal should trigger deferred compression
-        // Since we only have 1 memory and turn threshold is not reached,
-        // the deferred priority just records and checks scheduler
-        // The result depends on scheduler state
-        assert!(result.is_some() || result.is_none()); // Either compressed or deferred
+        // Without raw memories, compression always returns None or empty result
+        assert!(result.is_some() || result.is_none());
     }
 }

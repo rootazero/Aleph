@@ -392,7 +392,6 @@ impl MemorySearchTool {
 
             debug!(
                 facts_count = retrieval_result.facts.len(),
-                transcripts_count = retrieval_result.raw_memories.len(),
                 "Long-term retrieval completed"
             );
 
@@ -403,7 +402,6 @@ impl MemorySearchTool {
 
             info!(
                 facts = arbitrated.facts.len(),
-                transcripts = arbitrated.raw_memories.len(),
                 tokens_saved = arbitrated.tokens_saved,
                 "Arbitration completed"
             );
@@ -420,16 +418,7 @@ impl MemorySearchTool {
                 })
                 .collect();
 
-            let transcripts: Vec<TranscriptResult> = arbitrated
-                .raw_memories
-                .into_iter()
-                .map(|t| TranscriptResult {
-                    user_input: t.user_input,
-                    ai_output: t.ai_output,
-                    context: t.context.window_title.clone(),
-                    similarity_score: t.similarity_score.unwrap_or(0.0),
-                })
-                .collect();
+            let transcripts: Vec<TranscriptResult> = Vec::new();
 
             (
                 facts,

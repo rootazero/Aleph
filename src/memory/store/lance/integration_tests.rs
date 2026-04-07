@@ -6,13 +6,12 @@
 //! 3. FTS index creation via `ensure_indexes()`
 //! 4. Vector search, text search, and hybrid search
 //! 5. Graph operations (node upsert, retrieval)
-//! 6. Session store (memory insert, stats)
-//! 7. Stats consistency
+//! 6. Stats consistency
 
-use crate::memory::context::{ContextAnchor, FactType, MemoryEntry, MemoryFact};
+use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::store::lance::LanceMemoryBackend;
 use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{GraphNode, GraphStore, MemoryStore, SessionStore};
+use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
 
 #[tokio::test]
 async fn test_full_memory_lifecycle() {
@@ -48,16 +47,6 @@ async fn test_full_memory_lifecycle() {
     // -----------------------------------------------------------------------
     // 2. Build FTS indexes (requires data to exist)
     // -----------------------------------------------------------------------
-    // Insert a memory so the memories table has data for FTS indexing
-    let mem1 = MemoryEntry::with_embedding(
-        "mem-int-1".to_string(),
-        ContextAnchor::with_timestamp("test.txt".to_string(), 1700000000),
-        "What is Aleph?".to_string(),
-        "Aleph is an AI assistant".to_string(),
-        vec![0.4f32; 1024],
-    );
-    backend.insert_memory(&mem1).await.unwrap();
-
     // Insert a graph node so the nodes table has data for FTS indexing
     let node = GraphNode {
         id: "aleph".to_string(),
@@ -72,7 +61,7 @@ async fn test_full_memory_lifecycle() {
     };
     backend.upsert_node(&node, "default").await.unwrap();
 
-    // Now build indexes — all tables have data
+    // Now build indexes — tables have data
     backend.ensure_indexes().await.unwrap();
 
     // -----------------------------------------------------------------------
@@ -117,13 +106,11 @@ async fn test_full_memory_lifecycle() {
     assert_eq!(retrieved_node.aliases, vec!["aleph-ai".to_string()]);
 
     // -----------------------------------------------------------------------
-    // 6. Session store — verify memory and stats
+    // 6. Fact stats
     // -----------------------------------------------------------------------
-    let stats = backend.get_stats().await.unwrap();
+    let stats = backend.get_fact_stats().await.unwrap();
     assert_eq!(stats.total_facts, 2, "should have 2 facts");
     assert_eq!(stats.valid_facts, 2, "both facts should be valid");
-    assert_eq!(stats.total_graph_nodes, 1, "should have 1 graph node");
-    assert_eq!(stats.total_memories, 1, "should have 1 memory entry");
 
     // -----------------------------------------------------------------------
     // 7. Additional fact operations — update and invalidate
@@ -150,7 +137,7 @@ async fn test_full_memory_lifecycle() {
     );
 
     // Verify stats after mutations
-    let stats_after = backend.get_stats().await.unwrap();
+    let stats_after = backend.get_fact_stats().await.unwrap();
     assert_eq!(stats_after.total_facts, 2, "total facts unchanged");
     assert_eq!(stats_after.valid_facts, 1, "only 1 valid fact remains");
 }
@@ -181,15 +168,6 @@ async fn test_ensure_indexes_idempotent() {
         agent: "default".to_string(),
     };
     backend.upsert_node(&node, "default").await.unwrap();
-
-    let mem = MemoryEntry::with_embedding(
-        "mem-test".to_string(),
-        ContextAnchor::with_timestamp("test".to_string(), 0),
-        "input".to_string(),
-        "output".to_string(),
-        vec![0.1f32; 1024],
-    );
-    backend.insert_memory(&mem).await.unwrap();
 
     // First call
     backend.ensure_indexes().await.unwrap();

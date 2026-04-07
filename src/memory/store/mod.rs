@@ -1,7 +1,7 @@
 //! Storage abstraction layer for the memory system.
 //!
-//! Provides the core storage trait definitions (`MemoryStore`, `GraphStore`,
-//! `SessionStore`) and supporting types used by LanceDB-backed (and any future)
+//! Provides the core storage trait definitions (`MemoryStore`, `GraphStore`)
+//! and supporting types used by LanceDB-backed (and any future)
 //! storage implementations.
 //!
 //! ## Trait Overview
@@ -10,9 +10,9 @@
 //!   for `MemoryFact` (Layer 2 compressed facts).
 //! - **`GraphStore`** -- Knowledge graph node/edge management, entity resolution,
 //!   and temporal decay.
-//! - **`SessionStore`** -- Raw memory entry (Layer 1) storage and retrieval.
 
 pub mod lance;
+pub mod sqlite;
 pub mod types;
 
 pub use lance::LanceMemoryBackend;
@@ -21,11 +21,11 @@ use async_trait::async_trait;
 
 use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
-use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryEntry, MemoryFact};
+use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryFact};
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 use crate::memory::namespace::NamespaceScope;
 
-use types::{MemoryFilter, ScoredFact, SearchFilter};
+use types::{ScoredFact, SearchFilter};
 
 /// Parameters for hybrid (vector + text) search.
 pub struct HybridSearchParams<'a> {
@@ -56,8 +56,6 @@ pub struct StoreStats {
     pub total_facts: usize,
     /// Number of currently valid facts.
     pub valid_facts: usize,
-    /// Total raw memory entries (Layer 1).
-    pub total_memories: usize,
     /// Total knowledge-graph nodes.
     pub total_graph_nodes: usize,
     /// Total knowledge-graph edges.
@@ -349,87 +347,6 @@ pub trait GraphStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// SessionStore -- Layer 1 (raw memory) storage trait
-// ---------------------------------------------------------------------------
-
-/// Abstraction over raw memory entry storage (Layer 1).
-///
-/// Provides insert, search, and retrieval for conversation-level memory
-/// entries that have not yet been compressed into facts.
-#[async_trait]
-pub trait SessionStore: Send + Sync {
-    /// Insert a new raw memory entry.
-    async fn insert_memory(&self, memory: &MemoryEntry) -> Result<(), AlephError>;
-
-    /// Vector-search over memory entry embeddings.
-    async fn search_memories(
-        &self,
-        embedding: &[f32],
-        filter: &MemoryFilter,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-
-    /// Get memories associated with a specific entity ID.
-    async fn get_memories_for_entity(
-        &self,
-        entity_id: &str,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-
-    /// Get the most recent memories matching a filter.
-    async fn get_recent_memories(
-        &self,
-        filter: &MemoryFilter,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-
-    /// Hard-delete a memory entry by ID.
-    async fn delete_memory(&self, id: &str) -> Result<(), AlephError>;
-
-    /// Get aggregate statistics across all storage layers.
-    async fn get_stats(&self) -> Result<StoreStats, AlephError>;
-
-    /// Get memories created at or after the given timestamp within a namespace.
-    ///
-    /// Used by the DreamDaemon for daily consolidation.
-    async fn get_memories_since(
-        &self,
-        since_timestamp: i64,
-        namespace: &NamespaceScope,
-        workspace: &str,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-
-    /// Delete memory entries older than the given cutoff timestamp.
-    ///
-    /// Returns the number of deleted entries. Used by cleanup services.
-    async fn delete_older_than(&self, cutoff_timestamp: i64) -> Result<u64, AlephError>;
-
-    /// Clear memories with an optional window title filter.
-    ///
-    /// When the filter is `None`, clears all memories.
-    /// Returns the number of deleted entries.
-    async fn clear_memories(&self, window_filter: Option<&str>) -> Result<u64, AlephError>;
-
-    /// Get uncompressed memories since a timestamp, up to a limit.
-    ///
-    /// Used by the compression service to find raw memories that
-    /// have not yet been distilled into facts.
-    async fn get_uncompressed_memories(
-        &self,
-        since_timestamp: i64,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-
-    /// Retrieve all memory entries, optionally filtered by workspace.
-    ///
-    /// Used by the reembed migration to scan all memories for dimension mismatches.
-    async fn get_all_memories(
-        &self,
-        workspace: Option<&str>,
-    ) -> Result<Vec<MemoryEntry>, AlephError>;
-}
-
-// ---------------------------------------------------------------------------
 // DreamStore -- Dream daemon persistence trait
 // ---------------------------------------------------------------------------
 
@@ -546,7 +463,7 @@ pub trait MemoryEventStore: Send + Sync {
 
 use crate::sync_primitives::Arc;
 
-/// Unified memory backend — provides MemoryStore + GraphStore + SessionStore.
+/// Unified memory backend — provides MemoryStore + GraphStore.
 ///
 /// This is the single entry point for all memory storage operations.
 /// Wraps `LanceMemoryBackend` in an `Arc` for shared ownership across

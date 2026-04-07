@@ -6,10 +6,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
-use crate::memory::context::{MemoryEntry, MemoryFact};
+use crate::memory::context::MemoryFact;
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::{MemoryFilter, SearchFilter};
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::types::SearchFilter;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 
@@ -39,19 +39,17 @@ impl Default for FactRetrievalConfig {
 pub struct RetrievalResult {
     /// Retrieved compressed facts
     pub facts: Vec<MemoryFact>,
-    /// Fallback raw memories (when facts insufficient)
-    pub raw_memories: Vec<MemoryEntry>,
 }
 
 impl RetrievalResult {
     /// Check if result is empty
     pub fn is_empty(&self) -> bool {
-        self.facts.is_empty() && self.raw_memories.is_empty()
+        self.facts.is_empty()
     }
 
     /// Total number of retrieved items
     pub fn len(&self) -> usize {
-        self.facts.len() + self.raw_memories.len()
+        self.facts.len()
     }
 }
 
@@ -118,26 +116,7 @@ impl FactRetrieval {
             })
             .collect();
 
-        // 2. If facts are insufficient, fallback to raw memories (scaled by deficit)
-        let raw_memories = if facts.len() < self.config.max_facts as usize {
-            let deficit = self.config.max_facts as usize - facts.len();
-            let remaining = deficit.min(self.config.max_raw_fallback as usize);
-
-            if remaining > 0 {
-                self.database
-                    .search_memories(&query_embedding, &MemoryFilter::default(), remaining)
-                    .await?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        Ok(RetrievalResult {
-            facts,
-            raw_memories,
-        })
+        Ok(RetrievalResult { facts })
     }
 
     /// Retrieve relevant context for a query within a specific workspace.
@@ -204,29 +183,7 @@ impl FactRetrieval {
             })
             .collect();
 
-        // Fallback to raw memories with same workspace filter (scaled by deficit)
-        let raw_memories = if facts.len() < self.config.max_facts as usize {
-            let deficit = self.config.max_facts as usize - facts.len();
-            let remaining = deficit.min(self.config.max_raw_fallback as usize);
-            if remaining > 0 {
-                let mem_filter = MemoryFilter {
-                    agent_filter: Some(filter),
-                    ..Default::default()
-                };
-                self.database
-                    .search_memories(query_embedding, &mem_filter, remaining)
-                    .await?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        Ok(RetrievalResult {
-            facts,
-            raw_memories,
-        })
+        Ok(RetrievalResult { facts })
     }
 
     /// Retrieve with custom limits
@@ -259,54 +216,21 @@ impl FactRetrieval {
             })
             .collect();
 
-        let raw_memories = if facts.len() < max_facts as usize && max_raw_fallback > 0 {
-            self.database
-                .search_memories(
-                    &query_embedding,
-                    &MemoryFilter::default(),
-                    max_raw_fallback as usize,
-                )
-                .await?
-        } else {
-            Vec::new()
-        };
+        let _ = max_raw_fallback; // no longer used — raw memory fallback removed
 
-        Ok(RetrievalResult {
-            facts,
-            raw_memories,
-        })
+        Ok(RetrievalResult { facts })
     }
 
     /// Format retrieval result as context for LLM
     pub fn format_context(result: &RetrievalResult) -> String {
         let mut context = String::new();
 
-        // Format facts
         if !result.facts.is_empty() {
             context.push_str("## Known User Information\n\n");
             for fact in &result.facts {
                 context.push_str(&format!("- {}\n", format_fact_with_source(fact)));
             }
             context.push('\n');
-        }
-
-        // Format raw memories
-        if !result.raw_memories.is_empty() {
-            context.push_str("## Related Conversation History\n\n");
-            for memory in &result.raw_memories {
-                // Truncate long responses
-                let ai_output: String = memory.ai_output.chars().take(300).collect();
-                let truncated = if memory.ai_output.chars().count() > 300 {
-                    format!("{}...", ai_output)
-                } else {
-                    ai_output
-                };
-
-                context.push_str(&format!(
-                    "**User**: {}\n**Assistant**: {}\n\n",
-                    memory.user_input, truncated
-                ));
-            }
         }
 
         context
@@ -322,23 +246,6 @@ impl FactRetrieval {
                 context.push_str(&format!("- {}\n", format_fact_with_source(fact)));
             }
             context.push('\n');
-        }
-
-        if !result.raw_memories.is_empty() {
-            context.push_str("## 相关对话历史\n\n");
-            for memory in &result.raw_memories {
-                let ai_output: String = memory.ai_output.chars().take(300).collect();
-                let truncated = if memory.ai_output.chars().count() > 300 {
-                    format!("{}...", ai_output)
-                } else {
-                    ai_output
-                };
-
-                context.push_str(&format!(
-                    "**用户**: {}\n**助手**: {}\n\n",
-                    memory.user_input, truncated
-                ));
-            }
         }
 
         context
@@ -563,7 +470,6 @@ mod tests {
 
         let result = RetrievalResult {
             facts,
-            raw_memories: vec![],
         };
 
         let context = FactRetrieval::format_context(&result);
@@ -586,7 +492,6 @@ mod tests {
 
         let result = RetrievalResult {
             facts,
-            raw_memories: vec![],
         };
 
         let context = FactRetrieval::format_context_zh(&result);
@@ -608,7 +513,6 @@ mod tests {
 
         let result = RetrievalResult {
             facts: vec![fact.clone()],
-            raw_memories: vec![],
         };
 
         let context = FactRetrieval::format_context(&result);
@@ -628,7 +532,6 @@ mod tests {
 
         let result = RetrievalResult {
             facts: vec![fact.clone()],
-            raw_memories: vec![],
         };
 
         let context = FactRetrieval::format_context(&result);

@@ -7,8 +7,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
-use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
@@ -98,41 +97,17 @@ impl Default for SearchParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"memory.search","params":{"limit":10},"id":1}
 /// ```
-pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: SearchParams = request
+pub async fn handle_search(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
+    let _params: SearchParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    let filter = crate::memory::store::types::MemoryFilter {
-        window_title: params.window_title.clone(),
-        agent_filter: params.agent_id.clone().map(AgentEnvFilter::Single),
-        ..Default::default()
-    };
-
-    // Without a query embedding, fall back to recent memories
-    match db.get_recent_memories(&filter, params.limit as usize).await {
-        Ok(memories) => {
-            let entries: Vec<MemoryEntry> = memories
-                .into_iter()
-                .map(|m| MemoryEntry {
-                    id: m.id,
-                    agent_id: m.agent,
-                    window_title: m.context.window_title,
-                    user_input: m.user_input,
-                    ai_output: m.ai_output,
-                    timestamp: m.context.timestamp,
-                    similarity_score: m.similarity_score,
-                })
-                .collect();
-
-            JsonRpcResponse::success(request.id, json!({ "memories": entries }))
-        }
-        Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Search failed: {}", e))
-        }
-    }
+    // Raw memory search removed — SessionStore no longer exists.
+    // Return empty results. Clients should use memory.list_facts instead.
+    let entries: Vec<MemoryEntry> = Vec::new();
+    JsonRpcResponse::success(request.id, json!({ "memories": entries }))
 }
 
 // ============================================================================
@@ -146,19 +121,15 @@ pub struct DeleteParams {
     pub id: String,
 }
 
-/// Delete a single memory
-pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: DeleteParams = match parse_params(&request) {
+/// Delete a single memory (no-op — raw memory storage removed)
+pub async fn handle_delete(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
+    let _params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    match db.delete_memory(&params.id).await {
-        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
-        Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Delete failed: {}", e))
-        }
-    }
+    // Raw memory deletion removed — SessionStore no longer exists.
+    JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 
 // ============================================================================
@@ -173,22 +144,16 @@ pub struct ClearParams {
     pub window_title: Option<String>,
 }
 
-/// Clear memories (with optional filters)
-pub async fn handle_clear(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    let params: ClearParams = request
+/// Clear memories (no-op — raw memory storage removed)
+pub async fn handle_clear(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
+    let _params: ClearParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db.clear_memories(params.window_title.as_deref()).await {
-        Ok(deleted_count) => {
-            JsonRpcResponse::success(request.id, json!({ "deletedCount": deleted_count }))
-        }
-        Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Clear failed: {}", e))
-        }
-    }
+    // Raw memory clearing removed — SessionStore no longer exists.
+    JsonRpcResponse::success(request.id, json!({ "deletedCount": 0 }))
 }
 
 // ============================================================================
@@ -294,15 +259,16 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 
 /// Get memory statistics
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    match db.get_stats().await {
+    // Fact stats via MemoryStore
+    match db.get_fact_stats().await {
         Ok(stats) => JsonRpcResponse::success(
             request.id,
             json!({
-                "totalMemories": stats.total_memories,
+                "totalMemories": 0,
                 "totalFacts": stats.total_facts,
                 "validFacts": stats.valid_facts,
-                "totalGraphNodes": stats.total_graph_nodes,
-                "totalGraphEdges": stats.total_graph_edges,
+                "totalGraphNodes": 0,
+                "totalGraphEdges": 0,
             }),
         ),
         Err(e) => JsonRpcResponse::error(

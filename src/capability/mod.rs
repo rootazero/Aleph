@@ -236,8 +236,7 @@ impl CapabilityExecutor {
         } else {
             info!(
                 facts_count = result.facts.len(),
-                raw_memories_count = result.raw_memories.len(),
-                "Retrieved memory context (facts + fallback)"
+                "Retrieved memory context (facts)"
             );
         }
 
@@ -248,12 +247,8 @@ impl CapabilityExecutor {
             Some(result.facts)
         };
 
-        // Store raw memories as fallback
-        payload.context.memory_snippets = if result.raw_memories.is_empty() {
-            None
-        } else {
-            Some(result.raw_memories)
-        };
+        // Raw memory fallback removed — SessionStore no longer exists.
+        payload.context.memory_snippets = None;
 
         Ok(payload)
     }

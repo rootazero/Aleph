@@ -6,7 +6,7 @@
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,23 +68,8 @@ pub async fn reembed_all(
     )
     .await?;
 
-    if cancel.load(Ordering::Relaxed) {
-        info!("[reembed] Cancelled after facts phase");
-        return Ok(result);
-    }
-
-    // Phase 2: Memories
-    info!(target_dim, batch_size, "[reembed] Starting memories phase");
-    reembed_memories(
-        database,
-        embedder,
-        target_dim,
-        batch_size,
-        &progress_tx,
-        &cancel,
-        &mut result,
-    )
-    .await?;
+    // Phase 2 (memories) removed — SessionStore no longer exists.
+    // Raw memories are stored in SessionManager's SQLite.
 
     info!(
         facts_updated = result.facts_updated,
@@ -183,113 +168,6 @@ async fn reembed_facts(
     }
 
     result.facts_updated = completed;
-    Ok(())
-}
-
-async fn reembed_memories(
-    database: &MemoryBackend,
-    embedder: &Arc<dyn EmbeddingProvider>,
-    target_dim: usize,
-    batch_size: usize,
-    progress_tx: &Option<tokio::sync::watch::Sender<ReembedProgress>>,
-    cancel: &AtomicBool,
-    result: &mut ReembedResult,
-) -> Result<(), AlephError> {
-    let all_memories = database.get_all_memories(None).await?;
-    result.memories_total = all_memories.len();
-
-    let needs_reembed: Vec<_> = all_memories
-        .into_iter()
-        .filter(|m| {
-            m.embedding
-                .as_ref()
-                .map(|e| e.len() != target_dim)
-                .unwrap_or(true)
-        })
-        .collect();
-
-    if needs_reembed.is_empty() {
-        info!("[reembed] All memories already have correct embeddings");
-        return Ok(());
-    }
-
-    info!(
-        needs_reembed = needs_reembed.len(),
-        "[reembed] Memories needing re-embedding"
-    );
-
-    let mut completed = 0usize;
-    let mut failed = 0usize;
-
-    for chunk in needs_reembed.chunks(batch_size) {
-        if cancel.load(Ordering::Relaxed) {
-            info!("[reembed] Cancelled during memories phase");
-            break;
-        }
-
-        // Embed text matches ingestion.rs: user_input + "\n\n" + ai_output
-        let texts: Vec<String> = chunk
-            .iter()
-            .map(|m| format!("{}\n\n{}", m.user_input, m.ai_output))
-            .collect();
-        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-
-        match embedder.embed_batch(&text_refs).await {
-            Ok(embeddings) => {
-                for (memory, embedding) in chunk.iter().zip(embeddings.into_iter()) {
-                    if embedding.len() != target_dim {
-                        warn!(
-                            memory_id = %memory.id,
-                            got_dim = embedding.len(),
-                            expected_dim = target_dim,
-                            "[reembed] Dimension mismatch, skipping"
-                        );
-                        failed += 1;
-                        result
-                            .errors
-                            .push(format!("memory {}: dimension mismatch", memory.id));
-                        continue;
-                    }
-                    let mut updated = memory.clone();
-                    updated.embedding = Some(embedding);
-
-                    // delete + insert (same pattern as update_fact)
-                    if let Err(e) = database.delete_memory(&memory.id).await {
-                        warn!(memory_id = %memory.id, error = %e, "[reembed] Failed to delete memory");
-                        failed += 1;
-                        result
-                            .errors
-                            .push(format!("memory {}: delete failed: {}", memory.id, e));
-                        continue;
-                    }
-                    if let Err(e) = database.insert_memory(&updated).await {
-                        warn!(memory_id = %memory.id, error = %e, "[reembed] Failed to insert memory");
-                        failed += 1;
-                        result
-                            .errors
-                            .push(format!("memory {}: insert failed: {}", memory.id, e));
-                    } else {
-                        completed += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(batch_size = chunk.len(), error = %e, "[reembed] Batch embed failed");
-                failed += chunk.len();
-                result.errors.push(format!("memories batch: {}", e));
-            }
-        }
-
-        send_progress(
-            progress_tx,
-            "memories",
-            result.memories_total,
-            completed,
-            failed,
-        );
-    }
-
-    result.memories_updated = completed;
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use crate::memory::context::{MemoryEntry, MemoryFact};
+use crate::memory::context::MemoryFact;
 
 /// Token budget for context window
 #[derive(Debug, Clone)]
@@ -28,7 +28,6 @@ impl TokenBudget {
 #[derive(Debug, Clone)]
 pub struct ArbitratedContext {
     pub facts: Vec<MemoryFact>,
-    pub raw_memories: Vec<MemoryEntry>,
     pub tokens_saved: usize,
 }
 

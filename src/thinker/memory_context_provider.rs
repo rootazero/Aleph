@@ -3,10 +3,10 @@
 //! PromptLayer::inject() is sync, so we pre-fetch LanceDB results here
 //! and store them in MemoryContext for the layer to format.
 
-use super::memory_context::{MemoryContext, MemorySummary};
+use super::memory_context::MemoryContext;
 use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::store::types::{MemoryFilter, ScoredFact, SearchFilter};
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::store::types::{ScoredFact, SearchFilter};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
@@ -15,8 +15,6 @@ use tracing::{debug, warn};
 pub struct MemoryContextConfig {
     /// Maximum number of facts to retrieve.
     pub max_facts: usize,
-    /// Maximum number of memories to retrieve.
-    pub max_memories: usize,
     /// Minimum cosine similarity threshold.
     pub similarity_threshold: f32,
     /// Maximum characters for the formatted output.
@@ -27,7 +25,6 @@ impl Default for MemoryContextConfig {
     fn default() -> Self {
         Self {
             max_facts: 5,
-            max_memories: 5,
             similarity_threshold: 0.3,
             max_output_chars: 8000, // ~2000 tokens
         }
@@ -89,16 +86,15 @@ impl MemoryContextProvider {
 
         let dim = embedding.len() as u32;
 
-        // 2. Search facts and memories in parallel (scoped to agent workspace + session)
-        let facts_future = self.search_facts(&embedding, dim, agent_id);
-        let memories_future = self.search_memories(&embedding, agent_id, session_id);
+        let _ = session_id; // no longer used — raw memory search removed
 
-        let (facts, memories) = tokio::join!(facts_future, memories_future);
+        // 2. Search facts (scoped to agent workspace)
+        let facts = self.search_facts(&embedding, dim, agent_id).await;
 
-        // 3. Build context
+        // 3. Build context (raw memory search removed)
         let mut ctx = MemoryContext {
             facts: facts.unwrap_or_default(),
-            memory_summaries: memories.unwrap_or_default(),
+            memory_summaries: Vec::new(),
             structured_index: None,
         };
 
@@ -135,44 +131,6 @@ impl MemoryContextProvider {
             })
     }
 
-    async fn search_memories(
-        &self,
-        embedding: &[f32],
-        agent_id: &str,
-        session_id: Option<&str>,
-    ) -> Result<Vec<MemorySummary>, ()> {
-        let filter = MemoryFilter {
-            agent_filter: Some(AgentEnvFilter::Single(agent_id.to_string())),
-            session_ids: session_id.map(|sid| vec![sid.to_string()]),
-            ..Default::default()
-        };
-        self.memory_db
-            .search_memories(embedding, &filter, self.config.max_memories)
-            .await
-            .map(|entries| {
-                entries
-                    .into_iter()
-                    .filter(|e| {
-                        e.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold
-                    })
-                    .map(|e| {
-                        let date = chrono::DateTime::from_timestamp(e.context.timestamp, 0)
-                            .map(|dt| dt.format("%Y-%m-%d").to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        MemorySummary {
-                            date,
-                            user_input: truncate_str(&e.user_input, 150),
-                            ai_output: truncate_str(&e.ai_output, 200),
-                            score: e.similarity_score.unwrap_or(0.0),
-                        }
-                    })
-                    .collect()
-            })
-            .map_err(|e| {
-                warn!(error = %e, "Memory augmentation: memories search failed");
-            })
-    }
-
     fn truncate_to_budget(&self, ctx: &mut MemoryContext) {
         // Remove memories first (lower priority), then facts
         while ctx.format_for_prompt().len() > self.config.max_output_chars
@@ -184,15 +142,5 @@ impl MemoryContextProvider {
         {
             ctx.facts.pop();
         }
-    }
-}
-
-/// Truncate a string to max_chars, appending "..." if truncated.
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{}...", truncated)
     }
 }
