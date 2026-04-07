@@ -162,6 +162,14 @@ mod tests {
         use tempfile::tempdir;
 
         let temp = tempdir().unwrap();
+        let sm_config = crate::gateway::session_manager::SessionManagerConfig {
+            db_path: temp.path().join("test_sessions.db"),
+            ..Default::default()
+        };
+        let sm = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(sm_config)
+                .expect("test session manager"),
+        );
         let config = AgentInstanceConfig {
             agent_id: "test".to_string(),
             workspace: temp.path().join("workspace"),
@@ -169,7 +177,7 @@ mod tests {
             ..Default::default()
         };
 
-        let agent = Arc::new(AgentInstance::new(config).unwrap());
+        let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
         let emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(NoOpEventEmitter::new());
         let adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter::new());
 

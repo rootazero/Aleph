@@ -46,9 +46,23 @@ impl EventEmitter for TestEmitter {
     }
 }
 
+fn test_session_manager(
+    temp: &tempfile::TempDir,
+) -> Arc<crate::gateway::session_manager::SessionManager> {
+    let config = crate::gateway::session_manager::SessionManagerConfig {
+        db_path: temp.path().join("test_sessions.db"),
+        ..Default::default()
+    };
+    Arc::new(
+        crate::gateway::session_manager::SessionManager::new(config)
+            .expect("test session manager"),
+    )
+}
+
 #[tokio::test]
 async fn test_simple_execution_engine_basic() {
     let temp = tempfile::tempdir().unwrap();
+    let sm = test_session_manager(&temp);
     let config = AgentInstanceConfig {
         agent_id: "test".to_string(),
         workspace: temp.path().join("workspace"),
@@ -56,7 +70,7 @@ async fn test_simple_execution_engine_basic() {
         ..Default::default()
     };
 
-    let agent = Arc::new(AgentInstance::new(config).unwrap());
+    let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
     let emitter = Arc::new(TestEmitter::new());
     let engine = SimpleExecutionEngine::default();
 
@@ -91,6 +105,7 @@ async fn test_simple_execution_engine_basic() {
 #[tokio::test]
 async fn test_simple_execution_engine_run() {
     let temp = tempfile::tempdir().unwrap();
+    let sm = test_session_manager(&temp);
     let config = AgentInstanceConfig {
         agent_id: "test-simple".to_string(),
         workspace: temp.path().join("workspace"),
@@ -98,7 +113,7 @@ async fn test_simple_execution_engine_run() {
         ..Default::default()
     };
 
-    let agent = Arc::new(AgentInstance::new(config).unwrap());
+    let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
     let emitter = Arc::new(TestEmitter::new());
     let engine = SimpleExecutionEngine::new(ExecutionEngineConfig {
         default_timeout_secs: 10,

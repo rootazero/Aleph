@@ -242,8 +242,23 @@ impl BuiltinToolRegistry {
             {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
+                let sm_for_agents = config
+                    .gateway_context
+                    .as_ref()
+                    .map(|ctx| Arc::clone(ctx.session_manager()))
+                    .or_else(|| config.session_manager.clone())
+                    .unwrap_or_else(|| {
+                        Arc::new(
+                            crate::gateway::SessionManager::with_defaults()
+                                .expect("fallback SessionManager for agent tools"),
+                        )
+                    });
                 let create = {
-                    let tool = agent_manage::AgentCreateTool::new(Arc::clone(ar), Arc::clone(wm));
+                    let tool = agent_manage::AgentCreateTool::new(
+                        Arc::clone(ar),
+                        Arc::clone(wm),
+                        Arc::clone(&sm_for_agents),
+                    );
                     if let Some(ref am) = config.agent_manager {
                         tool.with_agent_manager(Arc::clone(am))
                     } else {
@@ -394,10 +409,22 @@ impl BuiltinToolRegistry {
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::gateway::agent_instance::AgentRegistry::new()));
 
+            let sm_for_teams = config
+                .gateway_context
+                .as_ref()
+                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .or_else(|| config.session_manager.clone())
+                .unwrap_or_else(|| {
+                    Arc::new(
+                        crate::gateway::SessionManager::with_defaults()
+                            .expect("fallback SessionManager for team tools"),
+                    )
+                });
             let create = TeamCreateTool::new(
                 Arc::clone(store),
                 agent_registry,
                 config.agent_manager.clone(),
+                sm_for_teams,
                 current_agent_id.clone(),
             );
             let delegate = TeamDelegateTool::new(

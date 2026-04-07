@@ -1075,7 +1075,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let agent_id = config.agent_id.clone();
                 let agent_workspace = config.workspace.clone();
                 let agent_model = config.model.clone();
-                match alephcore::gateway::AgentInstance::with_session_manager(
+                match alephcore::gateway::AgentInstance::new(
                     config,
                     session_manager.clone(),
                 ) {
@@ -1102,7 +1102,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Legacy path: use FullGatewayConfig agents
             for agent_config in full_config.get_agent_instance_configs() {
                 let agent_id = agent_config.agent_id.clone();
-                match alephcore::gateway::AgentInstance::with_session_manager(
+                match alephcore::gateway::AgentInstance::new(
                     agent_config,
                     session_manager.clone(),
                 ) {

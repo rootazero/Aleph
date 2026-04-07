@@ -122,6 +122,7 @@ pub struct TeamCreateTool {
     store: Arc<dyn TeamStore>,
     registry: Arc<AgentRegistry>,
     agent_manager: Option<Arc<AgentManager>>,
+    session_manager: Arc<crate::gateway::session_manager::SessionManager>,
     /// Injected by ExecutionEngine: the ID of the agent calling this tool.
     pub current_agent_id: String,
 }
@@ -131,12 +132,14 @@ impl TeamCreateTool {
         store: Arc<dyn TeamStore>,
         registry: Arc<AgentRegistry>,
         agent_manager: Option<Arc<AgentManager>>,
+        session_manager: Arc<crate::gateway::session_manager::SessionManager>,
         current_agent_id: impl Into<String>,
     ) -> Self {
         Self {
             store,
             registry,
             agent_manager,
+            session_manager,
             current_agent_id: current_agent_id.into(),
         }
     }
@@ -316,7 +319,7 @@ impl TeamCreateTool {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config).map_err(|e| {
+        let instance = AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
             AlephError::other(format!(
                 "Failed to create agent instance '{}': {}",
                 spec.id, e

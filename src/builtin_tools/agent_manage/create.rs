@@ -147,14 +147,20 @@ pub struct AgentCreateTool {
     #[allow(dead_code)]
     workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
+    session_manager: Arc<crate::gateway::session_manager::SessionManager>,
 }
 
 impl AgentCreateTool {
-    pub fn new(registry: Arc<AgentRegistry>, workspace_mgr: Arc<AgentEnvStore>) -> Self {
+    pub fn new(
+        registry: Arc<AgentRegistry>,
+        workspace_mgr: Arc<AgentEnvStore>,
+        session_manager: Arc<crate::gateway::session_manager::SessionManager>,
+    ) -> Self {
         Self {
             registry,
             workspace_mgr,
             agent_manager: None,
+            session_manager,
         }
     }
 
@@ -324,7 +330,7 @@ impl AlephTool for AgentCreateTool {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config).map_err(|e| {
+        let instance = AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
             crate::error::AlephError::other(format!(
                 "Failed to create agent instance '{}': {}",
                 args.id, e
@@ -464,7 +470,16 @@ mod tests {
     fn test_create_tool_definition() {
         let registry = Arc::new(AgentRegistry::new());
         let workspace_mgr = test_workspace_mgr();
-        let tool = AgentCreateTool::new(registry, workspace_mgr);
+        let temp = tempfile::tempdir().unwrap();
+        let sm_config = crate::gateway::session_manager::SessionManagerConfig {
+            db_path: temp.path().join("test_sessions.db"),
+            ..Default::default()
+        };
+        let sm = Arc::new(
+            crate::gateway::session_manager::SessionManager::new(sm_config)
+                .expect("test session manager"),
+        );
+        let tool = AgentCreateTool::new(registry, workspace_mgr, sm);
         let def = AlephTool::definition(&tool);
 
         assert_eq!(def.name, "agent_create");
