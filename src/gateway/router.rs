@@ -496,7 +496,9 @@ impl AgentRouter {
             }
         };
 
-        // 5. Resolve current epoch so messages route to the latest session
+        // 5. Resolve current epoch so messages route to the latest session.
+        //    This handles browser refresh: session_key is lost but we resume
+        //    the most recent session rather than falling back to epoch 0.
         if let Some(ref sm) = self.session_manager {
             let base_pattern = base_key.base_key_pattern();
             match sm.get_current_epoch(&base_pattern).await {
