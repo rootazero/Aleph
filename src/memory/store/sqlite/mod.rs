@@ -341,6 +341,41 @@ impl SqliteMemoryBackend {
         Ok(affected)
     }
 
+    /// Invalidate session-local facts older than `retention_hours`.
+    ///
+    /// Targets facts with `scope = 'session_local'` and session paths
+    /// whose `created_at` is older than `now - retention_hours`.
+    pub fn cleanup_expired_sessions(&self, retention_hours: u64) -> Result<usize, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let cutoff = now - (retention_hours * 3600) as i64;
+
+        let sql = "UPDATE facts SET is_valid = 0, \
+                   invalidation_reason = 'session_expired', \
+                   updated_at = ?1 \
+                   WHERE scope = 'session_local' \
+                   AND path LIKE 'aleph://session/%' \
+                   AND created_at < ?2 \
+                   AND is_valid = 1";
+
+        let affected = conn
+            .execute(sql, rusqlite::params![now, cutoff])
+            .map_err(|e| AlephError::config(format!("cleanup_expired_sessions failed: {e}")))?;
+
+        if affected > 0 {
+            tracing::info!(invalidated = affected, cutoff_hours = retention_hours, "Session cleanup");
+        }
+
+        Ok(affected)
+    }
+
     /// Count compressed/extracted facts (excluding raw memories).
     pub fn count_compressed_facts(&self) -> Result<i64, AlephError> {
         let conn = self

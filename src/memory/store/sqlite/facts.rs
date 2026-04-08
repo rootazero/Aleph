@@ -1433,4 +1433,52 @@ mod tests {
         let f3_after = backend.get_fact(&f3.id).await.unwrap().unwrap();
         assert!(f3_after.is_valid);
     }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_sessions() {
+        let (backend, _dir) = test_backend();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Insert an old session fact (25 hours ago)
+        let mut old = MemoryFact::new("old session summary".into(), FactType::Other, vec![]);
+        old.path = "aleph://session/old-sess/d2/0".into();
+        old.fact_source = FactSource::SessionCompressed;
+        old.scope = MemoryScope::SessionLocal;
+        old.created_at = now - 25 * 3600;
+        old.updated_at = old.created_at;
+        backend.insert_fact(&old).await.unwrap();
+
+        // Insert a recent session fact (1 hour ago)
+        let mut recent = MemoryFact::new("recent session".into(), FactType::Other, vec![]);
+        recent.path = "aleph://session/new-sess/d0/0".into();
+        recent.fact_source = FactSource::SessionCompressed;
+        recent.scope = MemoryScope::SessionLocal;
+        recent.created_at = now - 3600;
+        recent.updated_at = recent.created_at;
+        backend.insert_fact(&recent).await.unwrap();
+
+        // Insert a global fact (should NOT be touched)
+        let global = MemoryFact::new("global fact".into(), FactType::Preference, vec![]);
+        backend.insert_fact(&global).await.unwrap();
+
+        // Cleanup with 24h retention
+        let count = backend.cleanup_expired_sessions(24).unwrap();
+        assert_eq!(count, 1);
+
+        // Old session fact invalidated
+        let old_after = backend.get_fact(&old.id).await.unwrap().unwrap();
+        assert!(!old_after.is_valid);
+
+        // Recent session fact still valid
+        let recent_after = backend.get_fact(&recent.id).await.unwrap().unwrap();
+        assert!(recent_after.is_valid);
+
+        // Global fact untouched
+        let global_after = backend.get_fact(&global.id).await.unwrap().unwrap();
+        assert!(global_after.is_valid);
+    }
 }
