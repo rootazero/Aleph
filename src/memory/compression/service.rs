@@ -207,19 +207,58 @@ impl CompressionService {
             "Starting memory compression"
         );
 
-        // 3. Extract facts using LLM
-        let extracted_facts = match self.extractor.extract_facts(&memories).await {
-            Ok(facts) => facts,
+        // 2b. C-layer dedup: fetch existing non-session facts as context
+        let existing_fact_contents: Vec<String> = self
+            .database
+            .get_all_facts(false, None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| !f.path.starts_with("aleph://session/"))
+            .take(20)
+            .map(|f| f.content)
+            .collect();
+
+        // 3. Extract facts + entities + relationships using unified LLM call
+        let unified_result = match self
+            .extractor
+            .extract_unified(&memories, &existing_fact_contents)
+            .await
+        {
+            Ok(result) => result,
             Err(e) => {
-                tracing::error!(error = %e, "Failed to extract facts from memories");
+                tracing::error!(error = %e, "Unified extraction failed");
                 return Err(e);
             }
         };
 
         tracing::info!(
-            extracted_count = extracted_facts.len(),
-            "Extracted facts from memories"
+            facts = unified_result.facts.len(),
+            entities = unified_result.entities.len(),
+            relationships = unified_result.relationships.len(),
+            "Unified extraction completed"
         );
+
+        // Generate embeddings for extracted facts
+        let mut extracted_facts = Vec::new();
+        for extracted_fact in &unified_result.facts {
+            match self.extractor.embedder().embed(&extracted_fact.content).await {
+                Ok(embedding) => {
+                    let fact = crate::memory::context::MemoryFact::new(
+                        extracted_fact.content.clone(),
+                        crate::memory::context::FactType::from_str_or_other(&extracted_fact.fact_type),
+                        extracted_fact.source_ids.clone(),
+                    )
+                    .with_embedding(embedding)
+                    .with_confidence(extracted_fact.confidence);
+                    extracted_facts.push(fact);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Embedding failed, skipping fact");
+                    continue;
+                }
+            }
+        }
 
         // 4. Process each fact (conflict detection and storage)
         //    Tag each fact with the target workspace for memory isolation.
@@ -275,9 +314,8 @@ impl CompressionService {
                         content = %fact.content,
                         "Stored compressed fact"
                     );
-                    if let Err(e) = self.graph_store.update_from_fact(&fact, &memories).await {
-                        tracing::warn!(error = %e, fact_id = %fact.id, "Failed to update graph from fact");
-                    }
+                    // Graph updates are now done in bulk after the storage loop
+                    // using unified extraction results (entities + relationships).
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -286,6 +324,31 @@ impl CompressionService {
                         "Failed to store fact"
                     );
                 }
+            }
+        }
+
+        // 4x. Update knowledge graph from extracted entities and relationships
+        for entity in &unified_result.entities {
+            if let Err(e) = self
+                .graph_store
+                .upsert_entity(&entity.name, &entity.kind, &entity.aliases)
+                .await
+            {
+                tracing::warn!(error = %e, entity = %entity.name, "Failed to upsert entity");
+            }
+        }
+        for rel in &unified_result.relationships {
+            if let Err(e) = self
+                .graph_store
+                .upsert_relationship(
+                    &rel.subject,
+                    &rel.relation,
+                    &rel.object,
+                    rel.context.as_deref(),
+                )
+                .await
+            {
+                tracing::warn!(error = %e, "Failed to upsert relationship");
             }
         }
 

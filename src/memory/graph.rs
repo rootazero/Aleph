@@ -446,6 +446,49 @@ impl GraphStore {
         })
     }
 
+    /// Upsert a named entity into the knowledge graph.
+    ///
+    /// Creates or updates a graph node with the given name, kind, and aliases.
+    /// Used by CompressionService with LLM-extracted entity data.
+    pub async fn upsert_entity(
+        &self,
+        name: &str,
+        kind: &str,
+        aliases: &[String],
+    ) -> Result<(), AlephError> {
+        self.upsert_node(name, kind, aliases, None).await?;
+        Ok(())
+    }
+
+    /// Upsert a relationship triple into the knowledge graph.
+    ///
+    /// Creates or updates an edge between two named entities.
+    /// Auto-creates entities as "unknown" kind if they don't exist yet.
+    pub async fn upsert_relationship(
+        &self,
+        subject: &str,
+        relation: &str,
+        object: &str,
+        context: Option<&str>,
+    ) -> Result<(), AlephError> {
+        // Ensure both entities exist (auto-create as "unknown" if missing)
+        let subject_node = self.upsert_node(subject, "unknown", &[], None).await?;
+        let object_node = self.upsert_node(object, "unknown", &[], None).await?;
+
+        let context_key = context.unwrap_or_default();
+        self.upsert_edge(
+            &subject_node.id,
+            &object_node.id,
+            relation,
+            context_key,
+            1.0,
+            1.0,
+        )
+        .await?;
+
+        Ok(())
+    }
+
     /// Update graph from a compressed fact.
     pub async fn update_from_fact(
         &self,
