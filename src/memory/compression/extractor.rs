@@ -82,6 +82,106 @@ impl FactExtractor {
         Self { provider, embedder }
     }
 
+    /// Access the embedding provider.
+    pub fn embedder(&self) -> &Arc<dyn EmbeddingProvider> {
+        &self.embedder
+    }
+
+    /// Build the system prompt for unified extraction (facts + entities + relationships).
+    ///
+    /// When `existing_facts` is non-empty, they are injected as context to
+    /// prevent re-extraction of known information (C-layer deduplication).
+    pub fn get_unified_system_prompt(&self, existing_facts: &[String]) -> String {
+        let mut prompt = r#"You are a memory compression assistant. Extract key facts, entities, and relationships from conversations.
+
+RULES FOR FACTS:
+1. Write facts in THIRD PERSON (e.g., "The user prefers Rust", NOT "I prefer Rust")
+2. Each fact should be a single, atomic statement
+3. Classify each fact: preference, plan, learning, project, personal, other
+4. Assign confidence (0.0-1.0) based on certainty
+5. Extract 0-10 facts maximum per batch
+6. Focus on ACTIONABLE or MEMORABLE information
+7. Ignore greetings, small talk, transient information
+
+RULES FOR ENTITIES:
+1. Extract named entities: people, technologies, projects, organizations, tools
+2. Support both English and Chinese entity names
+3. Include aliases if known (e.g., "Rust" aliases: ["rust-lang"])
+4. Classify kind: person, technology, project, organization, tool, concept, place, other
+
+RULES FOR RELATIONSHIPS:
+1. Extract (subject, relation, object) triples
+2. relation is free text: uses, works_on, prefers, knows, is_a, belongs_to, etc.
+3. Include optional context for the relationship
+4. "user" is a valid subject for user-related relationships
+
+OUTPUT FORMAT (JSON only, no markdown code blocks):
+{
+  "facts": [
+    { "content": "The user prefers Rust for backend", "fact_type": "preference", "confidence": 0.9, "source_ids": ["id1"] }
+  ],
+  "entities": [
+    { "name": "Rust", "kind": "technology", "aliases": ["rust-lang"] }
+  ],
+  "relationships": [
+    { "subject": "user", "relation": "uses", "object": "Rust", "context": "backend development" }
+  ]
+}"#
+            .to_string();
+
+        if !existing_facts.is_empty() {
+            prompt.push_str("\n\nYou already know these facts — do NOT re-extract them. Only output genuinely NEW or UPDATED information:\n");
+            for (i, fact) in existing_facts.iter().enumerate() {
+                prompt.push_str(&format!("{}. {}\n", i + 1, fact));
+            }
+        }
+
+        prompt
+    }
+
+    /// Extract facts, entities, and relationships from memories in a single LLM call.
+    ///
+    /// `existing_facts` contains content strings of related facts already in the database,
+    /// injected to prevent re-extraction (C-layer deduplication).
+    pub async fn extract_unified(
+        &self,
+        memories: &[MemoryEntry],
+        existing_facts: &[String],
+    ) -> Result<UnifiedExtractionResponse, AlephError> {
+        if memories.is_empty() {
+            return Ok(UnifiedExtractionResponse {
+                facts: vec![],
+                entities: vec![],
+                relationships: vec![],
+            });
+        }
+
+        let system_prompt = self.get_unified_system_prompt(existing_facts);
+        let user_prompt = self.build_extraction_prompt(memories);
+
+        let msgs = [UnifiedMessage::user(&user_prompt)];
+        let response = self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(&system_prompt)))
+            .await
+            .map_err(|e| AlephError::other(format!("Unified extraction LLM call failed: {e}")))?;
+
+        let mut result = parse_unified_response(&response.text_content())?;
+
+        // Validate source_ids on extracted facts
+        let memory_ids: Vec<String> = memories.iter().map(|m| m.id.clone()).collect();
+        for fact in &mut result.facts {
+            if fact.source_ids.is_empty()
+                || fact.source_ids.iter().any(|id| !memory_ids.contains(id))
+            {
+                fact.source_ids = memory_ids.clone();
+            }
+            fact.confidence = fact.confidence.clamp(0.0, 1.0);
+        }
+
+        Ok(result)
+    }
+
     /// Extract facts from a batch of memories
     pub async fn extract_facts(
         &self,
