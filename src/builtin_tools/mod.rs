@@ -67,6 +67,7 @@ pub mod pim;
 pub mod recall_context;
 pub mod scratchpad;
 pub mod search;
+pub mod self_config;
 pub mod self_manage;
 pub mod session_search;
 pub mod sessions;
@@ -110,7 +111,7 @@ pub use config_guide::{
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use error::ToolError;
-pub use file_ops::{FileOpsArgs, FileOpsTool};
+pub use file_ops::{FileEditTool, FileOpsArgs, FileOpsTool, FileReadTool, FileWriteTool};
 pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,
