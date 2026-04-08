@@ -13,6 +13,7 @@ mod sessions;
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
+use crate::memory::store::MemoryStore;
 use crate::sync_primitives::Mutex;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -377,6 +378,63 @@ impl SqliteMemoryBackend {
     }
 
     /// Count compressed/extracted facts (excluding raw memories).
+    /// Apply Ebbinghaus decay to facts of a specific memory tier.
+    ///
+    /// Each tier uses its own half-life and min-strength threshold:
+    /// - ShortTerm: aggressive (1 day half-life)
+    /// - LongTerm: gradual (30 day half-life)
+    /// - Core: near-permanent (365 day half-life)
+    ///
+    /// Returns the number of facts updated or invalidated.
+    pub async fn apply_fact_decay_by_tier(
+        &self,
+        tier: &str,
+        half_life_days: f64,
+        min_strength: f32,
+    ) -> Result<usize, AlephError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Get all valid facts filtered by tier
+        let all_facts = self.get_all_facts(false, None).await?;
+        let tier_facts: Vec<_> = all_facts
+            .into_iter()
+            .filter(|f| f.tier.as_str() == tier)
+            .collect();
+
+        let mut affected = 0usize;
+
+        for fact in &tier_facts {
+            let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
+            let days_since_access = (now - last_access).max(0) as f64 / 86400.0;
+
+            // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
+            let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days).exp() as f32;
+            let new_confidence = fact.confidence * decay;
+
+            if new_confidence < min_strength {
+                let mut invalidated = fact.clone();
+                invalidated.is_valid = false;
+                invalidated.invalidation_reason = Some("decay_prune".to_string());
+                invalidated.decay_invalidated_at = Some(now);
+                invalidated.confidence = new_confidence;
+                invalidated.updated_at = now;
+                self.update_fact(&invalidated).await?;
+                affected += 1;
+            } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
+                let mut updated = fact.clone();
+                updated.confidence = new_confidence;
+                updated.updated_at = now;
+                self.update_fact(&updated).await?;
+                affected += 1;
+            }
+        }
+
+        Ok(affected)
+    }
+
     pub fn count_compressed_facts(&self) -> Result<i64, AlephError> {
         let conn = self
             .conn

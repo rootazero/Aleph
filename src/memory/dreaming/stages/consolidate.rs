@@ -1,7 +1,9 @@
 //! ConsolidateStage: promotes STM facts to LTM and prunes weak facts.
 //!
 //! Iterates all valid facts and applies two checks:
-//! - **Consolidation**: ShortTerm facts with strength >= threshold are upgraded to LongTerm.
+//! - **Consolidation**: ShortTerm facts with access_count >= 2 AND strength >= threshold
+//!   are upgraded to LongTerm. This prevents freshly-created facts (default strength 1.0)
+//!   from being promoted before they've been actually used in conversations.
 //! - **Pruning**: non-Core facts with strength < pruning threshold are invalidated.
 
 use async_trait::async_trait;

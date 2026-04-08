@@ -35,7 +35,7 @@ impl DreamStage for DecayStage {
 
         // 2. Apply fact decay with Ebbinghaus exponential curve
         let half_life_days = ctx.memory_decay_config.half_life_days;
-        let min_strength = ctx.memory_decay_config.min_strength;
+        let _min_strength = ctx.memory_decay_config.min_strength;
         let now_ts = crate::memory::dreaming::now_timestamp();
 
         // Optionally emit decay events via command_handler for audit trail
@@ -70,14 +70,30 @@ impl DreamStage for DecayStage {
             }
         }
 
-        // 3. Apply the actual LanceDB fact decay update
-        let decayed_count = ctx
-            .database
-            .apply_fact_decay(half_life_days, min_strength)
-            .await?;
+        // 3. Apply tiered fact decay — each tier has its own half-life
+        //    ShortTerm: 1 day (aggressive cleanup of session facts)
+        //    LongTerm: 30 days (gradual decay of extracted facts)
+        //    Core: 365 days (near-permanent identity facts)
+        let tiers: [(&str, f64, f32); 3] = [
+            ("short_term", 1.0, 0.1),
+            ("long_term", 30.0, 0.05),
+            ("core", 365.0, 0.01),
+        ];
+
+        let mut total_decayed: usize = 0;
+        for (tier, tier_half_life, tier_min_str) in &tiers {
+            let count = ctx
+                .database
+                .apply_fact_decay_by_tier(tier, *tier_half_life, *tier_min_str)
+                .await?;
+            if count > 0 {
+                info!(tier, decayed = count, half_life = *tier_half_life, "Tiered decay applied");
+            }
+            total_decayed += count;
+        }
 
         info!(
-            decayed_count,
+            decayed_count = total_decayed,
             graph_pruned_nodes = graph_report.pruned_nodes,
             graph_pruned_edges = graph_report.pruned_edges,
             "DecayStage: decay cycle complete"
@@ -85,7 +101,7 @@ impl DreamStage for DecayStage {
 
         ctx.graph_decay_report = Some(graph_report);
         ctx.memory_decay_report = Some(MemoryDecayReport {
-            updated_facts: decayed_count as u64,
+            updated_facts: total_decayed as u64,
             pruned_facts: 0,
         });
 

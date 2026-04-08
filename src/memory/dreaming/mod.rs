@@ -577,9 +577,14 @@ impl Default for ConsolidationPipelineConfig {
 }
 
 /// Check if a STM fact qualifies for consolidation into LTM.
-/// Only ShortTerm facts with sufficient strength are candidates.
+///
+/// Requires that a fact has been actually USED (retrieved in conversations)
+/// before promotion — not just created with default strength 1.0.
+/// Conditions: ShortTerm tier, accessed at least twice, strength >= threshold.
 pub fn should_consolidate(fact: &MemoryFact, strength_threshold: f32) -> bool {
-    fact.tier == MemoryTier::ShortTerm && fact.strength >= strength_threshold
+    fact.tier == MemoryTier::ShortTerm
+        && fact.access_count >= 2
+        && fact.strength >= strength_threshold
 }
 
 /// Check if a fact should be pruned (deleted permanently).
@@ -675,11 +680,30 @@ mod consolidation_tests {
     use crate::memory::context::{FactType, MemoryFact, MemoryTier};
 
     #[test]
-    fn test_should_consolidate_stm_high_strength() {
+    fn test_should_consolidate_stm_high_strength_and_accessed() {
         let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
         fact.tier = MemoryTier::ShortTerm;
         fact.strength = 0.7;
+        fact.access_count = 3;
         assert!(should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_not_consolidate_low_access_count() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 0.7;
+        fact.access_count = 1; // only accessed once — not enough
+        assert!(!should_consolidate(&fact, 0.6));
+    }
+
+    #[test]
+    fn test_should_not_consolidate_zero_access() {
+        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
+        fact.tier = MemoryTier::ShortTerm;
+        fact.strength = 1.0; // default strength, never used
+        fact.access_count = 0;
+        assert!(!should_consolidate(&fact, 0.6));
     }
 
     #[test]
@@ -687,6 +711,7 @@ mod consolidation_tests {
         let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
         fact.tier = MemoryTier::ShortTerm;
         fact.strength = 0.4;
+        fact.access_count = 5;
         assert!(!should_consolidate(&fact, 0.6));
     }
 
@@ -695,6 +720,7 @@ mod consolidation_tests {
         let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
         fact.tier = MemoryTier::LongTerm;
         fact.strength = 0.9;
+        fact.access_count = 10;
         assert!(!should_consolidate(&fact, 0.6));
     }
 
@@ -703,6 +729,7 @@ mod consolidation_tests {
         let mut fact = MemoryFact::new("test".into(), FactType::Personal, vec![]);
         fact.tier = MemoryTier::Core;
         fact.strength = 0.9;
+        fact.access_count = 10;
         assert!(!should_consolidate(&fact, 0.6));
     }
 
