@@ -6,6 +6,7 @@
 
 pub mod diagnostics;
 pub mod pipeline;
+pub mod preflight;
 pub mod pressure;
 
 use super::tool::ToolDefinition;
