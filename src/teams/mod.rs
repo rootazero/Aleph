@@ -1,13 +1,14 @@
 //! Team management module.
 //!
 //! Provides types and a SQLite-backed store for managing teams of agents,
-//! team membership, and per-team task tracking.
+//! team membership, per-team task tracking, lifecycle management, and plan approval.
 
 pub mod artifacts;
 pub mod context;
 pub mod events;
+pub mod lifecycle;
 pub mod messages;
-pub mod roles;
+pub mod plans;
 pub mod sessions;
 pub mod store;
 pub mod types;
