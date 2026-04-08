@@ -35,13 +35,7 @@ fn row_to_fact(row: &rusqlite::Row) -> rusqlite::Result<MemoryFact> {
 
 /// Public variant of `row_to_fact` for use by `SqliteMemoryBackend` methods in `mod.rs`.
 pub(super) fn row_to_fact_pub(row: &rusqlite::Row) -> rusqlite::Result<MemoryFact> {
-    let tags_json: Option<String> = row.get("tags")?;
     let source_ids_json: Option<String> = row.get("source_memory_ids")?;
-
-    let tags: Vec<String> = tags_json
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let _ = tags; // tags not stored on MemoryFact directly; they are in source_memory_ids
 
     let source_memory_ids: Vec<String> = source_ids_json
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -398,7 +392,7 @@ impl MemoryStore for SqliteMemoryBackend {
     }
 
     async fn update_fact(&self, fact: &MemoryFact) -> Result<(), AlephError> {
-        // Validate content before delete to avoid data loss
+        // Validate content before acquiring lock to avoid holding it unnecessarily
         if let crate::memory::content_scanner::ScanVerdict::Rejected { reason, pattern } =
             crate::memory::content_scanner::scan_content(&fact.content)
         {
@@ -413,9 +407,21 @@ impl MemoryStore for SqliteMemoryBackend {
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        // Delete old row (with vec + FTS cleanup), then insert new
-        delete_fact_inner(&conn, &fact.id)?;
-        insert_fact_inner(&conn, fact)
+        // Wrap delete+insert in a transaction to prevent data loss if insert fails
+        conn.execute_batch("BEGIN TRANSACTION")
+            .map_err(|e| AlephError::config(format!("Failed to begin update transaction: {e}")))?;
+
+        if let Err(e) = delete_fact_inner(&conn, &fact.id)
+            .and_then(|_| insert_fact_inner(&conn, fact))
+        {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
+        }
+
+        conn.execute_batch("COMMIT")
+            .map_err(|e| AlephError::config(format!("Failed to commit update transaction: {e}")))?;
+
+        Ok(())
     }
 
     async fn delete_fact(&self, id: &str) -> Result<(), AlephError> {
@@ -474,53 +480,69 @@ impl MemoryStore for SqliteMemoryBackend {
             return Ok(Vec::new());
         }
 
-        let (filter_clause, filter_params) = build_filter_clause(filter, 1);
+        // Build a distance lookup from KNN results
+        let distance_map: HashMap<i64, f64> = knn_results.iter().copied().collect();
+        let rowids: Vec<i64> = knn_results.iter().map(|(r, _)| *r).collect();
+
+        // Batch query: fetch all matching facts in one SQL statement
+        let rowid_placeholders: Vec<String> =
+            (1..=rowids.len()).map(|i| format!("?{i}")).collect();
+
+        let (filter_clause, filter_params) = build_filter_clause(filter, rowids.len());
+
+        let sql = format!(
+            "SELECT rowid, * FROM facts WHERE rowid IN ({}){}",
+            rowid_placeholders.join(", "),
+            if filter_clause.is_empty() {
+                String::new()
+            } else {
+                format!(" AND {}", &filter_clause[7..]) // skip " WHERE "
+            }
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = rowids
+            .iter()
+            .map(|r| Box::new(*r) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        for p in &filter_params {
+            all_params.push(clone_tosql_param(p));
+        }
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            all_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| AlephError::config(format!("vec search query failed: {e}")))?;
+
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let rowid: i64 = row.get::<_, i64>(0)?; // first column is explicit rowid
+                let fact = row_to_fact(row)?;
+                Ok((fact, rowid))
+            })
+            .map_err(|e| AlephError::config(format!("vec search batch query failed: {e}")))?;
 
         let mut results = Vec::with_capacity(limit);
-        for (rowid, distance) in &knn_results {
-            // Build query with filter
-            let sql = format!(
-                "SELECT * FROM facts WHERE rowid = ?1{}",
-                if filter_clause.is_empty() {
-                    String::new()
-                } else {
-                    // Append additional conditions after the rowid check
-                    format!(" AND {}", &filter_clause[7..]) // skip " WHERE "
-                }
-            );
-
-            let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                vec![Box::new(*rowid)];
-            for p in &filter_params {
-                // We need to clone the boxed values; use a string representation approach
-                all_params.push(clone_tosql_param(p));
-            }
-
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                all_params.iter().map(|p| p.as_ref()).collect();
-
-            let mut stmt = conn
-                .prepare(&sql)
-                .map_err(|e| AlephError::config(format!("vec search query failed: {e}")))?;
-
-            let fact_opt = stmt
-                .query_row(param_refs.as_slice(), row_to_fact)
-                .optional()
-                .map_err(|e| {
-                    AlephError::config(format!("vec search row read failed: {e}"))
-                })?;
-
-            if let Some(fact) = fact_opt {
-                let score = 1.0 / (1.0 + distance);
-                results.push(ScoredFact {
-                    fact,
-                    score: score as f32,
-                });
-                if results.len() >= limit {
-                    break;
-                }
-            }
+        for row in rows {
+            let (fact, rowid) = row.map_err(|e| {
+                AlephError::config(format!("vec search row read failed: {e}"))
+            })?;
+            let distance = distance_map.get(&rowid).copied().unwrap_or(1.0);
+            let score = 1.0 / (1.0 + distance);
+            results.push(ScoredFact {
+                fact,
+                score: score as f32,
+            });
         }
+
+        // Sort by score descending (KNN order may not be preserved after IN query)
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
 
         Ok(results)
     }
@@ -1030,12 +1052,29 @@ impl MemoryStore for SqliteMemoryBackend {
     ) -> Result<usize, AlephError> {
         let now = now_unix();
 
-        // Get all valid facts
-        let all_facts = self.get_all_facts(false, None).await?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        // Read all valid facts under the same lock to prevent TOCTOU races
+        let mut stmt = conn
+            .prepare("SELECT * FROM facts WHERE is_valid = 1")
+            .map_err(|e| AlephError::config(format!("apply_fact_decay prepare: {e}")))?;
+
+        let all_facts: Vec<MemoryFact> = stmt
+            .query_map([], row_to_fact)
+            .map_err(|e| AlephError::config(format!("apply_fact_decay query: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("apply_fact_decay collect: {e}")))?;
+        drop(stmt);
+
+        conn.execute_batch("BEGIN TRANSACTION")
+            .map_err(|e| AlephError::config(format!("apply_fact_decay begin: {e}")))?;
+
         let mut affected = 0usize;
 
         for fact in &all_facts {
-            // Compute days since last access (or creation if never accessed)
             let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
             let days_since_access = (now - last_access).max(0) as f64 / 86400.0;
 
@@ -1045,22 +1084,33 @@ impl MemoryStore for SqliteMemoryBackend {
             let new_confidence = fact.confidence * decay;
 
             if new_confidence < min_score {
-                let mut invalidated = fact.clone();
-                invalidated.is_valid = false;
-                invalidated.invalidation_reason = Some("decay_prune".to_string());
-                invalidated.decay_invalidated_at = Some(now);
-                invalidated.confidence = new_confidence;
-                invalidated.updated_at = now;
-                self.update_fact(&invalidated).await?;
+                // Invalidate: soft-delete via UPDATE (cheaper than delete+insert)
+                conn.execute(
+                    "UPDATE facts SET is_valid = 0, invalidation_reason = 'decay_prune', \
+                     decay_invalidated_at = ?1, confidence = ?2, updated_at = ?3 \
+                     WHERE id = ?4",
+                    rusqlite::params![now, new_confidence as f64, now, fact.id],
+                )
+                .map_err(|e| {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    AlephError::config(format!("apply_fact_decay invalidate: {e}"))
+                })?;
                 affected += 1;
             } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
-                let mut updated = fact.clone();
-                updated.confidence = new_confidence;
-                updated.updated_at = now;
-                self.update_fact(&updated).await?;
+                conn.execute(
+                    "UPDATE facts SET confidence = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![new_confidence as f64, now, fact.id],
+                )
+                .map_err(|e| {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    AlephError::config(format!("apply_fact_decay update: {e}"))
+                })?;
                 affected += 1;
             }
         }
+
+        conn.execute_batch("COMMIT")
+            .map_err(|e| AlephError::config(format!("apply_fact_decay commit: {e}")))?;
 
         Ok(affected)
     }
@@ -1145,7 +1195,7 @@ impl MemoryStore for SqliteMemoryBackend {
 ///
 /// This is needed because `dyn ToSql` is not `Clone`. We support the types
 /// that `build_filter_clause` actually produces: String, i32, i64, f64.
-fn clone_tosql_param(param: &Box<dyn rusqlite::types::ToSql>) -> Box<dyn rusqlite::types::ToSql> {
+fn clone_tosql_param(param: &dyn rusqlite::types::ToSql) -> Box<dyn rusqlite::types::ToSql> {
     use rusqlite::types::ToSqlOutput;
 
     // Use to_sql() to get the value and reconstruct
@@ -1162,6 +1212,71 @@ fn clone_tosql_param(param: &Box<dyn rusqlite::types::ToSql>) -> Box<dyn rusqlit
             // Fallback: convert to string representation
             Box::new(format!("{:?}", other))
         }
+    }
+}
+
+// ============================================================================
+// Inherent helpers on SqliteMemoryBackend (not part of the MemoryStore trait)
+// ============================================================================
+
+impl SqliteMemoryBackend {
+    /// Return the most-recently-updated synthesis facts visible to `namespace`.
+    ///
+    /// Facts with `fact_source = 'synthesis'` and `is_valid = 1` are returned,
+    /// scoped to the given namespace **or** the global `'owner'` namespace.
+    pub fn top_synthesized(
+        &self,
+        namespace: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT * FROM facts \
+                 WHERE fact_source = 'synthesis' \
+                   AND is_valid = 1 \
+                   AND (namespace = ?1 OR namespace = 'owner') \
+                 ORDER BY updated_at DESC \
+                 LIMIT ?2",
+            )
+            .map_err(|e| AlephError::config(format!("Failed to prepare top_synthesized: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![namespace, limit as i64], row_to_fact)
+            .map_err(|e| AlephError::config(format!("Failed to query top_synthesized: {e}")))?;
+
+        let mut facts = Vec::new();
+        for row in rows {
+            facts.push(
+                row.map_err(|e| {
+                    AlephError::config(format!("Failed to read top_synthesized row: {e}"))
+                })?,
+            );
+        }
+        Ok(facts)
+    }
+
+    /// Bump the `updated_at` timestamp of a fact to the current time.
+    pub fn touch_fact_updated_at(&self, fact_id: &str) -> Result<(), AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE facts SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, fact_id],
+        )
+        .map_err(|e| {
+            AlephError::config(format!("Failed to touch_fact_updated_at {fact_id}: {e}"))
+        })?;
+
+        Ok(())
     }
 }
 
@@ -1480,5 +1595,43 @@ mod tests {
         // Global fact untouched
         let global_after = backend.get_fact(&global.id).await.unwrap().unwrap();
         assert!(global_after.is_valid);
+    }
+
+    #[tokio::test]
+    async fn top_synthesized_empty() {
+        let (backend, _dir) = test_backend();
+        // No facts at all — should return empty vec
+        let results = backend.top_synthesized("owner", 10).unwrap();
+        assert!(results.is_empty());
+
+        // Insert a non-synthesis fact — still empty
+        let fact = test_fact("non-synth-1", "Regular fact");
+        backend.insert_fact(&fact).await.unwrap();
+        let results = backend.top_synthesized("owner", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn touch_fact_updated_at_updates_timestamp() {
+        let (backend, _dir) = test_backend();
+        let fact = test_fact("touch-1", "Touchable fact");
+        backend.insert_fact(&fact).await.unwrap();
+
+        let before = backend.get_fact("touch-1").await.unwrap().unwrap();
+        let original_updated = before.updated_at;
+
+        // Sleep briefly so the timestamp differs
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        backend.touch_fact_updated_at("touch-1").unwrap();
+
+        let after = backend.get_fact("touch-1").await.unwrap().unwrap();
+        // updated_at should be >= original (timestamps are in seconds, so >= is correct)
+        assert!(
+            after.updated_at >= original_updated,
+            "updated_at should have been bumped: before={}, after={}",
+            original_updated,
+            after.updated_at
+        );
     }
 }
