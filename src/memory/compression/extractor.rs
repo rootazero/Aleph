@@ -27,6 +27,43 @@ pub struct ExtractedFact {
     pub source_ids: Vec<String>,
 }
 
+/// An entity extracted by the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedEntity {
+    /// Entity name (e.g., "Rust", "Aleph", "用户")
+    pub name: String,
+    /// Entity kind (e.g., "technology", "project", "person")
+    pub kind: String,
+    /// Alternative names
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+/// A relationship triple extracted by the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedRelationship {
+    /// Subject entity name
+    pub subject: String,
+    /// Relation type (free text, e.g., "uses", "works_on", "prefers")
+    pub relation: String,
+    /// Object entity name
+    pub object: String,
+    /// Optional context
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+/// Unified response from LLM extraction (facts + entities + relationships)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedExtractionResponse {
+    #[serde(default)]
+    pub facts: Vec<ExtractedFact>,
+    #[serde(default)]
+    pub entities: Vec<ExtractedEntity>,
+    #[serde(default)]
+    pub relationships: Vec<ExtractedRelationship>,
+}
+
 /// Response format from LLM extraction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtractionResponse {
@@ -226,6 +263,29 @@ EXAMPLE OUTPUT:
     }
 }
 
+/// Parse a unified extraction response from LLM output.
+///
+/// Gracefully handles missing fields (all default to empty vecs).
+/// Falls back to empty response if JSON parsing fails entirely.
+pub fn parse_unified_response(response: &str) -> Result<UnifiedExtractionResponse, AlephError> {
+    let json_value = match extract_json_robust(response) {
+        Some(v) => v,
+        None => {
+            warn!("No JSON found in unified extraction response");
+            return Ok(UnifiedExtractionResponse {
+                facts: vec![],
+                entities: vec![],
+                relationships: vec![],
+            });
+        }
+    };
+
+    serde_json::from_value(json_value).map_err(|e| {
+        warn!("Failed to parse unified extraction response: {e}");
+        AlephError::other(format!("Unified extraction parse failed: {e}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +352,64 @@ mod tests {
             Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
 
         FactExtractor::new(provider, embedder)
+    }
+
+    #[test]
+    fn test_parse_unified_response() {
+        let response = r#"{
+            "facts": [
+                {
+                    "content": "The user prefers Rust for backend",
+                    "fact_type": "preference",
+                    "confidence": 0.9,
+                    "source_ids": ["mem-1"]
+                }
+            ],
+            "entities": [
+                { "name": "Rust", "kind": "technology", "aliases": ["rust-lang"] }
+            ],
+            "relationships": [
+                { "subject": "user", "relation": "uses", "object": "Rust", "context": "backend" }
+            ]
+        }"#;
+
+        let result = parse_unified_response(response).unwrap();
+        assert_eq!(result.facts.len(), 1);
+        assert_eq!(result.facts[0].content, "The user prefers Rust for backend");
+        assert_eq!(result.entities.len(), 1);
+        assert_eq!(result.entities[0].name, "Rust");
+        assert_eq!(result.entities[0].kind, "technology");
+        assert_eq!(result.entities[0].aliases, vec!["rust-lang"]);
+        assert_eq!(result.relationships.len(), 1);
+        assert_eq!(result.relationships[0].subject, "user");
+        assert_eq!(result.relationships[0].relation, "uses");
+        assert_eq!(result.relationships[0].object, "Rust");
+        assert_eq!(result.relationships[0].context.as_deref(), Some("backend"));
+    }
+
+    #[test]
+    fn test_parse_unified_response_empty() {
+        let response = r#"{"facts": [], "entities": [], "relationships": []}"#;
+        let result = parse_unified_response(response).unwrap();
+        assert!(result.facts.is_empty());
+        assert!(result.entities.is_empty());
+        assert!(result.relationships.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unified_response_facts_only_fallback() {
+        // When entities/relationships are missing, they default to empty
+        let response = r#"{"facts": [{"content": "test", "fact_type": "other", "confidence": 0.8, "source_ids": []}]}"#;
+        let result = parse_unified_response(response).unwrap();
+        assert_eq!(result.facts.len(), 1);
+        assert!(result.entities.is_empty());
+        assert!(result.relationships.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unified_response_no_json() {
+        let result = parse_unified_response("no json here").unwrap();
+        assert!(result.facts.is_empty());
+        assert!(result.entities.is_empty());
     }
 }
