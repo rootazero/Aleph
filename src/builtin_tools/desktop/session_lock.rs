@@ -186,13 +186,17 @@ impl Drop for ComputerUseLock {
 }
 
 /// Check whether a process with the given PID is alive.
-///
-/// Uses `kill(pid, 0)` which returns 0 if the process exists, -1 otherwise.
+#[cfg(unix)]
 fn is_pid_alive(pid: u32) -> bool {
     // SAFETY: kill(pid, 0) sends no signal; it only checks process existence.
-    // The return value and errno are the only observable effects.
     let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
     ret == 0
+}
+
+#[cfg(windows)]
+fn is_pid_alive(_pid: u32) -> bool {
+    // On Windows, assume stale lock — always allow acquisition.
+    false
 }
 
 // ---------------------------------------------------------------------------
