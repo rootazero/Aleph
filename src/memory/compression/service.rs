@@ -167,12 +167,37 @@ impl CompressionService {
             .await?
             .unwrap_or(0);
 
-        // Raw memory storage (SessionStore) has been removed — the compression
-        // pipeline no longer has a Layer 1 source to pull from. Return early.
-        let _ = last_timestamp;
-        let memories: Vec<crate::memory::context::MemoryEntry> = Vec::new();
+        // 2. Fetch raw session chunks as compression source.
+        //    After the SessionStore removal, the SessionCompactor stores raw
+        //    conversation chunks at `aleph://session/*/raw/*` in the facts
+        //    table.  We convert them to MemoryEntry for the existing extractor.
+        let raw_facts = self
+            .database
+            .get_uncompressed_session_facts(
+                last_timestamp,
+                if workspace_id == crate::memory::DEFAULT_AGENT {
+                    None
+                } else {
+                    Some(workspace_id)
+                },
+                self.config.batch_size as usize,
+            )
+            .map_err(|e| AlephError::other(format!("Failed to fetch session facts: {e}")))?;
+
+        let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts
+            .iter()
+            .map(|fact| {
+                crate::memory::context::MemoryEntry::new(
+                    fact.id.clone(),
+                    crate::memory::context::ContextAnchor::now("".to_string()),
+                    fact.content.clone(),
+                    String::new(),
+                )
+            })
+            .collect();
+
         if memories.is_empty() {
-            tracing::debug!("No memories to compress (SessionStore removed)");
+            tracing::debug!("No uncompressed session memories to extract from");
             return Ok(CompressionResult::empty());
         }
 
@@ -264,6 +289,13 @@ impl CompressionService {
             }
         }
 
+        // 4a. Invalidate consumed raw chunks
+        let consumed_ids: Vec<String> = raw_facts.iter().map(|f| f.id.clone()).collect();
+        match self.database.invalidate_consumed_chunks(&consumed_ids) {
+            Ok(n) => tracing::info!(invalidated = n, "Invalidated consumed raw chunks"),
+            Err(e) => tracing::warn!(error = %e, "Failed to invalidate consumed raw chunks"),
+        }
+
         // 4b. Generate/update L1 Overviews for affected paths
         if !affected_paths.is_empty() {
             if let Some(ref l1_gen) = self.l1_generator {
@@ -283,15 +315,14 @@ impl CompressionService {
         }
 
         // 5. Update compression timestamp
-        // Use the max memory timestamp + 1 so that the next query with
-        // `timestamp >= last_compression_ts` does not re-process the same
-        // batch. Adding 1 avoids off-by-one on the `>=` boundary.
-        let latest_timestamp = memories
+        // Use the max source fact created_at + 1 so that the next query with
+        // `created_at > last_compression_ts` does not re-process the same
+        // batch. raw_facts carries the original timestamps from the facts table.
+        let latest_timestamp = raw_facts
             .iter()
-            .map(|m| m.context.timestamp)
+            .map(|f| f.created_at)
             .max()
-            .unwrap_or(0)
-            + 1;
+            .unwrap_or(0);
 
         self.database
             .set_last_compression_timestamp(latest_timestamp)
