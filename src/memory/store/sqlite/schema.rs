@@ -112,6 +112,32 @@ CREATE INDEX IF NOT EXISTS idx_graph_edges_agent        ON graph_edges(agent);
 "#;
 
 // ---------------------------------------------------------------------------
+// Recall signals table + indexes
+// ---------------------------------------------------------------------------
+
+const RECALL_SIGNALS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS recall_signals (
+    id          TEXT PRIMARY KEY,
+    fact_id     TEXT NOT NULL,
+    query_hash  TEXT NOT NULL,
+    query_text  TEXT NOT NULL,
+    channel     TEXT NOT NULL DEFAULT 'unknown',
+    score       REAL NOT NULL,
+    session_id  TEXT,
+    namespace   TEXT NOT NULL DEFAULT 'owner',
+    created_at  INTEGER NOT NULL,
+    day_bucket  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recall_dedup
+    ON recall_signals(fact_id, query_hash, day_bucket, channel);
+CREATE INDEX IF NOT EXISTS idx_recall_fact_id
+    ON recall_signals(fact_id);
+CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
+    ON recall_signals(day_bucket);
+"#;
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -141,6 +167,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(GRAPH_EDGES_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create graph_edges table: {e}")))?;
+
+    conn.execute_batch(RECALL_SIGNALS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
 
     Ok(())
 }

@@ -9,11 +9,11 @@ pub mod vec;
 
 mod facts;
 mod graph;
+pub mod recall_signals;
 mod sessions;
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::store::MemoryStore;
 use crate::sync_primitives::Mutex;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -397,12 +397,25 @@ impl SqliteMemoryBackend {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // Get all valid facts filtered by tier
-        let all_facts = self.get_all_facts(false, None).await?;
-        let tier_facts: Vec<_> = all_facts
-            .into_iter()
-            .filter(|f| f.tier.as_str() == tier)
-            .collect();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        // Read tier facts under the same lock to prevent TOCTOU races
+        let mut stmt = conn
+            .prepare("SELECT * FROM facts WHERE is_valid = 1 AND tier = ?1")
+            .map_err(|e| AlephError::config(format!("decay_by_tier prepare: {e}")))?;
+
+        let tier_facts: Vec<crate::memory::context::MemoryFact> = stmt
+            .query_map(rusqlite::params![tier], facts::row_to_fact_pub)
+            .map_err(|e| AlephError::config(format!("decay_by_tier query: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("decay_by_tier collect: {e}")))?;
+        drop(stmt);
+
+        conn.execute_batch("BEGIN TRANSACTION")
+            .map_err(|e| AlephError::config(format!("decay_by_tier begin: {e}")))?;
 
         let mut affected = 0usize;
 
@@ -415,22 +428,32 @@ impl SqliteMemoryBackend {
             let new_confidence = fact.confidence * decay;
 
             if new_confidence < min_strength {
-                let mut invalidated = fact.clone();
-                invalidated.is_valid = false;
-                invalidated.invalidation_reason = Some("decay_prune".to_string());
-                invalidated.decay_invalidated_at = Some(now);
-                invalidated.confidence = new_confidence;
-                invalidated.updated_at = now;
-                self.update_fact(&invalidated).await?;
+                conn.execute(
+                    "UPDATE facts SET is_valid = 0, invalidation_reason = 'decay_prune', \
+                     decay_invalidated_at = ?1, confidence = ?2, updated_at = ?3 \
+                     WHERE id = ?4",
+                    rusqlite::params![now, new_confidence as f64, now, fact.id],
+                )
+                .map_err(|e| {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    AlephError::config(format!("decay_by_tier invalidate: {e}"))
+                })?;
                 affected += 1;
             } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
-                let mut updated = fact.clone();
-                updated.confidence = new_confidence;
-                updated.updated_at = now;
-                self.update_fact(&updated).await?;
+                conn.execute(
+                    "UPDATE facts SET confidence = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![new_confidence as f64, now, fact.id],
+                )
+                .map_err(|e| {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    AlephError::config(format!("decay_by_tier update: {e}"))
+                })?;
                 affected += 1;
             }
         }
+
+        conn.execute_batch("COMMIT")
+            .map_err(|e| AlephError::config(format!("decay_by_tier commit: {e}")))?;
 
         Ok(affected)
     }
