@@ -38,6 +38,12 @@ pub struct InboxReadArgs {
     /// Mark returned messages as read (default: true)
     #[serde(default = "default_true")]
     pub mark_read: bool,
+    /// If true, peek without marking as read (overrides mark_read).
+    #[serde(default)]
+    pub peek: bool,
+    /// If true, only return unread count (no message content).
+    #[serde(default)]
+    pub count_only: bool,
 }
 
 /// Output from inbox_read.
@@ -45,6 +51,8 @@ pub struct InboxReadArgs {
 pub struct InboxReadOutput {
     pub messages: Vec<TeamMessage>,
     pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread: Option<crate::teams::messages::inbox::PeekCount>,
 }
 
 // =============================================================================
@@ -93,12 +101,35 @@ impl AlephTool for InboxReadTool {
             "inbox_read: reading messages"
         );
 
+        // count_only: return unread counts without message content
+        if args.count_only {
+            let unread = self
+                .inbox
+                .peek_count(&self.current_agent_id, &args.team_id)
+                .await?;
+            let total = (unread.to + unread.cc) as usize;
+            return Ok(InboxReadOutput {
+                messages: vec![],
+                count: total,
+                unread: Some(unread),
+            });
+        }
+
         let messages = match args.mode.as_str() {
             "thread" => {
                 let thread_id = args.thread_id.as_deref().ok_or_else(|| {
                     AlephError::tool("inbox_read: thread_id is required when mode='thread'")
                 })?;
                 self.inbox.read_thread(thread_id).await?
+            }
+            _ if args.peek => {
+                self.inbox
+                    .peek(
+                        &self.current_agent_id,
+                        &args.team_id,
+                        args.msg_type.as_ref(),
+                    )
+                    .await?
             }
             _ => {
                 self.inbox
@@ -114,6 +145,10 @@ impl AlephTool for InboxReadTool {
 
         let count = messages.len();
 
-        Ok(InboxReadOutput { messages, count })
+        Ok(InboxReadOutput {
+            messages,
+            count,
+            unread: None,
+        })
     }
 }

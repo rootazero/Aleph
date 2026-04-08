@@ -56,6 +56,8 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
         created_at: row.get(9)?,
         started_at: row.get(10)?,
         completed_at: row.get(11)?,
+        locked_by: row.get(12)?,
+        locked_at: row.get(13)?,
     })
 }
 
@@ -99,7 +101,7 @@ fn derive_status(
 /// Fully load a task including dependencies and derived status.
 fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Option<CoordTask>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, team_id, subject, description, status, owner, priority, result, metadata, created_at, started_at, completed_at FROM coord_tasks WHERE id = ?1",
+        "SELECT id, team_id, subject, description, status, owner, priority, result, metadata, created_at, started_at, completed_at, locked_by, locked_at FROM coord_tasks WHERE id = ?1",
     )?;
     let task_opt: Option<CoordTask> = stmt.query_row(params![task_id], read_task_row).optional()?;
 
@@ -231,6 +233,18 @@ impl SqliteCoordTaskStore {
             "#,
         )
         .map_err(db_err)?;
+
+        // --- Add task locking columns (idempotent) ---
+        let has_locked_by: bool = conn
+            .prepare("SELECT locked_by FROM coord_tasks LIMIT 0")
+            .is_ok();
+        if !has_locked_by {
+            conn.execute_batch(
+                "ALTER TABLE coord_tasks ADD COLUMN locked_by TEXT;\
+                 ALTER TABLE coord_tasks ADD COLUMN locked_at INTEGER;",
+            )
+            .map_err(db_err)?;
+        }
 
         Ok(())
     }
@@ -438,7 +452,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         };
 
         let sql = format!(
-            "SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at FROM coord_tasks t {where_sql} ORDER BY t.created_at ASC"
+            "SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at, t.locked_by, t.locked_at FROM coord_tasks t {where_sql} ORDER BY t.created_at ASC"
         );
 
         let params_ref: Vec<&dyn rusqlite::types::ToSql> =
@@ -498,7 +512,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         let mut stmt = conn
             .prepare_cached(
                 r#"
-                SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at
+                SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at, t.locked_by, t.locked_at
                 FROM coord_tasks t
                 JOIN coord_task_dependencies d ON d.task_id = t.id
                 WHERE d.depends_on = ?1
@@ -525,6 +539,93 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             tasks.push(task);
         }
         Ok(tasks)
+    }
+
+    // --- Task locking ---
+
+    async fn acquire_lock(&self, task_id: &str, agent_id: &str) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        let now = now_epoch();
+
+        let affected = conn
+            .execute(
+                "UPDATE coord_tasks SET locked_by = ?1, locked_at = ?2 \
+                 WHERE id = ?3 AND (locked_by IS NULL OR locked_by = ?1)",
+                params![agent_id, now, task_id],
+            )
+            .map_err(db_err)?;
+
+        if affected == 0 {
+            // Check if task exists at all
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM coord_tasks WHERE id = ?1)",
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .map_err(db_err)?;
+
+            if !exists {
+                return Err(db_err(format!("task not found: {task_id}")));
+            }
+            // Task exists but locked by someone else
+            return Err(db_err(format!(
+                "task {task_id} is locked by another agent"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn release_lock(&self, task_id: &str, agent_id: &str) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+
+        let affected = conn
+            .execute(
+                "UPDATE coord_tasks SET locked_by = NULL, locked_at = NULL \
+                 WHERE id = ?1 AND locked_by = ?2",
+                params![task_id, agent_id],
+            )
+            .map_err(db_err)?;
+
+        if affected == 0 {
+            // Check current holder
+            let holder: Option<String> = conn
+                .query_row(
+                    "SELECT locked_by FROM coord_tasks WHERE id = ?1",
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?
+                .flatten();
+
+            match holder {
+                Some(other) => {
+                    return Err(db_err(format!(
+                        "task {task_id} is locked by {other}, not {agent_id}"
+                    )));
+                }
+                None => {
+                    // Already unlocked — idempotent success
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn release_stale_locks(&self, max_age_secs: u64) -> crate::error::Result<usize> {
+        let conn = self.conn.lock().await;
+        let cutoff = now_epoch().saturating_sub(max_age_secs);
+
+        let affected = conn
+            .execute(
+                "UPDATE coord_tasks SET locked_by = NULL, locked_at = NULL \
+                 WHERE locked_by IS NOT NULL AND locked_at < ?1",
+                params![cutoff],
+            )
+            .map_err(db_err)?;
+
+        Ok(affected)
     }
 }
 
@@ -779,5 +880,88 @@ mod tests {
         let unblocked2 = store.get_newly_unblocked(&b.id).await.unwrap();
         assert_eq!(unblocked2.len(), 1);
         assert_eq!(unblocked2[0].id, c.id);
+    }
+
+    #[tokio::test]
+    async fn test_acquire_and_release_lock() {
+        let store = setup_store().await;
+
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: None,
+                subject: "Lockable".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Acquire lock
+        store.acquire_lock(&task.id, "agent-1").await.unwrap();
+        let t = store.get_task(&task.id).await.unwrap().unwrap();
+        assert_eq!(t.locked_by.as_deref(), Some("agent-1"));
+        assert!(t.locked_at.is_some());
+
+        // Re-acquire by same agent (idempotent)
+        store.acquire_lock(&task.id, "agent-1").await.unwrap();
+
+        // Fail by different agent
+        let err = store.acquire_lock(&task.id, "agent-2").await;
+        assert!(err.is_err());
+
+        // Release
+        store.release_lock(&task.id, "agent-1").await.unwrap();
+        let t2 = store.get_task(&task.id).await.unwrap().unwrap();
+        assert!(t2.locked_by.is_none());
+        assert!(t2.locked_at.is_none());
+
+        // Now different agent can acquire
+        store.acquire_lock(&task.id, "agent-2").await.unwrap();
+        let t3 = store.get_task(&task.id).await.unwrap().unwrap();
+        assert_eq!(t3.locked_by.as_deref(), Some("agent-2"));
+    }
+
+    #[tokio::test]
+    async fn test_release_stale_locks() {
+        let store = setup_store().await;
+
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: None,
+                subject: "Stale lock".into(),
+                description: "".into(),
+                owner: None,
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Acquire lock
+        store.acquire_lock(&task.id, "agent-1").await.unwrap();
+
+        // Manually backdate locked_at to 1 hour ago
+        {
+            let conn = store.conn.lock().await;
+            let old_time = now_epoch() - 3600;
+            conn.execute(
+                "UPDATE coord_tasks SET locked_at = ?1 WHERE id = ?2",
+                params![old_time, task.id],
+            )
+            .unwrap();
+        }
+
+        // Release stale locks with 30 min max age
+        let released = store.release_stale_locks(1800).await.unwrap();
+        assert_eq!(released, 1);
+
+        // Verify lock is released
+        let t = store.get_task(&task.id).await.unwrap().unwrap();
+        assert!(t.locked_by.is_none());
+        assert!(t.locked_at.is_none());
     }
 }

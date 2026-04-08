@@ -71,6 +71,9 @@ pub trait TeamStore: Send + Sync {
     /// Return all members of a team.
     async fn get_members(&self, team_id: &str) -> crate::error::Result<Vec<TeamMember>>;
 
+    /// Remove a member from an active team. Cannot remove the leader.
+    async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()>;
+
     /// Return summary records for all teams that an agent belongs to (as leader or member).
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>>;
 }
@@ -378,6 +381,54 @@ impl TeamStore for SqliteTeamStore {
         Ok(members)
     }
 
+    async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+
+        // Check team exists and is active
+        let team = conn
+            .prepare_cached(
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE id = ?1",
+            )
+            .map_err(db_err)?
+            .query_row(params![team_id], read_team_row)
+            .optional()
+            .map_err(db_err)?;
+
+        let team = match team {
+            None => return Err(db_err(format!("team not found: {team_id}"))),
+            Some(t) => t,
+        };
+
+        if team.status == TeamStatus::Disbanded {
+            return Err(db_err(format!(
+                "cannot remove member from disbanded team: {team_id}"
+            )));
+        }
+
+        // Forbid removing the leader
+        if team.leader_id == agent_id {
+            return Err(db_err(format!(
+                "cannot remove the team leader ({})",
+                agent_id
+            )));
+        }
+
+        let affected = conn
+            .execute(
+                "DELETE FROM team_members WHERE team_id = ?1 AND agent_id = ?2",
+                params![team_id, agent_id],
+            )
+            .map_err(db_err)?;
+
+        if affected == 0 {
+            return Err(db_err(format!(
+                "agent '{agent_id}' is not a member of team '{team_id}'"
+            )));
+        }
+
+        Ok(())
+    }
+
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>> {
         let conn = self.conn.lock().await;
 
@@ -602,5 +653,62 @@ mod tests {
         let ids: Vec<&str> = agent_teams.iter().map(|t| t.id.as_str()).collect();
         assert!(ids.contains(&t1.id.as_str()));
         assert!(ids.contains(&t2.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_remove_member() {
+        let store = setup_store().await;
+
+        let team = store
+            .create_team(NewTeam {
+                name: "RemoveTest".into(),
+                description: "".into(),
+                leader_id: "leader-r".into(),
+            })
+            .await
+            .unwrap();
+
+        // Add two members
+        store
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: "member-1".into(),
+                role: "worker".into(),
+            })
+            .await
+            .unwrap();
+        store
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: "member-2".into(),
+                role: "reviewer".into(),
+            })
+            .await
+            .unwrap();
+
+        // Can remove a regular member
+        store
+            .remove_member(&team.id, "member-1")
+            .await
+            .unwrap();
+        let members = store.get_members(&team.id).await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].agent_id, "member-2");
+
+        // Cannot remove the leader
+        let err = store.remove_member(&team.id, "leader-r").await;
+        assert!(err.is_err());
+        assert!(
+            format!("{:?}", err.unwrap_err()).contains("leader"),
+            "error should mention leader"
+        );
+
+        // Cannot remove non-existent member
+        let err = store.remove_member(&team.id, "nobody").await;
+        assert!(err.is_err());
+        assert!(
+            format!("{:?}", err.unwrap_err()).contains("not a member"),
+            "error should mention not a member"
+        );
     }
 }

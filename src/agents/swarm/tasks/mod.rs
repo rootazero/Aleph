@@ -131,6 +131,8 @@ pub struct CoordTask {
     pub created_at: u64,
     pub started_at: Option<u64>,
     pub completed_at: Option<u64>,
+    pub locked_by: Option<String>,
+    pub locked_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,4 +190,13 @@ pub trait CoordTaskStore: Send + Sync {
     /// Returns tasks whose ALL dependencies are now Completed after completing `completed_id`
     async fn get_newly_unblocked(&self, completed_id: &str)
         -> crate::error::Result<Vec<CoordTask>>;
+
+    // --- Task locking ---
+
+    /// Atomically acquire a lock on a task. Idempotent if the same agent already holds it.
+    async fn acquire_lock(&self, task_id: &str, agent_id: &str) -> crate::error::Result<()>;
+    /// Release a lock held by `agent_id`. Idempotent if already unlocked.
+    async fn release_lock(&self, task_id: &str, agent_id: &str) -> crate::error::Result<()>;
+    /// Release all locks older than `max_age_secs`. Returns number of locks released.
+    async fn release_stale_locks(&self, max_age_secs: u64) -> crate::error::Result<usize>;
 }

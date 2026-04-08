@@ -214,6 +214,12 @@ impl AlephTool for TeamDelegateTool {
             )
             .await?;
 
+        // Acquire task lock (non-fatal — best effort)
+        let _ = self
+            .coord_store
+            .acquire_lock(&task.id, &args.agent_id)
+            .await;
+
         // 3. Look up the target agent in the registry
         let agent_registry = context.agent_registry();
         let target_agent = match agent_registry.get(&args.agent_id).await {
@@ -280,6 +286,10 @@ impl AlephTool for TeamDelegateTool {
                 let reply = Self::fetch_last_reply(&target_agent, &session_key).await;
                 let reply_text = reply.unwrap_or_else(|| "(No reply content)".to_string());
 
+                let _ = self
+                    .coord_store
+                    .release_lock(&task.id, &args.agent_id)
+                    .await;
                 self.coord_store
                     .update_task(
                         &task.id,
@@ -326,6 +336,10 @@ impl AlephTool for TeamDelegateTool {
                     "team_delegate: execution failed"
                 );
 
+                let _ = self
+                    .coord_store
+                    .release_lock(&task.id, &args.agent_id)
+                    .await;
                 self.coord_store
                     .update_task(
                         &task.id,
@@ -348,6 +362,10 @@ impl AlephTool for TeamDelegateTool {
                 let error_msg = format!("Task panicked: {}", join_err);
                 warn!(task_id = %task.id, "team_delegate: task panicked");
 
+                let _ = self
+                    .coord_store
+                    .release_lock(&task.id, &args.agent_id)
+                    .await;
                 self.coord_store
                     .update_task(
                         &task.id,
@@ -377,6 +395,10 @@ impl AlephTool for TeamDelegateTool {
                     "team_delegate: timed out, task aborted"
                 );
 
+                let _ = self
+                    .coord_store
+                    .release_lock(&task.id, &args.agent_id)
+                    .await;
                 self.coord_store
                     .update_task(
                         &task.id,

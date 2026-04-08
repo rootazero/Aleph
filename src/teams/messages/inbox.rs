@@ -5,10 +5,23 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use super::store::MessageStore;
 use super::types::{MessageType, TeamMessage};
 use crate::error::Result;
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
+
+// ---------------------------------------------------------------------------
+// PeekCount
+// ---------------------------------------------------------------------------
+
+/// Unread message counts returned by [`Inbox::peek_count`].
+#[derive(Debug, Clone, Serialize)]
+pub struct PeekCount {
+    pub to: u64,
+    pub cc: u64,
+}
 
 // ---------------------------------------------------------------------------
 // Inbox
@@ -72,6 +85,26 @@ impl Inbox {
     /// Get unread counts as `(to_count, cc_count)` for an agent in a team.
     pub async fn get_unread_counts(&self, agent_id: &str, team_id: &str) -> Result<(u32, u32)> {
         self.msg_store.get_unread_counts(agent_id, team_id).await
+    }
+
+    /// Non-destructive read — returns unread messages without marking as read.
+    pub async fn peek(
+        &self,
+        agent_id: &str,
+        team_id: &str,
+        msg_type: Option<&MessageType>,
+    ) -> Result<Vec<TeamMessage>> {
+        self.msg_store.read_inbox(agent_id, team_id, msg_type).await
+    }
+
+    /// Returns unread message counts without reading content.
+    pub async fn peek_count(
+        &self,
+        agent_id: &str,
+        team_id: &str,
+    ) -> Result<PeekCount> {
+        let (to, cc) = self.msg_store.get_unread_counts(agent_id, team_id).await?;
+        Ok(PeekCount { to: to as u64, cc: cc as u64 })
     }
 }
 
@@ -164,6 +197,47 @@ mod tests {
         let (to, cc) = inbox.get_unread_counts("agent-b", "team-1").await.unwrap();
         assert_eq!(to, 1);
         assert_eq!(cc, 0);
+    }
+
+    #[tokio::test]
+    async fn test_peek_does_not_mark_read() {
+        let (inbox, msg_store, event_store) = make_inbox().await;
+
+        msg_store
+            .send_message(sample_msg("team-1", "agent-a", "agent-b"))
+            .await
+            .unwrap();
+
+        // First peek returns the message
+        let msgs = inbox.peek("agent-b", "team-1", None).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+
+        // Second peek still returns it (not marked as read)
+        let msgs2 = inbox.peek("agent-b", "team-1", None).await.unwrap();
+        assert_eq!(msgs2.len(), 1);
+
+        // No events logged
+        let events = event_store.get_events("team-1", None, None).await.unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_peek_count() {
+        let (inbox, msg_store, _) = make_inbox().await;
+
+        msg_store
+            .send_message(sample_msg("team-1", "agent-a", "agent-b"))
+            .await
+            .unwrap();
+
+        let counts = inbox.peek_count("agent-b", "team-1").await.unwrap();
+        assert_eq!(counts.to, 1);
+        assert_eq!(counts.cc, 0);
+
+        // Unknown agent has zero counts
+        let counts2 = inbox.peek_count("unknown-agent", "team-1").await.unwrap();
+        assert_eq!(counts2.to, 0);
+        assert_eq!(counts2.cc, 0);
     }
 
     #[tokio::test]
