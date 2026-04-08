@@ -15,6 +15,7 @@ use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
 use crate::memory::decay::DecayConfig;
 use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
+use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
 use crate::memory::store::{DreamStore, MemoryBackend};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -22,7 +23,7 @@ use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{info, warn};
@@ -532,7 +533,51 @@ impl DreamDaemon {
             memory_decay_report: None,
         };
 
+        let pipeline_start = Instant::now();
         let report = pipeline.run(ctx).await?;
+        let elapsed_ms = pipeline_start.elapsed().as_millis() as i64;
+
+        // Persist audit report (best-effort — never crash the daemon)
+        let finished_at = now_timestamp();
+        let persisted = PersistedDreamReport {
+            id: uuid::Uuid::new_v4().to_string(),
+            pipeline_type: match report.run_type {
+                DreamRunType::Daily => "daily".into(),
+                DreamRunType::Weekly => "weekly".into(),
+            },
+            started_at: run_start,
+            finished_at,
+            duration_ms: elapsed_ms,
+            facts_collected: report.memory_count as u32,
+            clusters_found: report.clusters_count as u32,
+            drift_detected: report.drift_resolutions_count > 0,
+            drift_summary: None,
+            candidates_evaluated: 0,
+            facts_promoted: report.new_facts_count as u32,
+            promotion_details: None,
+            facts_decayed: report
+                .memory_decay_report
+                .as_ref()
+                .map_or(0, |r| r.updated_facts as u32),
+            facts_pruned: report
+                .memory_decay_report
+                .as_ref()
+                .map_or(0, |r| r.pruned_facts as u32),
+            nodes_decayed: report
+                .graph_decay_report
+                .as_ref()
+                .map_or(0, |r| r.pruned_nodes as u32),
+            edges_decayed: report
+                .graph_decay_report
+                .as_ref()
+                .map_or(0, |r| r.pruned_edges as u32),
+            synthesis_count: report.synthesis_insights_count as u32,
+            errors: None,
+            namespace: "owner".into(),
+        };
+        if let Err(e) = self.database.insert_dream_report(&persisted) {
+            warn!("Failed to persist dream report: {e}");
+        }
 
         // Convert DreamReport to legacy DreamRunReport
         Ok(DreamRunReport {
@@ -574,17 +619,6 @@ impl Default for ConsolidationPipelineConfig {
             cooldown_days: 1,
         }
     }
-}
-
-/// Check if a STM fact qualifies for consolidation into LTM.
-///
-/// Requires that a fact has been actually USED (retrieved in conversations)
-/// before promotion — not just created with default strength 1.0.
-/// Conditions: ShortTerm tier, accessed at least twice, strength >= threshold.
-pub fn should_consolidate(fact: &MemoryFact, strength_threshold: f32) -> bool {
-    fact.tier == MemoryTier::ShortTerm
-        && fact.access_count >= 2
-        && fact.strength >= strength_threshold
 }
 
 /// Check if a fact should be pruned (deleted permanently).
@@ -678,60 +712,6 @@ mod tests {
 mod consolidation_tests {
     use super::*;
     use crate::memory::context::{FactType, MemoryFact, MemoryTier};
-
-    #[test]
-    fn test_should_consolidate_stm_high_strength_and_accessed() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
-        fact.tier = MemoryTier::ShortTerm;
-        fact.strength = 0.7;
-        fact.access_count = 3;
-        assert!(should_consolidate(&fact, 0.6));
-    }
-
-    #[test]
-    fn test_should_not_consolidate_low_access_count() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
-        fact.tier = MemoryTier::ShortTerm;
-        fact.strength = 0.7;
-        fact.access_count = 1; // only accessed once — not enough
-        assert!(!should_consolidate(&fact, 0.6));
-    }
-
-    #[test]
-    fn test_should_not_consolidate_zero_access() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
-        fact.tier = MemoryTier::ShortTerm;
-        fact.strength = 1.0; // default strength, never used
-        fact.access_count = 0;
-        assert!(!should_consolidate(&fact, 0.6));
-    }
-
-    #[test]
-    fn test_should_not_consolidate_low_strength() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
-        fact.tier = MemoryTier::ShortTerm;
-        fact.strength = 0.4;
-        fact.access_count = 5;
-        assert!(!should_consolidate(&fact, 0.6));
-    }
-
-    #[test]
-    fn test_should_not_consolidate_non_stm() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Learning, vec![]);
-        fact.tier = MemoryTier::LongTerm;
-        fact.strength = 0.9;
-        fact.access_count = 10;
-        assert!(!should_consolidate(&fact, 0.6));
-    }
-
-    #[test]
-    fn test_should_not_consolidate_core() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Personal, vec![]);
-        fact.tier = MemoryTier::Core;
-        fact.strength = 0.9;
-        fact.access_count = 10;
-        assert!(!should_consolidate(&fact, 0.6));
-    }
 
     #[test]
     fn test_should_prune_low_strength() {
