@@ -195,22 +195,12 @@ pub fn ChatSidebar() -> impl IntoView {
     };
 
     // Start a new chat for the selected agent.
-    // Close the current session via sessions.new and set the returned new key.
+    // Just clear UI state — the backend will create a new epoch session
+    // when the first message is sent (session_key=None triggers next epoch).
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
-            let current_sk = chat.session_key.get_untracked();
             chat.clear_session();
             chat.agent_id.set(Some(agent_id));
-
-            // Close old session, create new epoch, and store the new key
-            if let Some(sk) = current_sk {
-                let dash = dashboard;
-                leptos::task::spawn_local(async move {
-                    if let Ok(new_key) = ChatApi::new_session(&dash, &sk, None).await {
-                        chat.session_key.set(Some(new_key));
-                    }
-                });
-            }
         }
     };
 

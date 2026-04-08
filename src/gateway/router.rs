@@ -496,15 +496,14 @@ impl AgentRouter {
             }
         };
 
-        // 5. Resolve current epoch so messages route to the latest session.
-        //    This handles browser refresh: session_key is lost but we resume
-        //    the most recent session rather than falling back to epoch 0.
+        // 5. No explicit session_key → create a new session (next epoch).
+        //    The session is only persisted to DB when the first message is sent.
+        //    This ensures refresh/new-chat without conversation leaves no trace.
         if let Some(ref sm) = self.session_manager {
             let base_pattern = base_key.base_key_pattern();
             match sm.get_current_epoch(&base_pattern).await {
-                Ok(epoch) if epoch > 0 => return base_key.with_epoch(epoch),
+                Ok(epoch) => return base_key.with_epoch(epoch + 1),
                 Err(e) => warn!("Failed to resolve epoch for {}: {}", base_pattern, e),
-                _ => {}
             }
         }
 
