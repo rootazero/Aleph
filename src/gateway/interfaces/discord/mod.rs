@@ -28,8 +28,10 @@
 pub mod api;
 pub mod config;
 pub mod permissions;
+pub mod resolver;
 
 pub use config::{DiscordConfig, IntentsConfig};
+pub use resolver::{ResolvedChannel, DiscordResolver, ChannelResolutionError, Candidate};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
