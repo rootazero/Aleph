@@ -21,10 +21,10 @@ use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
 };
 use crate::builtin_tools::{
-    AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool,
-    MediaTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool,
-    ReadConfigGuideTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool,
-    WebFetchTool,
+    AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileEditTool, FileOpsTool,
+    FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool, MemorySearchTool,
+    PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool,
+    SelfManageTool, SystemTool, VaultStoreTool, WebFetchTool,
 };
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -53,6 +53,21 @@ impl BuiltinToolRegistry {
         } else {
             FileOpsTool::new()
         };
+        let file_read_tool = if let Some(ref tc) = config.tool_context {
+            FileReadTool::new().with_tool_context(std::sync::Arc::clone(tc))
+        } else {
+            FileReadTool::new()
+        };
+        let file_write_tool = if let Some(ref tc) = config.tool_context {
+            FileWriteTool::new().with_tool_context(std::sync::Arc::clone(tc))
+        } else {
+            FileWriteTool::new()
+        };
+        let file_edit_tool = if let Some(ref tc) = config.tool_context {
+            FileEditTool::new().with_tool_context(std::sync::Arc::clone(tc))
+        } else {
+            FileEditTool::new()
+        };
         let bash_tool = BashExecTool::new();
         let code_exec_tool = CodeExecTool::new();
         let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
@@ -70,6 +85,22 @@ impl BuiltinToolRegistry {
 
         // Self-management tool (LLM-triggered entry point)
         let self_manage_tool = SelfManageTool::default();
+
+        // Self-config tool (identity files + config.toml access)
+        let self_config_tool = {
+            let agent_id = config
+                .current_agent_id
+                .clone()
+                .unwrap_or_else(|| "main".to_string());
+            let mut tool = crate::builtin_tools::self_config::SelfConfigTool::new(agent_id);
+            if let Some(ref cfg) = config.config {
+                tool = tool.with_config(Arc::clone(cfg));
+            }
+            if let Some(ref patcher) = config.config_patcher {
+                tool = tool.with_patcher(Arc::clone(patcher));
+            }
+            tool
+        };
 
         // Vault store tool (requires SharedTokenManager)
         let vault_store_tool = config.shared_token_manager.as_ref().map(|mgr| {
@@ -394,14 +425,14 @@ impl BuiltinToolRegistry {
             .unwrap_or_else(|| "main".to_string());
 
         // Add team management tools (if TeamStore + CoordTaskStore are available)
-        let (team_create_tool, team_delegate_tool, team_status_tool, team_disband_tool) = if let (
+        let (team_create_tool, team_delegate_tool, team_status_tool, team_disband_tool, team_member_remove_tool) = if let (
             Some(ref store),
             Some(ref coord_store),
         ) =
             (&config.team_store, &config.coord_task_store)
         {
             use crate::builtin_tools::team::{
-                TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamStatusTool,
+                TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamMemberRemoveTool, TeamStatusTool,
             };
 
             let agent_registry = config
@@ -438,6 +469,10 @@ impl BuiltinToolRegistry {
                 config.session_store.clone(),
                 config.event_store.clone(),
             );
+            let member_remove = TeamMemberRemoveTool::new(
+                Arc::clone(store),
+                current_agent_id.clone(),
+            );
 
             // Register parameter schemas for team tools
             {
@@ -447,6 +482,7 @@ impl BuiltinToolRegistry {
                     delegate.definition(),
                     status.definition(),
                     disband.definition(),
+                    member_remove.definition(),
                 ];
                 for td in &tool_defs {
                     let mut ut = UnifiedTool::new(
@@ -460,10 +496,10 @@ impl BuiltinToolRegistry {
                 }
             }
 
-            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband)");
-            (Some(create), Some(delegate), Some(status), Some(disband))
+            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_remove)");
+            (Some(create), Some(delegate), Some(status), Some(disband), Some(member_remove))
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
 
         // Add team_digest tool (if EventLogStore + TeamStore are available)
@@ -502,9 +538,14 @@ impl BuiltinToolRegistry {
         // Add message_send + inbox_read tools (if MessageRouter / Inbox are available)
         let (message_send_tool, inbox_read_tool) = {
             let current_agent_id = current_agent_id.clone();
-            let send = config.message_router.as_ref().map(|router| {
+            let send = config.message_router.as_ref().and_then(|router| {
+                let team_store = config.team_store.as_ref()?;
                 use crate::builtin_tools::team::MessageSendTool;
-                MessageSendTool::new(Arc::clone(router), current_agent_id.clone())
+                Some(MessageSendTool::new(
+                    Arc::clone(router),
+                    Arc::clone(team_store),
+                    current_agent_id.clone(),
+                ))
             });
             let read = config.inbox.as_ref().map(|inbox| {
                 use crate::builtin_tools::team::InboxReadTool;
@@ -572,43 +613,6 @@ impl BuiltinToolRegistry {
                 (Some(submit), Some(read))
             } else {
                 (None, None)
-            };
-
-        // Add review_score tool (if ArtifactStore + EventLogStore + MessageRouter are available)
-        let review_score_tool =
-            if let (Some(ref artifact_store), Some(ref event_store), Some(ref router)) = (
-                &config.artifact_store,
-                &config.event_store,
-                &config.message_router,
-            ) {
-                use crate::builtin_tools::team::ReviewScoreTool;
-
-                let current_agent_id = current_agent_id.clone();
-                let tool = ReviewScoreTool::new(
-                    Arc::clone(artifact_store),
-                    Arc::clone(event_store),
-                    Arc::clone(router),
-                    current_agent_id,
-                );
-
-                // Register parameter schema
-                {
-                    use crate::tools::AlephTool;
-                    let td = tool.definition();
-                    let mut ut = UnifiedTool::new(
-                        format!("builtin:{}", td.name),
-                        &td.name,
-                        &td.description,
-                        ToolSource::Builtin,
-                    );
-                    ut = ut.with_parameters_schema(td.parameters.clone());
-                    tools.insert(td.name.clone(), ut);
-                }
-
-                info!("Registered review_score tool");
-                Some(tool)
-            } else {
-                None
             };
 
         // Add collaborative session tools (if SessionCoordinator / SessionStore are available)
@@ -706,6 +710,9 @@ impl BuiltinToolRegistry {
             search_tool,
             web_fetch_tool,
             file_ops_tool,
+            file_read_tool,
+            file_write_tool,
+            file_edit_tool,
             bash_tool,
             code_exec_tool,
             pdf_generate_tool,
@@ -717,6 +724,7 @@ impl BuiltinToolRegistry {
             read_skill_tool,
             config_guide_tool,
             self_manage_tool,
+            self_config_tool,
             vault_store_tool,
             desktop_tool,
             pim_tool,
@@ -815,13 +823,13 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_member_remove_tool,
             team_digest_tool,
             message_send_tool,
             inbox_read_tool,
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
-            review_score_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
@@ -863,8 +871,31 @@ impl BuiltinToolRegistry {
         reg(
             tools,
             "file_ops",
-            "File system operations - list, read, write, move, copy, delete, etc.",
+            "File system operations - list, move, copy, delete, mkdir, search, batch_move, organize",
             serde_json::to_value(schema_for!(crate::builtin_tools::file_ops::FileOpsArgs))
+                .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "file_read",
+            FileReadTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::file_ops::read::FileReadArgs))
+                .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "file_write",
+            FileWriteTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(
+                crate::builtin_tools::file_ops::write::FileWriteArgs
+            ))
+            .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "file_edit",
+            FileEditTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::file_ops::edit::FileEditArgs))
                 .unwrap_or_default(),
         );
         reg(
@@ -920,6 +951,15 @@ impl BuiltinToolRegistry {
             SelfManageTool::DESCRIPTION,
             serde_json::to_value(schema_for!(
                 crate::builtin_tools::self_manage::SelfManageArgs
+            ))
+            .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "self_config",
+            crate::builtin_tools::self_config::SelfConfigTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(
+                crate::builtin_tools::self_config::SelfConfigArgs
             ))
             .unwrap_or_default(),
         );

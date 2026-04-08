@@ -9,6 +9,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::MessageType;
+use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -41,6 +42,9 @@ pub struct MessageSendArgs {
     /// Attachment references (optional)
     #[serde(default)]
     pub attachments: Vec<String>,
+    /// If true, send to all team members (except sender). The `to` field is ignored.
+    #[serde(default)]
+    pub broadcast: bool,
 }
 
 /// Output from message_send.
@@ -59,13 +63,19 @@ pub struct MessageSendOutput {
 #[derive(Clone)]
 pub struct MessageSendTool {
     router: Arc<MessageRouter>,
+    team_store: Arc<dyn TeamStore>,
     current_agent_id: String,
 }
 
 impl MessageSendTool {
-    pub fn new(router: Arc<MessageRouter>, current_agent_id: String) -> Self {
+    pub fn new(
+        router: Arc<MessageRouter>,
+        team_store: Arc<dyn TeamStore>,
+        current_agent_id: String,
+    ) -> Self {
         Self {
             router,
+            team_store,
             current_agent_id,
         }
     }
@@ -87,17 +97,34 @@ impl AlephTool for MessageSendTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Resolve broadcast: query all team members and exclude the sender.
+        let to = if args.broadcast {
+            let members = self
+                .team_store
+                .get_members(&args.team_id)
+                .await
+                .map_err(|e| AlephError::other(format!("Failed to resolve broadcast recipients: {e}")))?;
+            members
+                .into_iter()
+                .map(|m| m.agent_id)
+                .filter(|id| id != &self.current_agent_id)
+                .collect::<Vec<_>>()
+        } else {
+            args.to
+        };
+
         debug!(
             team_id = %args.team_id,
-            to = ?args.to,
+            to = ?to,
             cc = ?args.cc,
             msg_type = %args.msg_type.as_str(),
             subject = %args.subject,
             from = %self.current_agent_id,
+            broadcast = args.broadcast,
             "message_send: sending message"
         );
 
-        if args.to.is_empty() && args.cc.is_empty() {
+        if to.is_empty() && args.cc.is_empty() {
             return Err(AlephError::tool(
                 "message_send: at least one recipient (to or cc) is required",
             ));
@@ -108,7 +135,7 @@ impl AlephTool for MessageSendTool {
             .send(SendRequest {
                 team_id: args.team_id,
                 from_agent: self.current_agent_id.clone(),
-                to: args.to,
+                to,
                 cc: args.cc,
                 msg_type: args.msg_type,
                 subject: args.subject.clone(),
