@@ -709,6 +709,15 @@ mod tests {
         ) -> crate::error::Result<Vec<CoordTask>> {
             unimplemented!()
         }
+        async fn acquire_lock(&self, _task_id: &str, _agent_id: &str) -> crate::error::Result<()> {
+            unimplemented!()
+        }
+        async fn release_lock(&self, _task_id: &str, _agent_id: &str) -> crate::error::Result<()> {
+            unimplemented!()
+        }
+        async fn release_stale_locks(&self, _max_age_secs: u64) -> crate::error::Result<usize> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]
@@ -729,6 +738,8 @@ mod tests {
                     created_at: 0,
                     started_at: None,
                     completed_at: None,
+                    locked_by: None,
+                    locked_at: None,
                 },
                 CoordTask {
                     id: "t-2".into(),
@@ -744,6 +755,8 @@ mod tests {
                     created_at: 0,
                     started_at: None,
                     completed_at: None,
+                    locked_by: None,
+                    locked_at: None,
                 },
             ],
         });
