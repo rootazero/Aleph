@@ -478,10 +478,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Build router from config-driven bindings
-    let router = Arc::new(AgentRouter::from_bindings(
-        loaded_app_config.bindings.clone(),
-        &default_agent_id,
-    ));
+    let router = {
+        let mut r = AgentRouter::from_bindings(
+            loaded_app_config.bindings.clone(),
+            &default_agent_id,
+        );
+        r.set_session_manager(session_manager.clone());
+        Arc::new(r)
+    };
 
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));

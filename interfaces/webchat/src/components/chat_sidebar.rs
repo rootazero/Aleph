@@ -195,10 +195,20 @@ pub fn ChatSidebar() -> impl IntoView {
     };
 
     // Start a new chat for the selected agent.
+    // If there's an active session, close it via sessions.new to create a new epoch.
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
+            let current_sk = chat.session_key.get_untracked();
             chat.clear_session();
             chat.agent_id.set(Some(agent_id));
+
+            // Close old session and create new epoch in the background
+            if let Some(sk) = current_sk {
+                let dash = dashboard;
+                leptos::task::spawn_local(async move {
+                    let _ = ChatApi::new_session(&dash, &sk, None).await;
+                });
+            }
         }
     };
 

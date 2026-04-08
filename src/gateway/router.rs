@@ -7,6 +7,9 @@ use crate::routing::config::RouteBinding;
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tracing::warn;
+
+use super::session_manager::SessionManager;
 
 // Re-export new routing types for backward compatibility.
 // Existing code using gateway::router::SessionKey will continue to work.
@@ -355,6 +358,8 @@ pub struct AgentRouter {
     default_agent: String,
     /// Available agent IDs
     agents: Arc<RwLock<Vec<String>>>,
+    /// Optional session manager for epoch resolution
+    session_manager: Option<Arc<SessionManager>>,
 }
 
 impl AgentRouter {
@@ -364,6 +369,7 @@ impl AgentRouter {
             bindings: Arc::new(RwLock::new(Vec::new())),
             default_agent: "main".to_string(),
             agents: Arc::new(RwLock::new(vec!["main".to_string()])),
+            session_manager: None,
         }
     }
 
@@ -374,7 +380,13 @@ impl AgentRouter {
             bindings: Arc::new(RwLock::new(Vec::new())),
             default_agent: default.clone(),
             agents: Arc::new(RwLock::new(vec![default])),
+            session_manager: None,
         }
+    }
+
+    /// Set session manager for epoch resolution
+    pub fn set_session_manager(&mut self, sm: Arc<SessionManager>) {
+        self.session_manager = Some(sm);
     }
 
     /// Create router from config-driven RouteBinding list.
@@ -415,6 +427,7 @@ impl AgentRouter {
             bindings: Arc::new(RwLock::new(internal_bindings)),
             default_agent: default,
             agents: Arc::new(RwLock::new(agent_ids)),
+            session_manager: None,
         }
     }
 
@@ -467,21 +480,33 @@ impl AgentRouter {
         }
 
         // 2. If explicit agent_id provided (e.g., from panel UI), use it directly
-        if let Some(aid) = agent_id {
-            return match peer_id {
+        let base_key = if let Some(aid) = agent_id {
+            match peer_id {
                 Some(pid) => SessionKey::peer(aid, pid),
                 None => SessionKey::main(aid),
-            };
+            }
+        } else {
+            // 3. Try to match channel/peer against bindings
+            let resolved_agent = self.resolve_agent(channel, peer_id).await;
+
+            // 4. Create appropriate session key
+            match peer_id {
+                Some(pid) => SessionKey::peer(&resolved_agent, pid),
+                None => SessionKey::main(&resolved_agent),
+            }
+        };
+
+        // 5. Resolve current epoch so messages route to the latest session
+        if let Some(ref sm) = self.session_manager {
+            let base_pattern = base_key.base_key_pattern();
+            match sm.get_current_epoch(&base_pattern).await {
+                Ok(epoch) if epoch > 0 => return base_key.with_epoch(epoch),
+                Err(e) => warn!("Failed to resolve epoch for {}: {}", base_pattern, e),
+                _ => {}
+            }
         }
 
-        // 3. Try to match channel/peer against bindings
-        let resolved_agent = self.resolve_agent(channel, peer_id).await;
-
-        // 4. Create appropriate session key
-        match peer_id {
-            Some(pid) => SessionKey::peer(&resolved_agent, pid),
-            None => SessionKey::main(&resolved_agent),
-        }
+        base_key
     }
 
     /// Resolve agent ID from channel/peer

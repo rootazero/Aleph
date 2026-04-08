@@ -102,4 +102,23 @@ impl ChatApi {
         state.rpc_call("chat.clear", params).await?;
         Ok(())
     }
+
+    /// Create a new session by closing the current one and incrementing the epoch.
+    /// Returns the new session key.
+    pub async fn new_session(
+        state: &DashboardState,
+        current_session_key: &str,
+        topic: Option<&str>,
+    ) -> Result<String, String> {
+        let params = serde_json::json!({
+            "session_key": current_session_key,
+            "topic": topic,
+        });
+        let result = state.rpc_call("sessions.new", params).await?;
+        result
+            .get("new_session_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Missing new_session_key in response".to_string())
+    }
 }
