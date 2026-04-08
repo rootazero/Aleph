@@ -38,10 +38,13 @@ pub enum TeamEventType {
     TaskCompleted,
     TaskFailed,
     ArtifactSubmitted,
-    ReviewScoreSubmitted,
     SessionStarted,
     SessionConcluded,
     DigestGenerated,
+    ShutdownRequested,
+    ShutdownResolved,
+    PlanSubmitted,
+    PlanResolved,
 }
 
 impl TeamEventType {
@@ -53,10 +56,13 @@ impl TeamEventType {
             Self::TaskCompleted => "task_completed",
             Self::TaskFailed => "task_failed",
             Self::ArtifactSubmitted => "artifact_submitted",
-            Self::ReviewScoreSubmitted => "review_score_submitted",
             Self::SessionStarted => "session_started",
             Self::SessionConcluded => "session_concluded",
             Self::DigestGenerated => "digest_generated",
+            Self::ShutdownRequested => "shutdown_requested",
+            Self::ShutdownResolved => "shutdown_resolved",
+            Self::PlanSubmitted => "plan_submitted",
+            Self::PlanResolved => "plan_resolved",
         }
     }
 
@@ -68,10 +74,13 @@ impl TeamEventType {
             "task_completed" => Some(Self::TaskCompleted),
             "task_failed" => Some(Self::TaskFailed),
             "artifact_submitted" => Some(Self::ArtifactSubmitted),
-            "review_score_submitted" => Some(Self::ReviewScoreSubmitted),
             "session_started" => Some(Self::SessionStarted),
             "session_concluded" => Some(Self::SessionConcluded),
             "digest_generated" => Some(Self::DigestGenerated),
+            "shutdown_requested" => Some(Self::ShutdownRequested),
+            "shutdown_resolved" => Some(Self::ShutdownResolved),
+            "plan_submitted" => Some(Self::PlanSubmitted),
+            "plan_resolved" => Some(Self::PlanResolved),
             _ => None,
         }
     }

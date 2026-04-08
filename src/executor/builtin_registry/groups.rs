@@ -26,7 +26,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "file_code",
         name: "文件与代码",
-        tools: &["file_ops", "bash", "code_exec", "pdf_generate"],
+        tools: &["file_ops", "file_read", "file_write", "file_edit", "bash", "code_exec", "pdf_generate"],
     },
     ToolCategory {
         id: "memory_knowledge",
@@ -109,6 +109,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "team_delegate",
             "team_status",
             "team_disband",
+            "team_member_remove",
             "team_digest",
             "message_send",
             "inbox_read",
@@ -118,7 +119,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "task_wait",
             "task_submit",
             "task_read_artifact",
-            "review_score",
             "session_collaborate",
             "session_turn",
             "session_read",

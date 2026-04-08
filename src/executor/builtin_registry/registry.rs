@@ -51,6 +51,12 @@ pub struct BuiltinToolRegistry {
     pub(crate) web_fetch_tool: crate::builtin_tools::WebFetchTool,
     /// File operations tool instance
     pub(crate) file_ops_tool: crate::builtin_tools::FileOpsTool,
+    /// File read tool instance
+    pub(crate) file_read_tool: crate::builtin_tools::FileReadTool,
+    /// File write tool instance
+    pub(crate) file_write_tool: crate::builtin_tools::FileWriteTool,
+    /// File edit tool instance
+    pub(crate) file_edit_tool: crate::builtin_tools::FileEditTool,
     /// Bash execution tool instance (wraps CodeExecTool for shell commands)
     pub(crate) bash_tool: crate::builtin_tools::BashExecTool,
     /// Code execution tool instance
@@ -73,6 +79,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
     /// Self-management tool instance (LLM-triggered entry point)
     pub(crate) self_manage_tool: crate::builtin_tools::SelfManageTool,
+    /// Self-config tool instance (identity files + config.toml access)
+    pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
     /// Vault store tool instance (optional - requires SharedTokenManager)
     pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
@@ -178,6 +186,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
+    pub(crate) team_member_remove_tool: Option<crate::builtin_tools::team::TeamMemberRemoveTool>,
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
@@ -186,8 +195,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
     pub(crate) session_read_tool: Option<crate::builtin_tools::team::SessionReadTool>,
-    /// Review score tool (optional — requires ArtifactStore + EventLogStore + MessageRouter)
-    pub(crate) review_score_tool: Option<crate::builtin_tools::team::ReviewScoreTool>,
     /// Skill management tools — always available (SkillSystem is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
@@ -351,6 +358,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             "search" => Box::pin(async move { self.search_tool.call_json(arguments).await }),
             "web_fetch" => Box::pin(async move { self.web_fetch_tool.call_json(arguments).await }),
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
+            "file_read" => Box::pin(async move { self.file_read_tool.call_json(arguments).await }),
+            "file_write" => {
+                Box::pin(async move { self.file_write_tool.call_json(arguments).await })
+            }
+            "file_edit" => Box::pin(async move { self.file_edit_tool.call_json(arguments).await }),
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
             "pdf_generate" => {
@@ -421,6 +433,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "self_manage" => {
                 Box::pin(async move { self.self_manage_tool.call_json(arguments).await })
+            }
+            "self_config" => {
+                Box::pin(async move { self.self_config_tool.call_json(arguments).await })
             }
             "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
@@ -766,6 +781,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+            "team_member_remove" => Box::pin(async move {
+                let tool = self.team_member_remove_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_member_remove not available: no TeamStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "team_digest" => Box::pin(async move {
                 let tool = self.team_digest_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("team_digest not available: no EventLogStore configured")
@@ -806,12 +827,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let tool = self.session_read_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("session_read not available: no SessionStore configured")
                 })?;
-                tool.call_json(arguments).await
-            }),
-
-            // Review score tool
-            "review_score" => Box::pin(async move {
-                let tool = self.review_score_tool.as_ref().ok_or_else(|| AlephError::tool("review_score not available: no ArtifactStore/EventLogStore/MessageRouter configured"))?;
                 tool.call_json(arguments).await
             }),
 

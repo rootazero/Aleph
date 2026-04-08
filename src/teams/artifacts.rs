@@ -24,9 +24,7 @@ use crate::error::AlephError;
 pub enum ArtifactType {
     Report,
     Code,
-    Review,
-    Discovery,
-    Challenge,
+    Plan,
     Custom(String),
 }
 
@@ -36,9 +34,7 @@ impl ArtifactType {
         match self {
             Self::Report => "report",
             Self::Code => "code",
-            Self::Review => "review",
-            Self::Discovery => "discovery",
-            Self::Challenge => "challenge",
+            Self::Plan => "plan",
             Self::Custom(s) => s.as_str(),
         }
     }
@@ -48,9 +44,7 @@ impl ArtifactType {
         match s {
             "report" => Self::Report,
             "code" => Self::Code,
-            "review" => Self::Review,
-            "discovery" => Self::Discovery,
-            "challenge" => Self::Challenge,
+            "plan" => Self::Plan,
             other => Self::Custom(other.to_string()),
         }
     }

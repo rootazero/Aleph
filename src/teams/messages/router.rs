@@ -278,7 +278,7 @@ mod tests {
             from_agent: "agent-a".to_string(),
             to: vec!["agent-b".to_string()],
             cc: vec!["agent-c".to_string()],
-            msg_type: MessageType::Discovery,
+            msg_type: MessageType::Custom("discovery".into()),
             subject: "Finding".to_string(),
             content: "Discovered something".to_string(),
             reply_to: None,

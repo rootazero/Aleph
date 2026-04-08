@@ -11,7 +11,6 @@ use crate::config::types::agents_def::AgentDefinition;
 use crate::error::{AlephError, Result};
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::sync_primitives::Arc;
-use crate::teams::roles::{role_prompt_template, AgentRole};
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 use crate::tools::AlephTool;
 
@@ -39,7 +38,7 @@ pub struct CreateAgentSpec {
     /// Team role for this agent. When set, the corresponding role prompt
     /// template is automatically appended to the agent's system prompt.
     #[serde(default)]
-    pub role: Option<AgentRole>,
+    pub role: Option<String>,
 }
 
 // =============================================================================
@@ -62,12 +61,6 @@ pub struct MemberSpec {
     /// Role description for this member within the team (e.g. "researcher", "writer")
     #[serde(default)]
     pub role: String,
-
-    /// Typed team role. When set, the corresponding role prompt template is
-    /// automatically injected into the agent's system prompt at enroll time.
-    /// This is independent of `role` (which is a free-form description string).
-    #[serde(default)]
-    pub agent_role: Option<AgentRole>,
 }
 
 // =============================================================================
@@ -149,29 +142,29 @@ impl TeamCreateTool {
         self.current_agent_id = agent_id.into();
     }
 
+    /// Look up a built-in role prompt template by name.
+    fn builtin_role_prompt(role: &str) -> Option<&'static str> {
+        const LEADER_PROMPT: &str = include_str!("../../agents/prompts/team_leader.md");
+        const WORKER_PROMPT: &str = include_str!("../../agents/prompts/team_worker.md");
+
+        match role {
+            "leader" => Some(LEADER_PROMPT),
+            "worker" => Some(WORKER_PROMPT),
+            _ => None,
+        }
+    }
+
     /// Resolve a MemberSpec to an agent_id, creating the agent if needed.
-    /// When `agent_role` is set on the spec, the corresponding role prompt
+    /// When `role` is set on the spec, the corresponding role prompt
     /// template is injected into the agent's system prompt.
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
-        // Determine the effective AgentRole: prefer typed agent_role, fall back
-        // to parsing the free-form role string.
-        let effective_role = spec.agent_role.clone().or_else(|| {
-            if spec.role.is_empty() {
-                None
-            } else {
-                Some(AgentRole::from_stored(&spec.role))
-            }
-        });
-
         if let Some(ref agent_id) = spec.agent_id {
-            // Verify the existing agent is present in the runtime registry
             let instance = self.registry.get(agent_id).await.ok_or_else(|| {
                 AlephError::other(format!("Agent '{}' not found in registry", agent_id))
             })?;
 
-            // Inject role prompt for existing agents by appending to SOUL.md
-            if let Some(ref role) = effective_role {
-                if let Some(template) = role_prompt_template(role) {
+            if !spec.role.is_empty() {
+                if let Some(template) = Self::builtin_role_prompt(&spec.role) {
                     Self::append_role_prompt_to_soul(instance.agent_dir(), template).await;
                 }
             }
@@ -180,7 +173,6 @@ impl TeamCreateTool {
         }
 
         if let Some(ref create_spec) = spec.create {
-            // Inherit the leader's model so inline agents use the same provider
             let leader_model = self
                 .registry
                 .get(&self.current_agent_id)
@@ -188,7 +180,7 @@ impl TeamCreateTool {
                 .map(|inst| inst.config().model.clone())
                 .unwrap_or_else(|| "claude-sonnet-4-5".to_string());
             return self
-                .create_inline_agent(create_spec, effective_role.as_ref(), &leader_model)
+                .create_inline_agent(create_spec, &spec.role, &leader_model)
                 .await;
         }
 
@@ -234,7 +226,7 @@ impl TeamCreateTool {
     async fn create_inline_agent(
         &self,
         spec: &CreateAgentSpec,
-        role: Option<&AgentRole>,
+        role: &str,
         leader_model: &str,
     ) -> Result<String> {
         validate_agent_id(&spec.id)
@@ -282,14 +274,14 @@ impl TeamCreateTool {
                 ))
             })?;
 
-        // Determine the effective role: prefer the function parameter, fall back
-        // to spec.role if present.
-        let effective_role = role.cloned().or_else(|| spec.role.clone());
-
-        // Build the combined system prompt: user profile + role template
-        let role_template = effective_role
-            .as_ref()
-            .and_then(|r| role_prompt_template(r));
+        // Determine the effective role: prefer spec.role if present, fall back
+        // to the function parameter.
+        let effective_role = spec.role.as_deref().unwrap_or(role);
+        let role_template = if effective_role.is_empty() {
+            None
+        } else {
+            Self::builtin_role_prompt(effective_role)
+        };
 
         let combined_prompt = match (&spec.profile, role_template) {
             (Some(profile), Some(tpl)) => {
@@ -381,7 +373,7 @@ impl AlephTool for TeamCreateTool {
 
         // Inject leader role prompt for the calling agent
         if let Some(instance) = self.registry.get(&leader_id).await {
-            if let Some(template) = role_prompt_template(&AgentRole::Leader) {
+            if let Some(template) = Self::builtin_role_prompt("leader") {
                 Self::append_role_prompt_to_soul(instance.agent_dir(), template).await;
             }
         }

@@ -736,7 +736,7 @@ mod tests {
             .send_message(NewMessage {
                 team_id: "team-1".to_string(),
                 from_agent: "agent-c".to_string(),
-                msg_type: MessageType::Discovery,
+                msg_type: MessageType::Custom("discovery".into()),
                 subject: "FYI".to_string(),
                 content: "Just a heads up".to_string(),
                 recipients: vec![cc_recipient("agent-b")],
@@ -787,7 +787,7 @@ mod tests {
             .send_message(NewMessage {
                 team_id: "team-1".to_string(),
                 from_agent: "agent-c".to_string(),
-                msg_type: MessageType::Discovery,
+                msg_type: MessageType::Custom("discovery".into()),
                 subject: "Found something".to_string(),
                 content: "Discovery content".to_string(),
                 recipients: vec![to_recipient("agent-b")],
@@ -797,13 +797,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Filter by Discovery
+        // Filter by Custom("discovery")
         let discoveries = store
-            .read_inbox("agent-b", "team-1", Some(&MessageType::Discovery))
+            .read_inbox("agent-b", "team-1", Some(&MessageType::Custom("discovery".into())))
             .await
             .unwrap();
         assert_eq!(discoveries.len(), 1);
-        assert_eq!(discoveries[0].msg_type, MessageType::Discovery);
+        assert_eq!(discoveries[0].msg_type, MessageType::Custom("discovery".into()));
 
         // Filter by Message
         let messages = store
@@ -822,7 +822,7 @@ mod tests {
             .send_message(NewMessage {
                 team_id: "team-1".to_string(),
                 from_agent: "agent-a".to_string(),
-                msg_type: MessageType::ReviewRequest,
+                msg_type: MessageType::Custom("review_request".into()),
                 subject: "Please review".to_string(),
                 content: "See attached".to_string(),
                 recipients: vec![to_recipient("agent-b")],

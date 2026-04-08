@@ -1,7 +1,8 @@
-//! End-to-end integration tests for the three-layer team communication system.
+//! End-to-end integration tests for the team communication system.
 //!
-//! These tests exercise the full Explorer -> Critic -> Escalation flow using
-//! real SQLite-backed stores (in-memory) for full integration coverage.
+//! These tests exercise artifact creation, message routing, escalation,
+//! context injection, and team cleanup using real SQLite-backed stores
+//! (in-memory) for full integration coverage.
 
 use chrono::Utc;
 use serde_json::json;
@@ -14,20 +15,17 @@ use crate::teams::messages::inbox::*;
 use crate::teams::messages::router::*;
 use crate::teams::messages::store::*;
 use crate::teams::messages::types::*;
-use crate::teams::roles::review::*;
-use crate::teams::roles::types::*;
 use crate::teams::sessions::store::*;
 use crate::teams::sessions::types::*;
 use crate::teams::store::{SqliteTeamStore, TeamStore};
 use crate::teams::types::*;
 
 // ---------------------------------------------------------------------------
-// Test 1: Explorer-Critic Review Cycle
+// Test 1: Two-Agent Collaboration (artifact + message routing)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_explorer_critic_review_cycle() {
-    // --- Setup ---
+async fn test_two_agent_collaboration() {
     let artifact_store = Arc::new(SqliteArtifactStore::new_in_memory().await);
     let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
     let event_store: Arc<SqliteEventLogStore> =
@@ -44,273 +42,79 @@ async fn test_explorer_critic_review_cycle() {
         event_store.clone(),
     );
 
-    let team_id = "team-review";
-    let task_id = "task-explore-1";
-    let explorer_id = "explorer-1";
-    let critic_id = "critic-1";
+    let team_id = "team-collab";
+    let task_id = "task-1";
+    let agent_a = "agent-a";
+    let agent_b = "agent-b";
 
-    // --- Step 1: Explorer submits Discovery artifact ---
-    let discovery_v1 = artifact_store
+    // Agent A submits a report artifact
+    let report = artifact_store
         .create_artifact(NewArtifact {
             task_id: task_id.into(),
-            agent_id: explorer_id.into(),
-            artifact_type: ArtifactType::Discovery,
-            title: "Initial discovery: cache optimization".into(),
-            content: "We can improve cache hit rates by 30% with LRU eviction.".into(),
+            agent_id: agent_a.into(),
+            artifact_type: ArtifactType::Report,
+            title: "Initial analysis".into(),
+            content: "Cache optimization proposal.".into(),
             metadata: json!({"version": 1}),
         })
         .await
         .unwrap();
 
-    assert_eq!(discovery_v1.artifact_type, ArtifactType::Discovery);
+    assert_eq!(report.artifact_type, ArtifactType::Report);
 
-    // --- Step 2: System sends review request to Critic (Layer 1 auto-notification) ---
-    let review_req = router
+    // Agent A sends message to Agent B
+    let msg1 = router
         .send(SendRequest {
             team_id: team_id.into(),
-            from_agent: "system".into(),
-            to: vec![critic_id.into()],
+            from_agent: agent_a.into(),
+            to: vec![agent_b.into()],
             cc: vec![],
-            msg_type: MessageType::ReviewRequest,
-            subject: "Review discovery: cache optimization".into(),
-            content: format!("Please review artifact {}", discovery_v1.id),
+            msg_type: MessageType::Message,
+            subject: "Please review".into(),
+            content: format!("Please review artifact {}", report.id),
             reply_to: None,
-            attachments: vec![discovery_v1.id.clone()],
+            attachments: vec![report.id.clone()],
         })
         .await
         .unwrap();
 
-    assert_eq!(review_req.msg_type, MessageType::ReviewRequest);
-    assert_eq!(review_req.attachments.len(), 1);
-
-    // --- Step 3: Critic reads inbox and finds review request ---
-    let critic_inbox = inbox
-        .read(critic_id, team_id, Some(&MessageType::ReviewRequest), true)
+    // Agent B reads inbox
+    let b_inbox = inbox
+        .read(agent_b, team_id, None, true)
         .await
         .unwrap();
+    assert_eq!(b_inbox.len(), 1);
+    assert_eq!(b_inbox[0].attachments[0], report.id);
 
-    assert_eq!(critic_inbox.len(), 1);
-    assert_eq!(critic_inbox[0].msg_type, MessageType::ReviewRequest);
-    assert_eq!(critic_inbox[0].attachments[0], discovery_v1.id);
-
-    // --- Step 4: Critic reviews -- REJECT ---
-    let config = TeamRoleConfig {
-        role: AgentRole::Critic,
-        prompt_template: String::new(),
-        review_dimensions: vec![
-            "correctness".into(),
-            "completeness".into(),
-            "feasibility".into(),
-        ],
-        min_score_threshold: 7,
-        min_challenges: 3,
-    };
-
-    let review_v1 = ReviewScore {
-        task_id: task_id.into(),
-        artifact_id: discovery_v1.id.clone(),
-        scores: vec![
-            DimensionScore {
-                dimension: "correctness".into(),
-                score: 5,
-                rationale: "Claims lack supporting data".into(),
-            },
-            DimensionScore {
-                dimension: "completeness".into(),
-                score: 4,
-                rationale: "Missing edge cases".into(),
-            },
-            DimensionScore {
-                dimension: "feasibility".into(),
-                score: 6,
-                rationale: "Feasible but risky".into(),
-            },
-        ],
-        overall_pass: false,
-        challenges: vec![
-            Challenge {
-                point: "No benchmark data provided".into(),
-                severity: Severity::Critical,
-                evidence: "The 30% improvement claim has no supporting measurements".into(),
-            },
-            Challenge {
-                point: "LRU may not be optimal for our access patterns".into(),
-                severity: Severity::Major,
-                evidence: "Our workload is scan-heavy, not locality-heavy".into(),
-            },
-            Challenge {
-                point: "Missing memory overhead analysis".into(),
-                severity: Severity::Major,
-                evidence: "No discussion of memory cost of maintaining LRU metadata".into(),
-            },
-        ],
-        improvement_suggestions: vec!["Add benchmarks".into(), "Consider ARC or 2Q".into()],
-        risks_if_accepted: vec!["Performance regression".into()],
-    };
-
-    // Validate: failing review with 3 challenges should be valid
-    assert!(review_v1.validate(&config).is_ok());
-
-    // Save review as artifact
-    let review_artifact_v1 = artifact_store
-        .create_artifact(NewArtifact {
-            task_id: task_id.into(),
-            agent_id: critic_id.into(),
-            artifact_type: ArtifactType::Review,
-            title: "Review of cache optimization discovery (v1)".into(),
-            content: serde_json::to_string(&review_v1).unwrap(),
-            metadata: json!({"overall_pass": false, "version": 1}),
-        })
-        .await
-        .unwrap();
-
-    // --- Step 5: Challenge sent to Explorer ---
-    let challenge_msg = router
+    // Agent B replies
+    let _msg2 = router
         .send(SendRequest {
             team_id: team_id.into(),
-            from_agent: critic_id.into(),
-            to: vec![explorer_id.into()],
+            from_agent: agent_b.into(),
+            to: vec![agent_a.into()],
             cc: vec![],
-            msg_type: MessageType::Challenge,
-            subject: "Challenges to cache optimization discovery".into(),
-            content: "Your discovery needs revision. See review artifact for details.".into(),
-            reply_to: Some(review_req.id.clone()),
-            attachments: vec![review_artifact_v1.id.clone()],
+            msg_type: MessageType::Message,
+            subject: "Re: review".into(),
+            content: "Needs benchmarks.".into(),
+            reply_to: Some(msg1.id.clone()),
+            attachments: vec![],
         })
         .await
         .unwrap();
 
-    assert_eq!(challenge_msg.msg_type, MessageType::Challenge);
-
-    // --- Step 6: Explorer reads challenges ---
-    let explorer_inbox = inbox
-        .read(explorer_id, team_id, Some(&MessageType::Challenge), true)
-        .await
-        .unwrap();
-
-    assert_eq!(explorer_inbox.len(), 1);
-    assert!(explorer_inbox[0].content.contains("revision"));
-
-    // --- Step 7: Explorer revises and submits updated Discovery ---
-    let discovery_v2 = artifact_store
-        .create_artifact(NewArtifact {
-            task_id: task_id.into(),
-            agent_id: explorer_id.into(),
-            artifact_type: ArtifactType::Discovery,
-            title: "Revised discovery: cache optimization with ARC".into(),
-            content: "After benchmarking, ARC eviction improves hit rates by 25% with \
-                      only 8KB additional memory overhead per cache instance."
-                .into(),
-            metadata: json!({"version": 2, "parent_artifact": discovery_v1.id}),
-        })
-        .await
-        .unwrap();
-
-    // --- Step 8: Critic reviews again -- PASS ---
-    let review_v2 = ReviewScore {
-        task_id: task_id.into(),
-        artifact_id: discovery_v2.id.clone(),
-        scores: vec![
-            DimensionScore {
-                dimension: "correctness".into(),
-                score: 8,
-                rationale: "Claims now backed by benchmark data".into(),
-            },
-            DimensionScore {
-                dimension: "completeness".into(),
-                score: 7,
-                rationale: "Edge cases addressed, memory overhead documented".into(),
-            },
-            DimensionScore {
-                dimension: "feasibility".into(),
-                score: 9,
-                rationale: "ARC is well-suited for scan-heavy workloads".into(),
-            },
-        ],
-        overall_pass: true,
-        challenges: vec![
-            Challenge {
-                point: "Benchmark only covers read-heavy scenario".into(),
-                severity: Severity::Minor,
-                evidence: "Write-heavy benchmarks not included".into(),
-            },
-            Challenge {
-                point: "ARC implementation complexity".into(),
-                severity: Severity::Minor,
-                evidence: "ARC is more complex than LRU to implement".into(),
-            },
-            Challenge {
-                point: "Memory overhead under high concurrency".into(),
-                severity: Severity::Minor,
-                evidence: "8KB is per-instance; need to verify at scale".into(),
-            },
-        ],
-        improvement_suggestions: vec!["Add write-heavy benchmarks".into()],
-        risks_if_accepted: vec![],
-    };
-
-    // Validate: passing review with all scores >= 7 and 3 challenges should be valid
-    assert!(review_v2.validate(&config).is_ok());
-
-    // Save passing review as artifact
-    let _review_artifact_v2 = artifact_store
-        .create_artifact(NewArtifact {
-            task_id: task_id.into(),
-            agent_id: critic_id.into(),
-            artifact_type: ArtifactType::Review,
-            title: "Review of cache optimization discovery (v2)".into(),
-            content: serde_json::to_string(&review_v2).unwrap(),
-            metadata: json!({"overall_pass": true, "version": 2}),
-        })
-        .await
-        .unwrap();
-
-    // --- Step 9: Verify all artifacts ---
-    let all_artifacts = artifact_store
-        .get_artifacts_for_task(task_id)
-        .await
-        .unwrap();
-
-    // 2 discoveries + 2 reviews = 4 artifacts
-    assert_eq!(all_artifacts.len(), 4);
-
-    let discoveries: Vec<_> = all_artifacts
-        .iter()
-        .filter(|a| a.artifact_type == ArtifactType::Discovery)
-        .collect();
-    assert_eq!(discoveries.len(), 2);
-
-    let reviews: Vec<_> = all_artifacts
-        .iter()
-        .filter(|a| a.artifact_type == ArtifactType::Review)
-        .collect();
-    assert_eq!(reviews.len(), 2);
-
-    // Verify events were logged (MessageSent + MessageRead events)
+    // Verify events
     let events = event_store.get_events(team_id, None, None).await.unwrap();
-    assert!(
-        events.len() >= 2,
-        "Expected at least 2 events, got {}",
-        events.len()
-    );
-
     let sent_events: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == TeamEventType::MessageSent)
         .collect();
-    assert!(
-        sent_events.len() >= 2,
-        "Expected at least 2 MessageSent events"
-    );
+    assert!(sent_events.len() >= 2);
 
     let read_events: Vec<_> = events
         .iter()
         .filter(|e| e.event_type == TeamEventType::MessageRead)
         .collect();
-    assert!(
-        read_events.len() >= 2,
-        "Expected at least 2 MessageRead events"
-    );
+    assert!(read_events.len() >= 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +154,7 @@ async fn test_escalation_to_collaborative_session() {
             from_agent: explorer_id.into(),
             to: vec![critic_id.into()],
             cc: vec![],
-            msg_type: MessageType::Discovery,
+            msg_type: MessageType::Message,
             subject: "Cache optimization proposal".into(),
             content: "I propose we use LRU caching.".into(),
             reply_to: None,
@@ -368,7 +172,7 @@ async fn test_escalation_to_collaborative_session() {
             from_agent: critic_id.into(),
             to: vec![explorer_id.into()],
             cc: vec![],
-            msg_type: MessageType::Challenge,
+            msg_type: MessageType::Message,
             subject: "Re: Cache optimization proposal".into(),
             content: "LRU is not suitable for our workload.".into(),
             reply_to: Some(msg1.id.clone()),
@@ -574,7 +378,7 @@ async fn test_context_injection_shows_inbox_summary() {
         .send_message(NewMessage {
             team_id: team.id.clone(),
             from_agent: "sender-1".into(),
-            msg_type: MessageType::ReviewRequest,
+            msg_type: MessageType::Message,
             subject: "Please review".into(),
             content: "Review this artifact".into(),
             recipients: vec![Recipient {
@@ -591,7 +395,7 @@ async fn test_context_injection_shows_inbox_summary() {
         .send_message(NewMessage {
             team_id: team.id.clone(),
             from_agent: "sender-2".into(),
-            msg_type: MessageType::Discovery,
+            msg_type: MessageType::Message,
             subject: "FYI: new finding".into(),
             content: "Just a heads up".into(),
             recipients: vec![Recipient {
@@ -671,109 +475,7 @@ async fn test_context_injection_shows_inbox_summary() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Review Score Validation Flow
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_review_score_validation_flow() {
-    let config = TeamRoleConfig {
-        role: AgentRole::Critic,
-        prompt_template: String::new(),
-        review_dimensions: vec!["correctness".into(), "completeness".into()],
-        min_score_threshold: 7,
-        min_challenges: 3,
-    };
-
-    let make_challenge = |point: &str| Challenge {
-        point: point.into(),
-        severity: Severity::Major,
-        evidence: "evidence".into(),
-    };
-
-    let make_score = |dim: &str, score: u8| DimensionScore {
-        dimension: dim.into(),
-        score,
-        rationale: "rationale".into(),
-    };
-
-    // --- Case 1: Reject with only 2 challenges (need 3) ---
-    let review_2_challenges = ReviewScore {
-        task_id: "task-1".into(),
-        artifact_id: "art-1".into(),
-        scores: vec![make_score("correctness", 8), make_score("completeness", 8)],
-        overall_pass: true,
-        challenges: vec![make_challenge("challenge 1"), make_challenge("challenge 2")],
-        improvement_suggestions: vec![],
-        risks_if_accepted: vec![],
-    };
-
-    let result = review_2_challenges.validate(&config);
-    assert!(result.is_err());
-    let errors = result.unwrap_err();
-    assert!(errors.iter().any(|e| e.contains("Minimum 3 challenges")));
-
-    // --- Case 2: Reject pass=true with score 5 (below threshold 7) ---
-    let review_low_score = ReviewScore {
-        task_id: "task-1".into(),
-        artifact_id: "art-1".into(),
-        scores: vec![make_score("correctness", 5), make_score("completeness", 8)],
-        overall_pass: true,
-        challenges: vec![
-            make_challenge("c1"),
-            make_challenge("c2"),
-            make_challenge("c3"),
-        ],
-        improvement_suggestions: vec![],
-        risks_if_accepted: vec![],
-    };
-
-    let result = review_low_score.validate(&config);
-    assert!(result.is_err());
-    let errors = result.unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| e.contains("correctness") && e.contains("5/10")));
-
-    // --- Case 3: Valid passing review (3 challenges, all scores >= 7) ---
-    let review_valid_pass = ReviewScore {
-        task_id: "task-1".into(),
-        artifact_id: "art-1".into(),
-        scores: vec![make_score("correctness", 8), make_score("completeness", 9)],
-        overall_pass: true,
-        challenges: vec![
-            make_challenge("c1"),
-            make_challenge("c2"),
-            make_challenge("c3"),
-        ],
-        improvement_suggestions: vec![],
-        risks_if_accepted: vec![],
-    };
-
-    assert!(review_valid_pass.validate(&config).is_ok());
-
-    // --- Case 4: Valid failing review (3 challenges, low scores, pass=false) ---
-    let review_valid_fail = ReviewScore {
-        task_id: "task-1".into(),
-        artifact_id: "art-1".into(),
-        scores: vec![make_score("correctness", 3), make_score("completeness", 2)],
-        overall_pass: false,
-        challenges: vec![
-            make_challenge("major flaw 1"),
-            make_challenge("major flaw 2"),
-            make_challenge("major flaw 3"),
-        ],
-        improvement_suggestions: vec!["Rewrite everything".into()],
-        risks_if_accepted: vec!["System failure".into()],
-    };
-
-    assert!(
-        review_valid_fail.validate(&config).is_ok(),
-        "Failing review with low scores and sufficient challenges should be valid"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: Team Disband Cleanup
+// Test 4: Team Disband Cleanup
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -933,4 +635,111 @@ async fn test_team_disband_cleanup() {
     // --- Verify: Events pruned ---
     let events_after = event_store.get_events(team_id, None, None).await.unwrap();
     assert!(events_after.is_empty(), "All events should be pruned");
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Broadcast Pattern (query members → filter sender → send to all)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_broadcast_pattern() {
+    // Test the broadcast pattern: query members, filter sender, send to all others
+    let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
+    let event_store: Arc<SqliteEventLogStore> =
+        Arc::new(SqliteEventLogStore::new_in_memory().await);
+    let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
+    let team_store = Arc::new(SqliteTeamStore::new(conn));
+    team_store.migrate().await.unwrap();
+
+    let router = MessageRouter::new(
+        msg_store.clone(),
+        event_store.clone(),
+        EscalationRule::default(),
+        None,
+    );
+
+    // Create team with 3 members
+    let team = team_store
+        .create_team(NewTeam {
+            name: "Broadcast Test".into(),
+            description: "".into(),
+            leader_id: "leader".into(),
+        })
+        .await
+        .unwrap();
+
+    team_store
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: "leader".into(),
+            role: "leader".into(),
+        })
+        .await
+        .unwrap();
+    team_store
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: "worker-1".into(),
+            role: "worker".into(),
+        })
+        .await
+        .unwrap();
+    team_store
+        .add_member(NewTeamMember {
+            team_id: team.id.clone(),
+            agent_id: "worker-2".into(),
+            role: "worker".into(),
+        })
+        .await
+        .unwrap();
+
+    // Simulate broadcast: get members, filter sender, send to all
+    let members = team_store.get_members(&team.id).await.unwrap();
+    let sender = "leader";
+    let to: Vec<String> = members
+        .into_iter()
+        .map(|m| m.agent_id)
+        .filter(|id| id != sender)
+        .collect();
+
+    assert_eq!(to.len(), 2);
+    assert!(to.contains(&"worker-1".to_string()));
+    assert!(to.contains(&"worker-2".to_string()));
+
+    // Send to all filtered members
+    let _msg = router
+        .send(SendRequest {
+            team_id: team.id.clone(),
+            from_agent: sender.into(),
+            to,
+            cc: vec![],
+            msg_type: MessageType::Message,
+            subject: "Team announcement".into(),
+            content: "All hands meeting tomorrow".into(),
+            reply_to: None,
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Both workers should have the message
+    let w1_inbox = msg_store
+        .read_inbox("worker-1", &team.id, None)
+        .await
+        .unwrap();
+    assert_eq!(w1_inbox.len(), 1);
+    assert_eq!(w1_inbox[0].subject, "Team announcement");
+
+    let w2_inbox = msg_store
+        .read_inbox("worker-2", &team.id, None)
+        .await
+        .unwrap();
+    assert_eq!(w2_inbox.len(), 1);
+
+    // Leader should NOT have the message (was filtered out)
+    let leader_inbox = msg_store
+        .read_inbox("leader", &team.id, None)
+        .await
+        .unwrap();
+    assert!(leader_inbox.is_empty());
 }

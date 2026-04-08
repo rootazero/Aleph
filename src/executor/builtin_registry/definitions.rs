@@ -26,8 +26,9 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, PdfGenerateTool,
-    ReadConfigGuideTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    BashExecTool, CodeExecTool, DesktopTool, FileEditTool, FileOpsTool, FileReadTool,
+    FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SearchTool,
+    SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -63,7 +64,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "file_ops",
-        description: "File system operations - list, read, write, move, copy, delete, etc.",
+        description: "File system operations - list, move, copy, delete, mkdir, search, batch_move, organize",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "file_read",
+        description: "Read the contents of a file with optional offset/limit for partial reads",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "file_write",
+        description: "Write content to a file (content is a required parameter)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "file_edit",
+        description: "Perform exact string replacement in a file",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -323,6 +339,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "team_member_remove",
+        description: "Remove a member from a team (leader only, cannot remove self)",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "team_digest",
         description: "Generate a summary of recent team activity for the specified time period",
         requires_config: true,
@@ -384,11 +405,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "session_read",
         description: "Read a collaborative session's transcript, status, and outcome",
-        requires_config: true,
-    },
-    BuiltinToolDefinition {
-        name: "review_score",
-        description: "Submit a structured review score for a task artifact with configurable validation thresholds",
         requires_config: true,
     },
     // Channel management tools — require ChannelRegistry
@@ -464,6 +480,9 @@ pub fn create_tool_boxed(
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "file_ops" => Some(Box::new(FileOpsTool::new())),
+        "file_read" => Some(Box::new(FileReadTool::new())),
+        "file_write" => Some(Box::new(FileWriteTool::new())),
+        "file_edit" => Some(Box::new(FileEditTool::new())),
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),
@@ -532,8 +551,8 @@ pub fn create_tool_boxed(
         )),
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
-        "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_digest"
-        | "message_send" | "inbox_read" => None,
+        "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_member_remove"
+        | "team_digest" | "message_send" | "inbox_read" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,
@@ -543,9 +562,6 @@ pub fn create_tool_boxed(
         // Session collaboration tools require SessionCoordinator / SessionStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "session_collaborate" | "session_turn" | "session_read" => None,
-        // Review score tool requires ArtifactStore + EventLogStore + MessageRouter at runtime,
-        // created dynamically in BuiltinToolRegistry::with_config().
-        "review_score" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"

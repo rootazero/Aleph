@@ -59,49 +59,45 @@ pub struct Recipient {
 #[serde(rename_all = "snake_case")]
 pub enum MessageType {
     Message,
-    Discovery,
-    Challenge,
-    ReviewRequest,
-    ReviewResult,
     SystemNotification,
     Idle,
     PlanApprovalRequest,
     PlanApproved,
     PlanRejected,
+    ShutdownRequest,
+    ShutdownApproved,
+    ShutdownRejected,
+    Custom(String),
 }
 
 impl MessageType {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Message => "message",
-            Self::Discovery => "discovery",
-            Self::Challenge => "challenge",
-            Self::ReviewRequest => "review_request",
-            Self::ReviewResult => "review_result",
             Self::SystemNotification => "system_notification",
             Self::Idle => "idle",
             Self::PlanApprovalRequest => "plan_approval_request",
             Self::PlanApproved => "plan_approved",
             Self::PlanRejected => "plan_rejected",
+            Self::ShutdownRequest => "shutdown_request",
+            Self::ShutdownApproved => "shutdown_approved",
+            Self::ShutdownRejected => "shutdown_rejected",
+            Self::Custom(s) => s.as_str(),
         }
     }
 
     pub fn from_stored(s: &str) -> Self {
         match s {
             "message" => Self::Message,
-            "discovery" => Self::Discovery,
-            "challenge" => Self::Challenge,
-            "review_request" => Self::ReviewRequest,
-            "review_result" => Self::ReviewResult,
             "system_notification" => Self::SystemNotification,
             "idle" => Self::Idle,
             "plan_approval_request" => Self::PlanApprovalRequest,
             "plan_approved" => Self::PlanApproved,
             "plan_rejected" => Self::PlanRejected,
-            other => {
-                tracing::warn!("Unknown MessageType stored value: {other}, defaulting to Message");
-                Self::Message
-            }
+            "shutdown_request" => Self::ShutdownRequest,
+            "shutdown_approved" => Self::ShutdownApproved,
+            "shutdown_rejected" => Self::ShutdownRejected,
+            other => Self::Custom(other.to_string()),
         }
     }
 }
