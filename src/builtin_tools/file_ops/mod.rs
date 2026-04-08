@@ -4,12 +4,15 @@
 //! Supports: list, read, write, move, copy, delete, mkdir, search, batch_move, organize
 
 mod batch;
+pub(crate) mod edit;
 mod ops;
 mod path_utils;
+pub(crate) mod read;
 mod search;
 mod state;
 mod tool;
 mod types;
+pub(crate) mod write;
 
 // Re-export public API
 pub use state::{
@@ -17,8 +20,11 @@ pub use state::{
     record_written_file, scan_new_files_in_working_dir, set_working_dir, take_written_files,
     WrittenFile,
 };
+pub use edit::FileEditTool;
+pub use read::FileReadTool;
 pub use tool::FileOpsTool;
 pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};
+pub use write::FileWriteTool;
 
 #[cfg(test)]
 mod tests {
@@ -40,7 +46,6 @@ mod tests {
             operation: FileOperation::List,
             path: dir.path().to_string_lossy().to_string(),
             destination: None,
-            content: None,
             pattern: None,
             create_parents: true,
         };
@@ -53,36 +58,29 @@ mod tests {
     #[tokio::test]
     async fn test_read_write_file() {
         let dir = tempdir().unwrap();
-        let tool = FileOpsTool::new();
         let file_path = dir.path().join("test.txt");
 
-        // Write
-        let write_args = FileOpsArgs {
-            operation: FileOperation::Write,
-            path: file_path.to_string_lossy().to_string(),
-            destination: None,
-            content: Some("Hello, World!".to_string()),
-            pattern: None,
+        // Write via FileWriteTool
+        let write_tool = write::FileWriteTool::new();
+        let write_args = write::FileWriteArgs {
+            file_path: file_path.to_string_lossy().to_string(),
+            content: "Hello, World!".to_string(),
             create_parents: true,
         };
-
-        let result = AlephTool::call(&tool, write_args).await.unwrap();
+        let result = AlephTool::call(&write_tool, write_args).await.unwrap();
         assert!(result.success);
-        assert_eq!(result.bytes_written, Some(13));
+        assert_eq!(result.bytes_written, 13);
 
-        // Read
-        let read_args = FileOpsArgs {
-            operation: FileOperation::Read,
+        // Read via FileReadTool
+        let read_tool = read::FileReadTool::new();
+        let read_args = read::FileReadArgs {
             path: file_path.to_string_lossy().to_string(),
-            destination: None,
-            content: None,
-            pattern: None,
-            create_parents: true,
+            offset: None,
+            limit: None,
         };
-
-        let result = AlephTool::call(&tool, read_args).await.unwrap();
+        let result = AlephTool::call(&read_tool, read_args).await.unwrap();
         assert!(result.success);
-        assert_eq!(result.content, Some("Hello, World!".to_string()));
+        assert_eq!(result.content, "Hello, World!");
     }
 
     #[tokio::test]
@@ -95,7 +93,6 @@ mod tests {
             operation: FileOperation::Mkdir,
             path: new_dir.to_string_lossy().to_string(),
             destination: None,
-            content: None,
             pattern: None,
             create_parents: true,
         };
@@ -119,7 +116,6 @@ mod tests {
             operation: FileOperation::Move,
             path: from.to_string_lossy().to_string(),
             destination: Some(to.to_string_lossy().to_string()),
-            content: None,
             pattern: None,
             create_parents: true,
         };
@@ -144,7 +140,6 @@ mod tests {
             operation: FileOperation::Search,
             path: dir.path().to_string_lossy().to_string(),
             destination: None,
-            content: None,
             pattern: Some("*.txt".to_string()),
             create_parents: true,
         };
@@ -166,7 +161,6 @@ mod tests {
             operation: FileOperation::Mkdir,
             path: new_dir.to_string_lossy().to_string(),
             destination: None,
-            content: None,
             pattern: None,
             create_parents: true,
         };

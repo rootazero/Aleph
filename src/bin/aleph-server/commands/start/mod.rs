@@ -342,14 +342,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!("Desktop capabilities: in-process (native)");
     }
 
-    // Initialize memory backend (LanceDB)
-    let memory_db: Arc<alephcore::memory::store::LanceMemoryBackend> = {
+    // Initialize memory backend (SQLite + sqlite-vec)
+    let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> = {
         let data_dir = alephcore::utils::paths::get_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
-        match alephcore::memory::store::LanceMemoryBackend::open_or_create(&data_dir).await {
+        let db_path = data_dir.join("memory.db");
+
+        // Notify user if old LanceDB data directory exists
+        let lance_path = data_dir.join("memory.lance");
+        if lance_path.exists() {
+            println!("  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}", lance_path, lance_path);
+        }
+
+        match alephcore::memory::store::SqliteMemoryBackend::new(&db_path) {
             Ok(backend) => {
                 if !args.daemon {
-                    println!("Memory backend initialized (LanceDB)");
+                    println!("Memory backend initialized (SQLite + sqlite-vec)");
                 }
                 Arc::new(backend)
             }

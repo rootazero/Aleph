@@ -19,13 +19,21 @@ impl E164Number {
         &self.0
     }
 
-    /// Normalize a phone number to E.164 format
+    /// Normalize a phone number to E.164 format.
+    ///
+    /// 10-digit numbers are assumed to be US/Canada (country code 1).
+    /// 11-15 digit numbers are assumed to already include the country code.
     pub fn normalize(raw: &str) -> Option<Self> {
         let cleaned: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
         if cleaned.len() < 10 || cleaned.len() > 15 {
             return None;
         }
-        Some(Self(format!("+{}", cleaned)))
+        if cleaned.len() == 10 {
+            // Assume US/Canada: prepend country code 1
+            Some(Self(format!("+1{}", cleaned)))
+        } else {
+            Some(Self(format!("+{}", cleaned)))
+        }
     }
 }
 
@@ -152,9 +160,21 @@ impl WhatsAppPolicy {
     }
 
     fn matches_allowlist(&self, sender: &UserId, allowlist: &[String]) -> bool {
-        allowlist
-            .iter()
-            .any(|entry| entry == "*" || entry == sender.as_str() || entry.starts_with('+'))
+        allowlist.iter().any(|entry| {
+            if entry == "*" {
+                return true;
+            }
+            if entry == sender.as_str() {
+                return true;
+            }
+            // Normalize both sides for E.164 comparison
+            if let (Some(entry_norm), Some(sender_norm)) =
+                (E164Number::normalize(entry), E164Number::normalize(sender.as_str()))
+            {
+                return entry_norm.as_str() == sender_norm.as_str();
+            }
+            false
+        })
     }
 
     fn is_in_group(&self, group_id: &str) -> bool {

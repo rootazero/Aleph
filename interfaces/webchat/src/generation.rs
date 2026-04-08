@@ -32,7 +32,7 @@ impl GenerationType {
             GenerationType::Video => "Video",
             GenerationType::Audio => "Audio",
             GenerationType::Speech => "Speech",
-            GenerationType::Transcription => "Transcription",
+            GenerationType::Transcription => "STT",
         }
     }
 

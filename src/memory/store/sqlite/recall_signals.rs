@@ -119,6 +119,9 @@ impl SqliteMemoryBackend {
     /// Aggregate recall signals for a set of fact IDs.
     ///
     /// Returns one `RecallAggregate` per fact that has at least one signal.
+    /// SQLite max bound parameters per statement.
+    const SQLITE_MAX_VARS: usize = 999;
+
     pub fn aggregate_for_facts(
         &self,
         fact_ids: &[String],
@@ -132,57 +135,63 @@ impl SqliteMemoryBackend {
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        let placeholders: Vec<String> = (1..=fact_ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "SELECT \
-                 fact_id, \
-                 COUNT(*)                    AS signal_count, \
-                 SUM(score)                  AS total_score, \
-                 COUNT(DISTINCT query_hash)  AS unique_queries, \
-                 COUNT(DISTINCT channel)     AS unique_channels, \
-                 COUNT(DISTINCT day_bucket)  AS recall_days, \
-                 MIN(created_at)             AS first_recall, \
-                 MAX(created_at)             AS last_recall \
-             FROM recall_signals \
-             WHERE fact_id IN ({}) \
-             GROUP BY fact_id",
-            placeholders.join(", ")
-        );
-
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = fact_ids
-            .iter()
-            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
-            .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| AlephError::config(format!("aggregate_for_facts prepare: {e}")))?;
-
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                Ok(RecallAggregate {
-                    fact_id: row.get("fact_id")?,
-                    signal_count: row.get("signal_count")?,
-                    total_score: row.get("total_score")?,
-                    unique_queries: row.get("unique_queries")?,
-                    unique_channels: row.get("unique_channels")?,
-                    recall_days: row.get("recall_days")?,
-                    first_recall: row.get("first_recall")?,
-                    last_recall: row.get("last_recall")?,
-                })
-            })
-            .map_err(|e| AlephError::config(format!("aggregate_for_facts query: {e}")))?;
-
         let mut results = Vec::new();
-        for row in rows {
-            results.push(
-                row.map_err(|e| {
-                    AlephError::config(format!("aggregate_for_facts row: {e}"))
-                })?,
+
+        // Chunk to stay under SQLite's 999-variable limit
+        for chunk in fact_ids.chunks(Self::SQLITE_MAX_VARS) {
+            let placeholders: Vec<String> =
+                (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT \
+                     fact_id, \
+                     COUNT(*)                    AS signal_count, \
+                     SUM(score)                  AS total_score, \
+                     COUNT(DISTINCT query_hash)  AS unique_queries, \
+                     COUNT(DISTINCT channel)     AS unique_channels, \
+                     COUNT(DISTINCT day_bucket)  AS recall_days, \
+                     MIN(created_at)             AS first_recall, \
+                     MAX(created_at)             AS last_recall \
+                 FROM recall_signals \
+                 WHERE fact_id IN ({}) \
+                 GROUP BY fact_id",
+                placeholders.join(", ")
             );
+
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                .iter()
+                .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("aggregate_for_facts prepare: {e}")))?;
+
+            let rows = stmt
+                .query_map(param_refs.as_slice(), |row| {
+                    Ok(RecallAggregate {
+                        fact_id: row.get("fact_id")?,
+                        signal_count: row.get("signal_count")?,
+                        total_score: row.get("total_score")?,
+                        unique_queries: row.get("unique_queries")?,
+                        unique_channels: row.get("unique_channels")?,
+                        recall_days: row.get("recall_days")?,
+                        first_recall: row.get("first_recall")?,
+                        last_recall: row.get("last_recall")?,
+                    })
+                })
+                .map_err(|e| AlephError::config(format!("aggregate_for_facts query: {e}")))?;
+
+            for row in rows {
+                results.push(
+                    row.map_err(|e| {
+                        AlephError::config(format!("aggregate_for_facts row: {e}"))
+                    })?,
+                );
+            }
         }
+
         Ok(results)
     }
 

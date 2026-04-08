@@ -44,7 +44,7 @@ impl MemoryContext {
         let has_structured = self
             .structured_index
             .as_ref()
-            .map_or(false, |s| !s.content.is_empty());
+            .is_some_and(|s| !s.content.is_empty());
         !has_structured && self.facts.is_empty() && self.memory_summaries.is_empty()
     }
 
@@ -53,7 +53,7 @@ impl MemoryContext {
         let has_structured = self
             .structured_index
             .as_ref()
-            .map_or(false, |s| !s.content.is_empty());
+            .is_some_and(|s| !s.content.is_empty());
         let has_vector = !self.facts.is_empty() || !self.memory_summaries.is_empty();
 
         if !has_structured && !has_vector {

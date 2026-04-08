@@ -102,10 +102,7 @@ impl MatrixChannel {
         self.channel_state.set_status(status).await;
     }
 
-    async fn send_with_attachments(
-        &self,
-        message: OutboundMessage,
-    ) -> ChannelResult<SendResult> {
+    async fn send_with_attachments(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         let room_id = message.conversation_id.as_str();
         let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
@@ -154,9 +151,7 @@ impl MatrixChannel {
             let txn_id = uuid::Uuid::new_v4().to_string();
             let url = format!(
                 "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-                self.config.homeserver_url,
-                room_id,
-                txn_id
+                self.config.homeserver_url, room_id, txn_id
             );
 
             let resp = self
@@ -166,7 +161,9 @@ impl MatrixChannel {
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| ChannelError::SendFailed(format!("Matrix attachment send failed: {e}")))?;
+                .map_err(|e| {
+                    ChannelError::SendFailed(format!("Matrix attachment send failed: {e}"))
+                })?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
@@ -212,12 +209,9 @@ impl MatrixChannel {
 
         if let Some(url) = &attachment.url {
             if url.starts_with("http://") || url.starts_with("https://") {
-                let resp = self
-                    .client
-                    .get(url)
-                    .send()
-                    .await
-                    .map_err(|e| ChannelError::ReceiveFailed(format!("Attachment download failed: {e}")))?;
+                let resp = self.client.get(url).send().await.map_err(|e| {
+                    ChannelError::ReceiveFailed(format!("Attachment download failed: {e}"))
+                })?;
 
                 if !resp.status().is_success() {
                     return Err(ChannelError::ReceiveFailed(format!(
@@ -234,7 +228,9 @@ impl MatrixChannel {
                     .to_string();
 
                 let bytes = resp.bytes().await.map_err(|e| {
-                    ChannelError::ReceiveFailed(format!("Attachment download body read failed: {e}"))
+                    ChannelError::ReceiveFailed(format!(
+                        "Attachment download body read failed: {e}"
+                    ))
                 })?;
 
                 return Ok((bytes.to_vec(), content_type, filename));

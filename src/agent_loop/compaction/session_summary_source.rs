@@ -2,7 +2,7 @@
 //!
 //! When the context window fills up, instead of making a side-channel LLM API
 //! call for summarization, this module checks whether `SessionCompactor` has
-//! already written hierarchical summaries (d0/d1/d2) to LanceDB. If so, those
+//! already written hierarchical summaries (d0/d1/d2) to SQLite. If so, those
 //! are assembled within a token budget and used directly — zero API cost.
 
 use crate::memory::context::MemoryScope;
@@ -14,7 +14,7 @@ use super::super::context_compactor::{CompactResult, CompactStrategy};
 
 /// Source of zero-cost compaction from pre-existing session summaries.
 ///
-/// Checks LanceDB for `aleph://session/<session_id>/d*/…` facts and
+/// Checks SQLite for `aleph://session/<session_id>/d*/…` facts and
 /// assembles them into a single summary message within a token budget.
 pub struct SessionSummarySource {
     database: MemoryBackend,
@@ -30,7 +30,7 @@ impl SessionSummarySource {
         }
     }
 
-    /// Try to reuse existing session summaries stored in LanceDB.
+    /// Try to reuse existing session summaries stored in SQLite.
     ///
     /// Returns `Some(CompactResult)` if usable summaries were found and the
     /// window was successfully replaced. Returns `None` if no summaries exist

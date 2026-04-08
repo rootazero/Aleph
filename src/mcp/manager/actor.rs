@@ -642,12 +642,15 @@ impl McpManagerActor {
 
     // ===== Aggregation Methods =====
 
-    /// Aggregate tools from all healthy servers
-    async fn aggregate_tools(&self) -> Vec<McpTool> {
-        let mut all_tools = Vec::new();
+    /// Aggregate items from all healthy servers using the provided accessor.
+    async fn aggregate_from_healthy<T, F, Fut>(&self, accessor: F) -> Vec<T>
+    where
+        F: Fn(Arc<McpClient>) -> Fut,
+        Fut: std::future::Future<Output = Vec<T>>,
+    {
+        let mut result = Vec::new();
 
         for (server_id, client) in &self.clients {
-            // Check health - only aggregate from healthy servers
             if let Some(health) = self.health_states.get(server_id) {
                 if !matches!(
                     health.status,
@@ -657,55 +660,28 @@ impl McpManagerActor {
                 }
             }
 
-            let tools = client.list_tools().await;
-            all_tools.extend(tools);
+            result.extend(accessor(Arc::clone(client)).await);
         }
 
-        all_tools
+        result
+    }
+
+    /// Aggregate tools from all healthy servers
+    async fn aggregate_tools(&self) -> Vec<McpTool> {
+        self.aggregate_from_healthy(|c| async move { c.list_tools().await })
+            .await
     }
 
     /// Aggregate resources from all healthy servers
     async fn aggregate_resources(&self) -> Vec<McpResource> {
-        let mut all_resources = Vec::new();
-
-        for (server_id, client) in &self.clients {
-            // Check health - only aggregate from healthy servers
-            if let Some(health) = self.health_states.get(server_id) {
-                if !matches!(
-                    health.status,
-                    HealthStatus::Healthy | HealthStatus::Degraded { .. }
-                ) {
-                    continue;
-                }
-            }
-
-            let resources = client.list_resources().await;
-            all_resources.extend(resources);
-        }
-
-        all_resources
+        self.aggregate_from_healthy(|c| async move { c.list_resources().await })
+            .await
     }
 
     /// Aggregate prompts from all healthy servers
     async fn aggregate_prompts(&self) -> Vec<McpPrompt> {
-        let mut all_prompts = Vec::new();
-
-        for (server_id, client) in &self.clients {
-            // Check health - only aggregate from healthy servers
-            if let Some(health) = self.health_states.get(server_id) {
-                if !matches!(
-                    health.status,
-                    HealthStatus::Healthy | HealthStatus::Degraded { .. }
-                ) {
-                    continue;
-                }
-            }
-
-            let prompts = client.list_prompts().await;
-            all_prompts.extend(prompts);
-        }
-
-        all_prompts
+        self.aggregate_from_healthy(|c| async move { c.list_prompts().await })
+            .await
     }
 
     // ===== Config Methods =====

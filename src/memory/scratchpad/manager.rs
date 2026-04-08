@@ -117,10 +117,11 @@ impl ScratchpadManager {
         let has_plan_items = content.contains("- [x]")
             || (content.contains("- [ ]") && !content.contains("- [ ] ..."));
         let has_working_state = {
-            if let Some(pos) = content.find("## Working State") {
+            const HEADER: &str = "## Working State";
+            if let Some(pos) = content.find(HEADER) {
                 let after = &content[pos..];
-                if let Some(next_section) = after[16..].find("##") {
-                    let working_content = &after[16..16 + next_section];
+                if let Some(next_section) = after[HEADER.len()..].find("##") {
+                    let working_content = &after[HEADER.len()..HEADER.len() + next_section];
                     !working_content.trim().is_empty()
                 } else {
                     false

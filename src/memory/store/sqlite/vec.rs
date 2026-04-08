@@ -4,7 +4,7 @@
 //! against the `facts_vec_*` virtual tables.
 
 use crate::error::AlephError;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 
 /// Register the sqlite-vec extension for all future connections.
@@ -34,15 +34,15 @@ pub fn register_sqlite_vec() {
 
 /// Map an embedding dimension to the corresponding vec0 table name.
 ///
-/// # Panics
-///
-/// Panics if `dim` is not one of 768, 1024, or 1536.
-pub fn vec_table_for_dim(dim: u32) -> &'static str {
+/// Returns an error if `dim` is not one of 768, 1024, or 1536.
+pub fn vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
     match dim {
-        768 => "facts_vec_768",
-        1024 => "facts_vec_1024",
-        1536 => "facts_vec_1536",
-        _ => panic!("unsupported embedding dimension: {dim}"),
+        768 => Ok("facts_vec_768"),
+        1024 => Ok("facts_vec_1024"),
+        1536 => Ok("facts_vec_1536"),
+        _ => Err(AlephError::config(format!(
+            "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
+        ))),
     }
 }
 
@@ -62,7 +62,7 @@ pub fn insert_vec(
     embedding: &[f32],
     dim: u32,
 ) -> Result<(), AlephError> {
-    let table = vec_table_for_dim(dim);
+    let table = vec_table_for_dim(dim)?;
     let blob = embedding_to_blob(embedding);
 
     conn.execute(
@@ -76,7 +76,7 @@ pub fn insert_vec(
 
 /// Delete an embedding vector from a specific vec0 table.
 pub fn delete_vec(conn: &Connection, rowid: i64, dim: u32) -> Result<(), AlephError> {
-    let table = vec_table_for_dim(dim);
+    let table = vec_table_for_dim(dim)?;
 
     conn.execute(
         &format!("DELETE FROM {table} WHERE rowid = ?1"),
@@ -97,6 +97,30 @@ pub fn delete_vec_all_dims(conn: &Connection, rowid: i64) -> Result<(), AlephErr
     Ok(())
 }
 
+/// Retrieve an embedding vector for a given rowid from the first matching vec0 table.
+///
+/// Tries dimensions 768, 1024, 1536 in order and returns the first match.
+/// Returns `None` if no embedding is stored for this rowid.
+pub fn get_embedding(conn: &Connection, rowid: i64) -> Result<Option<Vec<f32>>, AlephError> {
+    for dim in [768u32, 1024, 1536] {
+        let table = vec_table_for_dim(dim)?;
+        let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
+        let result: Option<Vec<u8>> = conn
+            .query_row(&sql, rusqlite::params![rowid], |row| row.get(0))
+            .optional()
+            .map_err(|e| AlephError::config(format!("get_embedding from {table}: {e}")))?;
+
+        if let Some(blob) = result {
+            let floats: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect();
+            return Ok(Some(floats));
+        }
+    }
+    Ok(None)
+}
+
 /// Perform a K-nearest-neighbor search against a vec0 table.
 ///
 /// Returns `(rowid, distance)` pairs ordered by ascending distance.
@@ -106,7 +130,7 @@ pub fn knn_search(
     dim: u32,
     k: usize,
 ) -> Result<Vec<(i64, f64)>, AlephError> {
-    let table = vec_table_for_dim(dim);
+    let table = vec_table_for_dim(dim)?;
     let blob = embedding_to_blob(query_embedding);
 
     let mut stmt = conn

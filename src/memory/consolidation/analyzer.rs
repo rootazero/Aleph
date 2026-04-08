@@ -74,9 +74,19 @@ impl ConsolidationAnalyzer {
             self.categorize_by_type(&frequent_facts)
         };
 
+        // Load embeddings for all facts (needed for similarity comparison)
+        let mut categories_mut = categories;
+        for facts in categories_mut.values_mut() {
+            for ff in facts.iter_mut() {
+                self.database
+                    .load_embedding_for_fact(&mut ff.fact)
+                    .await?;
+            }
+        }
+
         // Consolidate facts within each category
         let mut profile = UserProfile::new();
-        for (_category_name, facts) in categories {
+        for (_category_name, facts) in categories_mut {
             let consolidated = self.consolidate_category(facts, config.similarity_threshold);
             profile.add_category(consolidated);
         }

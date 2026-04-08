@@ -20,6 +20,13 @@ use crate::tools::AlephTool;
 use super::error::ToolError;
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+/// Maximum size for identity file content (1 MB)
+const MAX_FILE_CONTENT_SIZE: usize = 1024 * 1024;
+
+// =============================================================================
 // Args
 // =============================================================================
 
@@ -66,6 +73,9 @@ pub struct SelfConfigOutput {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
+    /// Human-readable preview of config changes (only present for dry_run=true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_message: Option<String>,
 }
 
 // =============================================================================
@@ -111,10 +121,7 @@ impl SelfConfigTool {
 fn validate_file_name(name: &str) -> std::result::Result<(), ToolError> {
     use crate::thinker::identity_files::IDENTITY_FILE_NAMES;
     if !IDENTITY_FILE_NAMES.contains(&name) {
-        return Err(ToolError::InvalidArgs(format!(
-            "Invalid file name '{}'. Allowed: {:?}",
-            name, IDENTITY_FILE_NAMES
-        )));
+        return Err(ToolError::InvalidArgs("Invalid file name".into()));
     }
     if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
         return Err(ToolError::InvalidArgs(
@@ -155,6 +162,7 @@ impl SelfConfigTool {
                 self.agent_id
             ),
             data: Some(serde_json::Value::Array(entries)),
+            preview_message: None,
         })
     }
 
@@ -166,11 +174,13 @@ impl SelfConfigTool {
                 success: true,
                 message: format!("Read {} ({} bytes)", file_name, content.len()),
                 data: Some(serde_json::Value::String(content)),
+                preview_message: None,
             }),
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Failed to read {}: {}", file_name, e),
                 data: None,
+                preview_message: None,
             }),
         }
     }
@@ -178,12 +188,24 @@ impl SelfConfigTool {
     fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
         validate_file_name(file_name)?;
 
-        // Ensure agent directory exists
+        if content.len() > MAX_FILE_CONTENT_SIZE {
+            return Ok(SelfConfigOutput {
+                success: false,
+                message: format!(
+                    "Content exceeds maximum size limit of {} bytes",
+                    MAX_FILE_CONTENT_SIZE
+                ),
+                data: None,
+                preview_message: None,
+            });
+        }
+
         if let Err(e) = std::fs::create_dir_all(&self.agent_dir) {
             return Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Failed to create agent directory: {}", e),
                 data: None,
+                preview_message: None,
             });
         }
 
@@ -198,12 +220,14 @@ impl SelfConfigTool {
                         bytes, file_name
                     ),
                     data: Some(serde_json::json!({ "bytes_written": bytes })),
+                    preview_message: None,
                 })
             }
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Failed to write {}: {}", file_name, e),
                 data: None,
+                preview_message: None,
             }),
         }
     }
@@ -216,6 +240,7 @@ impl SelfConfigTool {
                     success: false,
                     message: "Config handle not available".into(),
                     data: None,
+                    preview_message: None,
                 });
             }
         };
@@ -231,11 +256,13 @@ impl SelfConfigTool {
                 success: true,
                 message: format!("Config at '{}'", config_path),
                 data: Some(v.clone()),
+                preview_message: None,
             }),
             None => Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Config path '{}' not found", config_path),
                 data: None,
+                preview_message: None,
             }),
         }
     }
@@ -253,6 +280,7 @@ impl SelfConfigTool {
                     success: false,
                     message: "Config patcher not available".into(),
                     data: None,
+                    preview_message: None,
                 });
             }
         };
@@ -268,6 +296,11 @@ impl SelfConfigTool {
         match patcher.apply(request).await {
             Ok(result) => {
                 let mode = if dry_run { "dry-run" } else { "applied" };
+                let preview_message = if dry_run && !result.diff.is_empty() {
+                    Some(generate_preview_message(config_path, &result.diff))
+                } else {
+                    None
+                };
                 Ok(SelfConfigOutput {
                     success: result.success,
                     message: format!(
@@ -277,13 +310,78 @@ impl SelfConfigTool {
                         result.diff.len()
                     ),
                     data: Some(serde_json::to_value(&result).unwrap_or_default()),
+                    preview_message,
                 })
             }
             Err(e) => Ok(SelfConfigOutput {
                 success: false,
                 message: format!("Config patch failed: {}", e),
                 data: None,
+                preview_message: None,
             }),
+        }
+    }
+}
+
+// =============================================================================
+// Natural Language Preview
+// =============================================================================
+
+/// Generate a human-readable preview message from a list of field diffs.
+fn generate_preview_message(config_path: &str, diffs: &[crate::config::patcher::FieldDiff]) -> String {
+    if diffs.is_empty() {
+        return format!(
+            "配置路径 '{}' 无变更。",
+            config_path
+        );
+    }
+
+    let mut lines = vec![format!("将为 '{}' 做出以下更改：", config_path)];
+
+    for diff in diffs {
+        let change_desc = match (&diff.old_value, &diff.new_value) {
+            // New field (old_value is null/None)
+            (None, new) => {
+                let new_str = value_to_string(new);
+                format!("• 新增字段: {} = {}", diff.path, new_str)
+            }
+            // Field removed
+            (_, serde_json::Value::Null) => {
+                let old_str = diff.old_value.as_ref().map(value_to_string).unwrap_or_else(|| "null".to_string());
+                format!("• 删除字段: {} (原值: {})", diff.path, old_str)
+            }
+            // Field modified
+            (Some(old), new) => {
+                let old_str = value_to_string(old);
+                let new_str = value_to_string(new);
+                format!("• 修改字段: {}: {} → {}", diff.path, old_str, new_str)
+            }
+        };
+        lines.push(change_desc);
+    }
+
+    lines.push(String::new());
+    lines.push("此为预览模式，未写入配置文件。确认后将以 dry_run=false 再次调用以应用更改。".to_string());
+
+    lines.join("\n")
+}
+
+/// Convert a JSON value to a compact human-readable string.
+fn value_to_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => format!("\"{}\"", s),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(value_to_string).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(obj) => {
+            let items: Vec<String> = obj.iter()
+                .map(|(k, v)| format!("{}: {}", k, value_to_string(v)))
+                .collect();
+            format!("{{{}}}", items.join(", "))
         }
     }
 }

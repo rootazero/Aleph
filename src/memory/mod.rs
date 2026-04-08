@@ -5,12 +5,11 @@
 //!
 //! ## Architecture
 //!
-//! - **Storage**: LanceDB via `store::lance::LanceMemoryBackend`
+//! - **Storage**: SQLite + sqlite-vec via `store::sqlite::SqliteMemoryBackend`
 //!
 //! ## Storage Traits
 //!
 //! - `MemoryStore`: Fact CRUD, vector search, path operations
-//! - `SessionStore`: Session memory management, compression tracking
 //! - `GraphStore`: Entity relationship graph operations
 //! - `DreamStore`, `CompressionStore`: Specialized operations
 
@@ -147,8 +146,8 @@ pub use vfs::{
     bootstrap_agent_context, compute_directory_hash, migrate_existing_facts_to_paths, L1Generator,
 };
 
-// LanceDB store types (Phase 3)
-pub use store::lance::LanceMemoryBackend;
+// SQLite store types (Phase 3)
+pub use store::sqlite::SqliteMemoryBackend;
 pub use store::types::{MemoryFilter, ScoredFact, SearchFilter};
 pub use store::MemoryBackend;
 // Workspace types are now canonical in gateway::agent_env; re-export for backward compatibility

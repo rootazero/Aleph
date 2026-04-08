@@ -368,6 +368,54 @@ impl FactRetrieval {
         })
     }
 
+    /// Retrieve facts and asynchronously record recall signals.
+    ///
+    /// Wraps the existing `retrieve` method.  After a successful retrieval,
+    /// a fire-and-forget `tokio::spawn` records which facts were recalled so
+    /// the promotion scorer can later use those signals.
+    pub async fn retrieve_with_signals(
+        &self,
+        query: &str,
+        namespace: &NamespaceScope,
+        channel: &str,
+        session_id: Option<&str>,
+    ) -> Result<RetrievalResult, AlephError> {
+        use crate::memory::store::sqlite::recall_signals::RecallHit;
+
+        let result = self.retrieve(query).await?;
+
+        if !result.facts.is_empty() {
+            let hits: Vec<RecallHit> = result
+                .facts
+                .iter()
+                .map(|f| RecallHit {
+                    fact_id: f.id.clone(),
+                    score: f.similarity_score.unwrap_or(f.confidence) as f64,
+                })
+                .collect();
+
+            let db = self.database.clone();
+            let query_owned = query.to_string();
+            let channel_owned = channel.to_string();
+            let session_owned = session_id.map(|s| s.to_string());
+            let ns = namespace.to_namespace_value();
+
+            tokio::spawn(async move {
+                if let Err(e) = db.record_signals(
+                    &query_owned,
+                    &channel_owned,
+                    &hits,
+                    session_owned.as_deref(),
+                    &ns,
+                ) {
+                    tracing::warn!("recall signal recording failed: {e}");
+                }
+            });
+        }
+
+        Ok(result)
+    }
+
     /// Update configuration
     pub fn update_config(&mut self, config: FactRetrievalConfig) {
         self.config = config;
@@ -401,6 +449,82 @@ pub struct CrossWorkspaceFact {
     pub source_workspace: String,
     /// Relevance score from vector search
     pub relevance_score: f32,
+}
+
+// ============================================================================
+// Layered MemoryContext
+// ============================================================================
+
+/// Two-layer memory context for prompt injection.
+///
+/// Layer 1 (`background`): stable, high-value synthesis facts that persist
+/// across conversations — the system's long-term knowledge about the user.
+///
+/// Layer 2 (`relevant`): query-relevant facts retrieved via hybrid search
+/// for the current conversation turn.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryContext {
+    /// Layer 1: stable background (synthesis facts)
+    pub background: Vec<MemoryFact>,
+    /// Layer 2: query-relevant detail (hybrid search results)
+    pub relevant: Vec<MemoryFact>,
+}
+
+impl MemoryContext {
+    pub fn is_empty(&self) -> bool {
+        self.background.is_empty() && self.relevant.is_empty()
+    }
+
+    /// Format for system prompt injection.
+    pub fn to_prompt_sections(&self) -> String {
+        let mut sections = String::new();
+
+        if !self.background.is_empty() {
+            sections.push_str("## Long-term knowledge about the user\n");
+            for fact in &self.background {
+                sections.push_str("- ");
+                sections.push_str(&fact.content);
+                sections.push('\n');
+            }
+            sections.push('\n');
+        }
+
+        if !self.relevant.is_empty() {
+            sections.push_str("## Relevant memories for this conversation\n");
+            for fact in &self.relevant {
+                sections.push_str("- ");
+                sections.push_str(&fact.content);
+                sections.push('\n');
+            }
+        }
+
+        sections
+    }
+}
+
+impl FactRetrieval {
+    /// Build a two-layer memory context for prompt injection.
+    ///
+    /// - **Layer 1 (background)**: top synthesis facts from the namespace,
+    ///   representing stable long-term knowledge.
+    /// - **Layer 2 (relevant)**: query-relevant facts from hybrid vector search.
+    pub async fn build_layered_context(
+        &self,
+        query: &str,
+        namespace: &NamespaceScope,
+    ) -> Result<MemoryContext, AlephError> {
+        // Layer 1: background synthesis facts (sync — SQLite behind Mutex)
+        let ns_value = namespace.to_namespace_value();
+        let background = self.database.top_synthesized(&ns_value, 10)?;
+
+        // Layer 2: query-relevant retrieval (existing async path)
+        let retrieval = self.retrieve(query).await?;
+
+        Ok(MemoryContext {
+            background,
+            relevant: retrieval.facts,
+        })
+    }
 }
 
 /// Format a single fact with source citation metadata.
@@ -605,5 +729,77 @@ mod tests {
         assert_eq!(deserialized.content, "Test content");
         assert_eq!(deserialized.source_workspace, "coding");
         assert!((deserialized.relevance_score - 0.85).abs() < f32::EPSILON);
+    }
+
+    // ── MemoryContext tests ────────────────────────────────────────────────
+
+    #[test]
+    fn memory_context_empty() {
+        let ctx = MemoryContext::default();
+        assert!(ctx.is_empty());
+        assert!(ctx.background.is_empty());
+        assert!(ctx.relevant.is_empty());
+        assert_eq!(ctx.to_prompt_sections(), "");
+    }
+
+    #[test]
+    fn memory_context_to_prompt_sections() {
+        let bg_fact = MemoryFact::new(
+            "User is a Rust developer".to_string(),
+            FactType::Personal,
+            vec!["src-1".to_string()],
+        );
+        let rel_fact = MemoryFact::new(
+            "User asked about async patterns".to_string(),
+            FactType::Learning,
+            vec!["src-2".to_string()],
+        );
+
+        let ctx = MemoryContext {
+            background: vec![bg_fact],
+            relevant: vec![rel_fact],
+        };
+
+        assert!(!ctx.is_empty());
+
+        let sections = ctx.to_prompt_sections();
+        assert!(sections.contains("## Long-term knowledge about the user"));
+        assert!(sections.contains("- User is a Rust developer"));
+        assert!(sections.contains("## Relevant memories for this conversation"));
+        assert!(sections.contains("- User asked about async patterns"));
+    }
+
+    #[test]
+    fn memory_context_background_only() {
+        let fact = MemoryFact::new(
+            "Background fact".to_string(),
+            FactType::Other,
+            vec!["src-1".to_string()],
+        );
+        let ctx = MemoryContext {
+            background: vec![fact],
+            relevant: vec![],
+        };
+        assert!(!ctx.is_empty());
+        let sections = ctx.to_prompt_sections();
+        assert!(sections.contains("## Long-term knowledge"));
+        assert!(!sections.contains("## Relevant memories"));
+    }
+
+    #[test]
+    fn memory_context_relevant_only() {
+        let fact = MemoryFact::new(
+            "Relevant fact".to_string(),
+            FactType::Other,
+            vec!["src-1".to_string()],
+        );
+        let ctx = MemoryContext {
+            background: vec![],
+            relevant: vec![fact],
+        };
+        assert!(!ctx.is_empty());
+        let sections = ctx.to_prompt_sections();
+        assert!(!sections.contains("## Long-term knowledge"));
+        assert!(sections.contains("## Relevant memories"));
     }
 }

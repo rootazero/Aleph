@@ -254,6 +254,18 @@ pub trait MemoryStore: Send + Sync {
         workspace: Option<&str>,
     ) -> Result<Vec<MemoryFact>, AlephError>;
 
+    /// Load the embedding vector for a fact from the vector store.
+    ///
+    /// Returns the fact with its `embedding` field populated, or unchanged
+    /// if no embedding is stored. Default implementation is a no-op.
+    async fn load_embedding_for_fact(
+        &self,
+        fact: &mut MemoryFact,
+    ) -> Result<(), AlephError> {
+        let _ = fact;
+        Ok(())
+    }
+
     // -- Mutation helpers ---------------------------------------------------
 
     /// Soft-delete a fact by marking it invalid with a reason.

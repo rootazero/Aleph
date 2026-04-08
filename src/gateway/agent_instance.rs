@@ -373,9 +373,9 @@ impl SessionInfo {
             agent_id: meta.agent_id.clone(),
             message_count: meta.message_count as usize,
             created_at: chrono::DateTime::from_timestamp(meta.created_at, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
             last_active_at: chrono::DateTime::from_timestamp(meta.last_active_at, 0)
-                .unwrap_or_else(|| chrono::Utc::now()),
+                .unwrap_or_else(chrono::Utc::now),
         }
     }
 }
@@ -391,7 +391,7 @@ impl SessionMessage {
             _ => MessageRole::User,
         };
         let timestamp = chrono::DateTime::from_timestamp(stored.timestamp, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
+            .unwrap_or_else(chrono::Utc::now);
         let metadata = stored.metadata.and_then(|json_str| {
             serde_json::from_str::<HashMap<String, String>>(&json_str).ok()
         });
@@ -421,6 +421,7 @@ pub enum AgentInstanceError {
 }
 
 /// Lazy-loaded agent entry: config-only until first access.
+#[allow(clippy::large_enum_variant)]
 enum AgentEntry {
     /// Registered but not yet instantiated
     Config {
@@ -599,7 +600,7 @@ impl AgentRegistry {
 
     /// Dynamically create and register a new agent at runtime.
     ///
-    /// Creates `~/.aleph/workspaces/{id}/SOUL.md` and registers an `AgentInstance`.
+    /// Creates `~/.aleph/agents/{id}/SOUL.md` and registers an `AgentInstance`.
     pub async fn create_dynamic(
         &self,
         id: &str,
@@ -621,6 +622,7 @@ impl AgentRegistry {
         let workspace_path = home.join(".aleph/workspaces").join(id);
         let agent_dir = home.join(".aleph/agents").join(id);
 
+        // Create workspace directory (runtime output, project files)
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
             AgentInstanceError::InitFailed(format!(
                 "Failed to create workspace for '{}': {}",
@@ -628,8 +630,17 @@ impl AgentRegistry {
             ))
         })?;
 
-        let soul_path = workspace_path.join("SOUL.md");
-        if !soul_path.exists() {
+        // Initialize all identity files (SOUL.md, AGENTS.md, IDENTITY.md, etc.)
+        crate::config::agent_resolver::initialize_agent_identity(&agent_dir, id).map_err(|e| {
+            AgentInstanceError::InitFailed(format!(
+                "Failed to initialize identity files for '{}': {}",
+                id, e
+            ))
+        })?;
+
+        // Overwrite SOUL.md with custom content if provided
+        if !soul_content.is_empty() {
+            let soul_path = agent_dir.join("SOUL.md");
             std::fs::write(&soul_path, soul_content).map_err(|e| {
                 AgentInstanceError::InitFailed(format!(
                     "Failed to write SOUL.md for '{}': {}",

@@ -207,15 +207,38 @@ impl GatewayEventBus {
 
     /// Publish a typed event frame to both the typed and string channels.
     ///
-    /// Serializes the frame to JSON and sends to both the typed channel
-    /// (for `subscribe_typed()`) and the string channel (for `subscribe()`).
+    /// For the string channel (consumed by WebSocket handler), the frame is
+    /// wrapped in the wire format expected by the handler and frontend:
+    ///
+    /// - **Streaming events** (agent run lifecycle): wrapped as JSON-RPC
+    ///   notification `{"method": "stream.<type>", "params": <frame>}`.
+    ///   The handler extracts `method` for subscription matching (`stream.*`),
+    ///   and the frontend converts `stream.X` → `run.X` for dispatch.
+    ///
+    /// - **Other events** (config, channel, etc.): wrapped as TopicEvent
+    ///   `{"topic": "<topic_name>", "data": <frame>}`.
+    ///   The handler wraps this into `{"method": "event", "params": {...}}`.
     pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {
         let preview = format!("{:?}", frame);
         debug!(
             "Publishing typed event: {}",
             &preview[..preview.len().min(100)]
         );
-        let json = serde_json::to_string(frame)?;
+        let frame_value = serde_json::to_value(frame)?;
+        let wire_json = if let Some(method) = frame.stream_method() {
+            // Streaming events → JSON-RPC notification format
+            serde_json::json!({
+                "method": method,
+                "params": frame_value,
+            })
+        } else {
+            // Non-streaming events → TopicEvent format
+            serde_json::json!({
+                "topic": frame.topic_name(),
+                "data": frame_value,
+            })
+        };
+        let json = serde_json::to_string(&wire_json)?;
         let typed_count = self.typed_sender.send(frame.clone()).unwrap_or(0);
         let str_count = self.sender.send(json).unwrap_or(0);
         Ok(typed_count.max(str_count))

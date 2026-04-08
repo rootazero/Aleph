@@ -1,8 +1,10 @@
-//! DeepSynthesisStage: weekly cross-cluster insight generation.
+//! DeepSynthesisStage: cross-cluster insight generation.
 //!
-//! Runs only during weekly dream cycles. Fetches all valid LTM facts,
+//! Runs during both daily and weekly dream cycles. Fetches all valid LTM facts,
 //! groups by fact_type, runs DBSCAN on embeddings within each group,
-//! and creates synthesized Core facts from clusters with >= 3 members.
+//! and creates synthesized Core facts from clusters with >= min_cluster_size members.
+//! Uses LLM-based synthesis when a provider is available, with dedup against
+//! existing synthesis facts.
 
 use std::collections::HashMap;
 
@@ -15,6 +17,8 @@ use crate::memory::context::{
 };
 use crate::memory::dreaming::report::DreamRunType;
 use crate::memory::store::MemoryStore;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 
 use super::cluster::dbscan;
 use super::{DreamContext, DreamStage};
@@ -43,7 +47,7 @@ pub struct PatternInsight {
 // DeepSynthesisStage
 // ---------------------------------------------------------------------------
 
-/// Generates deep cross-cluster insights (weekly runs only).
+/// Generates deep cross-cluster insights (daily and weekly runs).
 pub struct DeepSynthesisStage;
 
 #[async_trait]
@@ -52,20 +56,34 @@ impl DreamStage for DeepSynthesisStage {
         "deep_synthesis"
     }
 
-    async fn should_run(&self, ctx: &DreamContext) -> bool {
-        ctx.run_metadata.run_type == DreamRunType::Weekly
+    async fn should_run(&self, _ctx: &DreamContext) -> bool {
+        true
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let min_cluster_size = ctx.config.synthesis_min_cluster_size();
         let max_insights = ctx.config.synthesis_max_insights();
 
-        // 1. Fetch all valid LTM facts
+        // For daily runs, skip if no clusters were produced by earlier stages
+        if ctx.run_metadata.run_type == DreamRunType::Daily && ctx.clusters.is_empty() {
+            debug!("DeepSynthesisStage: daily run with no clusters, skipping");
+            return Ok(ctx);
+        }
+
+        // 1. Fetch all valid facts once, partition into LTM and existing synthesis
         let all_facts = ctx.database.get_all_facts(false, None).await?;
-        let ltm_facts: Vec<MemoryFact> = all_facts
-            .into_iter()
-            .filter(|f| f.tier == MemoryTier::LongTerm && f.is_valid)
-            .collect();
+        let mut ltm_facts: Vec<MemoryFact> = Vec::new();
+        let mut existing_synthesis: Vec<MemoryFact> = Vec::new();
+        for f in all_facts {
+            if !f.is_valid {
+                continue;
+            }
+            if f.fact_source == FactSource::Synthesis {
+                existing_synthesis.push(f);
+            } else if f.tier == MemoryTier::LongTerm {
+                ltm_facts.push(f);
+            }
+        }
 
         if ltm_facts.is_empty() {
             debug!("DeepSynthesisStage: no LTM facts to synthesize");
@@ -138,7 +156,30 @@ impl DreamStage for DeepSynthesisStage {
                     .collect::<Vec<_>>()
                     .join("; ");
 
-                let theme = format!("[{}] {}", fact_type_str, combined);
+                // Use LLM synthesis when provider is available
+                let theme = if let Some(ref provider) = ctx.provider {
+                    let facts_tuples: Vec<(&str, f32, &str)> = cluster_facts
+                        .iter()
+                        .map(|f| (f.fact_type.as_str(), f.confidence, f.content.as_str()))
+                        .collect();
+                    let prompt = build_synthesis_prompt(&facts_tuples);
+                    let msgs = [UnifiedMessage::user(&prompt)];
+                    let system = "You are a pattern analyst. Respond with a short theme label summarizing the pattern. No JSON, just the label.";
+                    let payload = RequestPayload::new(&msgs).with_system(Some(system));
+                    match provider.process(payload).await {
+                        Ok(response) => {
+                            let text = response.text_content();
+                            parse_synthesis_content(&text)
+                                .unwrap_or_else(|| format!("[{}] {}", fact_type_str, combined))
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "LLM synthesis theme failed, using fallback");
+                            format!("[{}] {}", fact_type_str, combined)
+                        }
+                    }
+                } else {
+                    format!("[{}] {}", fact_type_str, combined)
+                };
 
                 insights.push(PatternInsight {
                     theme,
@@ -157,10 +198,39 @@ impl DreamStage for DeepSynthesisStage {
             }
         }
 
-        // 4. Create synthesized Core facts and update source facts
+        // 4. Create synthesized Core facts with dedup (existing_synthesis from step 1)
         let mut created_count = 0;
         for insight in &insights {
-            let content = format!("Pattern: {}", insight.theme);
+            // Use LLM to generate synthesis content when provider is available
+            let content = if let Some(ref provider) = ctx.provider {
+                let facts_tuples: Vec<(&str, f32, &str)> = insight
+                    .source_fact_ids
+                    .iter()
+                    .filter_map(|id| ltm_facts.iter().find(|f| f.id == *id))
+                    .map(|f| (f.fact_type.as_str(), f.confidence, f.content.as_str()))
+                    .collect();
+                if facts_tuples.is_empty() {
+                    format!("Pattern: {}", insight.theme)
+                } else {
+                    let prompt = build_synthesis_prompt(&facts_tuples);
+                    let msgs = [UnifiedMessage::user(&prompt)];
+                    let system = "You are a pattern analyst. Synthesize a concise insight from the given facts. Respond with JSON: {\"content\": \"...\"}";
+                    let payload = RequestPayload::new(&msgs).with_system(Some(system));
+                    match provider.process(payload).await {
+                        Ok(response) => {
+                            let text = response.text_content();
+                            parse_synthesis_content(&text)
+                                .unwrap_or_else(|| format!("Pattern: {}", insight.theme))
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "LLM synthesis content failed, using fallback");
+                            format!("Pattern: {}", insight.theme)
+                        }
+                    }
+                }
+            } else {
+                format!("Pattern: {}", insight.theme)
+            };
 
             let fact_type = insight
                 .theme
@@ -178,37 +248,34 @@ impl DreamStage for DeepSynthesisStage {
                 .with_specificity(FactSpecificity::Abstract)
                 .with_confidence(insight.confidence);
 
-            if let Err(e) = ctx.database.insert_fact(&synthesized).await {
-                warn!(error = %e, "DeepSynthesisStage: failed to insert synthesized fact");
+            // Dedup: check content similarity against existing synthesis facts.
+            // New facts don't have embeddings yet, so we compare by content text.
+            // Use embedding cosine similarity when both have embeddings, otherwise
+            // fall back to normalized content comparison.
+            let near_dup = existing_synthesis.iter().find(|e| {
+                // Try embedding-based similarity first (if both have embeddings)
+                if let (Some(ref new_emb), Some(ref old_emb)) =
+                    (&synthesized.embedding, &e.embedding)
+                {
+                    cosine_similarity(new_emb, old_emb) > 0.85
+                } else {
+                    // Fallback: normalized content string comparison
+                    let new_norm = synthesized.content.trim().to_lowercase();
+                    let old_norm = e.content.trim().to_lowercase();
+                    new_norm == old_norm
+                }
+            });
+            if let Some(dup) = near_dup {
+                // Refresh the existing fact's timestamp instead of inserting a duplicate
+                if let Err(e) = ctx.database.touch_fact_updated_at(&dup.id) {
+                    warn!(error = %e, fact_id = %dup.id, "DeepSynthesisStage: failed to touch duplicate fact");
+                }
                 continue;
             }
 
-            // 5. Lower specificity of source facts to Abstract
-            for source_id in &insight.source_fact_ids {
-                match ctx.database.get_fact(source_id).await {
-                    Ok(Some(mut source_fact)) => {
-                        if source_fact.specificity != FactSpecificity::Abstract {
-                            source_fact.specificity = FactSpecificity::Abstract;
-                            if let Err(e) = ctx.database.update_fact(&source_fact).await {
-                                warn!(
-                                    error = %e,
-                                    fact_id = %source_id,
-                                    "DeepSynthesisStage: failed to update source fact specificity"
-                                );
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        debug!(fact_id = %source_id, "DeepSynthesisStage: source fact not found");
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            fact_id = %source_id,
-                            "DeepSynthesisStage: failed to fetch source fact"
-                        );
-                    }
-                }
+            if let Err(e) = ctx.database.insert_fact(&synthesized).await {
+                warn!(error = %e, "DeepSynthesisStage: failed to insert synthesized fact");
+                continue;
             }
 
             created_count += 1;
@@ -227,7 +294,7 @@ impl DreamStage for DeepSynthesisStage {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt builder (for future LLM integration)
+// Prompt builder
 // ---------------------------------------------------------------------------
 
 /// Build a prompt for LLM-based pattern synthesis.
@@ -264,6 +331,49 @@ pub fn build_synthesis_prompt(facts: &[(&str, f32, &str)]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Parse LLM synthesis response, trying JSON fields then plain text.
+fn parse_synthesis_content(response: &str) -> Option<String> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(response) {
+        if let Some(content) = v.get("content").and_then(|c| c.as_str()) {
+            return Some(content.to_string());
+        }
+        if let Some(insight) = v.get("insight").and_then(|c| c.as_str()) {
+            return Some(insight.to_string());
+        }
+    }
+    let trimmed = response.trim();
+    if !trimmed.is_empty() && trimmed.len() < 500 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+/// Cosine similarity between two embedding vectors.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom == 0.0 {
+        0.0
+    } else {
+        dot / denom
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -283,14 +393,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_run_returns_false_for_daily() {
+    async fn should_run_returns_true_for_daily() {
         let stage = DeepSynthesisStage;
-        // We need a DreamContext to test should_run, but we only need run_metadata.
-        // Since we can't easily construct a full DreamContext without a database,
-        // we test the logic directly.
+        // Deep synthesis now runs for both daily and weekly cycles.
         let metadata = make_run_metadata(DreamRunType::Daily);
         assert_eq!(metadata.run_type, DreamRunType::Daily);
-        assert_ne!(metadata.run_type, DreamRunType::Weekly);
         // Verify the stage name
         assert_eq!(stage.name(), "deep_synthesis");
     }
@@ -350,7 +457,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn should_run_false_for_daily_via_trait() {
+    async fn should_run_true_for_daily_via_trait() {
         use super::DreamContext;
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::stages::drift::DriftAction;
@@ -383,8 +490,8 @@ mod tests {
 
         let stage = DeepSynthesisStage;
         assert!(
-            !stage.should_run(&ctx).await,
-            "Daily runs should skip deep synthesis"
+            stage.should_run(&ctx).await,
+            "Daily runs should now execute deep synthesis"
         );
     }
 

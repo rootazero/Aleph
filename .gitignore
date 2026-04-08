@@ -100,3 +100,5 @@ core/ui/
 archive/
 .superpowers/
 .omc/
+graphify-out/
+**/graphify-out/

@@ -4,7 +4,7 @@
 //!
 //! 1. **Global Config** (~/.aleph/profiles.toml) - User-maintained, TOML format
 //! 2. **Runtime State** (memory) - Cooldowns, not persisted across restarts
-//! 3. **Per-Agent State** (~/.aleph/workspaces/{id}/state.json) - Usage tracking, persisted
+//! 3. **Per-Agent State** (~/.aleph/agents/{id}/state.json) - Usage tracking, persisted
 //!
 //! # Architecture
 //!
@@ -180,7 +180,7 @@ pub struct ProfileOverride {
     pub disabled: bool,
 }
 
-/// Per-agent state (persisted to ~/.aleph/workspaces/{id}/state.json)
+/// Per-agent state (persisted to ~/.aleph/agents/{id}/state.json)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentState {
     /// Usage statistics per profile

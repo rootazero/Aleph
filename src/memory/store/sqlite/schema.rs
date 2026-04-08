@@ -138,6 +138,37 @@ CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
 "#;
 
 // ---------------------------------------------------------------------------
+// Dream reports table + indexes
+// ---------------------------------------------------------------------------
+
+const DREAM_REPORTS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS dream_reports (
+    id                    TEXT PRIMARY KEY,
+    pipeline_type         TEXT NOT NULL,
+    started_at            INTEGER NOT NULL,
+    finished_at           INTEGER NOT NULL,
+    duration_ms           INTEGER NOT NULL,
+    facts_collected       INTEGER NOT NULL DEFAULT 0,
+    clusters_found        INTEGER NOT NULL DEFAULT 0,
+    drift_detected        INTEGER NOT NULL DEFAULT 0,
+    drift_summary         TEXT,
+    candidates_evaluated  INTEGER NOT NULL DEFAULT 0,
+    facts_promoted        INTEGER NOT NULL DEFAULT 0,
+    promotion_details     TEXT,
+    facts_decayed         INTEGER NOT NULL DEFAULT 0,
+    facts_pruned          INTEGER NOT NULL DEFAULT 0,
+    nodes_decayed         INTEGER NOT NULL DEFAULT 0,
+    edges_decayed         INTEGER NOT NULL DEFAULT 0,
+    synthesis_count       INTEGER NOT NULL DEFAULT 0,
+    errors                TEXT,
+    namespace             TEXT NOT NULL DEFAULT 'owner'
+);
+
+CREATE INDEX IF NOT EXISTS idx_dream_reports_started
+    ON dream_reports(started_at);
+"#;
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -170,6 +201,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
+
+    conn.execute_batch(DREAM_REPORTS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
 
     Ok(())
 }

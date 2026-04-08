@@ -620,6 +620,7 @@ impl SessionCompactor {
     ) -> Result<(), AlephError> {
         let path = format!("aleph://session/{}/raw/{}", session_id, seq);
         let fact = MemoryFact::new(content.to_string(), FactType::Other, Vec::new())
+            .with_fact_source(crate::memory::context::FactSource::SessionCompressed)
             .with_path(path)
             .with_scope(MemoryScope::SessionLocal)
             .with_confidence(1.0);

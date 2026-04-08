@@ -9,6 +9,7 @@ pub mod vec;
 
 mod facts;
 mod graph;
+pub mod dream_reports;
 pub mod recall_signals;
 mod sessions;
 

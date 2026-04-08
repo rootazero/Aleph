@@ -95,14 +95,21 @@ impl RippleTask {
         })
     }
 
-    /// Check if two facts are similar based on cosine similarity
-    fn is_similar(&self, fact1: &MemoryFact, fact2: &MemoryFact) -> bool {
-        // If either fact doesn't have an embedding, consider them dissimilar
-        let (Some(emb1), Some(emb2)) = (&fact1.embedding, &fact2.embedding) else {
+    /// Check if a candidate fact meets the similarity threshold.
+    ///
+    /// Uses the `similarity_score` populated by vector_search rather than
+    /// re-computing cosine similarity, since SQLite-backed facts do not
+    /// carry embeddings in the returned rows.
+    fn is_similar(&self, _seed: &MemoryFact, candidate: &MemoryFact) -> bool {
+        if let Some(score) = candidate.similarity_score {
+            return score >= self.config.similarity_threshold;
+        }
+
+        // Fallback: compute from embeddings if both are present
+        let (Some(emb1), Some(emb2)) = (&_seed.embedding, &candidate.embedding) else {
             return false;
         };
 
-        // Calculate cosine similarity
         let similarity = cosine_similarity(emb1, emb2);
         similarity >= self.config.similarity_threshold
     }

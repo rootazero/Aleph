@@ -77,6 +77,27 @@ impl WhatsAppChunker {
         let mut current = String::with_capacity(limit);
 
         for line in text.lines() {
+            // Handle single lines longer than the limit by splitting at char boundaries
+            if line.len() > limit {
+                if !current.is_empty() {
+                    chunks.push(current.clone());
+                    current.clear();
+                }
+                let mut remaining = line;
+                while !remaining.is_empty() {
+                    let split_at = remaining
+                        .char_indices()
+                        .take_while(|(i, _)| *i < limit)
+                        .last()
+                        .map(|(i, c)| i + c.len_utf8())
+                        .unwrap_or(remaining.len());
+                    let (chunk, rest) = remaining.split_at(split_at);
+                    chunks.push(chunk.to_string());
+                    remaining = rest;
+                }
+                continue;
+            }
+
             if current.len() + line.len() + 1 > limit && !current.is_empty() {
                 chunks.push(current.clone());
                 current.clear();

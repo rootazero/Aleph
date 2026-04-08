@@ -331,7 +331,10 @@ impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoa
         conversation_id: &ConversationId,
         status_text: &str,
     ) -> ChannelResult<String> {
-        let stream_id = self.inner.stream_start(conversation_id, status_text).await?;
+        let stream_id = self
+            .inner
+            .stream_start(conversation_id, status_text)
+            .await?;
 
         let mut pending_map = self.pending.write().await;
         if let Some(stale) = pending_map.remove(&stream_id) {
@@ -352,9 +355,9 @@ impl<H: NativeStreamHandler + Clone + 'static> NativeStreamHandler for StreamCoa
 
         let must_flush = {
             let mut pending_map = self.pending.write().await;
-            let entry = pending_map.entry(stream_key.clone()).or_insert_with(|| {
-                PendingStream::new(tokio::spawn(async {}))
-            });
+            let entry = pending_map
+                .entry(stream_key.clone())
+                .or_insert_with(|| PendingStream::new(tokio::spawn(async {})));
             entry.buffer.push_str(text);
             entry.sequence = sequence;
             entry.buffer.len() >= self.min_chars

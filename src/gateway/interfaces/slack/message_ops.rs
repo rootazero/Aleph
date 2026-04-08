@@ -133,7 +133,6 @@ impl SlackDebouncer {
 
         let _ = self.inbound_tx.send(combined).await;
     }
-
 }
 
 /// Slack message operations helper.
@@ -301,6 +300,7 @@ impl SlackMessageOps {
     ///
     /// This approach (rather than `files.upload`) is more reliable and works
     /// even when `files:write` scope is granted without `chat:write`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upload_file(
         client: &reqwest::Client,
         bot_token: &str,
@@ -343,24 +343,23 @@ impl SlackMessageOps {
             )));
         }
 
-        let upload_url = url_resp["upload_url"]
-            .as_str()
-            .ok_or_else(|| ChannelError::SendFailed("Missing upload_url in response".to_string()))?;
+        let upload_url = url_resp["upload_url"].as_str().ok_or_else(|| {
+            ChannelError::SendFailed("Missing upload_url in response".to_string())
+        })?;
         let file_id = url_resp["file_id"]
             .as_str()
             .ok_or_else(|| ChannelError::SendFailed("Missing file_id in response".to_string()))?;
 
         // Step 2: Upload file content directly to presigned URL
-        let req = reqwest::Client::new()
-            .post(upload_url)
-            .header("Content-Type", mime_type.unwrap_or("application/octet-stream"));
+        let req = reqwest::Client::new().post(upload_url).header(
+            "Content-Type",
+            mime_type.unwrap_or("application/octet-stream"),
+        );
 
         // For AWS S3-style presigned URLs, the body goes directly
-        let upload_resp = req
-            .body(file_data.to_vec())
-            .send()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("File upload to presigned URL failed: {e}")))?;
+        let upload_resp = req.body(file_data.to_vec()).send().await.map_err(|e| {
+            ChannelError::SendFailed(format!("File upload to presigned URL failed: {e}"))
+        })?;
 
         if !upload_resp.status().is_success() {
             return Err(ChannelError::SendFailed(format!(
@@ -855,8 +854,7 @@ impl SlackMessageOps {
 
             let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-            let mut flush_interval =
-                tokio::time::interval(Duration::from_millis(50));
+            let mut flush_interval = tokio::time::interval(Duration::from_millis(50));
 
             let should_reconnect = 'inner: loop {
                 tokio::select! {

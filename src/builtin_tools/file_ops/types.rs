@@ -9,10 +9,6 @@ use serde::{Deserialize, Serialize};
 pub enum FileOperation {
     /// List directory contents
     List,
-    /// Read file content
-    Read,
-    /// Write content to file
-    Write,
     /// Move/rename file or directory
     Move,
     /// Copy file or directory
@@ -39,9 +35,6 @@ pub struct FileOpsArgs {
     /// Destination path (for move/copy operations)
     #[serde(default)]
     pub destination: Option<String>,
-    /// Content to write (for write operation)
-    #[serde(default)]
-    pub content: Option<String>,
     /// Search pattern (for search operation, glob syntax)
     #[serde(default)]
     pub pattern: Option<String>,

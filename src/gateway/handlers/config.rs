@@ -826,7 +826,10 @@ model = "claude-opus-4-5"
 
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, dir.path().join("test.vault")));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault"),
+        ));
 
         let config = Config::default();
         let config = Arc::new(RwLock::new(config));

@@ -31,7 +31,7 @@ pub struct AuthProfileManager {
     /// Path to profiles.toml
     config_path: PathBuf,
 
-    /// Base directory for agent state (~/.aleph/workspaces)
+    /// Base directory for agent state (~/.aleph/agents)
     agents_dir: PathBuf,
 
     /// Cached agent states
@@ -45,7 +45,7 @@ impl AuthProfileManager {
         let agents_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".aleph")
-            .join("workspaces");
+            .join("agents");
 
         Self::with_paths(config_path, agents_dir)
     }

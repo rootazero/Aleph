@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
@@ -90,24 +90,44 @@ impl Default for SearchParams {
     }
 }
 
-/// Search memories
+/// Search raw memories (session summaries / conversation records).
+///
+/// Returns facts with `fact_source IN ('session_compressed', 'summary')`.
 ///
 /// # Example Request
 ///
 /// ```json
 /// {"jsonrpc":"2.0","method":"memory.search","params":{"limit":10},"id":1}
 /// ```
-pub async fn handle_search(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    let _params: SearchParams = request
+pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    let params: SearchParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    // Raw memory search removed — SessionStore no longer exists.
-    // Return empty results. Clients should use memory.list_facts instead.
-    let entries: Vec<MemoryEntry> = Vec::new();
-    JsonRpcResponse::success(request.id, json!({ "memories": entries }))
+    match db.get_raw_memories(params.agent_id.as_deref(), params.limit as usize) {
+        Ok(facts) => {
+            let entries: Vec<MemoryEntry> = facts
+                .into_iter()
+                .map(|f| MemoryEntry {
+                    id: f.id,
+                    agent_id: f.agent,
+                    window_title: String::new(),
+                    user_input: f.content.clone(),
+                    ai_output: String::new(),
+                    timestamp: f.created_at,
+                    similarity_score: f.similarity_score,
+                })
+                .collect();
+            JsonRpcResponse::success(request.id, json!({ "memories": entries }))
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Search raw memories failed: {}", e),
+        ),
+    }
 }
 
 // ============================================================================
@@ -192,7 +212,7 @@ pub struct FactEntry {
     pub path: String,
 }
 
-/// List compressed facts (Layer 2 data)
+/// List compressed facts (Layer 2 data, excluding raw session summaries).
 pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: ListFactsParams = request
         .params
@@ -200,15 +220,12 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db
-        .get_all_facts(params.include_invalid, params.agent_id.as_deref())
-        .await
-    {
-        Ok(mut facts) => {
-            // Sort by created_at descending (most recent first)
-            facts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            facts.truncate(params.limit);
-
+    match db.get_compressed_facts(
+        params.include_invalid,
+        params.agent_id.as_deref(),
+        params.limit,
+    ) {
+        Ok(facts) => {
             let entries: Vec<FactEntry> = facts
                 .into_iter()
                 .map(|f| FactEntry {
@@ -259,24 +276,25 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 
 /// Get memory statistics
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
-    // Fact stats via MemoryStore
-    match db.get_fact_stats().await {
-        Ok(stats) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "totalMemories": 0,
-                "totalFacts": stats.total_facts,
-                "validFacts": stats.valid_facts,
-                "totalGraphNodes": 0,
-                "totalGraphEdges": 0,
-            }),
-        ),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Get stats failed: {}", e),
-        ),
-    }
+    let raw_count = db.count_raw_memories().unwrap_or(0);
+    let fact_count = db.count_compressed_facts().unwrap_or(0);
+
+    // Graph stats
+    let (graph_nodes, graph_edges) = match db.get_graph_stats().await {
+        Ok((n, e)) => (n, e),
+        Err(_) => (0, 0),
+    };
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "totalMemories": raw_count,
+            "totalFacts": fact_count,
+            "validFacts": fact_count,
+            "totalGraphNodes": graph_nodes,
+            "totalGraphEdges": graph_edges,
+        }),
+    )
 }
 
 // ============================================================================

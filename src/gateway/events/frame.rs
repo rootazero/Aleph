@@ -344,6 +344,34 @@ impl GatewayEventFrame {
         }
         .to_string()
     }
+
+    /// Returns the `stream.*` method name for agent streaming events,
+    /// or `None` for non-streaming events (config, channel, etc.).
+    ///
+    /// Streaming events are sent over WebSocket as JSON-RPC notifications:
+    /// `{"method": "stream.<type>", "params": <frame_data>}`
+    ///
+    /// The frontend subscribes to `stream.*` and converts the method prefix
+    /// from `stream.` to `run.` for internal event dispatch.
+    pub fn stream_method(&self) -> Option<&'static str> {
+        match self {
+            GatewayEventFrame::RunAccepted { .. } => Some("stream.run_accepted"),
+            GatewayEventFrame::Reasoning { .. } => Some("stream.reasoning"),
+            GatewayEventFrame::ToolStart { .. } => Some("stream.tool_start"),
+            GatewayEventFrame::ToolUpdate { .. } => Some("stream.tool_update"),
+            GatewayEventFrame::ToolEnd { .. } => Some("stream.tool_end"),
+            GatewayEventFrame::AgentTrace { .. } => Some("stream.agent_trace"),
+            GatewayEventFrame::ResponseChunk { .. } => Some("stream.response_chunk"),
+            GatewayEventFrame::RunComplete { .. } => Some("stream.run_complete"),
+            GatewayEventFrame::RunError { .. } => Some("stream.run_error"),
+            GatewayEventFrame::AskUser { .. } => Some("stream.ask_user"),
+            GatewayEventFrame::ReasoningBlock { .. } => Some("stream.reasoning_block"),
+            GatewayEventFrame::UncertaintySignal { .. } => Some("stream.uncertainty_signal"),
+            GatewayEventFrame::ModelResolved { .. } => Some("stream.model_resolved"),
+            GatewayEventFrame::SessionUpdated { .. } => Some("stream.session_updated"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

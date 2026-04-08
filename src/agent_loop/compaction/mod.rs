@@ -26,9 +26,9 @@ pub use micro_compactor::{
     MicroCompactorConfig, ToolOutputEntry,
 };
 pub use orchestrator::{CompactionOrchestrator, OrchestratorBuilder};
-pub use tool_aware_chunker::{parse_semantic_units, SemanticChunk, SemanticUnit, ToolAwareChunker};
 pub use session_summary_source::SessionSummarySource;
 pub use summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
+pub use tool_aware_chunker::{parse_semantic_units, SemanticChunk, SemanticUnit, ToolAwareChunker};
 pub use types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
     TokenEstimate,

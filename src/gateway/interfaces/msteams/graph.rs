@@ -123,10 +123,9 @@ impl GraphTokenCache {
             )));
         }
 
-        let tr: TokenResponse = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph token response: {e}")))?;
+        let tr: TokenResponse = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph token response: {e}"))
+        })?;
 
         let lifetime = Duration::from_secs(tr.expires_in);
         let refresh_after = lifetime.mul_f64(GRAPH_TOKEN_REFRESH_THRESHOLD);
@@ -268,7 +267,11 @@ impl GraphClient {
     ///
     /// Uses the `$search` query parameter with "people" endpoint for
     /// relevant user search results.
-    pub async fn search_users(&self, query: &str, top: usize) -> Result<Vec<GraphUser>, ChannelError> {
+    pub async fn search_users(
+        &self,
+        query: &str,
+        top: usize,
+    ) -> Result<Vec<GraphUser>, ChannelError> {
         let url = format!(
             "{}/users?$search=\"displayName:{} OR mail:{}\"&$top={}&$select=id,displayName,userPrincipalName,mail",
             GRAPH_BASE_URL,
@@ -285,7 +288,9 @@ impl GraphClient {
             .header("ConsistencyLevel", "eventual")
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph user search request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph user search request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -294,10 +299,9 @@ impl GraphClient {
             return Err(map_graph_error(status.as_u16(), &body));
         }
 
-        let result: GraphResponse<GraphUser> = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph user response: {e}")))?;
+        let result: GraphResponse<GraphUser> = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph user response: {e}"))
+        })?;
 
         Ok(result.value)
     }
@@ -341,10 +345,17 @@ impl GraphClient {
     // ── Team & Channel Operations ──────────────────────────────────────────────
 
     /// Search for teams (groups with resourceProvisioningOptions containing "Team").
-    pub async fn list_teams_by_name(&self, query: &str, top: usize) -> Result<Vec<GraphGroup>, ChannelError> {
+    pub async fn list_teams_by_name(
+        &self,
+        query: &str,
+        top: usize,
+    ) -> Result<Vec<GraphGroup>, ChannelError> {
         // Escape single quotes for OData filter
         let escaped = query.replace('\'', "''");
-        let filter = format!("resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'{}')", escaped);
+        let filter = format!(
+            "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'{}')",
+            escaped
+        );
         let url = format!(
             "{}/groups?$filter={}&$top={}&$select=id,displayName",
             GRAPH_BASE_URL,
@@ -369,16 +380,18 @@ impl GraphClient {
             return Err(map_graph_error(status.as_u16(), &body));
         }
 
-        let result: GraphResponse<GraphGroup> = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph teams response: {e}")))?;
+        let result: GraphResponse<GraphGroup> = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph teams response: {e}"))
+        })?;
 
         Ok(result.value)
     }
 
     /// List channels for a given team.
-    pub async fn list_channels_for_team(&self, team_id: &str) -> Result<Vec<GraphChannel>, ChannelError> {
+    pub async fn list_channels_for_team(
+        &self,
+        team_id: &str,
+    ) -> Result<Vec<GraphChannel>, ChannelError> {
         let url = format!(
             "{}/teams/{}/channels?$select=id,displayName",
             GRAPH_BASE_URL,
@@ -392,7 +405,9 @@ impl GraphClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph list channels request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph list channels request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -401,10 +416,9 @@ impl GraphClient {
             return Err(map_graph_error(status.as_u16(), &body));
         }
 
-        let result: GraphResponse<GraphChannel> = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph channels response: {e}")))?;
+        let result: GraphResponse<GraphChannel> = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph channels response: {e}"))
+        })?;
 
         Ok(result.value)
     }
@@ -433,7 +447,9 @@ impl GraphClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph get message request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph get message request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if status.as_u16() == 404 {
@@ -476,7 +492,9 @@ impl GraphClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph list messages request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph list messages request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -485,10 +503,9 @@ impl GraphClient {
             return Err(map_graph_error(status.as_u16(), &body));
         }
 
-        let result: GraphResponse<GraphMessage> = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph messages response: {e}")))?;
+        let result: GraphResponse<GraphMessage> = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph messages response: {e}"))
+        })?;
 
         Ok(result.value)
     }
@@ -507,7 +524,9 @@ impl GraphClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph media download request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph media download request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -516,10 +535,9 @@ impl GraphClient {
             return Err(map_graph_error(status.as_u16(), &body));
         }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to read Graph media bytes: {e}")))?;
+        let bytes = resp.bytes().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to read Graph media bytes: {e}"))
+        })?;
 
         Ok(bytes.to_vec())
     }
@@ -552,7 +570,9 @@ impl GraphClient {
             .body(data.to_vec())
             .send()
             .await
-            .map_err(|e| ChannelError::Internal(format!("Graph SharePoint upload request failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::Internal(format!("Graph SharePoint upload request failed: {e}"))
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -568,14 +588,16 @@ impl GraphClient {
             id: Option<String>,
         }
 
-        let _uploaded: UploadResponse = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to parse Graph upload response: {e}")))?;
+        let _uploaded: UploadResponse = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph upload response: {e}"))
+        })?;
 
         // In practice, the actual file URL would be constructed from SharePoint
         // This is a simplified return - in production you'd parse the actual response
-        Ok(format!("https://graph.microsoft.com/v1.0/$sharepoint+upload+placeholder+{}", file_name))
+        Ok(format!(
+            "https://graph.microsoft.com/v1.0/$sharepoint+upload+placeholder+{}",
+            file_name
+        ))
     }
 }
 
@@ -624,7 +646,9 @@ fn map_graph_error(status: u16, body: &str) -> ChannelError {
     match status {
         401 | 403 => ChannelError::AuthFailed(format!("Graph API {}: {}", status, body)),
         404 => ChannelError::Internal("Graph API resource not found".into()),
-        429 => ChannelError::RateLimited { retry_after_secs: 5 },
+        429 => ChannelError::RateLimited {
+            retry_after_secs: 5,
+        },
         _ => ChannelError::Internal(format!("Graph API HTTP {}: {}", status, body)),
     }
 }
@@ -646,7 +670,10 @@ mod tests {
     fn test_encode_uri_component() {
         assert_eq!(encode_uri_component("user-123"), "user-123");
         assert_eq!(encode_uri_component("hello world"), "hello%20world");
-        assert_eq!(encode_uri_component("19:conv@thread.v2"), "19%3Aconv%40thread.v2");
+        assert_eq!(
+            encode_uri_component("19:conv@thread.v2"),
+            "19%3Aconv%40thread.v2"
+        );
         assert_eq!(encode_uri_component("teams/Channel"), "teams%2FChannel");
     }
 
@@ -661,7 +688,10 @@ mod tests {
         let user: GraphUser = serde_json::from_str(json).unwrap();
         assert_eq!(user.id.as_deref(), Some("user-123"));
         assert_eq!(user.display_name.as_deref(), Some("John Doe"));
-        assert_eq!(user.user_principal_name.as_deref(), Some("john@contoso.com"));
+        assert_eq!(
+            user.user_principal_name.as_deref(),
+            Some("john@contoso.com")
+        );
     }
 
     #[test]
@@ -684,8 +714,21 @@ mod tests {
         }"#;
         let msg: GraphMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.id.as_deref(), Some("msg-789"));
-        assert_eq!(msg.body.as_ref().unwrap().content.as_deref(), Some("Hello world"));
-        assert_eq!(msg.from.as_ref().unwrap().user.as_ref().unwrap().id.as_deref(), Some("user-123"));
+        assert_eq!(
+            msg.body.as_ref().unwrap().content.as_deref(),
+            Some("Hello world")
+        );
+        assert_eq!(
+            msg.from
+                .as_ref()
+                .unwrap()
+                .user
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("user-123")
+        );
         assert_eq!(msg.reply_to_id.as_deref(), Some("msg-001"));
     }
 

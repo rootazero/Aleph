@@ -178,9 +178,11 @@ impl AlephTool for HeartbeatCreateTool {
         let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
         let task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
 
-        let service = self.service.lock().await;
         let clock = SystemClock;
-        let id = service.add_task(task, &clock).await;
+        let id = {
+            let service = self.service.lock().await;
+            service.add_task(task, &clock).await
+        };
 
         info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");
 
@@ -253,14 +255,16 @@ impl AlephTool for HeartbeatUpdateTool {
             ..Default::default()
         };
 
-        let service = self.service.lock().await;
         let clock = SystemClock;
-        service
-            .update_task(&args.id, updates, &clock)
-            .await
-            .map_err(|e| {
-                crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e))
-            })?;
+        {
+            let service = self.service.lock().await;
+            service
+                .update_task(&args.id, updates, &clock)
+                .await
+                .map_err(|e| {
+                    crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e))
+                })?;
+        }
 
         info!(task_id = %args.id, "Heartbeat task updated via tool");
 

@@ -6,10 +6,7 @@ use async_trait::async_trait;
 use tracing::info;
 
 use super::batch::{execute_batch_move, execute_organize};
-use super::ops::{
-    execute_copy, execute_delete, execute_list, execute_mkdir, execute_move, execute_read,
-    execute_write,
-};
+use super::ops::{execute_copy, execute_delete, execute_list, execute_mkdir, execute_move};
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
 use super::search::execute_search;
 use super::types::{FileOperation, FileOpsArgs, FileOpsOutput};
@@ -32,10 +29,8 @@ impl FileOpsTool {
     pub const NAME: &'static str = "file_ops";
 
     /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = r#"Perform file system operations. Operations:
+    pub const DESCRIPTION: &'static str = r#"Perform file system operations (excluding read/write — use file_read / file_write instead). Operations:
 - list: List directory contents with file types and sizes
-- read: Read file content (text files only)
-- write: Write content to file
 - move: Move/rename single file or directory
 - copy: Copy single file or directory
 - delete: Delete file or directory
@@ -48,8 +43,6 @@ PATH RESOLUTION:
 - Relative paths (e.g., "output.pdf", "images/photo.jpg") → resolved to ~/.aleph/output/
 - Home paths (e.g., "~/Desktop/file.txt") → expanded to user's home directory
 - Absolute paths (e.g., "/Users/name/file.txt") → used as-is
-
-DEFAULT OUTPUT: When generating files (PDFs, images, translations), use relative paths like "article.pdf" or "translated.txt". They will be saved to the default output directory (~/.aleph/output/), which is always writable.
 
 IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead of multiple 'move' calls!"#;
 
@@ -97,8 +90,6 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         // Format operation description for notification
         let op_name = match &args.operation {
             FileOperation::List => "列出目录",
-            FileOperation::Read => "读取文件",
-            FileOperation::Write => "写入文件",
             FileOperation::Move => "移动文件",
             FileOperation::Copy => "复制文件",
             FileOperation::Delete => "删除文件",
@@ -128,22 +119,6 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         let result = match args.operation {
             FileOperation::List => execute_list(path, &self.denied_paths, output_dir_ref).await,
-            FileOperation::Read => {
-                execute_read(path, &self.denied_paths, self.max_read_size, output_dir_ref).await
-            }
-            FileOperation::Write => {
-                let content = args.content.ok_or_else(|| {
-                    ToolError::InvalidArgs("Content required for write operation".to_string())
-                })?;
-                execute_write(
-                    path,
-                    &content,
-                    args.create_parents,
-                    &self.denied_paths,
-                    output_dir_ref,
-                )
-                .await
-            }
             FileOperation::Move => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for move operation".to_string())
@@ -253,10 +228,8 @@ impl Clone for FileOpsTool {
 #[async_trait]
 impl AlephTool for FileOpsTool {
     const NAME: &'static str = "file_ops";
-    const DESCRIPTION: &'static str = r#"Perform file system operations. Operations:
+    const DESCRIPTION: &'static str = r#"Perform file system operations (excluding read/write — use file_read / file_write instead). Operations:
 - list: List directory contents with file types and sizes
-- read: Read file content (text files only)
-- write: Write content to file
 - move: Move/rename single file or directory
 - copy: Copy single file or directory
 - delete: Delete file or directory

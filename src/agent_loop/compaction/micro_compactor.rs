@@ -307,8 +307,13 @@ impl CompactionStrategy for MicroCompactor {
                 };
 
                 let original_tokens = estimate_tokens(&original_content, ratio);
-                let placeholder =
-                    format_compact_placeholder(&entry.tool_name, original_tokens, None, true, Some(&original_content));
+                let placeholder = format_compact_placeholder(
+                    &entry.tool_name,
+                    original_tokens,
+                    None,
+                    true,
+                    Some(&original_content),
+                );
                 let placeholder_tokens = estimate_tokens(&placeholder, ratio);
 
                 msg.replace_tool_result_content(placeholder);
@@ -438,13 +443,8 @@ mod tests {
     fn compact_placeholder_preserves_disk_ref() {
         let ref_line = "[Full output persisted: /tmp/aleph/tool_results/sess/call_1_bash.txt (12000 tokens, bash)]";
         let original_content = format!("some output\n{ref_line}\nmore text");
-        let placeholder = format_compact_placeholder(
-            "bash",
-            12000,
-            None,
-            true,
-            Some(&original_content),
-        );
+        let placeholder =
+            format_compact_placeholder("bash", 12000, None, true, Some(&original_content));
         assert!(
             placeholder.contains(ref_line),
             "placeholder must preserve the disk ref line: {placeholder}"

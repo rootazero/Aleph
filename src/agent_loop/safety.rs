@@ -519,7 +519,10 @@ mod tests {
         };
 
         // Full check should block it
-        assert!(matches!(guard.check(&call), Err(SafetyError::Blocked { .. })));
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::Blocked { .. })
+        ));
 
         // Permissions-only check should allow it (no pattern matching)
         assert!(guard.check_permissions_only(&call).is_ok());
@@ -677,12 +680,7 @@ mod tests {
 
     #[test]
     fn test_no_policy_falls_back_to_default() {
-        let guard = SafetyGuard::with_policy(
-            vec![],
-            HashMap::new(),
-            PermissionAction::Allow,
-            None,
-        );
+        let guard = SafetyGuard::with_policy(vec![], HashMap::new(), PermissionAction::Allow, None);
         let call = ToolCall {
             name: "file_delete".to_string(),
             input: json!({}),

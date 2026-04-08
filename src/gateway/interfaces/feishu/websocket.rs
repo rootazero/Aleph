@@ -120,6 +120,7 @@ pub(super) async fn run_ws_loop(ctx: WsLoopContext) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_text_frame(
     text: &str,
     dedup: &Arc<StdMutex<MessageDedup>>,

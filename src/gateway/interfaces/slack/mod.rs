@@ -350,7 +350,10 @@ impl SlackChannel {
                 )
                 .await
             } else {
-                tracing::warn!("Attachment {} has no data, path, or URL - skipping", attachment.id);
+                tracing::warn!(
+                    "Attachment {} has no data, path, or URL - skipping",
+                    attachment.id
+                );
                 continue;
             };
 
@@ -384,18 +387,14 @@ impl SlackChannel {
             last_result = Some(result);
         }
 
-        last_result.ok_or_else(|| {
-            ChannelError::SendFailed("No attachments to send".to_string())
-        })
+        last_result.ok_or_else(|| ChannelError::SendFailed("No attachments to send".to_string()))
     }
 
     async fn download_url(&self, url: &str) -> ChannelResult<Vec<u8>> {
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to download {}: {}", url, e)))?;
+        let response =
+            self.client.get(url).send().await.map_err(|e| {
+                ChannelError::SendFailed(format!("Failed to download {}: {}", url, e))
+            })?;
 
         if !response.status().is_success() {
             return Err(ChannelError::SendFailed(format!(
@@ -404,10 +403,9 @@ impl SlackChannel {
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to read download body: {}", e)))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ChannelError::SendFailed(format!("Failed to read download body: {}", e))
+        })?;
 
         Ok(bytes.to_vec())
     }

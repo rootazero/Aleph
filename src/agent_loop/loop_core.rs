@@ -1564,11 +1564,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                         .get(o.tool_id.as_str())
                         .map(|v| (*v).clone())
                         .unwrap_or(serde_json::json!({}));
-                    let confirmed = callback.on_confirmation_needed(
-                        &o.tool_name,
-                        &tool_input,
-                        reason,
-                    );
+                    let confirmed =
+                        callback.on_confirmation_needed(&o.tool_name, &tool_input, reason);
                     if !confirmed {
                         // User rejected — override output to denial message
                         let denial_msg = format!(

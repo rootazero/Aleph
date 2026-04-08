@@ -614,7 +614,10 @@ fn resolve_user_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Default workspace root directory: `~/.aleph/agents`.
+/// Default workspace root directory: `~/.aleph/workspaces`.
+///
+/// Workspaces hold runtime data (tool output, project files),
+/// NOT identity files (SOUL.md, AGENTS.md, MEMORY.md) — those live under `agents/`.
 pub(crate) fn default_workspace_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))

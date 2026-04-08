@@ -135,9 +135,8 @@ impl AlephTool for FileReadTool {
 
         let result = execute_read(path, &self.denied_paths, self.max_read_size, output_dir_ref)
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 notify_tool_result(Self::NAME, &e.to_string(), false);
-                e
             })?;
 
         // Apply offset/limit slicing when requested.
