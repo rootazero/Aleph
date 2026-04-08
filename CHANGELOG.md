@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.08]
+
+### Added
+- **记忆数据库迁移: LanceDB → sqlite-vec** — 新增 SqliteMemoryBackend 骨架与 sqlite-vec 向量搜索支持，移除 LanceDB 和 Arrow 全部依赖，删除 SessionStore trait 及所有调用方，记忆层全面轻量化
+- 记忆图谱增强: 统一抽取管线支持 LLM graph triples（事实 + 实体 + 关系），LLM 驱动的冲突仲裁去重，C-layer 去重 prompt
+- 记忆检索优化: RecallSignalStore 检索信号追踪，top_synthesized 查询，分层衰减率，promote 阈值调优
+- Dream pipeline 增强: 报告持久化审计，session 过期清理（24h 保留），压缩后原始 chunk 失效
+- Teams 多智能体协作优化: broadcast 广播机制、成员移除、peek 窥探、任务锁定，生命周期与计划管理模块
+- Teams 角色系统重构: 移除硬编码 Explorer/Critic 角色，简化为字符串化动态角色
+- Compaction 增强: SessionSummarySource 零成本上下文压缩，CacheMonitor prompt 缓存命中追踪，FileContentTracker 压缩后文件恢复，ToolResultStore 大结果磁盘持久化
+- 工具: self_config 身份文件与配置管理工具，独立 FileReadTool
+- file_ops 模块拆分为 edit.rs/write.rs/read.rs 子模块提升内聚性
+- Agent 实例按需懒加载，降低启动开销
+
+### Fixed
+- Webchat 新建对话和刷新浏览器始终路由到同一 session 的问题 — AgentRouter 现正确解析 epoch，新建对话调用 sessions.new RPC
+- Compaction double-write 关键 bug 修复，UTF-8 安全性，clippy 警告，边界检查
+- Desktop OCR 模块缺失导入修复
+- 移除 AgentInstance 中冗余的内存 session 缓存
+
 ## [2026.04.07]
 
 ### Added
