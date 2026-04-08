@@ -6,6 +6,7 @@
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
 use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 
 /// Strategy for merging facts
@@ -65,21 +66,105 @@ impl Default for ConflictConfig {
     }
 }
 
+/// Verdict from LLM conflict arbitration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictVerdict {
+    /// New fact is an updated version of the old (invalidate old).
+    SameUpdated,
+    /// New fact contradicts the old (invalidate old).
+    Contradicts,
+    /// Both facts are independently true (keep both).
+    Coexists,
+}
+
+/// Parse a conflict verdict from LLM JSON response.
+///
+/// Falls back to `Coexists` on parse failure (conservative — keep both).
+pub fn parse_conflict_verdict(response: &str) -> ConflictVerdict {
+    #[derive(serde::Deserialize)]
+    struct VerdictResponse {
+        verdict: String,
+        #[allow(dead_code)]
+        reason: Option<String>,
+    }
+
+    let parsed: Option<VerdictResponse> =
+        crate::utils::json_extract::extract_json_robust(response)
+            .and_then(|v| serde_json::from_value(v).ok());
+
+    match parsed {
+        Some(r) => match r.verdict.as_str() {
+            "same_updated" => ConflictVerdict::SameUpdated,
+            "contradicts" => ConflictVerdict::Contradicts,
+            "coexists" => ConflictVerdict::Coexists,
+            _ => ConflictVerdict::Coexists,
+        },
+        None => ConflictVerdict::Coexists,
+    }
+}
+
 /// Detects and resolves conflicting facts
 pub struct ConflictDetector {
     database: MemoryBackend,
     config: ConflictConfig,
+    provider: Option<Arc<dyn crate::providers::AiProvider>>,
 }
 
 impl ConflictDetector {
     /// Create a new conflict detector
     pub fn new(database: MemoryBackend, config: ConflictConfig) -> Self {
-        Self { database, config }
+        Self {
+            database,
+            config,
+            provider: None,
+        }
     }
 
     /// Create with default configuration
     pub fn with_defaults(database: MemoryBackend) -> Self {
         Self::new(database, ConflictConfig::default())
+    }
+
+    /// Attach an AI provider for LLM-based conflict arbitration.
+    pub fn with_provider(mut self, provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+        self.provider = Some(provider);
+        self
+    }
+
+    /// Use LLM to arbitrate between a new fact and an existing similar fact.
+    ///
+    /// Returns `Coexists` if no provider is available or LLM call fails.
+    pub async fn llm_arbitrate(
+        &self,
+        existing_content: &str,
+        new_content: &str,
+    ) -> ConflictVerdict {
+        let provider = match &self.provider {
+            Some(p) => p,
+            None => return ConflictVerdict::Coexists,
+        };
+
+        let prompt = format!(
+            "Given an existing fact and a new fact, classify their relationship:\n\
+             - same_updated: The new fact is an updated version of the existing fact\n\
+             - contradicts: The new fact contradicts the existing fact\n\
+             - coexists: Both facts are independently true\n\n\
+             Existing: \"{existing_content}\"\n\
+             New: \"{new_content}\"\n\n\
+             Output JSON only: {{\"verdict\": \"same_updated|contradicts|coexists\", \"reason\": \"...\"}}"
+        );
+
+        let msgs = [crate::providers::message::UnifiedMessage::user(&prompt)];
+        let payload = crate::providers::adapter::RequestPayload::new(&msgs)
+            .with_system(Some("You are a precise fact comparison assistant. Output JSON only."));
+
+        match provider.process(payload).await {
+            Ok(response) => parse_conflict_verdict(&response.text_content()),
+            Err(e) => {
+                tracing::warn!(error = %e, "LLM conflict arbitration failed, defaulting to coexists");
+                ConflictVerdict::Coexists
+            }
+        }
     }
 
     /// Detect and resolve conflicts for a new fact
@@ -113,32 +198,47 @@ impl ConflictDetector {
             return Ok(vec![ConflictResolution::NoConflict]);
         }
 
-        // For each similar fact, create an override resolution
-        // New facts always win (user-confirmed design decision)
-        let resolutions: Vec<ConflictResolution> = similar_facts
+        // For each similar fact, use LLM arbitration to decide the relationship.
+        // Only override when the LLM says the new fact supersedes or contradicts.
+        let similar_facts: Vec<_> = similar_facts
             .into_iter()
             .filter(|sf| sf.fact.id != new_fact.id) // exclude self
-            .map(|scored_fact| {
-                let similarity = scored_fact.score;
-
-                tracing::info!(
-                    old_fact_id = %scored_fact.fact.id,
-                    old_content = %scored_fact.fact.content,
-                    new_content = %new_fact.content,
-                    similarity = similarity,
-                    "Detected conflicting fact, will override old"
-                );
-
-                ConflictResolution::Override {
-                    invalidated_id: scored_fact.fact.id.clone(),
-                    reason: format!(
-                        "Superseded by newer fact (similarity: {:.2}): {}",
-                        similarity,
-                        new_fact.content.chars().take(100).collect::<String>()
-                    ),
-                }
-            })
             .collect();
+
+        let mut resolutions = Vec::new();
+        for scored in similar_facts {
+            let verdict = self
+                .llm_arbitrate(&scored.fact.content, &new_fact.content)
+                .await;
+
+            match verdict {
+                ConflictVerdict::SameUpdated | ConflictVerdict::Contradicts => {
+                    let reason = format!(
+                        "{:?}: superseded by new fact (similarity: {:.2})",
+                        verdict, scored.score
+                    );
+                    tracing::info!(
+                        old_fact_id = %scored.fact.id,
+                        old_content = %scored.fact.content,
+                        new_content = %new_fact.content,
+                        similarity = scored.score,
+                        ?verdict,
+                        "LLM verdict: override old fact"
+                    );
+                    resolutions.push(ConflictResolution::Override {
+                        invalidated_id: scored.fact.id.clone(),
+                        reason,
+                    });
+                }
+                ConflictVerdict::Coexists => {
+                    tracing::debug!(
+                        old = %scored.fact.content,
+                        new = %new_fact.content,
+                        "LLM verdict: coexists, keeping both"
+                    );
+                }
+            }
+        }
 
         Ok(resolutions)
     }
@@ -242,7 +342,14 @@ mod tests {
 
         database.insert_fact(&old_fact).await.unwrap();
 
-        let detector = ConflictDetector::with_defaults(database);
+        // Provide a mock provider that returns a "contradicts" verdict
+        let mock_provider: Arc<dyn crate::providers::AiProvider> = Arc::new(
+            crate::providers::MockProvider::new(
+                r#"{"verdict": "contradicts", "reason": "User stopped vs started"}"#,
+            ),
+        );
+        let detector = ConflictDetector::with_defaults(database)
+            .with_provider(mock_provider);
 
         // Create a very similar new fact (same embedding = similarity 1.0)
         let new_fact = MemoryFact::new(
@@ -302,5 +409,39 @@ mod tests {
         };
 
         assert!(matches!(resolution, ConflictResolution::Override { .. }));
+    }
+
+    #[test]
+    fn test_parse_conflict_verdict_same_updated() {
+        let response = r#"{"verdict": "same_updated", "reason": "Updated timeline"}"#;
+        let verdict = parse_conflict_verdict(response);
+        assert_eq!(verdict, ConflictVerdict::SameUpdated);
+    }
+
+    #[test]
+    fn test_parse_conflict_verdict_contradicts() {
+        let response = r#"{"verdict": "contradicts", "reason": "Changed preference"}"#;
+        let verdict = parse_conflict_verdict(response);
+        assert_eq!(verdict, ConflictVerdict::Contradicts);
+    }
+
+    #[test]
+    fn test_parse_conflict_verdict_coexists() {
+        let response = r#"{"verdict": "coexists", "reason": "Different topics"}"#;
+        let verdict = parse_conflict_verdict(response);
+        assert_eq!(verdict, ConflictVerdict::Coexists);
+    }
+
+    #[test]
+    fn test_parse_conflict_verdict_invalid_defaults_to_coexists() {
+        let verdict = parse_conflict_verdict("garbage");
+        assert_eq!(verdict, ConflictVerdict::Coexists);
+    }
+
+    #[test]
+    fn test_parse_conflict_verdict_unknown_value() {
+        let response = r#"{"verdict": "unknown_value", "reason": "test"}"#;
+        let verdict = parse_conflict_verdict(response);
+        assert_eq!(verdict, ConflictVerdict::Coexists);
     }
 }

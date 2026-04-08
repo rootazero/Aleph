@@ -107,12 +107,12 @@ impl CompressionService {
             ))
         });
 
-        let extractor = Arc::new(FactExtractor::new(provider, embedder));
+        let conflict_detector = Arc::new(
+            ConflictDetector::new(database.clone(), config.conflict.clone())
+                .with_provider(Arc::clone(&provider)),
+        );
 
-        let conflict_detector = Arc::new(ConflictDetector::new(
-            database.clone(),
-            config.conflict.clone(),
-        ));
+        let extractor = Arc::new(FactExtractor::new(provider, embedder));
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
