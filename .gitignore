@@ -102,3 +102,4 @@ archive/
 .omc/
 graphify-out/
 **/graphify-out/
+.worktrees/
