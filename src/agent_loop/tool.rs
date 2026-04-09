@@ -38,6 +38,9 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub parameters: Value,
+    /// Per-tool result size limit in estimated tokens. Falls back to global default if None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_result_tokens: Option<usize>,
 }
 
 // =============================================================================
@@ -171,6 +174,7 @@ impl LoopToolRegistry {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 parameters: t.schema(),
+                max_result_tokens: None,
             })
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));

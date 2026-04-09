@@ -371,7 +371,8 @@ impl ToolPipeline {
         };
         let exec_elapsed_ms = exec_start.elapsed().as_millis() as u64;
 
-        let mut outcome = Self::map_result(id, name, &result, self.result_store.as_ref());
+        let budget = default_result_budget(name);
+        let mut outcome = Self::map_result(id, name, &result, self.result_store.as_ref(), budget);
         outcome.duration_ms = exec_elapsed_ms;
 
         // Record file reads for post-compaction recovery
@@ -496,7 +497,7 @@ impl ToolPipeline {
     /// Map a `ToolResult` to a `ToolOutcome`, applying compression and truncation.
     ///
     /// Successful results are compressed (domain-specific summarization) then
-    /// truncated if they still exceed `MAX_TOOL_RESULT_TOKENS`. Error results
+    /// truncated if they still exceed the per-tool budget. Error results
     /// are passed through unchanged (error messages are typically short and
     /// their completeness matters for debugging).
     fn map_result(
@@ -504,16 +505,17 @@ impl ToolPipeline {
         name: &str,
         result: &ToolResult,
         store: Option<&ToolResultStore>,
+        budget: usize,
     ) -> ToolOutcome {
         match result {
             ToolResult::Success { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
                 let final_text = match store
-                    .and_then(|s| s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS))
+                    .and_then(|s| s.persist_if_large(id, name, &compressed, budget))
                 {
                     Some(ref_marker) => ref_marker,
-                    None => truncate_tool_result(&compressed),
+                    None => truncate_tool_result_with_budget(&compressed, budget),
                 };
                 ToolOutcome {
                     tool_id: id.to_string(),
@@ -538,10 +540,10 @@ impl ToolPipeline {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
                 let final_text = match store
-                    .and_then(|s| s.persist_if_large(id, name, &compressed, MAX_TOOL_RESULT_TOKENS))
+                    .and_then(|s| s.persist_if_large(id, name, &compressed, budget))
                 {
                     Some(ref_marker) => ref_marker,
-                    None => truncate_tool_result(&compressed),
+                    None => truncate_tool_result_with_budget(&compressed, budget),
                 };
                 ToolOutcome {
                     tool_id: id.to_string(),
@@ -647,6 +649,60 @@ fn value_to_text(v: &Value) -> String {
 fn is_file_read_tool(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.contains("read_file") || lower.contains("file_read") || lower == "read"
+}
+
+/// Default per-tool result budgets.
+fn default_result_budget(tool_name: &str) -> usize {
+    match tool_name {
+        "Read" => 12_000,
+        "WebFetch" | "web_fetch" => 10_000,
+        "Bash" | "bash_exec" => 8_000,
+        "Grep" => 6_000,
+        _ => MAX_TOOL_RESULT_TOKENS, // 8_000
+    }
+}
+
+/// Truncate a tool result with head+tail preservation.
+/// Keeps 70% from the head and 30% from the tail.
+fn truncate_tool_result_with_budget(text: &str, budget_tokens: usize) -> String {
+    let estimated = estimate_tokens_smart(text);
+    if estimated <= budget_tokens {
+        return text.to_string();
+    }
+
+    let chars_per_token: f64 = 2.5;
+    let total_chars = (budget_tokens as f64 * chars_per_token) as usize;
+    let head_chars = (total_chars as f64 * 0.7) as usize;
+    let tail_chars = total_chars.saturating_sub(head_chars);
+
+    // Find safe head boundary (last newline before head_chars)
+    let head_end = text
+        .char_indices()
+        .take(head_chars)
+        .filter(|(_, c)| *c == '\n')
+        .last()
+        .map(|(i, _)| i + 1)
+        .unwrap_or(head_chars.min(text.len()));
+
+    // Find safe tail boundary
+    let tail_byte_approx = text.len().saturating_sub(tail_chars * 4);
+    let tail_start = text[tail_byte_approx..]
+        .find('\n')
+        .map(|i| tail_byte_approx + i + 1)
+        .unwrap_or(tail_byte_approx);
+
+    if head_end >= tail_start {
+        // Overlap — fall back to head-only
+        return truncate_tool_result(text);
+    }
+
+    let truncated_tokens = estimated.saturating_sub(budget_tokens);
+    format!(
+        "{}\n\n[... truncated ~{} tokens ...]\n\n{}",
+        &text[..head_end],
+        truncated_tokens,
+        &text[tail_start..],
+    )
 }
 
 /// Truncate a tool result string if it exceeds `MAX_TOOL_RESULT_TOKENS`.
@@ -1266,5 +1322,33 @@ mod tests {
             !outcome.outcome.output_text.starts_with("[BLOCKED]"),
             "should not be blocked"
         );
+    }
+
+    #[test]
+    fn truncate_with_budget_preserves_head_and_tail() {
+        let mut lines = String::new();
+        for i in 0..2000 {
+            lines.push_str(&format!("Line {:04}: content padding here to fill tokens\n", i));
+        }
+        let result = truncate_tool_result_with_budget(&lines, 4000);
+        assert!(result.len() < lines.len(), "should be truncated");
+        assert!(result.contains("Line 0000"), "should preserve head");
+        assert!(result.contains("Line 1999"), "should preserve tail");
+        assert!(result.contains("truncated"), "should have marker");
+    }
+
+    #[test]
+    fn truncate_with_budget_within_limit_unchanged() {
+        let short = "Hello, short result.";
+        assert_eq!(truncate_tool_result_with_budget(short, 8000), short);
+    }
+
+    #[test]
+    fn default_result_budget_returns_correct_values() {
+        assert_eq!(default_result_budget("Read"), 12_000);
+        assert_eq!(default_result_budget("Grep"), 6_000);
+        assert_eq!(default_result_budget("Bash"), 8_000);
+        assert_eq!(default_result_budget("WebFetch"), 10_000);
+        assert_eq!(default_result_budget("Unknown"), MAX_TOOL_RESULT_TOKENS);
     }
 }

@@ -21,6 +21,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::tool::LoopToolRegistry;
+use crate::agent_loop::tool_execution_context::{CascadePolicy, ToolProgress};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
 use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
 use crate::providers::delta::ProviderDelta;
@@ -157,7 +158,27 @@ pub struct StreamingToolExecutor {
 
 impl StreamingToolExecutor {
     /// Consume all ready tool calls and return results sorted by original order.
-    pub async fn run(mut self) -> Vec<PipelineOutcome> {
+    pub async fn run(self) -> Vec<PipelineOutcome> {
+        self.run_internal(None).await
+    }
+
+    /// Like `run()`, but also returns a progress receiver channel.
+    ///
+    /// Tools can send `ToolProgress` events through the channel as they execute.
+    /// The sender is passed into the execution pipeline (unused for now — will be
+    /// wired to individual tool contexts in a future task).
+    pub async fn run_with_progress(self) -> (Vec<PipelineOutcome>, mpsc::Receiver<ToolProgress>) {
+        let (progress_tx, progress_rx) = mpsc::channel::<ToolProgress>(64);
+        let results = self.run_internal(Some(progress_tx)).await;
+        (results, progress_rx)
+    }
+
+    /// Internal implementation shared by `run()` and `run_with_progress()`.
+    async fn run_internal(
+        mut self,
+        _progress_tx: Option<mpsc::Sender<ToolProgress>>,
+    ) -> Vec<PipelineOutcome> {
+        let batch_cancel = self.cancel.child_token();
         let mut results: Vec<(usize, PipelineOutcome)> = Vec::new();
         let mut in_flight: Vec<(usize, JoinHandle<PipelineOutcome>)> = Vec::new();
         let mut exclusive_queue: Vec<ReadyToolCall> = Vec::new();
@@ -179,8 +200,13 @@ impl StreamingToolExecutor {
                                 .unwrap_or(false);
 
                             if is_concurrent && exclusive_queue.is_empty() {
-                                // Spawn immediately.
-                                let handle = self.spawn_tool_execution(call.id.clone(), call.name.clone(), call.arguments.clone());
+                                // Spawn immediately with batch-scoped cancel token.
+                                let handle = self.spawn_tool_execution_with_cancel(
+                                    call.id.clone(),
+                                    call.name.clone(),
+                                    call.arguments.clone(),
+                                    batch_cancel.child_token(),
+                                );
                                 in_flight.push((call.index, handle));
                             } else {
                                 // Queue for sequential execution.
@@ -195,7 +221,22 @@ impl StreamingToolExecutor {
         // Phase 2: await all in-flight concurrent tasks.
         for (idx, handle) in in_flight {
             match handle.await {
-                Ok(outcome) => results.push((idx, outcome)),
+                Ok(outcome) => {
+                    // Check cascade policy: if a side-effecting tool failed,
+                    // cancel all remaining siblings in this batch.
+                    if outcome.outcome.is_error {
+                        let policy = CascadePolicy::classify(&outcome.outcome.tool_name);
+                        if matches!(policy, CascadePolicy::AbortSiblings) {
+                            tracing::warn!(
+                                target: "streaming_bridge",
+                                tool = %outcome.outcome.tool_name,
+                                "Cascading abort: tool failure triggers sibling cancellation"
+                            );
+                            batch_cancel.cancel();
+                        }
+                    }
+                    results.push((idx, outcome));
+                }
                 Err(e) => {
                     tracing::error!("Spawned tool task panicked: {}", e);
                     results.push((
@@ -223,8 +264,9 @@ impl StreamingToolExecutor {
 
         // Phase 3: execute exclusive queue sequentially.
         for call in exclusive_queue {
-            if self.cancel.is_cancelled() {
-                break;
+            if self.cancel.is_cancelled() || batch_cancel.is_cancelled() {
+                results.push((call.index, synthetic_abort_outcome(&call.id, &call.name)));
+                continue;
             }
             let outcome = self
                 .execute_one(&call.id, &call.name, &call.arguments)
@@ -237,16 +279,16 @@ impl StreamingToolExecutor {
         results.into_iter().map(|(_, outcome)| outcome).collect()
     }
 
-    /// Spawn a concurrent tool execution task.
-    fn spawn_tool_execution(
+    /// Spawn a concurrent tool execution task with an explicit cancel token.
+    fn spawn_tool_execution_with_cancel(
         &self,
         id: String,
         name: String,
         arguments: Value,
+        cancel: CancellationToken,
     ) -> JoinHandle<PipelineOutcome> {
         let registry = Arc::clone(&self.registry);
         let pipeline = Arc::clone(&self.pipeline);
-        let cancel = self.cancel.clone();
 
         tokio::spawn(async move {
             let started_at = Instant::now();
@@ -267,6 +309,30 @@ impl StreamingToolExecutor {
             .await;
         outcome.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
         outcome
+    }
+}
+
+/// Produce a synthetic abort outcome for a tool that was cancelled due to
+/// cascading failure of a sibling tool.
+fn synthetic_abort_outcome(id: &str, name: &str) -> PipelineOutcome {
+    PipelineOutcome {
+        outcome: ToolOutcome {
+            tool_id: id.to_string(),
+            tool_name: name.to_string(),
+            duration_ms: 0,
+            output_text: format!(
+                "[Aborted] {} was cancelled because a sibling tool failed",
+                name
+            ),
+            is_error: true,
+            should_stop: false,
+            retryable: true,
+        },
+        additional_contexts: Vec::new(),
+        prevent_continuation: false,
+        hook_messages: Vec::new(),
+        needs_user_confirmation: false,
+        confirmation_reason: None,
     }
 }
 
@@ -560,7 +626,85 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 5: cancellation stops executor
+    // Test 5: bash failure cascades to exclusive siblings
+    // -------------------------------------------------------------------------
+
+    /// A tool that always fails (named "Bash" for AbortSiblings cascade policy).
+    struct FailingBashTool;
+
+    #[async_trait]
+    impl LoopTool for FailingBashTool {
+        fn name(&self) -> &str {
+            "Bash"
+        }
+        fn description(&self) -> &str {
+            "Always fails"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Error {
+                error: "command failed".into(),
+                retryable: false,
+            }
+        }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn bash_failure_cascades_to_exclusive_siblings() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(FailingBashTool));
+        registry.register(Box::new(ExclusiveTool));
+
+        let cancel = CancellationToken::new();
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+
+        // Bash fails (concurrent), then exclusive tool should be aborted.
+        feed_tool_call(&mut bridge, "t1", "Bash", "{}");
+        feed_tool_call(&mut bridge, "t2", "exclusive", "{}");
+        bridge.finish();
+
+        let results = executor.run().await;
+        assert_eq!(results.len(), 2);
+        assert!(results[0].outcome.is_error, "Bash should fail");
+        assert!(results[1].outcome.is_error, "exclusive should be aborted");
+        assert!(
+            results[1].outcome.output_text.contains("Aborted")
+                || results[1].outcome.output_text.contains("cancelled"),
+            "should indicate abort, got: {}",
+            results[1].outcome.output_text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 6: run_with_progress returns results and receiver
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_with_progress_returns_results_and_receiver() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+
+        let cancel = CancellationToken::new();
+        let (mut bridge, executor) =
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+
+        feed_tool_call(&mut bridge, "t1", "echo", r#"{"msg":"hello"}"#);
+        bridge.finish();
+
+        let (results, _progress_rx) = executor.run_with_progress().await;
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].outcome.is_error);
+        assert!(results[0].outcome.output_text.contains("hello"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 7: cancellation stops executor
     // -------------------------------------------------------------------------
 
     #[tokio::test]

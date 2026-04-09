@@ -99,6 +99,7 @@ pub mod services;
 pub mod session;
 pub mod session_usage;
 pub mod skills;
+pub mod markdown_skills;
 #[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;
 pub mod system_info;
@@ -353,6 +354,7 @@ impl HandlerRegistry {
         registry.register("skills.update", skills::handle_update);
         registry.register("skills.install_dep", skills::handle_install_dep);
         registry.register("skills.remove", skills::handle_remove);
+        registry.register("skills.install", markdown_skills::handle_install);
 
         // ClawHub handlers
         registry.register("clawhub.search", clawhub::handle_search);

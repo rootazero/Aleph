@@ -4,7 +4,10 @@
 //! that tracks context window pressure across turns and issues directives to the
 //! agent loop (compact, force final reply, or stop on diminishing returns).
 
+pub mod autocompact;
+pub mod context_collapse;
 pub mod diagnostics;
+pub mod microcompact;
 pub mod pipeline;
 pub mod preflight;
 pub mod pressure;
@@ -416,6 +419,7 @@ mod tests {
             name: "bash_exec".to_string(),
             description: "Execute a shell command and return output".to_string(),
             parameters: serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+            max_result_tokens: None,
         }];
         let pressure = ContextPressure::compute(&msgs, "system", &tools, 10_000, 3.5);
         // Overhead should include system prompt + tool definitions

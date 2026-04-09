@@ -611,7 +611,7 @@ pub async fn handle_create(
     // Inject secrets back for runtime channel creation
     inject_channel_secrets(&id, &mut config_with_secrets, &vault);
 
-    // Save secret-free config to app config
+    // Save secret-free config to app config and persist to disk
     {
         let mut app_cfg = app_config.write().await;
         let mut config_to_save = if let Value::Object(ref map) = config_to_persist {
@@ -623,6 +623,9 @@ pub async fn handle_create(
         app_cfg
             .channels
             .insert(id.clone(), Value::Object(config_to_save));
+        if let Err(e) = app_cfg.save_incremental(&["channels"]) {
+            tracing::error!(error = %e, "Failed to persist channels config to disk");
+        }
     }
 
     // Try to create and register channel instance (with secrets injected).
@@ -714,10 +717,13 @@ pub async fn handle_delete(
         registry.unregister(&channel_id).await;
     }
 
-    // Remove from app config
+    // Remove from app config and persist to disk
     {
         let mut app_cfg = app_config.write().await;
         app_cfg.channels.remove(&id);
+        if let Err(e) = app_cfg.save_incremental(&["channels"]) {
+            tracing::error!(error = %e, "Failed to persist channels config to disk after delete");
+        }
     }
 
     JsonRpcResponse::success(

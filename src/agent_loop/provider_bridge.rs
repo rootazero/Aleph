@@ -124,6 +124,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
+            max_result_tokens: None,
         };
 
         let converted = AiProviderBridge::convert_tool_def(&def);
