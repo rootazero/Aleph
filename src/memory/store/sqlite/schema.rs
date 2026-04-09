@@ -223,6 +223,36 @@ fn migrate_palace_topology(conn: &Connection) -> Result<(), AlephError> {
 }
 
 // ---------------------------------------------------------------------------
+// Temporal validity: valid_from / valid_to columns (migration)
+// ---------------------------------------------------------------------------
+
+const TEMPORAL_VALIDITY_DDL: &str = r#"
+ALTER TABLE facts ADD COLUMN valid_from INTEGER DEFAULT NULL;
+ALTER TABLE facts ADD COLUMN valid_to INTEGER DEFAULT NULL;
+"#;
+
+const TEMPORAL_VALIDITY_INDEX_DDL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_facts_validity ON facts(valid_to) WHERE valid_to IS NULL;
+"#;
+
+/// Add `valid_from` and `valid_to` columns to the `facts` table, then create
+/// the partial index. Safe to call multiple times (idempotent).
+pub fn migrate_temporal_validity(conn: &Connection) -> Result<(), AlephError> {
+    let has_valid_from: bool = conn.prepare("SELECT valid_from FROM facts LIMIT 0").is_ok();
+    if !has_valid_from {
+        for stmt in TEMPORAL_VALIDITY_DDL.split(';').filter(|s| !s.trim().is_empty()) {
+            conn.execute_batch(stmt).map_err(|e| {
+                AlephError::config(format!("Failed to add temporal validity column: {e}"))
+            })?;
+        }
+    }
+    conn.execute_batch(TEMPORAL_VALIDITY_INDEX_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create temporal validity index: {e}"))
+    })?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -260,6 +290,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
 
     migrate_palace_topology(conn)?;
+    migrate_temporal_validity(conn)?;
 
     Ok(())
 }
@@ -342,5 +373,26 @@ mod tests {
         let conn = open_db();
         // Calling migrate_palace_topology again must not return an error.
         migrate_palace_topology(&conn).expect("second call to migrate_palace_topology");
+    }
+
+    #[test]
+    fn temporal_validity_columns_default_null() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO facts (id, content, fact_type, fact_source, created_at, updated_at, path)
+             VALUES ('tv1', 'test', 'other', 'extracted', 0, 0, '')",
+            [],
+        )
+        .unwrap();
+        let (vf, vt): (Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT valid_from, valid_to FROM facts WHERE id = 'tv1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(vf.is_none());
+        assert!(vt.is_none());
     }
 }

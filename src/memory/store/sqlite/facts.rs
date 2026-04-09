@@ -242,14 +242,16 @@ fn insert_fact_inner(
             tags, source_memory_ids, content_hash, confidence, decay_score,
             is_valid, invalidation_reason, embedding_model,
             created_at, updated_at, decay_invalidated_at, version,
-            tier, scope, persona_id, strength, access_count, last_accessed_at
+            tier, scope, persona_id, strength, access_count, last_accessed_at,
+            valid_from, valid_to
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11, ?12,
             ?13, ?14, ?15, ?16, ?17,
             ?18, ?19, ?20,
             ?21, ?22, ?23, ?24,
-            ?25, ?26, ?27, ?28, ?29, ?30
+            ?25, ?26, ?27, ?28, ?29, ?30,
+            ?31, ?32
         )",
         rusqlite::params![
             fact.id,
@@ -282,6 +284,8 @@ fn insert_fact_inner(
             fact.strength as f64,
             fact.access_count as i32,
             fact.last_accessed_at,
+            fact.valid_from,
+            fact.valid_to,
         ],
     )
     .map_err(|e| AlephError::config(format!("Failed to insert fact {}: {e}", fact.id)))?;
