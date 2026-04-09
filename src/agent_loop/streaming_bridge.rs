@@ -167,6 +167,7 @@ impl StreamingToolExecutor {
     /// NOTE: Progress sending is not yet wired into tool execution.
     /// The receiver will be immediately closed. This API is scaffolding
     /// for future progress streaming support.
+    #[allow(dead_code)]
     pub(crate) async fn run_with_progress(self) -> (Vec<PipelineOutcome>, mpsc::Receiver<ToolProgress>) {
         let (progress_tx, progress_rx) = mpsc::channel::<ToolProgress>(64);
         let results = self.run_internal(Some(progress_tx)).await;
