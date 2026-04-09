@@ -7,6 +7,7 @@ pub mod decay;
 pub mod drift;
 pub mod summarize;
 pub mod synthesis;
+pub mod tunnel;
 
 use async_trait::async_trait;
 
@@ -40,3 +41,4 @@ pub use decay::{DecayStage, MemoryDecayReport};
 pub use drift::{DriftAction, DriftCandidate, DriftDetectStage};
 pub use summarize::SummarizeStage;
 pub use synthesis::{DeepSynthesisStage, PatternInsight};
+pub use tunnel::TunnelDiscoveryStage;

@@ -32,7 +32,7 @@ use tracing::{info, warn};
 pub use stages::decay::MemoryDecayReport;
 pub use stages::{
     ClusterStage, CollectStage, ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage,
-    SummarizeStage,
+    SummarizeStage, TunnelDiscoveryStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster, MetadataGroupKey};
 
@@ -97,6 +97,7 @@ impl DreamPipeline {
             .stage(SummarizeStage)
             .stage(DriftDetectStage)
             .stage(ConsolidateStage)
+            .stage(TunnelDiscoveryStage)
             .stage(DecayStage)
     }
 
@@ -698,13 +699,13 @@ mod tests {
     #[test]
     fn test_pipeline_builder() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 6);
+        assert_eq!(pipeline.stages.len(), 7);
     }
 
     #[test]
-    fn test_pipeline_weekly_has_seven_stages() {
+    fn test_pipeline_weekly_has_eight_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 8);
     }
 }
 
@@ -811,14 +812,14 @@ mod pipeline_integration_tests {
     }
 
     #[tokio::test]
-    async fn daily_pipeline_has_six_stages() {
+    async fn daily_pipeline_has_seven_stages() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 6);
+        assert_eq!(pipeline.stages.len(), 7);
     }
 
     #[tokio::test]
-    async fn weekly_pipeline_has_seven_stages() {
+    async fn weekly_pipeline_has_eight_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 8);
     }
 }
