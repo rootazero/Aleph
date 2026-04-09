@@ -72,6 +72,10 @@ pub struct SearchFilter {
     pub scope: Option<MemoryScope>,
     /// Restrict to a specific persona identifier.
     pub persona_id: Option<String>,
+    /// Restrict to a specific domain (derived from VFS path first segment).
+    pub domain: Option<String>,
+    /// Restrict to a specific topic (derived from VFS path second segment).
+    pub topic: Option<String>,
     /// Pre-built scope stack OR clause (set by `with_scope_stack`).
     scope_stack_clause: Option<String>,
 }
@@ -172,6 +176,18 @@ impl SearchFilter {
         self
     }
 
+    /// Set domain filter (first segment of VFS path).
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = Some(domain.into());
+        self
+    }
+
+    /// Set topic filter (second segment of VFS path).
+    pub fn with_topic(mut self, topic: impl Into<String>) -> Self {
+        self.topic = Some(topic.into());
+        self
+    }
+
     /// Build scope-stack filter: Global OR (Workspace=W) OR (Persona=P).
     ///
     /// This generates an OR-clause that retrieves facts visible from the
@@ -265,6 +281,14 @@ impl SearchFilter {
         // tier filter always applies (independent of scope stack)
         if let Some(ref tier) = self.tier {
             clauses.push(format!("tier = '{}'", escape_sql_string(tier.as_str())));
+        }
+
+        if let Some(ref domain) = self.domain {
+            clauses.push(format!("domain = '{}'", escape_sql_string(domain)));
+        }
+
+        if let Some(ref topic) = self.topic {
+            clauses.push(format!("topic = '{}'", escape_sql_string(topic)));
         }
 
         if clauses.is_empty() {
@@ -575,5 +599,23 @@ mod tests {
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("tier = 'core'"));
         assert!(sql.contains("scope = 'global'"));
+    }
+
+    #[test]
+    fn search_filter_domain_and_topic() {
+        let filter = SearchFilter::new()
+            .with_domain("user")
+            .with_topic("preferences");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("domain = 'user'"));
+        assert!(sql.contains("topic = 'preferences'"));
+    }
+
+    #[test]
+    fn search_filter_domain_only() {
+        let filter = SearchFilter::new().with_domain("knowledge");
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("domain = 'knowledge'"));
+        assert!(!sql.contains("topic"));
     }
 }
