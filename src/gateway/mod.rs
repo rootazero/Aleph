@@ -50,6 +50,7 @@ pub mod control_plane;
 // Phase 4: Multi-Agent & Dispatcher
 pub mod agent_instance;
 pub mod agent_lifecycle;
+pub mod cancellation;
 pub mod config;
 pub mod execution_engine;
 pub mod session_manager;
