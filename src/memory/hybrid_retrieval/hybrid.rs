@@ -294,6 +294,64 @@ impl HybridRetrieval {
         Ok(Self::apply_min_score(scored, self.config.min_score))
     }
 
+    /// Search facts with progressive scope narrowing.
+    ///
+    /// Starts with the narrowest scope inferred from `context_paths`, then
+    /// expands to wider scopes until `min_results` are found or Global is reached.
+    pub async fn search_facts_progressive(
+        &self,
+        query_embedding: &[f32],
+        query_text: &str,
+        context_paths: &[&str],
+        progressive_config: &super::progressive::ProgressiveSearchConfig,
+    ) -> Result<Vec<MemoryFact>, AlephError> {
+        use super::progressive::{build_scope_sequence, infer_scope_from_facts, SearchScope};
+
+        if !progressive_config.enabled {
+            return self.search_facts(query_embedding, query_text).await;
+        }
+
+        let (domain, topic) = infer_scope_from_facts(context_paths);
+        let scopes = build_scope_sequence(&domain, &topic);
+
+        let dim_hint = query_embedding.len() as u32;
+
+        for scope in &scopes {
+            let filter = match scope {
+                SearchScope::TopicLocal { domain, topic } => SearchFilter::valid_only(None)
+                    .with_domain(domain)
+                    .with_topic(topic),
+                SearchScope::DomainWide { domain } => {
+                    SearchFilter::valid_only(None).with_domain(domain)
+                }
+                SearchScope::Global => SearchFilter::valid_only(None),
+            };
+
+            let scored = self
+                .database
+                .hybrid_search(&crate::memory::store::HybridSearchParams {
+                    embedding: query_embedding,
+                    dim_hint,
+                    query_text,
+                    vector_weight: self.config.vector_weight,
+                    text_weight: self.config.text_weight,
+                    filter: &filter,
+                    limit: self.config.max_results,
+                })
+                .await?;
+
+            let scored = self.apply_pipeline(scored, query_embedding, query_text);
+            let results = Self::apply_min_score(scored, self.config.min_score);
+
+            if results.len() >= progressive_config.min_results {
+                return Ok(results);
+            }
+        }
+
+        // Final fallback: Global scope
+        self.search_facts(query_embedding, query_text).await
+    }
+
     /// Get a reference to the underlying database
     pub fn database(&self) -> &MemoryBackend {
         &self.database
