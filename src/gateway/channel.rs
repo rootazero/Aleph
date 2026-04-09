@@ -30,9 +30,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
+use crate::gateway::cancellation::CancellationToken;
 use crate::gateway::channel_approval::ChannelApprovalCapability;
 use crate::thinker::interaction::{Capability, InteractionManifest};
 
@@ -503,26 +503,48 @@ pub struct ChannelInfo {
 
 /// Shared mutable state for Channel implementations.
 ///
-/// Encapsulates thread-safe status tracking and inbound message receiver management.
+/// Encapsulates thread-safe status tracking and inbound message broadcast.
 /// Every Channel should embed this and return it from `fn state()`.
+/// Wrapper around broadcast::Sender that provides mpsc-compatible send() for
+/// backward compatibility with existing channel implementations.
+#[derive(Debug, Clone)]
+pub struct InboundMessageSender {
+    inner: broadcast::Sender<InboundMessage>,
+}
+
+impl InboundMessageSender {
+    /// Send a message to all subscribers. Returns `Err(msg)` if no subscribers.
+    #[allow(clippy::result_large_err)]
+    pub fn send(&self, msg: InboundMessage) -> Result<(), InboundMessage> {
+        self.inner.send(msg).map(|_| ()).map_err(|e| e.0)
+    }
+}
+
+impl From<broadcast::Sender<InboundMessage>> for InboundMessageSender {
+    fn from(inner: broadcast::Sender<InboundMessage>) -> Self {
+        Self { inner }
+    }
+}
+
 pub struct ChannelState {
     /// Thread-safe status — set by start()/stop(), read by status()
     status: Arc<tokio::sync::RwLock<ChannelStatus>>,
-    /// One-shot receiver — taken once by ChannelRegistry::start_message_forwarder()
-    inbound_rx: StdMutex<Option<mpsc::Receiver<InboundMessage>>>,
-    /// Sender side — channel impl pushes inbound messages here
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    /// Broadcast sender — channel impl pushes inbound messages here
+    /// Multiple consumers can subscribe via `inbound_subscribe()`
+    inbound_broadcast: broadcast::Sender<InboundMessage>,
+    /// Cancellation token for graceful shutdown
+    cancel: CancellationToken,
     health: Arc<tokio::sync::RwLock<ChannelHealth>>,
 }
 
 impl ChannelState {
-    /// Create with initial Disconnected status and a bounded channel.
+    /// Create with initial Disconnected status and a broadcast channel.
     pub fn new(buffer_size: usize) -> Self {
-        let (tx, rx) = mpsc::channel(buffer_size);
+        let (tx, _) = broadcast::channel(buffer_size);
         Self {
             status: Arc::new(tokio::sync::RwLock::new(ChannelStatus::Disconnected)),
-            inbound_rx: StdMutex::new(Some(rx)),
-            inbound_tx: tx,
+            inbound_broadcast: tx,
+            cancel: CancellationToken::new(),
             health: Arc::new(tokio::sync::RwLock::new(ChannelHealth::new())),
         }
     }
@@ -556,30 +578,31 @@ impl ChannelState {
         *self.status.write().await = status;
     }
 
-    /// Take the inbound receiver (can only succeed once).
-    pub fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
+    pub fn inbound_subscribe(&self) -> broadcast::Receiver<InboundMessage> {
+        self.inbound_broadcast.subscribe()
     }
 
-    /// Get a clone of the inbound sender.
-    pub fn sender(&self) -> mpsc::Sender<InboundMessage> {
-        self.inbound_tx.clone()
+    pub fn send_inbound(&self, message: InboundMessage) -> bool {
+        self.inbound_broadcast.send(message).is_ok()
     }
 
-    /// Clone the internal status Arc for use in spawned tasks.
-    ///
-    /// When a channel's `start()` method spawns background tasks that need
-    /// to update status (e.g., `Connected` → `Disconnected`), they can't
-    /// reference `self.channel_state`. Clone this Arc before the spawn.
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     pub fn status_handle(&self) -> Arc<tokio::sync::RwLock<ChannelStatus>> {
         self.status.clone()
     }
+
+    pub fn sender(&self) -> InboundMessageSender {
+        InboundMessageSender::from(self.inbound_broadcast.clone())
+    }
+
+    pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
+        Some(self.inbound_broadcast.subscribe())
+    }
 }
 
-/// Pairing data for a channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum PairingData {
@@ -654,13 +677,10 @@ pub trait Channel: Send + Sync {
     /// Send a message through this channel
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult>;
 
-    /// Get the inbound message receiver
-    ///
-    /// Returns a receiver for incoming messages. The channel implementation
-    /// is responsible for populating this channel with messages.
-    /// Can only succeed once — the receiver is taken from ChannelState.
-    fn inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.state().take_receiver()
+    /// Returns a subscriber receiver for incoming messages. Multiple subscribers
+    /// can call this simultaneously — each gets their own broadcast receiver.
+    fn inbound_subscribe(&self) -> broadcast::Receiver<InboundMessage> {
+        self.state().inbound_subscribe()
     }
 
     /// Send a typing indicator
@@ -895,7 +915,7 @@ mod tests {
             metadata: vec![],
         };
 
-        tx.send(msg).await.unwrap();
+        tx.send(msg).unwrap();
         let received = rx.recv().await.unwrap();
         assert_eq!(received.text, "hello");
     }

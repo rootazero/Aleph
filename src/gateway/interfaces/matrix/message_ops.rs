@@ -4,7 +4,8 @@
 //! These are separated from the channel struct for testability.
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
+    ChannelError, ChannelId, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::sync_primitives::Arc;
@@ -570,7 +571,7 @@ impl MatrixMessageOps {
         user_id: Arc<RwLock<Option<String>>>,
         since_token: Arc<RwLock<Option<String>>>,
         channel_id: ChannelId,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
         let mut backoff = INITIAL_BACKOFF;
@@ -660,7 +661,7 @@ impl MatrixMessageOps {
                                     room_id,
                                     &inbound.text[..inbound.text.len().min(50)]
                                 );
-                                if inbound_tx.send(inbound).await.is_err() {
+                                if inbound_tx.send(inbound).is_err() {
                                     tracing::error!("Matrix: inbound channel closed");
                                     return;
                                 }

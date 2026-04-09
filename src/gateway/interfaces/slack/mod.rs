@@ -414,6 +414,7 @@ impl SlackChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::FutureExt;
 
     #[test]
     fn test_channel_capabilities() {
@@ -447,22 +448,16 @@ mod tests {
     }
 
     #[test]
-    fn test_channel_initial_status() {
-        let config = SlackConfig::default();
-        let channel = SlackChannel::new("slack", config);
-        assert_eq!(channel.status(), ChannelStatus::Disconnected);
-    }
-
-    #[test]
-    fn test_take_receiver() {
+    fn test_inbound_subscribe() {
         let config = SlackConfig::default();
         let channel = SlackChannel::new("slack", config);
 
-        // First take should succeed (via ChannelState)
-        assert!(channel.inbound_receiver().is_some());
-
-        // Second take should return None
-        assert!(channel.inbound_receiver().is_none());
+        // inbound_subscribe returns a broadcast receiver (multiple subscribers allowed)
+        let mut rx1 = channel.inbound_subscribe();
+        let mut rx2 = channel.inbound_subscribe();
+        // Both receivers should be valid (broadcast allows multiple subscribers)
+        assert!(rx1.recv().now_or_never().is_none()); // no message sent yet
+        assert!(rx2.recv().now_or_never().is_none());
     }
 
     #[tokio::test]

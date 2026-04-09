@@ -40,7 +40,7 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, watch};
 
 /// Email channel implementation using IMAP + SMTP.
 pub struct EmailChannel {
@@ -94,7 +94,7 @@ impl EmailChannel {
     }
 
     /// Take the inbound receiver (can only be called once)
-    pub fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+    pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         self.channel_state.take_receiver()
     }
 }

@@ -258,15 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn test_take_receiver() {
+    fn test_inbound_subscribe_multi_consumer() {
         let config = SignalConfig::default();
         let channel = SignalChannel::new("signal", config);
 
-        // First take should succeed (via ChannelState)
-        assert!(channel.state().take_receiver().is_some());
+        let rx1 = channel.state().take_receiver();
+        let rx2 = channel.state().take_receiver();
+        let rx3 = channel.state().take_receiver();
 
-        // Second take should return None
-        assert!(channel.state().take_receiver().is_none());
+        assert!(rx1.is_some() && rx2.is_some() && rx3.is_some());
     }
 
     #[tokio::test]

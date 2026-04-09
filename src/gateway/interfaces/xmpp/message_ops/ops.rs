@@ -5,7 +5,8 @@ use std::time::Duration;
 use chrono::Utc;
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
+    ChannelError, ChannelId, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 
@@ -159,7 +160,7 @@ impl XmppMessageOps {
     pub async fn run_xmpp_loop(
         config: XmppConfig,
         channel_id: ChannelId,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         mut write_cmd_rx: tokio::sync::mpsc::Receiver<String>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -313,7 +314,7 @@ impl XmppMessageOps {
                                             inbound.sender_id.as_str(),
                                             inbound.text.get(..50).unwrap_or(&inbound.text)
                                         );
-                                        if inbound_tx.send(inbound).await.is_err() {
+                                        if inbound_tx.send(inbound).is_err() {
                                             tracing::error!("XMPP: inbound channel closed");
                                             return;
                                         }

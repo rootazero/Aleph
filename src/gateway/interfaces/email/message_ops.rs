@@ -4,7 +4,8 @@
 //! Separated from the channel struct for testability.
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
+    ChannelError, ChannelId, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    SendResult, UserId,
 };
 use chrono::Utc;
 use std::time::Duration;
@@ -222,7 +223,7 @@ impl EmailMessageOps {
     /// messages, converts them to InboundMessages, and marks them as seen.
     pub async fn run_imap_poll_loop(
         config: EmailConfig,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         channel_id: ChannelId,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -279,7 +280,7 @@ impl EmailMessageOps {
     /// the `futures::AsyncRead/AsyncWrite` that `async-imap` expects.
     async fn poll_imap_once(
         config: &EmailConfig,
-        inbound_tx: &tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: &InboundMessageSender,
         channel_id: &ChannelId,
     ) -> Result<usize, ChannelError> {
         use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -398,7 +399,7 @@ impl EmailMessageOps {
                     metadata: vec![],
                 };
 
-                if inbound_tx.send(inbound).await.is_err() {
+                if inbound_tx.send(inbound).is_err() {
                     tracing::error!("Email: inbound channel closed");
                     break;
                 }

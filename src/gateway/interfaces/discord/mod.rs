@@ -35,13 +35,13 @@ pub use resolver::{ResolvedChannel, DiscordResolver, ChannelResolutionError, Can
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
-    OutboundMessage, SendResult, UserId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, InboundMessageSender,
+    MessageId, OutboundMessage, SendResult, UserId,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{oneshot, RwLock};
 
 use std::collections::HashMap;
 
@@ -189,7 +189,7 @@ impl DiscordChannel {
 
 /// Event handler for Discord gateway events
 struct Handler {
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    inbound_tx: InboundMessageSender,
     config: DiscordConfig,
     status: Arc<RwLock<ChannelStatus>>,
     bot_user_id: Arc<RwLock<Option<u64>>>,
@@ -338,8 +338,8 @@ impl EventHandler for Handler {
         };
 
         // Send to channel
-        if let Err(e) = self.inbound_tx.send(inbound).await {
-            tracing::error!("Failed to send inbound Discord message: {}", e);
+        if let Err(e) = self.inbound_tx.send(inbound) {
+            tracing::error!(error = ?e, "Failed to send inbound Discord message");
         }
 
         // Send typing indicator if enabled
@@ -431,8 +431,8 @@ impl EventHandler for Handler {
             metadata: vec![],
         };
 
-        if let Err(e) = self.inbound_tx.send(inbound).await {
-            tracing::error!("Failed to send inbound Discord interaction: {}", e);
+        if let Err(e) = self.inbound_tx.send(inbound) {
+            tracing::error!(error = ?e, "Failed to send inbound Discord interaction");
         }
     }
 

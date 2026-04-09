@@ -134,7 +134,7 @@ impl IMessageChannel {
                 // Send messages to channel
                 for msg in messages {
                     debug!("Received iMessage: {:?}", msg.text);
-                    if tx.send(msg).await.is_err() {
+                    if tx.send(msg).is_err() {
                         warn!("Failed to send message to channel receiver");
                         break;
                     }

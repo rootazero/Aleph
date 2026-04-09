@@ -379,8 +379,8 @@ impl Channel for TelegramChannel {
                             if let Some(inbound) =
                                 handlers::convert_message(&msg, &bot, &channel_id).await
                             {
-                                if let Err(e) = inbound_tx.send(inbound).await {
-                                    tracing::error!("Failed to send inbound message: {}", e);
+                                if let Err(e) = inbound_tx.send(inbound) {
+                                    tracing::error!("Failed to send inbound message: {:?}", e);
                                 }
                             }
                         }
@@ -477,10 +477,9 @@ impl Channel for TelegramChannel {
                                 raw: None,
                                 metadata: vec![],
                             };
-                            if let Err(e) = inbound_tx.send(inbound).await {
+                            if let Err(e) = inbound_tx.send(inbound) {
                                 tracing::error!(
-                                    "Failed to re-inject callback as inbound message: {}",
-                                    e
+                                    "Failed to re-inject callback as inbound message: {:?}", e
                                 );
                             }
                         }

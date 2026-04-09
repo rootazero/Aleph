@@ -16,6 +16,39 @@ fn default_true() -> bool {
     true
 }
 
+fn default_reconnect_delay() -> u64 {
+    500
+}
+
+fn default_max_retries() -> u32 {
+    10
+}
+
+fn default_backoff_multiplier() -> f32 {
+    1.5
+}
+
+/// Configuration for SSE (Server-Sent Events) reconnection behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventSourceConfig {
+    #[serde(default = "default_reconnect_delay")]
+    pub reconnect_delay_ms: u64,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_backoff_multiplier")]
+    pub backoff_multiplier: f32,
+}
+
+impl Default for EventSourceConfig {
+    fn default() -> Self {
+        Self {
+            reconnect_delay_ms: default_reconnect_delay(),
+            max_retries: default_max_retries(),
+            backoff_multiplier: default_backoff_multiplier(),
+        }
+    }
+}
+
 /// Signal channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalConfig {
@@ -37,6 +70,10 @@ pub struct SignalConfig {
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
+
+    /// SSE event source configuration for real-time inbound
+    #[serde(default)]
+    pub event_source: EventSourceConfig,
 }
 
 impl Default for SignalConfig {
@@ -47,6 +84,7 @@ impl Default for SignalConfig {
             allowed_users: Vec::new(),
             poll_interval_secs: default_poll_interval(),
             send_typing: true,
+            event_source: EventSourceConfig::default(),
         }
     }
 }
@@ -149,6 +187,56 @@ mod tests {
     }
 
     #[test]
+    fn test_event_source_default_values() {
+        let config = EventSourceConfig::default();
+        assert_eq!(config.reconnect_delay_ms, 500);
+        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.backoff_multiplier, 1.5);
+    }
+
+    #[test]
+    fn test_event_source_custom_values() {
+        let config = EventSourceConfig {
+            reconnect_delay_ms: 1000,
+            max_retries: 5,
+            backoff_multiplier: 2.0,
+        };
+        assert_eq!(config.reconnect_delay_ms, 1000);
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.backoff_multiplier, 2.0);
+    }
+
+    #[test]
+    fn test_signal_config_with_custom_event_source() {
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            event_source: EventSourceConfig {
+                reconnect_delay_ms: 1000,
+                max_retries: 5,
+                backoff_multiplier: 2.0,
+            },
+            ..Default::default()
+        };
+        assert_eq!(config.event_source.reconnect_delay_ms, 1000);
+        assert_eq!(config.event_source.max_retries, 5);
+        assert_eq!(config.event_source.backoff_multiplier, 2.0);
+    }
+
+    #[test]
+    fn test_event_source_serde_roundtrip() {
+        let config = EventSourceConfig {
+            reconnect_delay_ms: 1000,
+            max_retries: 5,
+            backoff_multiplier: 2.0,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: EventSourceConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.reconnect_delay_ms, 1000);
+        assert_eq!(deserialized.max_retries, 5);
+        assert_eq!(deserialized.backoff_multiplier, 2.0);
+    }
+
+    #[test]
     fn test_serde_roundtrip() {
         let config = SignalConfig {
             api_url: "http://signal:9080".to_string(),
@@ -156,6 +244,7 @@ mod tests {
             allowed_users: vec!["+9876543210".to_string()],
             poll_interval_secs: 5,
             send_typing: false,
+            event_source: EventSourceConfig::default(),
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -166,6 +255,9 @@ mod tests {
         assert_eq!(deserialized.allowed_users, config.allowed_users);
         assert_eq!(deserialized.poll_interval_secs, config.poll_interval_secs);
         assert_eq!(deserialized.send_typing, config.send_typing);
+        assert_eq!(deserialized.event_source.reconnect_delay_ms, 500);
+        assert_eq!(deserialized.event_source.max_retries, 10);
+        assert_eq!(deserialized.event_source.backoff_multiplier, 1.5);
     }
 
     #[test]
@@ -177,5 +269,8 @@ mod tests {
         assert_eq!(config.poll_interval_secs, 2);
         assert!(config.send_typing);
         assert!(config.allowed_users.is_empty());
+        assert_eq!(config.event_source.reconnect_delay_ms, 500);
+        assert_eq!(config.event_source.max_retries, 10);
+        assert_eq!(config.event_source.backoff_multiplier, 1.5);
     }
 }
