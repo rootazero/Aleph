@@ -13,6 +13,12 @@ pub struct RippleConfig {
 
     /// Similarity threshold for related facts (default: 0.7)
     pub similarity_threshold: f32,
+
+    /// Enable cross-domain traversal via tunnel edges (default: true).
+    pub enable_tunnels: bool,
+
+    /// Maximum tunnel hops per ripple (default: 1).
+    pub max_tunnel_hops: usize,
 }
 
 impl Default for RippleConfig {
@@ -21,6 +27,8 @@ impl Default for RippleConfig {
             max_hops: 2,
             max_facts_per_hop: 5,
             similarity_threshold: 0.7,
+            enable_tunnels: true,
+            max_tunnel_hops: 1,
         }
     }
 }
@@ -36,4 +44,7 @@ pub struct RippleResult {
 
     /// Total number of hops performed
     pub total_hops: usize,
+
+    /// Facts discovered via tunnel edges (cross-domain).
+    pub tunnel_facts: Vec<MemoryFact>,
 }

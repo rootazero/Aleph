@@ -90,6 +90,8 @@ async fn test_ripple_single_hop() -> Result<()> {
         max_hops: 1,
         max_facts_per_hop: 5,
         similarity_threshold: 0.7,
+        enable_tunnels: true,
+        max_tunnel_hops: 1,
     };
     let ripple = RippleTask::new(db, config);
 
@@ -128,6 +130,8 @@ async fn test_ripple_multi_hop() -> Result<()> {
         max_hops: 2,
         max_facts_per_hop: 5,
         similarity_threshold: 0.6,
+        enable_tunnels: true,
+        max_tunnel_hops: 1,
     };
     let ripple = RippleTask::new(db, config);
 
@@ -156,6 +160,8 @@ async fn test_ripple_similarity_threshold() -> Result<()> {
         max_hops: 1,
         max_facts_per_hop: 5,
         similarity_threshold: 0.8,
+        enable_tunnels: true,
+        max_tunnel_hops: 1,
     };
     let ripple = RippleTask::new(db, config);
 
@@ -186,6 +192,8 @@ async fn test_ripple_no_duplicates() -> Result<()> {
         max_hops: 3,
         max_facts_per_hop: 5,
         similarity_threshold: 0.6,
+        enable_tunnels: true,
+        max_tunnel_hops: 1,
     };
     let ripple = RippleTask::new(db, config);
 
@@ -226,6 +234,8 @@ async fn test_ripple_max_facts_per_hop() -> Result<()> {
         max_hops: 1,
         max_facts_per_hop: 2,
         similarity_threshold: 0.6,
+        enable_tunnels: true,
+        max_tunnel_hops: 1,
     };
     let ripple = RippleTask::new(db, config);
 
@@ -236,4 +246,11 @@ async fn test_ripple_max_facts_per_hop() -> Result<()> {
     assert!(result.expanded_facts.len() <= 2);
 
     Ok(())
+}
+
+#[test]
+fn default_config_enables_tunnels() {
+    let config = RippleConfig::default();
+    assert!(config.enable_tunnels);
+    assert_eq!(config.max_tunnel_hops, 1);
 }

@@ -489,6 +489,22 @@ impl GraphStore {
         Ok(())
     }
 
+    /// Get all edges connected to a node, optionally filtered by relation type.
+    pub async fn get_edges_by_relation(
+        &self,
+        node_id: &str,
+        relation: &str,
+    ) -> Result<Vec<GraphEdge>, AlephError> {
+        let all_edges =
+            StoreGraphStore::get_edges_for_node(self.database.as_ref(), node_id, None, "default")
+                .await?;
+        Ok(all_edges
+            .into_iter()
+            .filter(|e| e.relation == relation)
+            .map(GraphEdge::from)
+            .collect())
+    }
+
     /// Update graph from a compressed fact.
     pub async fn update_from_fact(
         &self,

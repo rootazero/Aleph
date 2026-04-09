@@ -40,6 +40,8 @@ mod integration_tests {
             max_hops: 3,
             max_facts_per_hop: 5,
             similarity_threshold: 0.7,
+            enable_tunnels: true,
+            max_tunnel_hops: 1,
         };
 
         assert_eq!(config.max_hops, 3);
