@@ -75,7 +75,7 @@ impl GeminiProtocol {
                     let mut parts = Vec::new();
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text } => {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
                                 parts.push(Part::Text { text: text.clone() });
                             }
                             crate::providers::message::ContentBlock::ToolCall {
@@ -113,7 +113,7 @@ impl GeminiProtocol {
                     let output = content
                         .iter()
                         .map(|b| match b {
-                            crate::providers::message::ContentBlock::Text { text } => text.clone(),
+                            crate::providers::message::ContentBlock::Text { text, .. } => text.clone(),
                             crate::providers::message::ContentBlock::Json { value } => {
                                 serde_json::to_string(value).unwrap_or_default()
                             }
@@ -1187,6 +1187,7 @@ mod tests {
             content: vec![
                 CB::Text {
                     text: "Let me search for that.".to_string(),
+                    cache_control: None,
                 },
                 CB::ToolCall {
                     id: "call_1".to_string(),

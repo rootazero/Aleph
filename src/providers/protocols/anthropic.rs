@@ -63,7 +63,7 @@ impl AnthropicProtocol {
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text } => {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
                                 blocks.push(ContentBlock::Text { text: text.clone() });
                             }
                             crate::providers::message::ContentBlock::Image { data, mime_type } => {
@@ -98,7 +98,7 @@ impl AnthropicProtocol {
                         });
                     }
                     if blocks.len() == 1 {
-                        if let ContentBlock::Text { text } = &blocks[0] {
+                        if let ContentBlock::Text { text, .. } = &blocks[0] {
                             result.push(Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text {
@@ -119,7 +119,7 @@ impl AnthropicProtocol {
                     let mut blocks = Vec::new();
                     for block in content {
                         match block {
-                            crate::providers::message::ContentBlock::Text { text } => {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
                                 blocks.push(ContentBlock::Text { text: text.clone() });
                             }
                             crate::providers::message::ContentBlock::ToolCall {
@@ -179,7 +179,7 @@ impl AnthropicProtocol {
                             let output = content
                                 .iter()
                                 .map(|b| match b {
-                                    crate::providers::message::ContentBlock::Text { text } => {
+                                    crate::providers::message::ContentBlock::Text { text, .. } => {
                                         text.clone()
                                     }
                                     crate::providers::message::ContentBlock::Json { value } => {
@@ -816,6 +816,7 @@ mod tests {
             content: vec![
                 CB::Text {
                     text: "Let me search for that.".to_string(),
+                    cache_control: None,
                 },
                 CB::ToolCall {
                     id: "toolu_123".to_string(),
@@ -998,6 +999,7 @@ mod tests {
             content: vec![
                 CB::Text {
                     text: "What is in this image?".to_string(),
+                    cache_control: None,
                 },
                 CB::Image {
                     data: "aGVsbG8=".to_string(),

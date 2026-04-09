@@ -92,6 +92,7 @@ mod tests {
         UnifiedMessage::Assistant {
             content: vec![ContentBlock::Text {
                 text: content.to_string(),
+                cache_control: None,
             }],
         }
     }
@@ -102,6 +103,7 @@ mod tests {
             tool_name: tool_name.to_string(),
             content: vec![ContentBlock::Text {
                 text: "result".to_string(),
+                cache_control: None,
             }],
             is_error: false,
         }

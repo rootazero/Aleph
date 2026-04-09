@@ -116,6 +116,7 @@ impl MediaProcessor {
             );
             ContentBlock::Text {
                 text: format!("[Attachment: {} ({})]", name, mime),
+                cache_control: None,
             }
         }
     }
@@ -221,6 +222,7 @@ impl MediaProcessor {
             debug!(attachment_id = %attachment.id, "no vision pipeline, returning placeholder");
             return ContentBlock::Text {
                 text: "[Image: description unavailable (no vision provider)]".to_string(),
+                cache_control: None,
             };
         };
 
@@ -238,12 +240,14 @@ impl MediaProcessor {
                 debug!(attachment_id = %attachment.id, "vision described image");
                 ContentBlock::Text {
                     text: format!("[Image: {}]", result.description),
+                    cache_control: None,
                 }
             }
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "vision pipeline failed");
                 ContentBlock::Text {
                     text: "[Image: description unavailable]".to_string(),
+                    cache_control: None,
                 }
             }
         }
@@ -272,6 +276,7 @@ impl MediaProcessor {
                     "[Audio: {} — transcription unavailable (no provider)]",
                     name
                 ),
+                cache_control: None,
             };
         };
 
@@ -322,6 +327,7 @@ impl MediaProcessor {
                 );
                 ContentBlock::Text {
                     text: format!("[Voice message transcript]:\n\"{}\"", result.text),
+                    cache_control: None,
                 }
             }
             Err(e) => {
@@ -338,6 +344,7 @@ impl MediaProcessor {
                 let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
                 ContentBlock::Text {
                     text: format!("[Audio: {} — transcription failed]", name),
+                    cache_control: None,
                 }
             }
         }
@@ -353,6 +360,7 @@ fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
     let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
     ContentBlock::Text {
         text: format!("[Attachment: {} — error: {}]", name, error),
+        cache_control: None,
     }
 }
 
@@ -415,7 +423,7 @@ mod tests {
             data: None,
         };
         let block = fallback_text(&att, "network timeout");
-        if let ContentBlock::Text { text } = block {
+        if let ContentBlock::Text { text, .. } = block {
             assert!(text.contains("photo.png"));
             assert!(text.contains("network timeout"));
         } else {
@@ -435,7 +443,7 @@ mod tests {
             data: None,
         };
         let block = fallback_text(&att, "download failed");
-        if let ContentBlock::Text { text } = block {
+        if let ContentBlock::Text { text, .. } = block {
             assert!(text.contains("att-2"));
             assert!(text.contains("download failed"));
         } else {
@@ -459,7 +467,7 @@ mod tests {
             .process(&[att], true, "test-session", "test-run")
             .await;
         assert_eq!(blocks.len(), 1);
-        if let ContentBlock::Text { text } = &blocks[0] {
+        if let ContentBlock::Text { text, .. } = &blocks[0] {
             assert!(text.contains("report.pdf"));
             assert!(text.contains("application/pdf"));
         } else {
@@ -512,7 +520,7 @@ mod tests {
             .process(&[att], false, session_id, "test-run")
             .await;
         assert_eq!(blocks.len(), 1);
-        if let ContentBlock::Text { text } = &blocks[0] {
+        if let ContentBlock::Text { text, .. } = &blocks[0] {
             assert!(text.contains("description unavailable"));
         } else {
             panic!("expected Text block");
@@ -536,7 +544,7 @@ mod tests {
             .process(&[att], true, "test-audio", "test-run")
             .await;
         assert_eq!(blocks.len(), 1);
-        if let ContentBlock::Text { text } = &blocks[0] {
+        if let ContentBlock::Text { text, .. } = &blocks[0] {
             assert!(text.contains("transcription unavailable"));
         } else {
             panic!("expected Text block");

@@ -143,6 +143,7 @@ impl CompactionStage for ImageStripper {
                 if matches!(block, ContentBlock::Image { .. }) {
                     *block = ContentBlock::Text {
                         text: IMAGE_MARKER.to_string(),
+                        cache_control: None,
                     };
                     total_freed += IMAGE_TOKEN_ESTIMATE;
                 }

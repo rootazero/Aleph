@@ -93,7 +93,7 @@ impl OpenAiProtocol {
                         let blocks: Vec<OaiContentBlock> = content
                             .iter()
                             .filter_map(|b| match b {
-                                UCB::Text { text } => {
+                                UCB::Text { text, .. } => {
                                     Some(OaiContentBlock::Text { text: text.clone() })
                                 }
                                 UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
@@ -137,7 +137,7 @@ impl OpenAiProtocol {
                     let text: String = content
                         .iter()
                         .filter_map(|b| match b {
-                            crate::providers::message::ContentBlock::Text { text } => {
+                            crate::providers::message::ContentBlock::Text { text, .. } => {
                                 Some(text.as_str())
                             }
                             _ => None,
@@ -202,7 +202,7 @@ impl OpenAiProtocol {
                     let output = content
                         .iter()
                         .map(|b| match b {
-                            crate::providers::message::ContentBlock::Text { text } => text.clone(),
+                            crate::providers::message::ContentBlock::Text { text, .. } => text.clone(),
                             crate::providers::message::ContentBlock::Json { value } => {
                                 serde_json::to_string(value).unwrap_or_default()
                             }
@@ -984,6 +984,7 @@ mod tests {
             content: vec![
                 CB::Text {
                     text: "Let me search.".to_string(),
+                    cache_control: None,
                 },
                 CB::ToolCall {
                     id: "call_abc".to_string(),

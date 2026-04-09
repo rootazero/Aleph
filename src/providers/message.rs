@@ -26,12 +26,24 @@ pub enum UnifiedMessage {
     },
 }
 
+/// Cache control hint for API providers that support prompt caching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheControl {
+    /// Short-lived cache (Anthropic: ~5 min TTL).
+    Ephemeral,
+}
+
 /// Content block — one atomic unit within a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ContentBlock {
     /// Plain text
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     /// Structured JSON (preserves tool output structure)
     Json { value: Value },
     /// Thinking/reasoning trace
@@ -52,7 +64,7 @@ impl UnifiedMessage {
     /// Single text user message
     pub fn user(text: impl Into<String>) -> Self {
         Self::User {
-            content: vec![ContentBlock::Text { text: text.into() }],
+            content: vec![ContentBlock::Text { text: text.into(), cache_control: None }],
         }
     }
 
@@ -64,7 +76,7 @@ impl UnifiedMessage {
     /// Single text assistant message
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::Assistant {
-            content: vec![ContentBlock::Text { text: text.into() }],
+            content: vec![ContentBlock::Text { text: text.into(), cache_control: None }],
         }
     }
 
@@ -80,6 +92,7 @@ impl UnifiedMessage {
             tool_name: name.into(),
             content: vec![ContentBlock::Text {
                 text: output.into(),
+                cache_control: None,
             }],
             is_error,
         }
@@ -109,7 +122,7 @@ impl UnifiedMessage {
             });
         }
         if let Some(ref text) = resp.text {
-            content.push(ContentBlock::Text { text: text.clone() });
+            content.push(ContentBlock::Text { text: text.clone(), cache_control: None });
         }
         for tc in &resp.tool_calls {
             content.push(ContentBlock::ToolCall {
@@ -144,7 +157,7 @@ impl UnifiedMessage {
         let mut parts = Vec::new();
         for msg in messages {
             for block in msg.content_blocks() {
-                if let ContentBlock::Text { text } = block {
+                if let ContentBlock::Text { text, .. } = block {
                     parts.push(text.as_str());
                 }
             }
@@ -159,7 +172,7 @@ impl UnifiedMessage {
         let mut parts = Vec::new();
         for block in self.content_blocks() {
             match block {
-                ContentBlock::Text { text } => parts.push(text.as_str().to_owned()),
+                ContentBlock::Text { text, .. } => parts.push(text.as_str().to_owned()),
                 ContentBlock::Thinking { thinking } => parts.push(thinking.as_str().to_owned()),
                 ContentBlock::Json { value } => parts.push(value.to_string()),
                 ContentBlock::ToolCall {
@@ -199,7 +212,7 @@ impl UnifiedMessage {
                 let text = content
                     .iter()
                     .map(|b| match b {
-                        ContentBlock::Text { text } => text.as_str().to_owned(),
+                        ContentBlock::Text { text, .. } => text.as_str().to_owned(),
                         ContentBlock::Json { value } => value.to_string(),
                         _ => String::new(),
                     })
@@ -216,7 +229,7 @@ impl UnifiedMessage {
     /// No-op if this is not a ToolResult.
     pub fn replace_tool_result_content(&mut self, new_content: String) {
         if let Self::ToolResult { content, .. } = self {
-            *content = vec![ContentBlock::Text { text: new_content }];
+            *content = vec![ContentBlock::Text { text: new_content, cache_control: None }];
         }
     }
 
@@ -253,7 +266,7 @@ impl ContentBlock {
     /// Extract text content if this is a Text block
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            Self::Text { text } => Some(text),
+            Self::Text { text, .. } => Some(text),
             _ => None,
         }
     }
@@ -418,6 +431,7 @@ mod tests {
             content: vec![
                 ContentBlock::Text {
                     text: "searching".into(),
+                    cache_control: None,
                 },
                 ContentBlock::ToolCall {
                     id: "c1".into(),
@@ -479,10 +493,38 @@ mod tests {
     fn test_content_blocks_mut() {
         let mut msg = UnifiedMessage::user("original");
         for block in msg.content_blocks_mut() {
-            if let ContentBlock::Text { ref mut text } = block {
+            if let ContentBlock::Text { ref mut text, .. } = block {
                 *text = "filtered".to_string();
             }
         }
         assert_eq!(msg.content_blocks()[0].as_text(), Some("filtered"));
+    }
+
+    #[test]
+    fn cache_control_serializes_correctly() {
+        let block = ContentBlock::Text {
+            text: "hello".into(),
+            cache_control: Some(CacheControl::Ephemeral),
+        };
+        let json_str = serde_json::to_string(&block).unwrap();
+        assert!(
+            json_str.contains("ephemeral"),
+            "should serialize cache_control, got: {}",
+            json_str
+        );
+    }
+
+    #[test]
+    fn cache_control_none_omitted_in_json() {
+        let block = ContentBlock::Text {
+            text: "hello".into(),
+            cache_control: None,
+        };
+        let json_str = serde_json::to_string(&block).unwrap();
+        assert!(
+            !json_str.contains("cache_control"),
+            "None should be omitted, got: {}",
+            json_str
+        );
     }
 }

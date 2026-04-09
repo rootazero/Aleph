@@ -63,7 +63,7 @@ impl HttpProvider {
                 if !engine.is_provider_excluded(&self.name) {
                     for msg in &mut filtered_messages {
                         for block in msg.content_blocks_mut() {
-                            if let ContentBlock::Text { ref mut text } = block {
+                            if let ContentBlock::Text { ref mut text, .. } = block {
                                 let result = engine.filter(text);
                                 if result.has_detections() {
                                     *text = result.text;
@@ -159,7 +159,7 @@ impl HttpProvider {
                 if !engine.is_provider_excluded(&self.name) {
                     for msg in &mut filtered_messages {
                         for block in msg.content_blocks_mut() {
-                            if let ContentBlock::Text { ref mut text } = block {
+                            if let ContentBlock::Text { ref mut text, .. } = block {
                                 let result = engine.filter(text);
                                 if result.has_detections() {
                                     *text = result.text;

@@ -686,6 +686,8 @@ pub struct AgentLoop<P: LoopProvider> {
     pressure_sensor: Mutex<PressureSensor>,
     /// Pipeline of compaction stages (image strip → micro compact → tool compact → round drop).
     compaction_pipeline: CompactionPipeline,
+    /// Pre-flight context preparation pipeline (microcompact → collapse → autocompact).
+    preflight_pipeline: super::context_budget::preflight::PreflightPipeline,
     /// Diagnostics collector for pipeline run history.
     diagnostics: Mutex<ContextDiagnostics>,
     /// Truncation recovery state machine — handles `MaxTokens` stop reason by
@@ -760,6 +762,11 @@ impl<P: LoopProvider> AgentLoop<P> {
             context_budget: Mutex::new(None),
             pressure_sensor: Mutex::new(PressureSensor::new(3.5)),
             compaction_pipeline: pipeline,
+            preflight_pipeline: super::context_budget::preflight::PreflightPipeline::new(vec![
+                Box::new(super::context_budget::microcompact::MicrocompactStage::new()),
+                Box::new(super::context_budget::context_collapse::ContextCollapseStage::new()),
+                Box::new(super::context_budget::autocompact::AutocompactStage::noop()),
+            ]),
             diagnostics: Mutex::new(ContextDiagnostics::new()),
             compaction_orchestrator: None,
             truncation_recovery: Mutex::new(super::truncation_recovery::TruncationRecovery::new(
@@ -934,72 +941,116 @@ impl<P: LoopProvider> AgentLoop<P> {
         }
 
         let mut budget_directive = super::context_budget::LoopDirective::Continue;
-        let (budget_fresh_tail, budget_ratio) = {
+        let mut has_budget = false;
+
+        // Phase 1: Acquire lock, run before_turn, extract preflight values, release lock.
+        let (preflight_pressure, preflight_fresh_tail) = {
             let mut ctx_budget_ref = self
                 .context_budget
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                has_budget = true;
                 budget_directive = ctx_budget.before_turn(messages, system_prompt, tool_defs);
+                let pressure = ctx_budget.last_pressure().cloned();
+                let fresh_tail = ctx_budget.fresh_tail_count();
+                (pressure, fresh_tail)
+            } else {
+                (None, 6_usize)
+            }
+        };
 
-                match budget_directive {
-                    super::context_budget::LoopDirective::CompactAndContinue => {
-                        let result = {
-                            let sensor = self
-                                .pressure_sensor
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            self.compaction_pipeline.run(
-                                messages,
-                                &sensor,
-                                system_prompt,
-                                tool_defs,
-                                ctx_budget.token_budget(),
-                                ctx_budget.warning_threshold(),
-                                ctx_budget.fresh_tail_count(),
-                            )
-                        };
-                        if result.pressure_after.ratio < ctx_budget.warning_threshold()
-                            || result.tokens_freed > 500
-                        {
-                            ctx_budget.notify_compaction_success();
-                        }
-                        self.diagnostics
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .record_pipeline(result);
-                    }
-                    super::context_budget::LoopDirective::FinalReply => {
-                        let result = {
-                            let sensor = self
-                                .pressure_sensor
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            self.compaction_pipeline.run(
-                                messages,
-                                &sensor,
-                                system_prompt,
-                                tool_defs,
-                                ctx_budget.token_budget(),
-                                0.5,
-                                ctx_budget.fresh_tail_count(),
-                            )
-                        };
-                        self.diagnostics
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .record_pipeline(result);
-                        messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
-                    }
-                    super::context_budget::LoopDirective::StopDiminishing => {
-                        messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
-                    }
-                    super::context_budget::LoopDirective::Continue => {}
+        // Phase 2: Pre-flight context preparation (async — lock released).
+        if matches!(
+            budget_directive,
+            super::context_budget::LoopDirective::Continue
+                | super::context_budget::LoopDirective::CompactAndContinue
+        ) {
+            if let Some(ref pressure) = preflight_pressure {
+                let preflight_freed = self
+                    .preflight_pipeline
+                    .run(messages, pressure, preflight_fresh_tail)
+                    .await;
+                if preflight_freed > 0 {
+                    tracing::info!(
+                        target: "agent_loop",
+                        tokens_freed = preflight_freed,
+                        "Pre-flight context preparation freed tokens"
+                    );
                 }
-                (
-                    ctx_budget.fresh_tail_count(),
-                    ctx_budget.token_estimate_ratio(),
-                )
+            }
+        }
+
+        // Phase 3: Re-acquire lock for compaction pipeline.
+        let (budget_fresh_tail, budget_ratio) = {
+            let mut ctx_budget_ref = self
+                .context_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if has_budget {
+                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                    match budget_directive {
+                        super::context_budget::LoopDirective::CompactAndContinue => {
+                            let result = {
+                                let sensor = self
+                                    .pressure_sensor
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                self.compaction_pipeline.run(
+                                    messages,
+                                    &sensor,
+                                    system_prompt,
+                                    tool_defs,
+                                    ctx_budget.token_budget(),
+                                    ctx_budget.warning_threshold(),
+                                    ctx_budget.fresh_tail_count(),
+                                )
+                            };
+                            if result.pressure_after.ratio < ctx_budget.warning_threshold()
+                                || result.tokens_freed > 500
+                            {
+                                ctx_budget.notify_compaction_success();
+                            }
+                            self.diagnostics
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .record_pipeline(result);
+                        }
+                        super::context_budget::LoopDirective::FinalReply => {
+                            let result = {
+                                let sensor = self
+                                    .pressure_sensor
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
+                                self.compaction_pipeline.run(
+                                    messages,
+                                    &sensor,
+                                    system_prompt,
+                                    tool_defs,
+                                    ctx_budget.token_budget(),
+                                    0.5,
+                                    ctx_budget.fresh_tail_count(),
+                                )
+                            };
+                            self.diagnostics
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .record_pipeline(result);
+                            messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::StopDiminishing => {
+                            messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::Continue => {}
+                    }
+                    (
+                        ctx_budget.fresh_tail_count(),
+                        ctx_budget.token_estimate_ratio(),
+                    )
+                } else {
+                    // Budget was removed between phases — fall back to defaults.
+                    (6_usize, 3.5_f64)
+                }
             } else {
                 let sensor = self
                     .pressure_sensor
@@ -3387,7 +3438,7 @@ mod tests {
                     matches!(&content[0], ContentBlock::Thinking { thinking } if thinking == "Let me think about this...")
                 );
                 assert!(
-                    matches!(&content[1], ContentBlock::Text { text } if text == "I'll search for that.")
+                    matches!(&content[1], ContentBlock::Text { text, .. } if text == "I'll search for that.")
                 );
                 assert!(
                     matches!(&content[2], ContentBlock::ToolCall { id, name, .. } if id == "call_1" && name == "echo")
@@ -3469,7 +3520,7 @@ mod tests {
         let has_nudge = third_call_msgs.iter().any(|m| {
             if let UnifiedMessage::User { content } = m {
                 content.iter().any(|b| {
-                    if let ContentBlock::Text { text } = b {
+                    if let ContentBlock::Text { text, .. } = b {
                         text.contains("have not confirmed task completion")
                     } else {
                         false
@@ -3678,7 +3729,7 @@ mod tests {
             let has_nudge = call_msgs.iter().any(|m| {
                 if let UnifiedMessage::User { content } = m {
                     content.iter().any(|b| {
-                        if let ContentBlock::Text { text } = b {
+                        if let ContentBlock::Text { text, .. } = b {
                             text.contains("have not confirmed task completion")
                         } else {
                             false

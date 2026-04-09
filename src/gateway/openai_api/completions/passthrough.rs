@@ -77,6 +77,7 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                 "user" => Some(UnifiedMessage::User {
                     content: vec![ContentBlock::Text {
                         text: content_text.to_string(),
+                        cache_control: None,
                     }],
                 }),
                 "assistant" => {
@@ -84,6 +85,7 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                     if !content_text.is_empty() {
                         content.push(ContentBlock::Text {
                             text: content_text.to_string(),
+                            cache_control: None,
                         });
                     }
                     if let Some(tool_calls) = &msg.tool_calls {
@@ -116,6 +118,7 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                         tool_name: String::new(),
                         content: vec![ContentBlock::Text {
                             text: content_text.to_string(),
+                            cache_control: None,
                         }],
                         is_error: false,
                     })

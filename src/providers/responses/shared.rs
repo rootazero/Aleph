@@ -31,7 +31,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                     let parts: Vec<InputContentPart> = content
                         .iter()
                         .filter_map(|b| match b {
-                            ContentBlock::Text { text } => {
+                            ContentBlock::Text { text, .. } => {
                                 Some(InputContentPart::InputText { text: text.clone() })
                             }
                             ContentBlock::Image { data, mime_type } => {
@@ -76,7 +76,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                 let text: String = content
                     .iter()
                     .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
+                        ContentBlock::Text { text, .. } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -110,7 +110,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                 let output = content
                     .iter()
                     .map(|b| match b {
-                        ContentBlock::Text { text } => text.clone(),
+                        ContentBlock::Text { text, .. } => text.clone(),
                         ContentBlock::Json { value } => {
                             serde_json::to_string(value).unwrap_or_default()
                         }
@@ -278,6 +278,7 @@ mod tests {
             content: vec![
                 ContentBlock::Text {
                     text: "Look at this".to_string(),
+                    cache_control: None,
                 },
                 ContentBlock::Image {
                     data: "abc123".to_string(),
@@ -314,6 +315,7 @@ mod tests {
             content: vec![
                 ContentBlock::Text {
                     text: "Let me search.".to_string(),
+                    cache_control: None,
                 },
                 ContentBlock::ToolCall {
                     id: "call_abc".to_string(),

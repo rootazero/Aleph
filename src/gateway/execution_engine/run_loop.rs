@@ -335,6 +335,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 let mut content = vec![crate::providers::message::ContentBlock::Text {
                     text: request.input.clone(),
+                    cache_control: None,
                 }];
                 content.extend(media_blocks);
 
@@ -342,7 +343,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .iter()
                     .any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
                 let has_transcripts = content.iter().any(|b| {
-                    if let crate::providers::message::ContentBlock::Text { text } = b {
+                    if let crate::providers::message::ContentBlock::Text { text, .. } = b {
                         text.starts_with("[Voice message transcript]")
                     } else {
                         false

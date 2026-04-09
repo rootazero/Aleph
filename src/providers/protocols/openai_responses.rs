@@ -804,6 +804,7 @@ mod tests {
             content: vec![
                 ContentBlock::Text {
                     text: "Let me search for that.".to_string(),
+                    cache_control: None,
                 },
                 ContentBlock::ToolCall {
                     id: "call_abc".to_string(),
@@ -882,6 +883,7 @@ mod tests {
             content: vec![
                 ContentBlock::Text {
                     text: "Running multiple searches.".to_string(),
+                    cache_control: None,
                 },
                 ContentBlock::ToolCall {
                     id: "c1".to_string(),
