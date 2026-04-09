@@ -169,6 +169,60 @@ CREATE INDEX IF NOT EXISTS idx_dream_reports_started
 "#;
 
 // ---------------------------------------------------------------------------
+// Palace topology: generated columns + index (migration)
+// ---------------------------------------------------------------------------
+
+const PALACE_TOPOLOGY_DDL: &str = r#"
+ALTER TABLE facts ADD COLUMN domain TEXT
+  GENERATED ALWAYS AS (
+    CASE WHEN path LIKE 'aleph://%/%'
+    THEN substr(path, 9, instr(substr(path, 9), '/') - 1)
+    ELSE '' END
+  ) STORED;
+"#;
+
+const PALACE_TOPOLOGY_DDL_TOPIC: &str = r#"
+ALTER TABLE facts ADD COLUMN topic TEXT
+  GENERATED ALWAYS AS (
+    CASE WHEN path LIKE 'aleph://%/%/%'
+    THEN substr(path, 9 + instr(substr(path, 9), '/'),
+         instr(substr(path, 9 + instr(substr(path, 9), '/')), '/') - 1)
+    ELSE '' END
+  ) STORED;
+"#;
+
+const PALACE_TOPOLOGY_INDEX_DDL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_facts_domain_topic ON facts(domain, topic);
+"#;
+
+/// Add generated columns `domain` and `topic` to the `facts` table, then create
+/// the composite index. Safe to call multiple times (idempotent).
+fn migrate_palace_topology(conn: &Connection) -> Result<(), AlephError> {
+    // Check whether the columns already exist by probing with a LIMIT-0 query.
+    let already_exists = conn
+        .prepare("SELECT domain FROM facts LIMIT 0")
+        .is_ok();
+
+    if !already_exists {
+        // SQLite requires ALTER TABLE statements to be executed one at a time.
+        conn.execute_batch(PALACE_TOPOLOGY_DDL).map_err(|e| {
+            AlephError::config(format!("Failed to add domain column to facts: {e}"))
+        })?;
+
+        conn.execute_batch(PALACE_TOPOLOGY_DDL_TOPIC).map_err(|e| {
+            AlephError::config(format!("Failed to add topic column to facts: {e}"))
+        })?;
+    }
+
+    // Index creation is idempotent via IF NOT EXISTS.
+    conn.execute_batch(PALACE_TOPOLOGY_INDEX_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create domain/topic index: {e}"))
+    })?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -205,6 +259,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(DREAM_REPORTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
 
+    migrate_palace_topology(conn)?;
+
     Ok(())
 }
 
@@ -224,4 +280,67 @@ pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn open_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        conn
+    }
+
+    #[test]
+    fn generated_columns_auto_populated_from_path() {
+        let conn = open_db();
+        conn.execute(
+            "INSERT INTO facts (id, content, fact_type, fact_source, path, created_at, updated_at) \
+             VALUES ('f1', 'hello', 'text', 'test', 'aleph://people/alice/notes', 1, 1)",
+            [],
+        )
+        .expect("insert");
+
+        let (domain, topic): (String, String) = conn
+            .query_row(
+                "SELECT domain, topic FROM facts WHERE id = 'f1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("query");
+
+        assert_eq!(domain, "people");
+        assert_eq!(topic, "alice");
+    }
+
+    #[test]
+    fn empty_path_yields_empty_strings() {
+        let conn = open_db();
+        conn.execute(
+            "INSERT INTO facts (id, content, fact_type, fact_source, path, created_at, updated_at) \
+             VALUES ('f2', 'bare', 'text', 'test', '', 1, 1)",
+            [],
+        )
+        .expect("insert");
+
+        let (domain, topic): (String, String) = conn
+            .query_row(
+                "SELECT domain, topic FROM facts WHERE id = 'f2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("query");
+
+        assert_eq!(domain, "");
+        assert_eq!(topic, "");
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let conn = open_db();
+        // Calling migrate_palace_topology again must not return an error.
+        migrate_palace_topology(&conn).expect("second call to migrate_palace_topology");
+    }
 }
