@@ -225,10 +225,13 @@ impl DreamStage for DriftDetectStage {
                     new_id,
                     merged_content,
                 } => {
-                    // Invalidate old, update new with merged content
-                    ctx.database
-                        .invalidate_fact(old_id, "merged into newer fact")
-                        .await?;
+                    // Close old fact's validity window (preserve as historical)
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    ctx.database.close_fact_validity(old_id, now).await?;
+                    ctx.database.set_fact_valid_from(new_id, now).await?;
                     ctx.database
                         .update_fact_content(new_id, merged_content)
                         .await?;

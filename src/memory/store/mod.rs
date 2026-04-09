@@ -317,6 +317,11 @@ pub trait MemoryStore: Send + Sync {
     ) -> Result<u64, AlephError>;
 
     /// Mark a fact as a tunnel candidate.
+    ///
+    /// TODO(palace-evolution): Wire this into the fact write path (compression service
+    /// or session compactor) so that newly inserted facts are checked for cross-domain
+    /// tunnel candidacy. Currently the TunnelDiscoveryStage is dormant because nothing
+    /// sets tunnel_pending = true.
     async fn set_tunnel_pending(&self, id: &str, pending: bool) -> Result<(), AlephError>;
 
     /// Check if any tunnel candidates exist.

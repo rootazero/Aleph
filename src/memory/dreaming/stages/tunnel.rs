@@ -100,11 +100,12 @@ pub fn embedding_similarity(a: Option<&[f32]>, b: Option<&[f32]>) -> f32 {
 }
 
 /// Pick the representative fact per domain (highest strength).
-fn pick_representative<'a>(facts: &[&'a MemoryFact]) -> &'a MemoryFact {
+/// Returns `None` if the slice is empty.
+fn pick_representative<'a>(facts: &[&'a MemoryFact]) -> Option<&'a MemoryFact> {
     facts
         .iter()
+        .copied()
         .max_by(|a, b| a.strength.partial_cmp(&b.strength).unwrap_or(std::cmp::Ordering::Equal))
-        .expect("pick_representative called with empty slice")
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +164,9 @@ impl DreamStage for TunnelDiscoveryStage {
             // Pick representative fact per domain (highest strength)
             let representatives: Vec<(&str, &MemoryFact)> = domain_groups
                 .iter()
-                .map(|(domain, facts)| (domain.as_str(), pick_representative(facts)))
+                .filter_map(|(domain, facts)| {
+                    pick_representative(facts).map(|rep| (domain.as_str(), rep))
+                })
                 .collect();
 
             // Compute pairwise embedding cosine similarity
