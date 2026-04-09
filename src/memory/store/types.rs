@@ -76,6 +76,10 @@ pub struct SearchFilter {
     pub domain: Option<String>,
     /// Restrict to a specific topic (derived from VFS path second segment).
     pub topic: Option<String>,
+    /// Query facts valid at this point in time (Unix seconds).
+    pub as_of: Option<i64>,
+    /// Include historically-valid facts (valid_to IS NOT NULL). Default: false.
+    pub include_historical: bool,
     /// Pre-built scope stack OR clause (set by `with_scope_stack`).
     scope_stack_clause: Option<String>,
 }
@@ -188,6 +192,18 @@ impl SearchFilter {
         self
     }
 
+    /// Filter to facts valid at the given Unix timestamp (point-in-time query).
+    pub fn with_as_of(mut self, ts: i64) -> Self {
+        self.as_of = Some(ts);
+        self
+    }
+
+    /// Include historically-valid facts (those with a non-NULL valid_to).
+    pub fn with_include_historical(mut self) -> Self {
+        self.include_historical = true;
+        self
+    }
+
     /// Build scope-stack filter: Global OR (Workspace=W) OR (Persona=P).
     ///
     /// This generates an OR-clause that retrieves facts visible from the
@@ -281,6 +297,18 @@ impl SearchFilter {
         // tier filter always applies (independent of scope stack)
         if let Some(ref tier) = self.tier {
             clauses.push(format!("tier = '{}'", escape_sql_string(tier.as_str())));
+        }
+
+        // Temporal validity filtering
+        if !self.include_historical {
+            if let Some(ts) = self.as_of {
+                clauses.push(format!(
+                    "(valid_from IS NULL OR valid_from <= {ts}) AND (valid_to IS NULL OR valid_to >= {ts})"
+                ));
+            } else if self.is_valid.is_some() {
+                // Default: only currently-valid facts (valid_to IS NULL)
+                clauses.push("valid_to IS NULL".to_string());
+            }
         }
 
         if let Some(ref domain) = self.domain {
@@ -410,7 +438,9 @@ mod tests {
     #[test]
     fn search_filter_valid_only_shortcut() {
         let f = SearchFilter::valid_only(None);
-        assert_eq!(f.to_lance_filter().unwrap(), "is_valid = true");
+        let sql = f.to_lance_filter().unwrap();
+        assert!(sql.contains("is_valid = true"));
+        assert!(sql.contains("valid_to IS NULL"));
     }
 
     #[test]
@@ -617,5 +647,30 @@ mod tests {
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("domain = 'knowledge'"));
         assert!(!sql.contains("topic"));
+    }
+
+    #[test]
+    fn search_filter_default_excludes_historical() {
+        let filter = SearchFilter::new().with_valid_only();
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("valid_to IS NULL"));
+    }
+
+    #[test]
+    fn search_filter_as_of_generates_temporal_range() {
+        let filter = SearchFilter::new().with_as_of(1700000000);
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(sql.contains("valid_from IS NULL OR valid_from <= 1700000000"));
+        assert!(sql.contains("valid_to IS NULL OR valid_to >= 1700000000"));
+    }
+
+    #[test]
+    fn search_filter_include_historical_skips_validity() {
+        let filter = SearchFilter::new()
+            .with_valid_only()
+            .with_include_historical();
+        let sql = filter.to_lance_filter().unwrap();
+        assert!(!sql.contains("valid_to"));
+        assert!(sql.contains("is_valid = true"));
     }
 }
