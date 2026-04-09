@@ -199,6 +199,8 @@ impl ToolIndexCoordinator {
                 strength: 1.0,
                 access_count: 0,
                 last_accessed_at: None,
+                valid_from: None,
+                valid_to: None,
             };
 
             self.db.insert_fact(&fact).await?;

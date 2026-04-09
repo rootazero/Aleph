@@ -166,6 +166,8 @@ mod tests {
             strength: 1.0,
             access_count: 5,
             last_accessed_at: Some(900),
+            valid_from: None,
+            valid_to: None,
         }
     }
 

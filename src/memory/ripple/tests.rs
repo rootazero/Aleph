@@ -51,6 +51,8 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
         strength: 1.0,
         access_count: 0,
         last_accessed_at: None,
+        valid_from: None,
+        valid_to: None,
     }
 }
 

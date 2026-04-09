@@ -93,6 +93,8 @@ pub(super) fn row_to_fact_pub(row: &rusqlite::Row) -> rusqlite::Result<MemoryFac
         strength: row.get::<_, Option<f64>>("strength")?.unwrap_or(1.0) as f32,
         access_count: row.get::<_, Option<i32>>("access_count")?.unwrap_or(0) as u32,
         last_accessed_at: row.get("last_accessed_at")?,
+        valid_from: row.get("valid_from")?,
+        valid_to: row.get("valid_to")?,
     })
 }
 

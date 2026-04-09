@@ -101,6 +101,12 @@ pub struct MemoryFact {
     /// Timestamp of last retrieval (Unix seconds)
     #[serde(default)]
     pub last_accessed_at: Option<i64>,
+    /// When this fact became true (Unix seconds). None = since creation.
+    #[serde(default)]
+    pub valid_from: Option<i64>,
+    /// When this fact stopped being true (Unix seconds). None = still valid.
+    #[serde(default)]
+    pub valid_to: Option<i64>,
 }
 
 impl Entity for MemoryFact {
@@ -155,6 +161,8 @@ impl MemoryFact {
             strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
+            valid_from: None,
+            valid_to: None,
         }
     }
 
@@ -199,6 +207,8 @@ impl MemoryFact {
             strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
+            valid_from: None,
+            valid_to: None,
         }
     }
 
@@ -302,5 +312,67 @@ impl MemoryFact {
             .unwrap_or_default()
             .as_secs() as i64;
         self
+    }
+
+    /// Set the timestamp when this fact became true
+    pub fn with_valid_from(mut self, ts: i64) -> Self {
+        self.valid_from = Some(ts);
+        self
+    }
+
+    /// Set the timestamp when this fact stopped being true
+    pub fn with_valid_to(mut self, ts: i64) -> Self {
+        self.valid_to = Some(ts);
+        self
+    }
+
+    /// Close the validity window at the current time
+    pub fn close_validity(mut self) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.valid_to = Some(now);
+        self
+    }
+
+    /// Returns true if this fact has no end to its validity window
+    pub fn is_currently_valid(&self) -> bool {
+        self.valid_to.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::context::FactType;
+
+    #[test]
+    fn new_fact_has_no_validity_bounds() {
+        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        assert!(fact.valid_from.is_none());
+        assert!(fact.valid_to.is_none());
+        assert!(fact.is_currently_valid());
+    }
+
+    #[test]
+    fn close_validity_sets_valid_to() {
+        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).close_validity();
+        assert!(fact.valid_to.is_some());
+        assert!(!fact.is_currently_valid());
+    }
+
+    #[test]
+    fn with_valid_from_sets_timestamp() {
+        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).with_valid_from(1000);
+        assert_eq!(fact.valid_from, Some(1000));
+        assert!(fact.is_currently_valid());
+    }
+
+    #[test]
+    fn with_valid_to_sets_timestamp() {
+        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).with_valid_to(2000);
+        assert_eq!(fact.valid_to, Some(2000));
+        assert!(!fact.is_currently_valid());
     }
 }
