@@ -223,26 +223,27 @@ impl TruncationRecovery {
     pub fn escalate(&mut self) -> EscalateDecision {
         self.attempts += 1;
 
-        let current = self
+        let base = self
             .original_max_tokens
             .unwrap_or(self.provider_max_tokens / 2);
-        let next = (current.saturating_mul(2u32.pow(self.attempts))).min(self.provider_max_tokens);
-        let prev = (current.saturating_mul(2u32.pow(self.attempts - 1))).min(self.provider_max_tokens);
+        let next = base.saturating_mul(2u32.pow(self.attempts)).min(self.provider_max_tokens);
 
-        if self.attempts <= 3 && next > prev {
-            EscalateDecision::Retry {
-                new_max_tokens: next,
-                continuation_prompt: format!(
-                    "Your previous response was truncated at the output token limit. \
-                     Continue exactly where you left off. Do not repeat content. \
-                     Limit increased to {} tokens.",
-                    next
-                ),
-            }
-        } else {
-            EscalateDecision::GiveUp {
+        // Give up if: exceeded max attempts OR already at provider cap after first attempt
+        let at_cap = next >= self.provider_max_tokens;
+        if self.attempts > 3 || (self.attempts > 1 && at_cap) {
+            return EscalateDecision::GiveUp {
                 assembled: self.fragments.join(""),
-            }
+            };
+        }
+
+        EscalateDecision::Retry {
+            new_max_tokens: next,
+            continuation_prompt: format!(
+                "Your previous response was truncated at the output token limit. \
+                 Continue exactly where you left off. Do not repeat content. \
+                 Limit increased to {} tokens.",
+                next
+            ),
         }
     }
 

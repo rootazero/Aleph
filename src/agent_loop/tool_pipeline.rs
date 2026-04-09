@@ -682,10 +682,18 @@ fn truncate_tool_result_with_budget(text: &str, budget_tokens: usize) -> String 
         .filter(|(_, c)| *c == '\n')
         .last()
         .map(|(i, _)| i + 1)
-        .unwrap_or(head_chars.min(text.len()));
+        .unwrap_or_else(|| {
+            text.char_indices()
+                .nth(head_chars)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())
+        });
 
-    // Find safe tail boundary
+    // Find safe tail boundary (snap to char boundary)
     let tail_byte_approx = text.len().saturating_sub(tail_chars * 4);
+    let tail_byte_approx = (tail_byte_approx..text.len())
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
     let tail_start = text[tail_byte_approx..]
         .find('\n')
         .map(|i| tail_byte_approx + i + 1)

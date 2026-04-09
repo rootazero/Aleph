@@ -71,25 +71,21 @@ impl PreflightStage for MicrocompactStage {
         }
 
         // --- Pass 1: scan tool results, track newest index per key ---
-        let mut cache: HashMap<u64, CacheEntry> = HashMap::new();
+        // Key: (tool_name_hash, full_content_hash) — eliminates prefix collision risk
+        let mut cache: HashMap<(u64, u64), CacheEntry> = HashMap::new();
 
         for (idx, msg) in messages[..partition].iter().enumerate() {
             if let Some((name, content)) = msg.tool_result_info() {
-                let prefix: String = content.chars().take(50).collect();
-                let key_hash = simple_hash(&format!("{name}:{prefix}"));
                 let content_hash = simple_hash(&content);
+                let key = (simple_hash(name), content_hash);
 
-                let entry = cache.entry(key_hash).or_insert(CacheEntry {
+                let entry = cache.entry(key).or_insert(CacheEntry {
                     content_hash,
                     newest_index: idx,
                 });
 
-                // Update if this occurrence is newer and has the same content
-                if idx > entry.newest_index && content_hash == entry.content_hash {
-                    entry.newest_index = idx;
-                } else if idx > entry.newest_index {
-                    // Different content with the same key prefix — update entry
-                    entry.content_hash = content_hash;
+                // Update if this occurrence is newer (same key means same content)
+                if idx > entry.newest_index {
                     entry.newest_index = idx;
                 }
             }
@@ -109,11 +105,10 @@ impl PreflightStage for MicrocompactStage {
                 None => continue,
             };
 
-            let prefix: String = content.chars().take(50).collect();
-            let key_hash = simple_hash(&format!("{name}:{prefix}"));
             let content_hash = simple_hash(&content);
+            let key = (simple_hash(&name), content_hash);
 
-            if let Some(entry) = cache.get(&key_hash) {
+            if let Some(entry) = cache.get(&key) {
                 if content_hash == entry.content_hash && idx < entry.newest_index {
                     let old_tokens = estimate_tokens_smart(&content);
                     let replacement = format!(

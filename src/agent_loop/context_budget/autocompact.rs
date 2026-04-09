@@ -36,6 +36,7 @@ pub struct AutocompactStage {
     summarizer: Box<SummarizerFn>,
     cooldown_turns: usize,
     last_compact_turn: AtomicUsize,
+    invocation_count: AtomicUsize,
 }
 
 impl AutocompactStage {
@@ -49,6 +50,7 @@ impl AutocompactStage {
             summarizer: Box::new(move |input| Box::pin(f(input))),
             cooldown_turns: DEFAULT_COOLDOWN_TURNS,
             last_compact_turn: AtomicUsize::new(0),
+            invocation_count: AtomicUsize::new(0),
         }
     }
 
@@ -75,10 +77,10 @@ impl PreflightStage for AutocompactStage {
             return 0;
         }
 
-        // Gate 2: Skip if within cooldown period.
-        let current_turn = messages.len();
-        let last = self.last_compact_turn.load(Ordering::Relaxed);
-        if last > 0 && current_turn.saturating_sub(last) < self.cooldown_turns {
+        // Gate 2: Skip if within cooldown period (monotonic counter, not messages.len()).
+        let current_invocation = self.invocation_count.fetch_add(1, Ordering::Release);
+        let last = self.last_compact_turn.load(Ordering::Acquire);
+        if last > 0 && current_invocation.saturating_sub(last) < self.cooldown_turns {
             return 0;
         }
 
@@ -157,8 +159,8 @@ impl PreflightStage for AutocompactStage {
             std::iter::once(compact_msg),
         );
 
-        // Update cooldown tracking.
-        self.last_compact_turn.store(messages.len(), Ordering::Relaxed);
+        // Update cooldown tracking (monotonic invocation count).
+        self.last_compact_turn.store(current_invocation, Ordering::Release);
 
         // Return tokens freed.
         tokens_before.saturating_sub(tokens_after)
@@ -179,14 +181,15 @@ fn find_safe_boundary(messages: &[UnifiedMessage], target: usize) -> usize {
 
 /// Truncate a message's text content for inclusion in the summarization prompt.
 fn truncate_for_summary(text: &str) -> String {
-    if text.len() <= MAX_CHARS_PER_MSG {
+    if text.chars().count() <= MAX_CHARS_PER_MSG {
         text.to_string()
     } else {
-        // Use char_indices for UTF-8 safety.
-        match text.char_indices().nth(MAX_CHARS_PER_MSG) {
-            Some((byte_idx, _)) => format!("{}... [truncated]", &text[..byte_idx]),
-            None => text.to_string(),
-        }
+        let end = text
+            .char_indices()
+            .nth(MAX_CHARS_PER_MSG)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+        format!("{}... [truncated]", &text[..end])
     }
 }
 

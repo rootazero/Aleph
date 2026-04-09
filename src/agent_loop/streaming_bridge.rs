@@ -162,12 +162,12 @@ impl StreamingToolExecutor {
         self.run_internal(None).await
     }
 
-    /// Like `run()`, but also returns a progress receiver channel.
+    /// Run with a progress channel.
     ///
-    /// Tools can send `ToolProgress` events through the channel as they execute.
-    /// The sender is passed into the execution pipeline (unused for now — will be
-    /// wired to individual tool contexts in a future task).
-    pub async fn run_with_progress(self) -> (Vec<PipelineOutcome>, mpsc::Receiver<ToolProgress>) {
+    /// NOTE: Progress sending is not yet wired into tool execution.
+    /// The receiver will be immediately closed. This API is scaffolding
+    /// for future progress streaming support.
+    pub(crate) async fn run_with_progress(self) -> (Vec<PipelineOutcome>, mpsc::Receiver<ToolProgress>) {
         let (progress_tx, progress_rx) = mpsc::channel::<ToolProgress>(64);
         let results = self.run_internal(Some(progress_tx)).await;
         (results, progress_rx)
@@ -326,7 +326,7 @@ fn synthetic_abort_outcome(id: &str, name: &str) -> PipelineOutcome {
             ),
             is_error: true,
             should_stop: false,
-            retryable: true,
+            retryable: false, // don't retry aborted tools
         },
         additional_contexts: Vec::new(),
         prevent_continuation: false,
