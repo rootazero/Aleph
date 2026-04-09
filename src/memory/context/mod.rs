@@ -16,7 +16,7 @@ pub use enums::{
     TemporalScope,
 };
 pub use fact::MemoryFact;
-pub use paths::{compute_parent_path, PRESET_PATHS};
+pub use paths::{compute_parent_path, parse_domain_topic, PRESET_PATHS};
 
 // ============================================================================
 // ContextAnchor

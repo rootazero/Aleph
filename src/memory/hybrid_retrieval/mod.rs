@@ -18,9 +18,13 @@
 pub mod association;
 pub mod fusion;
 pub mod hybrid;
+pub mod progressive;
 pub mod strategy;
 
 pub use association::{AssociationCluster, AssociationConfig, AssociationRetriever};
 pub use fusion::{rrf_fuse, weighted_fuse, FusedScore, FusionStrategy};
 pub use hybrid::{HybridRetrieval, HybridSearchConfig};
+pub use progressive::{
+    build_scope_sequence, infer_scope_from_facts, ProgressiveSearchConfig, SearchScope,
+};
 pub use strategy::RetrievalStrategy;
