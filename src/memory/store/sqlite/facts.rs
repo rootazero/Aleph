@@ -1010,6 +1010,28 @@ impl MemoryStore for SqliteMemoryBackend {
         self.update_fact(&fact).await
     }
 
+    async fn close_fact_validity(&self, id: &str, valid_to: i64) -> Result<(), AlephError> {
+        let existing = self.get_fact(id).await?;
+        let mut fact =
+            existing.ok_or_else(|| AlephError::NotFound(format!("Fact '{}'", id)))?;
+
+        fact.valid_to = Some(valid_to);
+        fact.updated_at = now_unix();
+
+        self.update_fact(&fact).await
+    }
+
+    async fn set_fact_valid_from(&self, id: &str, valid_from: i64) -> Result<(), AlephError> {
+        let existing = self.get_fact(id).await?;
+        let mut fact =
+            existing.ok_or_else(|| AlephError::NotFound(format!("Fact '{}'", id)))?;
+
+        fact.valid_from = Some(valid_from);
+        fact.updated_at = now_unix();
+
+        self.update_fact(&fact).await
+    }
+
     async fn update_fact_content(&self, id: &str, new_content: &str) -> Result<(), AlephError> {
         if let crate::memory::content_scanner::ScanVerdict::Rejected { reason, pattern } =
             crate::memory::content_scanner::scan_content(new_content)

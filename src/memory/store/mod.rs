@@ -271,6 +271,13 @@ pub trait MemoryStore: Send + Sync {
     /// Soft-delete a fact by marking it invalid with a reason.
     async fn invalidate_fact(&self, id: &str, reason: &str) -> Result<(), AlephError>;
 
+    /// Close a fact's validity window by setting `valid_to` to the given timestamp.
+    /// The fact remains valid (`is_valid = true`) but becomes historical.
+    async fn close_fact_validity(&self, id: &str, valid_to: i64) -> Result<(), AlephError>;
+
+    /// Set `valid_from` on a fact.
+    async fn set_fact_valid_from(&self, id: &str, valid_from: i64) -> Result<(), AlephError>;
+
     /// Update only the textual content of a fact (preserving other fields).
     async fn update_fact_content(&self, id: &str, new_content: &str) -> Result<(), AlephError>;
 

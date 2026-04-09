@@ -212,10 +212,13 @@ impl DreamStage for DriftDetectStage {
         // Apply resolutions
         for action in &resolutions {
             match action {
-                DriftAction::Supersede { old_id, .. } => {
-                    ctx.database
-                        .invalidate_fact(old_id, "superseded by newer fact")
-                        .await?;
+                DriftAction::Supersede { old_id, new_id } => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    ctx.database.close_fact_validity(old_id, now).await?;
+                    ctx.database.set_fact_valid_from(new_id, now).await?;
                 }
                 DriftAction::Merge {
                     old_id,
