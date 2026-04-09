@@ -1177,9 +1177,61 @@ impl<P: LoopProvider> AgentLoop<P> {
                             tracing::warn!(
                                 attempt = ptl_attempts,
                                 ?token_gap,
-                                "413 recovery: truncating messages"
+                                "413 recovery: multi-tier cascade"
                             );
+
+                            // Tier 1: Pre-flight pipeline (microcompact → collapse → autocompact)
+                            {
+                                let pressure = {
+                                    let sensor = self
+                                        .pressure_sensor
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    sensor.measure(
+                                        messages,
+                                        system_prompt,
+                                        tool_defs,
+                                        self.config.token_budget as u64,
+                                    )
+                                };
+                                let preflight_freed = self
+                                    .preflight_pipeline
+                                    .run(messages, &pressure, budget.fresh_tail_count)
+                                    .await;
+                                if preflight_freed > 0 {
+                                    tracing::info!(
+                                        target: "agent_loop",
+                                        freed = preflight_freed,
+                                        "413 Tier 1: pre-flight freed tokens"
+                                    );
+                                }
+                            }
+
+                            // Tier 2: Emergency truncation (existing logic)
                             emergency_truncate(messages, token_gap, budget.fresh_tail_count);
+
+                            // Tier 3: Aggressive round drop with halved fresh_tail
+                            // Only needed if Tier 2 didn't free enough (checked on next
+                            // retry attempt via another 413). Apply preemptively on
+                            // attempt >= 2 to avoid wasting a round-trip.
+                            if ptl_attempts >= 2 {
+                                use super::context_budget::pipeline::{CompactionStage, RoundDrop};
+                                let aggressive_tail = (budget.fresh_tail_count / 2).max(2);
+                                let stage = RoundDrop {
+                                    token_budget: self.config.token_budget as u64,
+                                    ratio: 0.85,
+                                };
+                                let tier3_freed = stage.compact(messages, aggressive_tail);
+                                if tier3_freed > 0 {
+                                    tracing::info!(
+                                        target: "agent_loop",
+                                        freed = tier3_freed,
+                                        aggressive_tail,
+                                        "413 Tier 3: aggressive round drop freed tokens"
+                                    );
+                                }
+                            }
+
                             continue;
                         }
                         super::retry::RetryVerdict::Fallback { reason }
