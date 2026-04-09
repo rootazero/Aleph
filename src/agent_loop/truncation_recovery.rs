@@ -33,6 +33,18 @@ pub enum RecoveryPhase {
     Exhausted,
 }
 
+/// Decision from the escalation logic (standalone escalation API).
+#[derive(Debug)]
+pub enum EscalateDecision {
+    /// Increase max_tokens and retry the LLM call.
+    Retry {
+        new_max_tokens: u32,
+        continuation_prompt: String,
+    },
+    /// Give up — return assembled fragments as final output.
+    GiveUp { assembled: String },
+}
+
 /// Action returned by `on_truncation` telling the caller what to do next.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryAction {
@@ -192,6 +204,51 @@ impl TruncationRecovery {
     /// Total truncation attempts so far.
     pub fn attempts(&self) -> u32 {
         self.attempts
+    }
+
+    /// Record a truncated output fragment for later assembly (standalone API).
+    ///
+    /// Note: `on_truncation` already records fragments internally.
+    /// Use this method when building an escalation loop outside `on_truncation`.
+    pub fn record_truncation(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.fragments.push(text.to_string());
+        }
+    }
+
+    /// Try to escalate max_tokens using a doubling strategy (standalone API).
+    ///
+    /// Returns `Retry` with a new token limit, or `GiveUp` with assembled fragments
+    /// once escalation is no longer possible (after 3 attempts or when capped).
+    pub fn escalate(&mut self) -> EscalateDecision {
+        self.attempts += 1;
+
+        let current = self
+            .original_max_tokens
+            .unwrap_or(self.provider_max_tokens / 2);
+        let next = (current.saturating_mul(2u32.pow(self.attempts))).min(self.provider_max_tokens);
+        let prev = (current.saturating_mul(2u32.pow(self.attempts - 1))).min(self.provider_max_tokens);
+
+        if self.attempts <= 3 && next > prev {
+            EscalateDecision::Retry {
+                new_max_tokens: next,
+                continuation_prompt: format!(
+                    "Your previous response was truncated at the output token limit. \
+                     Continue exactly where you left off. Do not repeat content. \
+                     Limit increased to {} tokens.",
+                    next
+                ),
+            }
+        } else {
+            EscalateDecision::GiveUp {
+                assembled: self.fragments.join(""),
+            }
+        }
+    }
+
+    /// Assemble all recorded fragments into a single string (no deduplication).
+    pub fn assemble_fragments(&self) -> String {
+        self.fragments.join("")
     }
 }
 
@@ -513,5 +570,68 @@ mod tests {
     fn deduplicate_no_overlap() {
         let frags = vec!["hello ".to_owned(), "world".to_owned()];
         assert_eq!(deduplicate_and_join(&frags), "hello world");
+    }
+
+    // ── Escalation tests ──────────────────────────────────────────
+
+    #[test]
+    fn escalation_doubles_max_tokens() {
+        let mut recovery = TruncationRecovery::new(32768);
+        recovery.original_max_tokens = Some(4096);
+        recovery.record_truncation("partial output 1");
+        match recovery.escalate() {
+            EscalateDecision::Retry { new_max_tokens, .. } => {
+                assert!(
+                    new_max_tokens > 4096,
+                    "should increase, got {}",
+                    new_max_tokens
+                );
+            }
+            EscalateDecision::GiveUp { .. } => panic!("should retry on first attempt"),
+        }
+    }
+
+    #[test]
+    fn escalation_caps_at_provider_max() {
+        let mut recovery = TruncationRecovery::new(32768);
+        recovery.original_max_tokens = Some(16384);
+        recovery.record_truncation("p1");
+        match recovery.escalate() {
+            EscalateDecision::Retry { new_max_tokens, .. } => {
+                assert!(
+                    new_max_tokens <= 32768,
+                    "should cap at provider max, got {}",
+                    new_max_tokens
+                );
+            }
+            _ => panic!("should retry"),
+        }
+    }
+
+    #[test]
+    fn escalation_eventually_gives_up() {
+        let mut recovery = TruncationRecovery::new(16384);
+        recovery.original_max_tokens = Some(8192);
+        let mut gave_up = false;
+        for i in 0..10 {
+            recovery.record_truncation(&format!("frag{}", i));
+            match recovery.escalate() {
+                EscalateDecision::GiveUp { assembled } => {
+                    assert!(!assembled.is_empty(), "assembled should contain fragments");
+                    gave_up = true;
+                    break;
+                }
+                EscalateDecision::Retry { .. } => continue,
+            }
+        }
+        assert!(gave_up, "should eventually give up");
+    }
+
+    #[test]
+    fn assemble_fragments_joins_all() {
+        let mut recovery = TruncationRecovery::new(32768);
+        recovery.record_truncation("hello ");
+        recovery.record_truncation("world");
+        assert_eq!(recovery.assemble_fragments(), "hello world");
     }
 }
