@@ -1,0 +1,270 @@
+//! LINE Channel Implementation
+//!
+//! Integrates with LINE Messaging API using webhook-based inbound
+//! and HTTP API outbound.
+
+pub mod config;
+pub mod message_ops;
+pub mod types;
+pub mod webhook;
+
+use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::watch;
+
+use crate::gateway::channel::{
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
+    OutboundMessage, PairingData, SendResult,
+};
+
+pub use config::{LineConfig, LineDmPolicy, LineGroupPolicy};
+
+use message_ops::LineMessagingApi;
+use webhook::WebhookContext;
+
+    pub struct LineChannel {
+        info: ChannelInfo,
+        config: LineConfig,
+        channel_state: ChannelState,
+        api: Option<Arc<LineMessagingApi>>,
+        shutdown_tx: Option<watch::Sender<bool>>,
+    }
+
+impl LineChannel {
+    pub fn new(id: impl Into<String>, config: LineConfig) -> Self {
+        let info = ChannelInfo {
+            id: ChannelId::new(id),
+            name: "LINE".to_string(),
+            channel_type: "line".to_string(),
+            status: ChannelStatus::Disconnected,
+            capabilities: Self::capabilities(),
+        };
+
+        Self {
+            info,
+            config,
+            channel_state: ChannelState::new(100),
+            api: None,
+            shutdown_tx: None,
+        }
+    }
+
+    fn capabilities() -> ChannelCapabilities {
+        ChannelCapabilities {
+            attachments: true,
+            images: true,
+            audio: true,
+            video: true,
+            reactions: true,
+            replies: true,
+            editing: false,
+            deletion: true,
+            typing_indicator: true,
+            read_receipts: false,
+            rich_text: true,
+            max_message_length: 5000,
+            max_attachment_size: 50 * 1024 * 1024,
+            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
+        }
+    }
+}
+
+#[async_trait]
+impl Channel for LineChannel {
+    fn info(&self) -> &ChannelInfo {
+        &self.info
+    }
+
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
+    }
+
+    async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
+        Err(ChannelError::UnsupportedFeature(
+            "LINE does not support pairing codes".to_string(),
+        ))
+    }
+
+    async fn list_active_pairing_codes(&self) -> ChannelResult<Vec<(String, u64)>> {
+        Ok(Vec::new())
+    }
+
+    async fn start(&mut self) -> ChannelResult<()> {
+        self.config
+            .validate()
+            .map_err(ChannelError::ConfigError)?;
+
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
+        tracing::info!("Starting LINE channel...");
+
+        let api = Arc::new(LineMessagingApi::new(
+            self.config.channel_access_token.clone(),
+        ));
+        self.api = Some(api);
+
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        let webhook_ctx = WebhookContext {
+            config: self.config.clone(),
+            channel_id: self.info.id.clone(),
+            sender: self.channel_state.sender(),
+            status_handle: self.channel_state.status_handle(),
+        };
+
+        tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
+        tracing::info!(
+            "LINE channel started on {}:{}",
+            self.config.webhook_host,
+            self.config.webhook_port
+        );
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> ChannelResult<()> {
+        tracing::info!("Stopping LINE channel...");
+
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+
+        self.api = None;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
+        Ok(())
+    }
+
+    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        let api = self
+            .api
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+
+        let chat_id = message.conversation_id.as_str();
+
+        let msg_id = api
+            .push_text(chat_id, &message.text)
+            .await
+            .map_err(ChannelError::SendFailed)?;
+
+        Ok(SendResult {
+            message_id: MessageId::new(msg_id),
+            timestamp: chrono::Utc::now(),
+        })
+    }
+
+    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
+        Ok(())
+    }
+
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _reaction: &str,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "LINE reactions not yet implemented".to_string(),
+        ))
+    }
+
+    async fn edit(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _new_text: &str,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "LINE does not support message editing".to_string(),
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "LINE message deletion not yet implemented".to_string(),
+        ))
+    }
+}
+
+/// Factory for creating LINE channels.
+pub struct LineChannelFactory;
+
+#[async_trait]
+impl ChannelFactory for LineChannelFactory {
+    fn channel_type(&self) -> &str {
+        "line"
+    }
+
+    async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        let config: LineConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid LINE config: {}", e)))?;
+
+        config
+            .validate()
+            .map_err(ChannelError::ConfigError)?;
+
+        Ok(Box::new(LineChannel::new("line", config)))
+    }
+}
+
+fn line_factory_creator(
+    _config: crate::gateway::channel::ChannelConfig,
+) -> crate::gateway::channel::ChannelResult<std::sync::Arc<dyn ChannelFactory>> {
+    Ok(std::sync::Arc::new(LineChannelFactory))
+}
+
+pub fn register_with_plugin() {
+    crate::gateway::interfaces::plugin::register("line", line_factory_creator);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_channel_capabilities() {
+        let caps = LineChannel::capabilities();
+        assert!(caps.attachments);
+        assert!(caps.images);
+        assert!(caps.audio);
+        assert!(caps.video);
+        assert!(caps.reactions);
+        assert!(caps.replies);
+        assert!(!caps.editing);
+        assert!(caps.deletion);
+        assert!(caps.typing_indicator);
+        assert!(!caps.read_receipts);
+        assert!(caps.rich_text);
+        assert_eq!(caps.max_message_length, 5000);
+    }
+
+    #[test]
+    fn test_channel_creation() {
+        let config = LineConfig {
+            channel_access_token: "test_token".to_string(),
+            channel_secret: "test_secret".to_string(),
+            ..Default::default()
+        };
+        let channel = LineChannel::new("line-test", config);
+        assert_eq!(channel.info().id.as_str(), "line-test");
+        assert_eq!(channel.info().channel_type, "line");
+    }
+
+    #[test]
+    fn test_factory_channel_type() {
+        let factory = LineChannelFactory;
+        assert_eq!(factory.channel_type(), "line");
+    }
+}

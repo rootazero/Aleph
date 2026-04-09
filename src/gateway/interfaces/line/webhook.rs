@@ -64,7 +64,6 @@ pub async fn run_webhook_server(ctx: WebhookContext) {
 }
 
 struct ParsedRequest<'a> {
-    method: &'a str,
     path: &'a str,
     headers: Vec<(&'a str, &'a str)>,
     body: &'a [u8],
@@ -94,7 +93,6 @@ fn parse_http_request(data: &[u8]) -> Option<ParsedRequest<'_>> {
         return None;
     }
 
-    let method = parts[0];
     let path = parts[1];
 
     let mut headers = Vec::new();
@@ -109,7 +107,6 @@ fn parse_http_request(data: &[u8]) -> Option<ParsedRequest<'_>> {
     let body = &data[body_start..];
 
     Some(ParsedRequest {
-        method,
         path,
         headers,
         body,
@@ -341,7 +338,6 @@ mod tests {
     fn test_parse_http_request_simple() {
         let request = b"POST /line/webhook HTTP/1.1\r\nHost: localhost\r\nContent-Length: 13\r\nX-Line-Signature: abc123\r\n\r\n{\"type\":\"test\"}";
         let parsed = parse_http_request(request).unwrap();
-        assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.path, "/line/webhook");
         assert_eq!(parsed.get_header("content-length").unwrap(), "13");
         assert_eq!(parsed.get_header("x-line-signature").unwrap(), "abc123");
@@ -352,7 +348,6 @@ mod tests {
     fn test_parse_http_request_health() {
         let request = b"GET /health HTTP/1.1\r\n\r\n";
         let parsed = parse_http_request(request).unwrap();
-        assert_eq!(parsed.method, "GET");
         assert_eq!(parsed.path, "/health");
     }
 

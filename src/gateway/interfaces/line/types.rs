@@ -2,19 +2,21 @@
 //!
 //! Deserializable from LINE webhook payload.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// LINE event types received via webhook.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LineEvent {
     Message {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
         message: LineMessage,
     },
     Follow {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
     },
     #[serde(rename = "unfollow")]
@@ -22,24 +24,28 @@ pub enum LineEvent {
         source: LineSource,
     },
     Join {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
     },
     Leave {
         source: LineSource,
     },
     Postback {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
         postback: PostbackData,
     },
     Beacon {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
         beacon: BeaconData,
     },
     AccountLink {
-        reply_token: String,
+        #[serde(rename = "replyToken")]
+        reply_token: Option<String>,
         source: LineSource,
         link: LinkData,
     },
@@ -228,7 +234,7 @@ mod tests {
         let event: LineEvent = serde_json::from_str(json).unwrap();
         match event {
             LineEvent::Message {
-                reply_token,
+                reply_token: _,
                 source,
                 message,
             } => {

@@ -3,7 +3,7 @@
 //! Outbound message builders for LINE Messaging API v2 calls.
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// LINE Messaging API client.
 #[derive(Clone)]
@@ -94,11 +94,7 @@ impl LineMessagingApi {
         alt_text: &str,
         contents: FlexBubbleContents,
     ) -> Result<String, String> {
-        let payload = LinePushPayload::Flex(FlexPayload {
-            to: to.to_string(),
-            alt_text: alt_text.to_string(),
-            contents,
-        });
+        let payload = LinePushPayload::Flex(Box::new(FlexPayload::new(to, alt_text, contents)));
         self.push(&payload).await
     }
 
@@ -128,15 +124,11 @@ impl LineMessagingApi {
     /// Push a Template message.
     pub async fn push_template(
         &self,
-        to: &str,
-        alt_text: &str,
+        _to: &str,
+        _alt_text: &str,
         template: TemplatePayload,
     ) -> Result<String, String> {
-        let payload = LinePushPayload::Template(TemplatePayload {
-            to: to.to_string(),
-            alt_text: alt_text.to_string(),
-            contents: Box::new(template),
-        });
+        let payload = LinePushPayload::Template(template);
         self.push(&payload).await
     }
 }
@@ -147,7 +139,7 @@ impl LineMessagingApi {
 #[serde(untagged)]
 pub enum LinePushPayload {
     Text(TextPayload),
-    Flex(FlexPayload),
+    Flex(Box<FlexPayload>),
     Template(TemplatePayload),
 }
 
@@ -598,11 +590,11 @@ mod tests {
 
     #[test]
     fn test_build_flex_payload() {
-        let payload = LinePushPayload::Flex(FlexPayload::new(
+        let payload = LinePushPayload::Flex(Box::new(FlexPayload::new(
             "U123",
             "Flex message",
             FlexBubbleContents::new(),
-        ));
+        )));
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"type\":\"flex\""));
         assert!(json.contains("\"altText\":\"Flex message\""));

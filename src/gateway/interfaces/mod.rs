@@ -20,6 +20,7 @@
 //! - **XMPP**: XMPP raw TCP integration via RFC 6120/6121 + XEP-0045 MUC
 //! - **Nostr**: Nostr NIP-01 relay WebSocket + NIP-04 DM integration
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
+//! - **LINE**: LINE Messaging API webhook + REST API integration
 
 pub mod cli;
 pub mod plugin;
@@ -31,6 +32,7 @@ pub mod discord;
 pub mod email;
 pub mod feishu;
 pub mod irc;
+pub mod line;
 pub mod matrix;
 pub mod mattermost;
 pub mod msteams;
@@ -54,6 +56,7 @@ pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
 pub use email::{EmailChannel, EmailChannelFactory, EmailConfig};
 pub use feishu::{FeishuChannel, FeishuConfig};
 pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
+pub use line::{LineChannel, LineChannelFactory, LineConfig};
 pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
 pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
 pub use msteams::{MsTeamsChannel, MsTeamsConfig};
@@ -66,5 +69,6 @@ pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
 
 pub fn register_channel_plugins() {
+    line::register_with_plugin();
     telegram::register_with_plugin();
 }
