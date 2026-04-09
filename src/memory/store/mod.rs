@@ -308,6 +308,25 @@ pub trait MemoryStore: Send + Sync {
     ///
     /// Used by the lazy decay engine.
     async fn soft_delete_fact(&self, id: &str, reason: &str) -> Result<(), AlephError>;
+
+    /// Count facts in a given topic that belong to a domain other than `exclude_domain`.
+    async fn count_facts_by_topic_excluding_domain(
+        &self,
+        topic: &str,
+        exclude_domain: &str,
+    ) -> Result<u64, AlephError>;
+
+    /// Mark a fact as a tunnel candidate.
+    async fn set_tunnel_pending(&self, id: &str, pending: bool) -> Result<(), AlephError>;
+
+    /// Check if any tunnel candidates exist.
+    async fn has_tunnel_pending(&self) -> Result<bool, AlephError>;
+
+    /// Get tunnel candidate facts, up to `limit`.
+    async fn get_tunnel_candidates(&self, limit: usize) -> Result<Vec<MemoryFact>, AlephError>;
+
+    /// Clear tunnel_pending flag for all facts with the given topic.
+    async fn clear_tunnel_pending_by_topic(&self, topic: &str) -> Result<(), AlephError>;
 }
 
 // ---------------------------------------------------------------------------

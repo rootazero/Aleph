@@ -253,6 +253,35 @@ pub fn migrate_temporal_validity(conn: &Connection) -> Result<(), AlephError> {
 }
 
 // ---------------------------------------------------------------------------
+// Tunnel candidates: tunnel_pending column + index (migration)
+// ---------------------------------------------------------------------------
+
+const TUNNEL_PENDING_DDL: &str = r#"
+ALTER TABLE facts ADD COLUMN tunnel_pending INTEGER DEFAULT 0;
+"#;
+
+const TUNNEL_PENDING_INDEX_DDL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_facts_tunnel_pending ON facts(tunnel_pending) WHERE tunnel_pending = 1;
+"#;
+
+/// Add `tunnel_pending` column to the `facts` table, then create the partial
+/// index. Safe to call multiple times (idempotent).
+pub fn migrate_tunnel_pending(conn: &Connection) -> Result<(), AlephError> {
+    let has_col: bool = conn.prepare("SELECT tunnel_pending FROM facts LIMIT 0").is_ok();
+    if !has_col {
+        for stmt in TUNNEL_PENDING_DDL.split(';').filter(|s| !s.trim().is_empty()) {
+            conn.execute_batch(stmt).map_err(|e| {
+                AlephError::config(format!("Failed to add tunnel_pending column: {e}"))
+            })?;
+        }
+    }
+    conn.execute_batch(TUNNEL_PENDING_INDEX_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create tunnel_pending index: {e}"))
+    })?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -291,6 +320,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     migrate_palace_topology(conn)?;
     migrate_temporal_validity(conn)?;
+    migrate_tunnel_pending(conn)?;
 
     Ok(())
 }

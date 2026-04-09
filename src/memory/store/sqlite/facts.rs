@@ -1213,6 +1213,110 @@ impl MemoryStore for SqliteMemoryBackend {
     async fn soft_delete_fact(&self, id: &str, reason: &str) -> Result<(), AlephError> {
         self.invalidate_fact(id, reason).await
     }
+
+    // -- Tunnel candidate operations ----------------------------------------
+
+    async fn count_facts_by_topic_excluding_domain(
+        &self,
+        topic: &str,
+        exclude_domain: &str,
+    ) -> Result<u64, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM facts WHERE topic = ?1 AND domain != ?2 AND is_valid = 1",
+                rusqlite::params![topic, exclude_domain],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                AlephError::config(format!("count_facts_by_topic_excluding_domain failed: {e}"))
+            })?;
+
+        Ok(count as u64)
+    }
+
+    async fn set_tunnel_pending(&self, id: &str, pending: bool) -> Result<(), AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let flag: i32 = if pending { 1 } else { 0 };
+        conn.execute(
+            "UPDATE facts SET tunnel_pending = ?1 WHERE id = ?2",
+            rusqlite::params![flag, id],
+        )
+        .map_err(|e| AlephError::config(format!("set_tunnel_pending failed: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn has_tunnel_pending(&self) -> Result<bool, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let exists: i32 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM facts WHERE tunnel_pending = 1)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AlephError::config(format!("has_tunnel_pending failed: {e}")))?;
+
+        Ok(exists != 0)
+    }
+
+    async fn get_tunnel_candidates(&self, limit: usize) -> Result<Vec<MemoryFact>, AlephError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT * FROM facts WHERE tunnel_pending = 1 AND is_valid = 1 LIMIT ?1",
+            )
+            .map_err(|e| {
+                AlephError::config(format!("get_tunnel_candidates prepare failed: {e}"))
+            })?;
+
+        let results = stmt
+            .query_map(rusqlite::params![limit as i64], row_to_fact)
+            .map_err(|e| {
+                AlephError::config(format!("get_tunnel_candidates query failed: {e}"))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(results)
+    }
+
+    async fn clear_tunnel_pending_by_topic(&self, topic: &str) -> Result<(), AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        conn.execute(
+            "UPDATE facts SET tunnel_pending = 0 WHERE topic = ?1 AND tunnel_pending = 1",
+            rusqlite::params![topic],
+        )
+        .map_err(|e| {
+            AlephError::config(format!("clear_tunnel_pending_by_topic failed: {e}"))
+        })?;
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
