@@ -83,6 +83,7 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id).await?;
         Ok(fact_id)
     }
 
@@ -104,10 +105,12 @@ impl MemoryCommandHandler {
             reason: cmd.reason,
         };
 
+        let fact_id_ref = cmd.fact_id.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -122,10 +125,12 @@ impl MemoryCommandHandler {
             strength_at_invalidation: cmd.strength_at_invalidation,
         };
 
+        let fact_id_ref = cmd.fact_id.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -138,6 +143,7 @@ impl MemoryCommandHandler {
             new_strength: cmd.new_strength,
         };
 
+        let fact_id_ref = cmd.fact_id.clone();
         let envelope = MemoryEventEnvelope::new(
             cmd.fact_id,
             seq,
@@ -147,6 +153,7 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -167,6 +174,7 @@ impl MemoryCommandHandler {
             new_access_count: current_access_count + 1,
         };
 
+        let fact_id_ref = cmd.fact_id.clone();
         let envelope = MemoryEventEnvelope::new(
             cmd.fact_id,
             seq,
@@ -176,6 +184,7 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -202,6 +211,9 @@ impl MemoryCommandHandler {
 
         let count = envelopes.len();
         self.db.append_memory_events(&envelopes).await?;
+        for (fact_id, _, _) in &cmd.fact_ids_with_strength {
+            self.project_to_store(fact_id).await?;
+        }
         Ok(count)
     }
 
@@ -220,6 +232,7 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id).await?;
         Ok(fact_id)
     }
 
@@ -232,10 +245,12 @@ impl MemoryCommandHandler {
             reason: cmd.reason,
         };
 
+        let fact_id_ref = cmd.fact_id.clone();
         let envelope =
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
+        self.project_to_store(&fact_id_ref).await?;
         Ok(())
     }
 }
