@@ -1,6 +1,6 @@
 //! CRUD operations for memory_events table
 //!
-//! Implements MemoryEventStore for StateDatabase.
+//! Memory event persistence methods on StateDatabase.
 //! Follows the same pattern as events.rs (agent_events).
 
 use super::StateDatabase;
@@ -10,7 +10,7 @@ use rusqlite::params;
 
 impl StateDatabase {
     // =========================================================================
-    // Memory Events CRUD (MemoryEventStore implementation)
+    // Memory Events CRUD
     // =========================================================================
 
     /// Append a single memory event. Returns the assigned global ID.

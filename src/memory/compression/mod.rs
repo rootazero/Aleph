@@ -14,7 +14,6 @@
 //! - [`CompressionScheduler`]: Determines when to trigger compression
 //! - [`SignalDetector`]: Keyword-based detection for smart compression triggers
 
-mod archival;
 mod conflict;
 mod extractor;
 mod scheduler;
@@ -22,7 +21,6 @@ mod service;
 pub mod signal_detector;
 mod trigger;
 
-pub use archival::{ArchivalConfig, ArchivalResult, ArchivalService};
 pub use conflict::{ConflictConfig, ConflictDetector, ConflictResolution, MergeStrategy};
 pub use extractor::{ExtractedFact, FactExtractor};
 pub use scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};

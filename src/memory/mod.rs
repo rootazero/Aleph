@@ -122,7 +122,7 @@ pub use value_estimator::{
     CortexValueEstimator, ExperienceScore, LlmScorer, LlmScorerConfig, ValueEstimator,
 };
 pub use vfs::{
-    bootstrap_agent_context, compute_directory_hash, migrate_existing_facts_to_paths, L1Generator,
+    bootstrap_agent_context, compute_directory_hash, L1Generator,
 };
 
 // SQLite store types (Phase 3)
