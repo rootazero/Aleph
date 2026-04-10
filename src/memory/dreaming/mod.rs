@@ -32,7 +32,7 @@ use tracing::{info, warn};
 pub use stages::decay::MemoryDecayReport;
 pub use stages::{
     ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage, SummarizeStage,
-    TunnelDiscoveryStage, WikiIngestStage, WikiLintStage,
+    WikiLintStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster};
 
@@ -67,6 +67,8 @@ pub struct DreamContext {
     pub graph_decay_report: Option<GraphDecayReport>,
     /// Output: memory decay report populated by DecayStage.
     pub memory_decay_report: Option<MemoryDecayReport>,
+    /// Output: wiki lint report populated by WikiLintStage.
+    pub wiki_lint_report: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -89,15 +91,13 @@ impl DreamPipeline {
         self
     }
 
-    /// Build the standard daily pipeline (7 stages).
+    /// Build the standard daily pipeline (5 stages).
     pub fn daily() -> Self {
         Self::new()
             .stage(SummarizeStage)
             .stage(DriftDetectStage)
             .stage(ConsolidateStage)
-            .stage(WikiIngestStage)
             .stage(WikiLintStage)
-            .stage(TunnelDiscoveryStage)
             .stage(DecayStage)
     }
 
@@ -532,6 +532,7 @@ impl DreamDaemon {
             provider: self.provider.clone(),
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         let pipeline_start = Instant::now();
@@ -573,7 +574,7 @@ impl DreamDaemon {
                 .as_ref()
                 .map_or(0, |r| r.pruned_edges as u32),
             synthesis_count: report.synthesis_insights_count as u32,
-            errors: None,
+            errors: report.wiki_lint_summary.clone(),
             namespace: "owner".into(),
         };
         if let Err(e) = self.database.insert_dream_report(&persisted) {
@@ -699,13 +700,13 @@ mod tests {
     #[test]
     fn test_pipeline_builder() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 5);
     }
 
     #[test]
-    fn test_pipeline_weekly_has_eight_stages() {
+    fn test_pipeline_weekly_has_six_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 8);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 }
 
@@ -782,6 +783,7 @@ mod pipeline_integration_tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         (ctx, tmp)
@@ -812,14 +814,14 @@ mod pipeline_integration_tests {
     }
 
     #[tokio::test]
-    async fn daily_pipeline_has_seven_stages() {
+    async fn daily_pipeline_has_five_stages() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 5);
     }
 
     #[tokio::test]
-    async fn weekly_pipeline_has_eight_stages() {
+    async fn weekly_pipeline_has_six_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 8);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 }
