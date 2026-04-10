@@ -60,6 +60,7 @@ pub mod media_tool;
 pub mod media_tools;
 pub mod memory_browse;
 pub mod memory_explore;
+pub mod memory_timeline;
 pub mod memory_search;
 pub mod meta_tools;
 pub mod pdf_generate;
@@ -138,6 +139,7 @@ pub use media_tools::{
 };
 pub use memory_browse::{MemoryBrowseArgs, MemoryBrowseOutput, MemoryBrowseTool};
 pub use memory_explore::{MemoryExploreArgs, MemoryExploreOutput, MemoryExploreTool};
+pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
 pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, PathCluster};
 pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,

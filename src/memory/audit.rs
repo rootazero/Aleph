@@ -3,6 +3,7 @@
 //! Provides audit logging for memory operations, enabling explainability
 //! of why facts were created, accessed, updated, or invalidated.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Actor performing the memory operation
@@ -182,7 +183,7 @@ impl AuditEntry {
 }
 
 /// Explanation of a fact's lifecycle
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct FactExplanation {
     /// The fact ID
     pub fact_id: String,
@@ -201,7 +202,7 @@ pub struct FactExplanation {
 }
 
 /// A single explained event in a fact's lifecycle
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExplainedEvent {
     /// Unix timestamp
     pub timestamp: i64,
