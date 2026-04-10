@@ -371,6 +371,12 @@ Change:
 - Send candidates to LLM: "Is this fact worth promoting from ShortTerm to LongTerm?"
 - Preserve pruning logic (strength < 0.1 non-Core facts invalidated)
 
+### LLM Unavailability Fallback
+
+When LLM is unavailable (offline, API failure), LLM-driven stages (Summarize, Drift, Consolidate, Tunnel) skip their core logic gracefully. Only Decay (pure math) always executes. Specifically:
+- **Consolidate**: skips promotion, still executes pruning (strength < 0.1 invalidation)
+- **Drift/Tunnel/Summarize**: skip entirely, log warning, return empty results
+
 ### Pipeline Stage Registration
 
 ```rust
