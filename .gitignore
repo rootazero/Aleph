@@ -59,10 +59,7 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 # Git worktrees
 .worktrees/
 
-# Docs: only docs/images/ and docs/reference/ are tracked
-docs/*
-!docs/reference/
-!docs/images/
+# Docs
 _bmad/
 
 # Test / scratch / local files
