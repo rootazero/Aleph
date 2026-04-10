@@ -53,16 +53,23 @@ impl ValueEstimator {
         let combined_text = format!("{} {}", entry.user_input, entry.ai_output);
         let mut score: f32 = 0.5;
 
-        // Simple heuristics: length as a proxy for information density
+        let lower = combined_text.to_lowercase();
+
+        // High-value signals: preferences, decisions, personal info
+        let high_value_keywords = ["prefer", "always", "never", "decide", "i use", "i like", "i want", "important"];
+        if high_value_keywords.iter().any(|kw| lower.contains(kw)) {
+            score += 0.30;
+        }
+
+        // Length as a proxy for information density
         let text_length = combined_text.len();
         if text_length > 500 {
             score += 0.10;
-        } else if text_length < 50 {
+        } else if text_length < 20 {
             score -= 0.20;
         }
 
         // Greetings are low-value
-        let lower = combined_text.to_lowercase();
         if lower.starts_with("hello") || lower.starts_with("hi ") || lower.trim() == "hi" {
             score -= 0.30;
         }
