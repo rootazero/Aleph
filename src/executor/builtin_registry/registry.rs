@@ -199,6 +199,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
     pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
+    /// Wiki management tool (optional - requires memory_db)
+    pub(crate) wiki_manage_tool: Option<crate::builtin_tools::wiki_manage::WikiManageTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -906,6 +908,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "skill_manage" => {
                 Box::pin(async move { self.skill_manage_tool.call_json(arguments).await })
+            }
+            "wiki_manage" => {
+                if let Some(ref tool) = self.wiki_manage_tool {
+                    let tool = tool.clone();
+                    Box::pin(async move { tool.call_json(arguments).await })
+                } else {
+                    Box::pin(async move {
+                        Err(AlephError::tool(
+                            "wiki_manage tool is not available: memory backend not configured",
+                        ))
+                    })
+                }
             }
 
             _ => {

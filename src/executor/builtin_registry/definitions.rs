@@ -439,6 +439,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Toggle or configure a skill (enable/disable, change prompt scope)",
         requires_config: false,
     },
+    BuiltinToolDefinition {
+        name: "wiki_manage",
+        description: "Create, update, query, delete, and list wiki knowledge pages",
+        requires_config: true,
+    },
     // ACP delegate tool — unified delegation to any external CLI agent.
     // Requires AcpHarnessManager; execution returns clear error if harness unavailable.
     BuiltinToolDefinition {
@@ -608,6 +613,8 @@ pub fn create_tool_boxed(
                 crate::skill::SkillSystem::new(),
             ),
         )),
+        // wiki_manage requires memory backend — cannot create standalone fallback
+        "wiki_manage" => None,
         _ => None,
     }
 }

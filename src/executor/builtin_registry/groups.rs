@@ -34,6 +34,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &[
             "memory_search",
             "memory_browse",
+            "wiki_manage",
             "session_search",
             "skill_list",
             "skill_read",

@@ -700,6 +700,39 @@ impl BuiltinToolRegistry {
         }
         info!("Registered skill management tools (skill_status, skill_install, skill_manage)");
 
+        // Wiki management tool — requires memory backend for fact storage
+        let wiki_manage_tool = if let Some(ref db) = config.memory_db {
+            let data_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".aleph")
+                .join("data");
+            let wiki_dir = data_dir.join("wiki");
+            let git = crate::wiki::git::WikiGitManager::new(&wiki_dir);
+            let tool = crate::builtin_tools::wiki_manage::WikiManageTool::new(
+                data_dir,
+                db.clone(),
+                git,
+            );
+
+            // Register wiki_manage tool schema
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered wiki_manage tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config
             .tool_policy
@@ -833,6 +866,7 @@ impl BuiltinToolRegistry {
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
+            wiki_manage_tool,
             tools,
         }
     }
