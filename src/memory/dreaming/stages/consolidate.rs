@@ -4,9 +4,10 @@
 //! - **Pruning**: non-Core facts with strength < pruning threshold are invalidated.
 //! - **Promotion**: STM facts that meet the strength threshold are promoted to LongTerm.
 //!
-//! NOTE: The previous 8-dimensional algorithmic scorer (PromotionScorer) has been
-//! removed as part of the LLM sovereignty refactor. Task 8 will replace this with
-//! LLM-based promotion judgment.
+//! The previous 8-dimensional algorithmic scorer (PromotionScorer) was removed
+//! as part of the LLM sovereignty refactor. Promotion now uses a simple
+//! strength-threshold filter. LLM-based promotion judgment will be wired
+//! when the dreaming pipeline gains LLM calling infrastructure.
 
 use async_trait::async_trait;
 use tracing::info;
@@ -18,7 +19,7 @@ use crate::memory::dreaming::{now_timestamp, should_prune, ConsolidationPipeline
 use crate::memory::store::MemoryStore;
 
 /// Consolidates short-term memory facts into long-term memory.
-/// Promotion logic will be replaced by LLM-based scoring in Task 8.
+/// Uses simple strength-threshold promotion (LLM-based judgment deferred to future work).
 pub struct ConsolidateStage;
 
 #[async_trait]
@@ -57,8 +58,7 @@ impl DreamStage for ConsolidateStage {
                 continue;
             }
 
-            // Stub promotion: promote facts that exceed the strength threshold.
-            // Task 8 will replace this with LLM-based judgment.
+            // Simple strength-threshold promotion (replaces previous 8D scorer).
             if fact.strength >= config.strength_threshold {
                 fact.tier = MemoryTier::LongTerm;
                 ctx.database.update_fact(&fact).await?;
