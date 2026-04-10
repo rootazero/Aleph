@@ -168,15 +168,6 @@ impl WikiManageTool {
             .ensure_agent_dir(agent_id)
             .map_err(AlephError::tool)?;
 
-        // Check if page already exists
-        let file_path = wiki_file_path(&self.data_dir, agent_id, page_slug);
-        if file_path.exists() {
-            return Err(AlephError::tool(format!(
-                "Wiki page '{}' already exists. Use 'update' action instead.",
-                page_slug
-            )));
-        }
-
         // Build frontmatter + content
         let now = chrono::Local::now().format("%Y-%m-%d").to_string();
         let full_content = format!(
@@ -184,8 +175,24 @@ impl WikiManageTool {
             title, now, now, content
         );
 
-        // Write the file
-        std::fs::write(&file_path, &full_content)
+        // Atomic create: OpenOptions::create_new ensures the file doesn't already exist,
+        // avoiding TOCTOU race between exists() check and write.
+        let file_path = wiki_file_path(&self.data_dir, agent_id, page_slug);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    AlephError::tool(format!(
+                        "Wiki page '{}' already exists. Use 'update' action instead.",
+                        page_slug
+                    ))
+                } else {
+                    AlephError::tool(format!("Failed to create wiki page: {}", e))
+                }
+            })?;
+        std::io::Write::write_all(&mut file, full_content.as_bytes())
             .map_err(|e| AlephError::tool(format!("Failed to write wiki page: {}", e)))?;
 
         // Create wiki fact in memory store
@@ -383,11 +390,8 @@ impl WikiManageTool {
             )));
         }
 
-        // Delete the file
-        std::fs::remove_file(&file_path)
-            .map_err(|e| AlephError::tool(format!("Failed to delete wiki page: {}", e)))?;
-
-        // Invalidate the fact
+        // Invalidate the fact first (recoverable), then delete the file.
+        // An orphan file is harmless; a dangling fact pointing to a missing file is not.
         let vfs_path = wiki_path(agent_id, page_slug);
         if let Some(fact) = self.find_wiki_fact_by_path(&vfs_path).await? {
             self.database
@@ -395,6 +399,10 @@ impl WikiManageTool {
                 .await
                 .map_err(|e| AlephError::tool(format!("Failed to invalidate wiki fact: {}", e)))?;
         }
+
+        // Delete the file
+        std::fs::remove_file(&file_path)
+            .map_err(|e| AlephError::tool(format!("Failed to delete wiki page: {}", e)))?;
 
         // Regenerate index
         self.regenerate_index(agent_id).await?;
