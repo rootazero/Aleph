@@ -13,12 +13,12 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use reqwest_eventsource::{Event, EventSource};
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use super::config::{EventSourceConfig, SignalConfig};
 use super::error::SignalError;
 
-const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// Signal message length limit (characters).
 pub(crate) const SIGNAL_MSG_LIMIT: usize = 65535;
@@ -49,6 +49,7 @@ impl SignalMonitor {
     /// * `config` - Signal configuration (api_url, phone_number, etc.)
     /// * `channel_id` - Channel ID for inbound messages
     /// * `inbound_tx` - Sender for inbound messages
+    /// * `shutdown_rx` - Shutdown signal receiver
     ///
     /// # Returns
     ///
@@ -58,9 +59,10 @@ impl SignalMonitor {
         config: SignalConfig,
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
+        shutdown_rx: watch::Receiver<bool>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            Self::run_sse_loop(client, config, channel_id, inbound_tx).await;
+            Self::run_sse_loop(client, config, channel_id, inbound_tx, shutdown_rx).await;
         })
     }
 
@@ -70,6 +72,7 @@ impl SignalMonitor {
         config: SignalConfig,
         channel_id: ChannelId,
         inbound_tx: InboundMessageSender,
+        mut shutdown_rx: watch::Receiver<bool>,
     ) {
         let EventSourceConfig {
             reconnect_delay_ms,
@@ -91,35 +94,45 @@ impl SignalMonitor {
         let mut retry_count = 0u32;
 
         loop {
-            match Self::connect_and_stream(&client, &sse_url, &channel_id, &config, &inbound_tx).await
-            {
-                Ok(()) => {
-                    tracing::debug!("Signal SSE stream ended normally");
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, retry_count, "Signal SSE stream error");
-
-                    if retry_count >= max_retries {
-                        tracing::error!(
-                            error = %e,
-                            retry_count,
-                            "Signal SSE max retries exceeded, stopping monitor"
-                        );
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        tracing::info!("Signal SSE monitor shutting down");
                         break;
                     }
+                    continue;
+                }
+                result = Self::connect_and_stream(&client, &sse_url, &channel_id, &config, &inbound_tx) => {
+                    match result {
+                        Ok(()) => {
+                            tracing::debug!("Signal SSE stream ended normally");
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, retry_count, "Signal SSE stream error");
 
-                    // Exponential backoff: delay * multiplier^retry_count
-                    let backoff = (reconnect_delay_ms as f32).mul_add(
-                        backoff_multiplier.powi(retry_count as i32),
-                        0.0,
-                    );
-                    let backoff = Duration::from_millis(backoff as u64).min(MAX_BACKOFF);
+                            if retry_count >= max_retries {
+                                tracing::error!(
+                                    error = %e,
+                                    retry_count,
+                                    "Signal SSE max retries exceeded, stopping monitor"
+                                );
+                                break;
+                            }
 
-                    tracing::info!(retry_count, delay_ms = backoff.as_millis(), "Retrying Signal SSE connection");
-                    tokio::time::sleep(backoff).await;
+                            // Exponential backoff: delay * multiplier^retry_count
+                            let backoff = (reconnect_delay_ms as f32).mul_add(
+                                backoff_multiplier.powi(retry_count as i32),
+                                0.0,
+                            );
+                            let backoff = Duration::from_millis(backoff as u64).min(MAX_BACKOFF);
 
-                    retry_count = retry_count.saturating_add(1);
+                            tracing::info!(retry_count, delay_ms = backoff.as_millis(), "Retrying Signal SSE connection");
+                            tokio::time::sleep(backoff).await;
+
+                            retry_count = retry_count.saturating_add(1);
+                        }
+                    }
                 }
             }
         }
@@ -190,38 +203,6 @@ impl SignalMonitor {
 }
 
 impl SignalMessageOps {
-    /// Poll for new messages from signal-cli REST API.
-    ///
-    /// Uses `GET /v1/receive/{phone_number}` to fetch pending messages.
-    pub async fn poll_messages(
-        client: &reqwest::Client,
-        api_url: &str,
-        phone: &str,
-    ) -> Result<Vec<serde_json::Value>, ChannelError> {
-        let url = format!("{api_url}/v1/receive/{phone}");
-
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ChannelError::ReceiveFailed(format!("Signal poll failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::ReceiveFailed(format!(
-                "Signal poll error ({status}): {body}"
-            )));
-        }
-
-        let messages: Vec<serde_json::Value> = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::ReceiveFailed(format!("Signal poll parse error: {e}")))?;
-
-        Ok(messages)
-    }
-
     /// Send a message via signal-cli REST API.
     ///
     /// Uses `POST /v2/send` with the bot's phone number as sender.
@@ -369,81 +350,6 @@ impl SignalMessageOps {
             raw: Some(msg.clone()),
             metadata: vec![],
         })
-    }
-
-    /// Run the polling loop for receiving messages from signal-cli.
-    ///
-    /// Polls `GET /v1/receive/{phone}` at the configured interval.
-    /// Handles:
-    /// - Periodic polling with configurable interval
-    /// - Message filtering by allowed users
-    /// - Graceful shutdown via watch channel
-    /// - Exponential backoff on errors
-    pub async fn run_poll_loop(
-        client: reqwest::Client,
-        config: SignalConfig,
-        channel_id: ChannelId,
-        inbound_tx: InboundMessageSender,
-        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    ) {
-        let poll_interval = Duration::from_secs(config.poll_interval_secs);
-        let mut backoff = INITIAL_BACKOFF;
-
-        tracing::info!(
-            "Signal poll loop started (polling {} every {:?})",
-            config.api_url,
-            poll_interval
-        );
-
-        loop {
-            // Wait for poll interval or shutdown
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        tracing::info!("Signal poll loop shutting down");
-                        break;
-                    }
-                    continue;
-                }
-                _ = tokio::time::sleep(poll_interval) => {}
-            }
-
-            // Check shutdown before polling
-            if *shutdown_rx.borrow() {
-                break;
-            }
-
-            // Poll for new messages
-            match Self::poll_messages(&client, &config.api_url, &config.phone_number).await {
-                Ok(messages) => {
-                    // Reset backoff on success
-                    backoff = INITIAL_BACKOFF;
-
-                    for msg in &messages {
-                        if let Some(inbound) =
-                            Self::convert_message(msg, &channel_id, &config.phone_number, &config)
-                        {
-                            tracing::debug!(
-                                "Signal message from {}: {}",
-                                inbound.sender_id.as_str(),
-                                &inbound.text[..inbound.text.len().min(50)]
-                            );
-                            if inbound_tx.send(inbound).is_err() {
-                                tracing::error!("Signal: inbound channel closed");
-                                return;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Signal poll error: {e}, retrying in {backoff:?}");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
-                }
-            }
-        }
-
-        tracing::info!("Signal poll loop stopped");
     }
 }
 
@@ -803,6 +709,7 @@ mod tests {
     #[tokio::test]
     async fn test_signal_monitor_start_returns_join_handle() {
         use crate::gateway::channel::ChannelState;
+        use tokio::sync::watch;
 
         let state = ChannelState::new(100);
         let inbound_tx = state.sender();
@@ -816,11 +723,14 @@ mod tests {
             ..Default::default()
         };
 
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+
         let handle = SignalMonitor::start(
             reqwest::Client::new(),
             config,
             ChannelId::new("signal"),
             inbound_tx,
+            shutdown_rx,
         );
 
         assert!(!handle.is_finished());

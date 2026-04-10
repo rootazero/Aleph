@@ -124,19 +124,18 @@ impl Channel for SignalChannel {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Spawn polling loop
+        // Spawn SSE monitor
         let client = self.client.clone();
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
         let inbound_tx = self.channel_state.sender();
         let status = self.channel_state.status_handle();
 
+        let handle = SignalMonitor::start(client, config, channel_id, inbound_tx, shutdown_rx);
+
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
-
-            SignalMessageOps::run_poll_loop(client, config, channel_id, inbound_tx, shutdown_rx)
-                .await;
-
+            let _ = handle.await;
             *status.write().await = ChannelStatus::Disconnected;
         });
 
