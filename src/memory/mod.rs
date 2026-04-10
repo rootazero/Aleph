@@ -22,7 +22,6 @@ pub mod cleanup;
 pub mod cli;
 pub mod composer;
 pub mod compression;
-pub mod consolidation;
 pub mod content_scanner;
 pub mod context;
 pub mod context_comptroller;
@@ -32,7 +31,6 @@ pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
 pub mod events;
-pub mod evolution;
 pub mod fact_retrieval;
 pub mod graph;
 pub mod hybrid_retrieval;
@@ -41,10 +39,8 @@ pub mod lazy_decay;
 pub mod namespace;
 pub mod noise_filter;
 pub mod performance_monitor;
-pub mod promotion;
 pub mod query_expander;
 pub mod reembed;
-pub mod reflection;
 pub mod rerank;
 pub mod reranker;
 pub mod retrieval;
@@ -82,10 +78,6 @@ pub use compression::{
     CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,
 };
-pub use consolidation::{
-    ConsolidatedFact, ConsolidationAnalyzer, ConsolidationConfig, FrequentFact, ProfileCategory,
-    UserProfile,
-};
 pub use context::{
     compute_parent_path, CompressionResult, CompressionSession, ContextAnchor, FactSource,
     FactSpecificity, FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
@@ -117,10 +109,6 @@ pub use events::{
     projector::EventProjector,
     traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
-};
-pub use evolution::{
-    ContradictionDetector, EvolutionChain, EvolutionNode, EvolutionResolver, FactEvolution,
-    ResolutionStrategy,
 };
 pub use fact_retrieval::{
     CrossWorkspaceFact, FactRetrieval, FactRetrievalConfig, RetrievalResult, SmartRetrievalResult,
