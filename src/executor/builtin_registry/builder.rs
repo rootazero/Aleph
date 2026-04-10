@@ -22,9 +22,10 @@ use crate::builtin_tools::skill_reader::{
 };
 use crate::builtin_tools::{
     AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileEditTool, FileOpsTool,
-    FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool, MemorySearchTool,
-    PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool,
-    SelfManageTool, SystemTool, VaultStoreTool, WebFetchTool,
+    FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool,
+    MemoryExploreTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool,
+    ReadConfigGuideTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool,
+    WebFetchTool,
 };
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -165,6 +166,7 @@ impl BuiltinToolRegistry {
         let (
             memory_search_tool,
             memory_browse_tool,
+            memory_explore_tool,
             memory_workspace_handle,
             memory_session_key_handle,
         ) = if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
@@ -177,10 +179,12 @@ impl BuiltinToolRegistry {
             let sk_handle = search_tool.default_session_key_handle();
             let mut browse_tool = MemoryBrowseTool::new(db.clone());
             browse_tool.set_workspace_handle(Arc::clone(&ws_handle));
-            info!("Created memory_search and memory_browse tools");
+            let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
+            info!("Created memory_search, memory_browse, and memory_explore tools");
             (
                 Some(search_tool),
                 Some(browse_tool),
+                Some(explore_tool),
                 Some(ws_handle),
                 Some(sk_handle),
             )
@@ -188,10 +192,18 @@ impl BuiltinToolRegistry {
             let browse_tool = MemoryBrowseTool::new(db.clone());
             let ws_handle = browse_tool.default_workspace_handle();
             info!("Created memory_browse tool (no embedder for memory_search)");
-            (None, Some(browse_tool), Some(ws_handle), None)
+            (None, Some(browse_tool), None, Some(ws_handle), None)
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
+
+        // Create memory timeline tool if StateDatabase is provided
+        let timeline_tool = config.state_db.as_ref().map(|sdb| {
+            let traveler = Arc::new(crate::memory::events::traveler::MemoryTimeTraveler::new(
+                Arc::clone(sdb),
+            ));
+            crate::builtin_tools::MemoryTimelineTool::new(traveler)
+        });
 
         // Create image generation tool if generation registry is provided
         let image_generate_tool = config.generation_registry.as_ref().map(|registry| {
@@ -261,6 +273,8 @@ impl BuiltinToolRegistry {
             &mut tools,
             &memory_search_tool,
             &memory_browse_tool,
+            &memory_explore_tool,
+            &timeline_tool,
             &image_generate_tool,
             &vault_store_tool,
             &config,
@@ -769,6 +783,8 @@ impl BuiltinToolRegistry {
             scratchpad_tool,
             memory_search_tool,
             memory_browse_tool,
+            memory_explore_tool,
+            memory_timeline_tool: timeline_tool,
             memory_workspace_handle,
             memory_session_key_handle,
             dispatcher_registry: config.dispatcher_registry.clone(),
@@ -1073,6 +1089,8 @@ impl BuiltinToolRegistry {
         tools: &mut HashMap<String, UnifiedTool>,
         memory_search_tool: &Option<MemorySearchTool>,
         memory_browse_tool: &Option<MemoryBrowseTool>,
+        memory_explore_tool: &Option<MemoryExploreTool>,
+        memory_timeline_tool: &Option<crate::builtin_tools::MemoryTimelineTool>,
         image_generate_tool: &Option<ImageGenerateTool>,
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
@@ -1116,6 +1134,30 @@ impl BuiltinToolRegistry {
                 .unwrap_or_default(),
             );
             info!("Registered memory.browse tool in BuiltinToolRegistry");
+        }
+        if memory_explore_tool.is_some() {
+            reg(
+                tools,
+                "memory_explore",
+                MemoryExploreTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::memory_explore::MemoryExploreArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered memory_explore tool in BuiltinToolRegistry");
+        }
+        if memory_timeline_tool.is_some() {
+            reg(
+                tools,
+                "memory_timeline",
+                crate::builtin_tools::MemoryTimelineTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::memory_timeline::MemoryTimelineArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered memory_timeline tool in BuiltinToolRegistry");
         }
 
         // Vault store tool

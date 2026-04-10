@@ -90,4 +90,6 @@ pub struct BuiltinToolConfig {
     pub session_store: Option<Arc<dyn crate::teams::sessions::SessionStore>>,
     /// Message store for disbandment cleanup (expire pending messages)
     pub message_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
+    /// State database for memory_timeline tool (event sourcing store)
+    pub state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
 }

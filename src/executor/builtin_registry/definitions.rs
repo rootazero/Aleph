@@ -148,6 +148,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires memory_db
     },
     BuiltinToolDefinition {
+        name: "memory_explore",
+        description: "Explore related knowledge by following semantic connections from a starting query across multiple hops",
+        requires_config: true, // Requires memory_db + embedder
+    },
+    BuiltinToolDefinition {
+        name: "memory_timeline",
+        description: "View the complete lifecycle of a memory fact — creation, modification, decay, invalidation timeline",
+        requires_config: true, // Requires StateDatabase
+    },
+    BuiltinToolDefinition {
         name: "session_list",
         description: "List sessions accessible to this agent for cross-session communication",
         requires_config: true, // Requires gateway_context

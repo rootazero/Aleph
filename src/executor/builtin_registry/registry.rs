@@ -104,6 +104,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory browse tool instance (optional - requires memory_db)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
+    /// Memory explore tool instance (optional - requires memory_db + embedder)
+    pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
+    /// Memory timeline tool instance (optional - requires StateDatabase)
+    pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
     /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -469,6 +473,18 @@ impl ToolRegistry for BuiltinToolRegistry {
             "memory_browse" => Box::pin(async move {
                 let tool = self.memory_browse_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("memory_browse not available: no memory backend configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "memory_explore" => Box::pin(async move {
+                let tool = self.memory_explore_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("memory_explore not available: no memory backend or embedding provider configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "memory_timeline" => Box::pin(async move {
+                let tool = self.memory_timeline_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("memory_timeline not available: no event store configured")
                 })?;
                 tool.call_json(arguments).await
             }),
