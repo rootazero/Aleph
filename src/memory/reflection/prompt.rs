@@ -16,7 +16,33 @@ Output EXACTLY this markdown format:
 - {symptom}: {root cause} → {fix or prevention strategy}
 
 ## Skills
-- {skill name}: {concise reusable steps or key insight}
+For any non-trivial, reusable knowledge discovered this session (5+ steps,
+likely to recur, or hard-won insight), output a complete skill definition
+inside a ```yaml code block:
+
+```yaml
+- name: kebab-case-name
+  category: coding | debugging | workflow | knowledge | communication
+  description: One-line description (max 100 chars)
+  content: |
+    # Skill Title
+
+    ## When to Use
+    Trigger conditions...
+
+    ## Steps
+    1. ...
+
+    ## Pitfalls
+    - ...
+```
+
+Rules for skills:
+- Only extract if the knowledge is REUSABLE across sessions
+- If an existing skill was used and found outdated, output it with updated content
+- If a skill was used and confirmed correct, do NOT re-output it
+- Maximum 3 skills per reflection
+- You may also use the old bullet format (- skill name: description) for simple notes
 
 ## Open Loops
 - {Follow-up actions with action verbs: investigate, verify, update, test, check}
@@ -26,10 +52,9 @@ Rules:
 2. Be specific and concrete — avoid vague statements
 3. Invariants must be TRUE ACROSS SESSIONS, not session-specific
 4. Lessons MUST have the symptom: cause → fix format
-5. Skills: only include if the approach is non-trivial (5+ steps or non-obvious) and likely to recur
-6. Open Loops MUST start with an action verb
-7. If a section has no items, write: - (none)
-8. Do NOT repeat facts that are in the ALREADY EXTRACTED list below"#
+5. Open Loops MUST start with an action verb
+6. If a section has no items, write: - (none)
+7. Do NOT repeat facts that are in the ALREADY EXTRACTED list below"#
 }
 
 /// Build the reflection user prompt with conversation context.
@@ -66,6 +91,8 @@ mod tests {
         assert!(prompt.contains("## Lessons"));
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("## Open Loops"));
+        assert!(prompt.contains("```yaml"));
+        assert!(prompt.contains("category:"));
     }
 
     #[test]

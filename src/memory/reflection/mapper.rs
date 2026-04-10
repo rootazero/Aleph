@@ -102,6 +102,21 @@ pub fn map_to_facts(output: &ReflectionOutput) -> Vec<MemoryFact> {
         facts.push(fact);
     }
 
+    // Structured Skills → ShortTerm tier, Skill type, skills/ path prefix
+    for skill in &output.skills_structured {
+        let path = skill.vfs_path();
+        let content = skill.fact_content();
+        let fact = MemoryFact::new(content, FactType::Skill, Vec::new())
+            .with_confidence(0.80)
+            .with_tier(MemoryTier::ShortTerm)
+            .with_scope(MemoryScope::Persona)
+            .with_layer(MemoryLayer::L1Overview)
+            .with_category(MemoryCategory::Patterns)
+            .with_path(path)
+            .with_fact_source(FactSource::Extracted);
+        facts.push(fact);
+    }
+
     // Open Loops are intentionally skipped — they represent actions, not facts.
 
     facts
@@ -226,5 +241,28 @@ mod tests {
         let output = ReflectionOutput::default();
         let facts = map_to_facts(&output);
         assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn maps_structured_skills_to_skill_facts() {
+        use crate::skill::SkillExtraction;
+
+        let output = ReflectionOutput {
+            skills_structured: vec![SkillExtraction {
+                name: "rust-lifetime-debugging".to_string(),
+                category: "coding".to_string(),
+                description: "Debug lifetime errors".to_string(),
+                content: "# Steps\n1. Check scope".to_string(),
+                is_update: false,
+            }],
+            ..Default::default()
+        };
+        let facts = map_to_facts(&output);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].fact_type, FactType::Skill);
+        assert_eq!(facts[0].tier, MemoryTier::ShortTerm);
+        assert_eq!(facts[0].path, "aleph://skills/coding/rust-lifetime-debugging/");
+        assert!(facts[0].content.contains("Debug lifetime errors"));
+        assert!(facts[0].content.contains("Check scope"));
     }
 }

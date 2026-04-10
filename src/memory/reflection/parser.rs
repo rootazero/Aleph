@@ -1,5 +1,7 @@
 //! Parses LLM-generated session reflection markdown into structured categories.
 
+use crate::skill::SkillExtraction;
+
 /// Structured output from session-end reflection parsing.
 #[derive(Debug, Clone, Default)]
 pub struct ReflectionOutput {
@@ -7,6 +9,7 @@ pub struct ReflectionOutput {
     pub derived: Vec<String>,
     pub lessons: Vec<LessonItem>,
     pub skills: Vec<String>,
+    pub skills_structured: Vec<SkillExtraction>,
     pub open_loops: Vec<String>,
 }
 
@@ -39,12 +42,33 @@ enum Section {
 ///
 /// Bullet items (`- `) under each header are collected.
 /// Placeholder values like "(none)" are skipped.
+///
+/// In the Skills section, ` ```yaml ` fences are detected and the enclosed
+/// block is parsed as a list of structured skill entries.
 pub fn parse_reflection(text: &str) -> ReflectionOutput {
     let mut out = ReflectionOutput::default();
     let mut section = Section::Unknown;
+    let mut in_yaml_block = false;
+    let mut yaml_lines: Vec<&str> = Vec::new();
 
     for line in text.lines() {
         let trimmed = line.trim();
+
+        // Handle YAML block termination
+        if in_yaml_block {
+            if trimmed == "```" {
+                // End of YAML block — parse accumulated lines
+                let yaml_text = yaml_lines.join("\n");
+                if let Some(structured) = parse_skill_yaml(&yaml_text) {
+                    out.skills_structured.extend(structured);
+                }
+                in_yaml_block = false;
+                yaml_lines.clear();
+            } else {
+                yaml_lines.push(line);
+            }
+            continue;
+        }
 
         // Detect section headers
         if let Some(header) = trimmed.strip_prefix("## ") {
@@ -62,6 +86,13 @@ pub fn parse_reflection(text: &str) -> ReflectionOutput {
             } else {
                 Section::Unknown
             };
+            continue;
+        }
+
+        // Detect YAML fence opening inside Skills section
+        if section == Section::Skills && (trimmed == "```yaml" || trimmed == "``` yaml") {
+            in_yaml_block = true;
+            yaml_lines.clear();
             continue;
         }
 
@@ -83,6 +114,34 @@ pub fn parse_reflection(text: &str) -> ReflectionOutput {
     }
 
     out
+}
+
+/// Parse a YAML block containing a list of skill definitions.
+///
+/// Each entry must have `name`, `category`, `description`, and `content` fields.
+/// Returns `None` if the YAML cannot be parsed.
+fn parse_skill_yaml(yaml_text: &str) -> Option<Vec<SkillExtraction>> {
+    #[derive(serde::Deserialize)]
+    struct RawSkill {
+        name: String,
+        category: String,
+        description: String,
+        content: String,
+    }
+
+    let skills: Vec<RawSkill> = serde_yaml::from_str(yaml_text).ok()?;
+    Some(
+        skills
+            .into_iter()
+            .map(|s| SkillExtraction {
+                name: s.name,
+                category: s.category,
+                description: s.description,
+                content: s.content.trim().to_string(),
+                is_update: false,
+            })
+            .collect(),
+    )
 }
 
 /// Returns `true` for placeholder values that should be skipped.
@@ -217,5 +276,74 @@ mod tests {
         assert!(out.lessons.is_empty());
         assert!(out.skills.is_empty());
         assert!(out.open_loops.is_empty());
+    }
+
+    #[test]
+    fn parse_structured_skill_yaml() {
+        let md = r#"## Skills
+```yaml
+- name: rust-lifetime-debugging
+  category: coding
+  description: Debug lifetime errors efficiently
+  content: |
+    # Rust Lifetime Debugging
+
+    ## When to Use
+    When the compiler reports lifetime errors.
+
+    ## Steps
+    1. Check borrow scope
+    2. Use explicit lifetime annotations
+```
+"#;
+        let out = parse_reflection(md);
+        assert_eq!(out.skills_structured.len(), 1);
+        assert!(out.skills.is_empty());
+
+        let skill = &out.skills_structured[0];
+        assert_eq!(skill.name, "rust-lifetime-debugging");
+        assert_eq!(skill.category, "coding");
+        assert_eq!(skill.description, "Debug lifetime errors efficiently");
+        assert!(skill.content.contains("Check borrow scope"));
+        assert!(!skill.is_update);
+    }
+
+    #[test]
+    fn parse_old_format_skill_still_works() {
+        let md = "\
+## Skills
+- Cross-session FTS5 search: build FTS5 index on messages table
+- Atomic file writes: use tempfile + rename pattern
+";
+        let out = parse_reflection(md);
+        assert_eq!(out.skills.len(), 2);
+        assert!(out.skills_structured.is_empty());
+        assert!(out.skills[0].contains("FTS5"));
+        assert!(out.skills[1].contains("Atomic file writes"));
+    }
+
+    #[test]
+    fn parse_mixed_skills_yaml_and_bullets() {
+        let md = r#"## Skills
+- quick-note: simple bullet skill
+
+```yaml
+- name: structured-skill
+  category: workflow
+  description: A structured skill
+  content: |
+    ## Steps
+    1. Do the thing
+```
+
+- another-bullet: second bullet
+"#;
+        let out = parse_reflection(md);
+        assert_eq!(out.skills.len(), 2);
+        assert_eq!(out.skills_structured.len(), 1);
+        assert!(out.skills[0].contains("quick-note"));
+        assert!(out.skills[1].contains("another-bullet"));
+        assert_eq!(out.skills_structured[0].name, "structured-skill");
+        assert_eq!(out.skills_structured[0].category, "workflow");
     }
 }
