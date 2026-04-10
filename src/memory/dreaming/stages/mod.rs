@@ -42,3 +42,5 @@ pub use summarize::SummarizeStage;
 pub use synthesis::{DeepSynthesisStage, PatternInsight};
 pub use tunnel::TunnelDiscoveryStage;
 pub use types::{MemoryCluster, MetadataGroupKey};
+pub use wiki_ingest::WikiIngestStage;
+pub use wiki_lint::WikiLintStage;
