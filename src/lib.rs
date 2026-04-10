@@ -79,6 +79,7 @@ pub mod routing;
 pub mod runtimes;
 pub mod search;
 pub mod skill;
+pub mod wiki;
 
 pub(crate) mod supervisor;
 pub mod thinker;
