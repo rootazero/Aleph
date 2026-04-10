@@ -9,9 +9,13 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
+use futures_util::StreamExt;
+use reqwest::Client;
+use reqwest_eventsource::{Event, EventSource};
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
-use super::config::SignalConfig;
+use super::config::{EventSourceConfig, SignalConfig};
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -22,6 +26,167 @@ pub(crate) const SIGNAL_MSG_LIMIT: usize = 65535;
 ///
 /// Provides methods for sending/receiving messages via the signal-cli REST API.
 pub struct SignalMessageOps;
+
+/// SSE-based Signal message monitor.
+///
+/// Connects to signal-cli's SSE endpoint (`GET /v1/receive/{phone}`) for
+/// real-time inbound message delivery instead of polling.
+///
+/// Uses `reqwest_eventsource` for SSE handling with configurable reconnection
+/// via [`EventSourceConfig`].
+pub struct SignalMonitor;
+
+impl SignalMonitor {
+    /// Start the SSE monitor.
+    ///
+    /// Spawns a background task that connects to the signal-cli SSE endpoint
+    /// and forwards inbound messages via `inbound_tx`.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - HTTP client for the SSE connection
+    /// * `config` - Signal configuration (api_url, phone_number, etc.)
+    /// * `channel_id` - Channel ID for inbound messages
+    /// * `inbound_tx` - Sender for inbound messages
+    ///
+    /// # Returns
+    ///
+    /// A `JoinHandle` for the background monitor task.
+    pub fn start(
+        client: Client,
+        config: SignalConfig,
+        channel_id: ChannelId,
+        inbound_tx: InboundMessageSender,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            Self::run_sse_loop(client, config, channel_id, inbound_tx).await;
+        })
+    }
+
+    /// Run the SSE monitoring loop with reconnection.
+    async fn run_sse_loop(
+        client: Client,
+        config: SignalConfig,
+        channel_id: ChannelId,
+        inbound_tx: InboundMessageSender,
+    ) {
+        let EventSourceConfig {
+            reconnect_delay_ms,
+            max_retries,
+            backoff_multiplier,
+        } = config.event_source;
+
+        let sse_url = format!(
+            "{}/v1/receive/{}",
+            config.api_url.trim_end_matches('/'),
+            config.phone_number
+        );
+
+        tracing::info!(
+            url = %sse_url,
+            "Signal SSE monitor started"
+        );
+
+        let mut retry_count = 0u32;
+
+        loop {
+            match Self::connect_and_stream(&client, &sse_url, &channel_id, &config, &inbound_tx).await
+            {
+                Ok(()) => {
+                    tracing::debug!("Signal SSE stream ended normally");
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, retry_count, "Signal SSE stream error");
+
+                    if retry_count >= max_retries {
+                        tracing::error!(
+                            error = %e,
+                            retry_count,
+                            "Signal SSE max retries exceeded, stopping monitor"
+                        );
+                        break;
+                    }
+
+                    // Exponential backoff: delay * multiplier^retry_count
+                    let backoff = (reconnect_delay_ms as f32).mul_add(
+                        backoff_multiplier.powi(retry_count as i32),
+                        0.0,
+                    );
+                    let backoff = Duration::from_millis(backoff as u64).min(MAX_BACKOFF);
+
+                    tracing::info!(retry_count, delay_ms = backoff.as_millis(), "Retrying Signal SSE connection");
+                    tokio::time::sleep(backoff).await;
+
+                    retry_count = retry_count.saturating_add(1);
+                }
+            }
+        }
+
+        tracing::info!("Signal SSE monitor stopped");
+    }
+
+    /// Connect to the SSE endpoint and stream messages.
+    async fn connect_and_stream(
+        client: &Client,
+        sse_url: &str,
+        channel_id: &ChannelId,
+        config: &SignalConfig,
+        inbound_tx: &InboundMessageSender,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let request = client
+            .get(sse_url)
+            .header("Accept", "text/event-stream");
+
+        let mut es = EventSource::new(request)?;
+
+        tracing::debug!("Signal EventSource created, waiting for events");
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(Event::Open) => {
+                    tracing::debug!("Signal SSE connection opened");
+                }
+                Ok(Event::Message(msg)) => {
+                    // Parse the message JSON from SSE data
+                    if let Some(inbound) = Self::parse_and_convert(
+                        &msg.data,
+                        channel_id,
+                        &config.phone_number,
+                        config,
+                    ) {
+                        tracing::debug!(
+                            sender = %inbound.sender_id.as_str(),
+                            text_len = inbound.text.len(),
+                            "Signal SSE message received"
+                        );
+                        if inbound_tx.send(inbound).is_err() {
+                            tracing::error!("Signal: inbound channel closed, stopping monitor");
+                            return Ok(());
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Return error to trigger reconnection in the outer loop
+                    return Err(Box::new(e));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse SSE message data and convert to an InboundMessage.
+    fn parse_and_convert(
+        data: &str,
+        channel_id: &ChannelId,
+        own_phone: &str,
+        config: &SignalConfig,
+    ) -> Option<InboundMessage> {
+        let msg: serde_json::Value = serde_json::from_str(data).ok()?;
+        SignalMessageOps::convert_message(&msg, channel_id, own_phone, config)
+    }
+}
 
 impl SignalMessageOps {
     /// Poll for new messages from signal-cli REST API.
@@ -568,5 +733,96 @@ mod tests {
 
         let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_signal_monitor_parse_and_convert_valid() {
+        let msg = serde_json::json!({
+            "envelope": {
+                "source": "+9876543210",
+                "sourceName": "Bob",
+                "timestamp": 1700000000000_i64,
+                "dataMessage": {
+                    "message": "Hello via SSE!",
+                    "timestamp": 1700000000000_i64
+                }
+            }
+        });
+
+        let channel_id = ChannelId::new("signal");
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            ..Default::default()
+        };
+
+        let data = serde_json::to_string(&msg).unwrap();
+        let inbound = SignalMonitor::parse_and_convert(&data, &channel_id, "+1234567890", &config);
+
+        assert!(inbound.is_some());
+        let inbound = inbound.unwrap();
+        assert_eq!(inbound.sender_id.as_str(), "+9876543210");
+        assert_eq!(inbound.text, "Hello via SSE!");
+    }
+
+    #[test]
+    fn test_signal_monitor_parse_and_convert_invalid_json() {
+        let channel_id = ChannelId::new("signal");
+        let config = SignalConfig::default();
+
+        let result = SignalMonitor::parse_and_convert("not json", &channel_id, "+1234567890", &config);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_signal_monitor_parse_and_convert_filtered_message() {
+        let msg = serde_json::json!({
+            "envelope": {
+                "source": "+5555555555",
+                "sourceName": "Stranger",
+                "timestamp": 1700000000000_i64,
+                "dataMessage": {
+                    "message": "Not allowed",
+                    "timestamp": 1700000000000_i64
+                }
+            }
+        });
+
+        let channel_id = ChannelId::new("signal");
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            allowed_users: vec!["+9876543210".to_string()],
+            ..Default::default()
+        };
+
+        let data = serde_json::to_string(&msg).unwrap();
+        let result = SignalMonitor::parse_and_convert(&data, &channel_id, "+1234567890", &config);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_signal_monitor_start_returns_join_handle() {
+        use crate::gateway::channel::ChannelState;
+
+        let state = ChannelState::new(100);
+        let inbound_tx = state.sender();
+        let config = SignalConfig {
+            phone_number: "+1234567890".to_string(),
+            event_source: EventSourceConfig {
+                reconnect_delay_ms: 500,
+                max_retries: 3,
+                backoff_multiplier: 2.0,
+            },
+            ..Default::default()
+        };
+
+        let handle = SignalMonitor::start(
+            reqwest::Client::new(),
+            config,
+            ChannelId::new("signal"),
+            inbound_tx,
+        );
+
+        assert!(!handle.is_finished());
+        handle.abort();
     }
 }

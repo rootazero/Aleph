@@ -27,7 +27,7 @@ pub mod config;
 pub mod message_ops;
 
 pub use config::SignalConfig;
-pub use message_ops::SignalMessageOps;
+pub use message_ops::{SignalMessageOps, SignalMonitor};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
