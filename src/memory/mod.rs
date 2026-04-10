@@ -14,11 +14,8 @@
 //! - `DreamStore`, `CompressionStore`: Specialized operations
 
 // Public submodules
-pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;
-pub mod backup;
-pub mod cleanup;
 pub mod cli;
 pub mod composer;
 pub mod compression;
@@ -35,10 +32,8 @@ pub mod fact_retrieval;
 pub mod graph;
 pub mod hybrid_retrieval;
 pub mod ingestion;
-pub mod lazy_decay;
 pub mod namespace;
 pub mod noise_filter;
-pub mod performance_monitor;
 pub mod query_expander;
 pub mod reembed;
 pub mod rerank;
@@ -64,14 +59,11 @@ mod loom_concurrency;
 mod proptest_enums;
 
 // Re-export commonly used types
-pub use adaptive_retrieval::{AdaptiveRetrievalConfig, AdaptiveRetrievalGate, RetrievalDecision};
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use audit::{
     AuditAction, AuditActor, AuditDetails, AuditEntry, ExplainedEvent, FactExplanation,
     ForgettingExplanation,
 };
-pub use backup::MemoryBackupService;
-pub use cleanup::CleanupService;
 pub use cli::{LockError, LockMode, MemoryLock};
 pub use composer::{ComposedContext, CompositionRequest, ContextComposer};
 pub use compression::{
@@ -116,7 +108,6 @@ pub use fact_retrieval::{
 pub use graph::{GraphDecayConfig, GraphDecayReport, GraphStore, ResolvedEntity};
 pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
-pub use lazy_decay::{DecayEvaluation, LazyDecayEngine};
 pub use namespace::NamespaceScope;
 pub use noise_filter::{NoiseFilter, NoiseFilterConfig};
 pub use reranker::{NoOpReranker, RerankResult, Reranker};

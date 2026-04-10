@@ -121,10 +121,6 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig,
 
-    /// Adaptive retrieval gate configuration.
-    #[serde(default)]
-    pub adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig,
-
     /// Noise filter configuration.
     #[serde(default)]
     pub noise_filter: crate::memory::noise_filter::NoiseFilterConfig,
@@ -734,8 +730,6 @@ impl Default for MemoryConfig {
             // Scoring, retrieval gate & noise filter
             scoring_pipeline:
                 crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
-            adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(
-            ),
             noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
             // Storage
             dedup_similarity_threshold: default_dedup_similarity_threshold(),
