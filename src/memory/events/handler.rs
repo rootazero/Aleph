@@ -664,6 +664,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_fact_dual_write() {
+        use crate::memory::store::MemoryStore;
+
+        let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
+        let store = crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap();
+        let store = Arc::new(store);
+        let handler = MemoryCommandHandler::new(db.clone(), Some(store.clone()));
+
+        let fact_id = handler
+            .create_fact(CreateFactCommand {
+                content: "Dual-write test".into(),
+                fact_type: FactType::Learning,
+                tier: MemoryTier::ShortTerm,
+                scope: MemoryScope::Global,
+                path: "/test/dual".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                confidence: 0.9,
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Verify event log
+        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.event_type_tag(), "FactCreated");
+
+        // Verify facts table
+        let fact = store
+            .get_fact(&fact_id)
+            .await
+            .unwrap()
+            .expect("fact should exist in store");
+        assert_eq!(fact.content, "Dual-write test");
+        assert_eq!(fact.fact_type, FactType::Learning);
+    }
+
+    #[tokio::test]
+    async fn test_dual_write_lifecycle() {
+        use crate::memory::store::MemoryStore;
+
+        let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
+        let store = crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap();
+        let store = Arc::new(store);
+        let handler = MemoryCommandHandler::new(db.clone(), Some(store.clone()));
+
+        // Create
+        let fact_id = handler
+            .create_fact(CreateFactCommand {
+                content: "Original".into(),
+                fact_type: FactType::Learning,
+                tier: MemoryTier::ShortTerm,
+                scope: MemoryScope::Global,
+                path: "/test/lifecycle".into(),
+                namespace: "owner".into(),
+                agent: "default".into(),
+                confidence: 0.9,
+                source: FactSource::Extracted,
+                source_memory_ids: vec![],
+                actor: EventActor::Agent,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        // Update content
+        handler
+            .update_content(UpdateContentCommand {
+                fact_id: fact_id.clone(),
+                new_content: "Updated".into(),
+                reason: "test".into(),
+                actor: EventActor::User,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let fact = store.get_fact(&fact_id).await.unwrap().unwrap();
+        assert_eq!(fact.content, "Updated");
+
+        // Invalidate
+        handler
+            .invalidate_fact(InvalidateFactCommand {
+                fact_id: fact_id.clone(),
+                reason: "outdated".into(),
+                actor: EventActor::System,
+                strength_at_invalidation: Some(0.5),
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let fact = store.get_fact(&fact_id).await.unwrap().unwrap();
+        assert!(!fact.is_valid);
+
+        // Delete
+        handler
+            .delete_fact(DeleteFactCommand {
+                fact_id: fact_id.clone(),
+                reason: "cleanup".into(),
+                actor: EventActor::User,
+                correlation_id: None,
+            })
+            .await
+            .unwrap();
+
+        let fact = store.get_fact(&fact_id).await.unwrap();
+        assert!(fact.is_none(), "Deleted fact should not exist in store");
+    }
+
+    #[tokio::test]
     async fn test_seq_increments_correctly() {
         let (handler, fact_id) = make_handler_with_fact().await;
 

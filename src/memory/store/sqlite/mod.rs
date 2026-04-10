@@ -85,6 +85,22 @@ impl SqliteMemoryBackend {
         })
     }
 
+    /// Create an in-memory `SqliteMemoryBackend` for testing.
+    #[cfg(test)]
+    pub fn in_memory() -> Result<Self, AlephError> {
+        vec::register_sqlite_vec();
+
+        let conn = Connection::open_in_memory()
+            .map_err(|e| AlephError::config(format!("Failed to open in-memory DB: {e}")))?;
+
+        schema::init_schema(&conn)?;
+        schema::init_vec_tables(&conn)?;
+
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
     // -- Dashboard helpers (source-based filtering) ---------------------------
 
     /// SQL condition that matches raw conversation records.
