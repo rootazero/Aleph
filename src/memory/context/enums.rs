@@ -28,6 +28,8 @@ pub enum FactType {
     Lesson,
     /// Reusable procedural knowledge extracted by LLM self-growth.
     Skill,
+    /// Structured Markdown wiki page (first-class knowledge document).
+    Wiki,
     /// Other facts that don't fit above categories
     #[default]
     Other,
@@ -54,6 +56,7 @@ impl FactType {
             FactType::Tool => "tool",
             FactType::Lesson => "lesson",
             FactType::Skill => "skill",
+            FactType::Wiki => "wiki",
             FactType::Other => "other",
             FactType::SubagentRun => "subagent_run",
             FactType::SubagentSession => "subagent_session",
@@ -78,6 +81,7 @@ impl FactType {
             FactType::Tool => "aleph://agent/tools/",
             FactType::Lesson => "aleph://knowledge/lessons/",
             FactType::Skill => "aleph://skills/",
+            FactType::Wiki => "aleph://wiki/",
             FactType::Other => "aleph://knowledge/",
             FactType::SubagentRun
             | FactType::SubagentSession
@@ -92,7 +96,7 @@ impl FactType {
             FactType::Preference => MemoryCategory::Preferences,
             FactType::Plan | FactType::Personal => MemoryCategory::Profile,
             FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
-            FactType::Tool | FactType::Skill => MemoryCategory::Patterns,
+            FactType::Tool | FactType::Skill | FactType::Wiki => MemoryCategory::Patterns,
             FactType::Lesson => MemoryCategory::Cases,
             FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
                 MemoryCategory::Cases
@@ -115,6 +119,7 @@ impl std::str::FromStr for FactType {
             "tool" => Ok(FactType::Tool),
             "lesson" => Ok(FactType::Lesson),
             "skill" => Ok(FactType::Skill),
+            "wiki" => Ok(FactType::Wiki),
             "subagent_run" => Ok(FactType::SubagentRun),
             "subagent_session" => Ok(FactType::SubagentSession),
             "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
@@ -525,5 +530,29 @@ impl std::str::FromStr for TemporalScope {
 impl std::fmt::Display for TemporalScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wiki_fact_type_roundtrips() {
+        let ft = FactType::Wiki;
+        assert_eq!(ft.as_str(), "wiki");
+        assert_eq!(ft.to_string(), "wiki");
+        let parsed: FactType = "wiki".parse().unwrap();
+        assert_eq!(parsed, FactType::Wiki);
+    }
+
+    #[test]
+    fn wiki_default_path() {
+        assert_eq!(FactType::Wiki.default_path(), "aleph://wiki/");
+    }
+
+    #[test]
+    fn wiki_default_category() {
+        assert_eq!(FactType::Wiki.default_category(), MemoryCategory::Patterns);
     }
 }

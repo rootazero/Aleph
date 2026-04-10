@@ -160,6 +160,7 @@ impl ConsolidationAnalyzer {
                 | FactType::SubagentTranscript
                 | FactType::Lesson
                 | FactType::Skill
+                | FactType::Wiki
                 | FactType::Other => "other",
             };
 
@@ -202,6 +203,7 @@ impl ConsolidationAnalyzer {
                 | FactType::SubagentTranscript
                 | FactType::Lesson
                 | FactType::Skill
+                | FactType::Wiki
                 | FactType::Other => "other",
             }
         } else {
