@@ -1,13 +1,12 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
-pub mod cluster;
-pub mod collect;
 pub mod consolidate;
 pub mod decay;
 pub mod drift;
 pub mod summarize;
 pub mod synthesis;
 pub mod tunnel;
+pub mod types;
 
 use async_trait::async_trait;
 
@@ -34,11 +33,10 @@ pub trait DreamStage: Send + Sync {
 }
 
 // Re-export all stages
-pub use cluster::{ClusterStage, MemoryCluster, MetadataGroupKey};
-pub use collect::CollectStage;
 pub use consolidate::ConsolidateStage;
 pub use decay::{DecayStage, MemoryDecayReport};
 pub use drift::{DriftAction, DriftCandidate, DriftDetectStage};
 pub use summarize::SummarizeStage;
 pub use synthesis::{DeepSynthesisStage, PatternInsight};
 pub use tunnel::TunnelDiscoveryStage;
+pub use types::{MemoryCluster, MetadataGroupKey};

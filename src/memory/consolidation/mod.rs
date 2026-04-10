@@ -5,11 +5,9 @@
 
 mod analyzer;
 mod profile;
-pub mod promotion_scorer;
 
 #[cfg(test)]
 mod tests;
 
 pub use analyzer::{ConsolidationAnalyzer, ConsolidationConfig, FrequentFact};
 pub use profile::{ConsolidatedFact, ProfileCategory, UserProfile};
-pub use promotion_scorer::{PromotionScorer, PromotionThresholds};

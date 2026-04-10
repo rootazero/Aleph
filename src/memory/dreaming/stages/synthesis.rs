@@ -20,7 +20,7 @@ use crate::memory::store::MemoryStore;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
-use super::cluster::dbscan;
+use super::types::dbscan;
 use super::{DreamContext, DreamStage};
 
 // ---------------------------------------------------------------------------

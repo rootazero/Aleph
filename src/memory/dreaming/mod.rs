@@ -31,10 +31,10 @@ use tracing::{info, warn};
 // Re-export stage types for backward compatibility
 pub use stages::decay::MemoryDecayReport;
 pub use stages::{
-    ClusterStage, CollectStage, ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage,
-    SummarizeStage, TunnelDiscoveryStage,
+    ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage, SummarizeStage,
+    TunnelDiscoveryStage,
 };
-pub use stages::{DreamStage, DriftAction, MemoryCluster, MetadataGroupKey};
+pub use stages::{DreamStage, DriftAction, MemoryCluster};
 
 // Re-export gate types
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
@@ -89,11 +89,9 @@ impl DreamPipeline {
         self
     }
 
-    /// Build the standard daily pipeline (6 stages).
+    /// Build the standard daily pipeline (5 stages).
     pub fn daily() -> Self {
         Self::new()
-            .stage(CollectStage)
-            .stage(ClusterStage)
             .stage(SummarizeStage)
             .stage(DriftDetectStage)
             .stage(ConsolidateStage)
@@ -699,13 +697,13 @@ mod tests {
     #[test]
     fn test_pipeline_builder() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 5);
     }
 
     #[test]
-    fn test_pipeline_weekly_has_eight_stages() {
+    fn test_pipeline_weekly_has_six_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 8);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 }
 
@@ -812,14 +810,14 @@ mod pipeline_integration_tests {
     }
 
     #[tokio::test]
-    async fn daily_pipeline_has_seven_stages() {
+    async fn daily_pipeline_has_five_stages() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 7);
+        assert_eq!(pipeline.stages.len(), 5);
     }
 
     #[tokio::test]
-    async fn weekly_pipeline_has_eight_stages() {
+    async fn weekly_pipeline_has_six_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 8);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 }

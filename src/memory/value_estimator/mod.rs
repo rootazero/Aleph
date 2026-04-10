@@ -5,12 +5,10 @@
 pub mod cortex;
 pub mod estimator;
 pub mod llm_scorer;
-pub mod signals;
 
 pub use cortex::{CortexValueEstimator, ExperienceScore};
 pub use estimator::ValueEstimator;
 pub use llm_scorer::{LlmScorer, LlmScorerConfig};
-pub use signals::{Signal, SignalDetector};
 
 #[cfg(test)]
 mod llm_tests;
@@ -70,42 +68,5 @@ mod tests {
             "Expected medium score, got {}",
             score
         );
-    }
-
-    #[test]
-    fn test_signal_detection_preference() {
-        let detector = SignalDetector::new();
-        let text = "I prefer using Rust";
-        let signals = detector.detect(text);
-
-        assert!(signals.contains(&Signal::UserPreference));
-    }
-
-    #[test]
-    fn test_signal_detection_greeting() {
-        let detector = SignalDetector::new();
-        let text = "Hello there!";
-        let signals = detector.detect(text);
-
-        assert!(signals.contains(&Signal::Greeting));
-    }
-
-    #[test]
-    fn test_signal_detection_question() {
-        let detector = SignalDetector::new();
-        let text = "What is Rust?";
-        let signals = detector.detect(text);
-
-        assert!(signals.contains(&Signal::Question));
-    }
-
-    #[test]
-    fn test_signal_detection_multiple() {
-        let detector = SignalDetector::new();
-        let text = "I prefer Rust. What do you think?";
-        let signals = detector.detect(text);
-
-        assert!(signals.contains(&Signal::UserPreference));
-        assert!(signals.contains(&Signal::Question));
     }
 }

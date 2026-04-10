@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use super::cluster::MemoryCluster;
+use super::types::MemoryCluster;
 use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
 use crate::memory::store::DreamStore;
@@ -118,7 +118,7 @@ fn truncate_text(text: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use crate::memory::context::{ContextAnchor, MemoryEntry};
-    use crate::memory::dreaming::stages::cluster::MetadataGroupKey;
+    use crate::memory::dreaming::stages::types::MetadataGroupKey;
 
     fn make_cluster(label: &str, inputs: &[&str], is_noise: bool) -> MemoryCluster {
         let members: Vec<MemoryEntry> = inputs
