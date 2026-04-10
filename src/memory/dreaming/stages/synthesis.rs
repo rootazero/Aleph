@@ -486,6 +486,7 @@ mod tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         let stage = DeepSynthesisStage;
@@ -525,6 +526,7 @@ mod tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         let stage = DeepSynthesisStage;
@@ -569,6 +571,7 @@ mod tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         let stage = DeepSynthesisStage;

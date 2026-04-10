@@ -88,6 +88,10 @@ impl DreamStage for WikiLintStage {
             "WikiLintStage complete"
         );
 
+        let mut ctx = ctx;
+        if !report.broken_links.is_empty() || !report.orphan_pages.is_empty() {
+            ctx.wiki_lint_report = serde_json::to_string(&report).ok();
+        }
         Ok(ctx)
     }
 }

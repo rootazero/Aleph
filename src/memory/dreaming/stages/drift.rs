@@ -501,6 +501,7 @@ mod tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         // should_run returns false when new_facts is empty
@@ -601,6 +602,7 @@ mod tests {
             provider: None,
             graph_decay_report: None,
             memory_decay_report: None,
+            wiki_lint_report: None,
         };
 
         let stage = DriftDetectStage;

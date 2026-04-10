@@ -35,6 +35,7 @@ pub struct DreamReport {
     pub synthesis_insights_count: usize,
     pub graph_decay_report: Option<GraphDecayReport>,
     pub memory_decay_report: Option<MemoryDecayReport>,
+    pub wiki_lint_summary: Option<String>,
 }
 
 /// Status of a completed dream pipeline run.
@@ -62,6 +63,7 @@ impl DreamReport {
             synthesis_insights_count: ctx.synthesis_insights_count,
             graph_decay_report: ctx.graph_decay_report.clone(),
             memory_decay_report: ctx.memory_decay_report.clone(),
+            wiki_lint_summary: ctx.wiki_lint_report.clone(),
         }
     }
 
@@ -80,6 +82,7 @@ impl DreamReport {
             synthesis_insights_count: ctx.synthesis_insights_count,
             graph_decay_report: ctx.graph_decay_report.clone(),
             memory_decay_report: ctx.memory_decay_report.clone(),
+            wiki_lint_summary: ctx.wiki_lint_report.clone(),
         }
     }
 }
