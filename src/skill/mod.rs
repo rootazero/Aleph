@@ -12,9 +12,11 @@ pub mod events;
 pub mod installer;
 pub mod manifest;
 pub mod prompt;
+pub mod recaller;
 pub mod registry;
 pub mod snapshot;
 pub mod status;
+pub mod tools;
 
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use compat::SkillInfo;
@@ -523,10 +525,106 @@ fn guess_source(path: &Path) -> SkillSource {
     SkillSource::Bundled
 }
 
+// ---------------------------------------------------------------------------
+// Self-growth: SkillExtraction
+// ---------------------------------------------------------------------------
+
+/// Structured skill extraction from LLM reflection output.
+///
+/// Produced by the reflection stage and consumed by `SkillManageTool` to
+/// persist learned skills as `FactType::Skill` facts in MemoryStore.
+#[derive(Debug, Clone)]
+pub struct SkillExtraction {
+    /// Kebab-case identifier (e.g., "rust-lifetime-debugging")
+    pub name: String,
+    /// Category: coding, debugging, workflow, knowledge, communication
+    pub category: String,
+    /// One-line description (max 100 chars)
+    pub description: String,
+    /// Full markdown body (When to Use, Steps, Pitfalls)
+    pub content: String,
+    /// True if this is an update to an existing skill
+    pub is_update: bool,
+}
+
+impl SkillExtraction {
+    /// Build the VFS path for this skill.
+    pub fn vfs_path(&self) -> String {
+        format!("aleph://skills/{}/{}/", self.category, self.name)
+    }
+
+    /// Build the full fact content with description header.
+    pub fn fact_content(&self) -> String {
+        format!("{}\n\n{}", self.description, self.content)
+    }
+}
+
+/// Valid skill categories.
+pub const SKILL_CATEGORIES: &[&str] = &[
+    "coding",
+    "debugging",
+    "workflow",
+    "knowledge",
+    "communication",
+];
+
+/// Validate a skill category.
+pub fn is_valid_category(category: &str) -> bool {
+    SKILL_CATEGORIES.contains(&category)
+}
+
+/// Validate a skill name (kebab-case, non-empty, ASCII alphanumeric + hyphens).
+pub fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::skill::SkillSource;
+
+    #[test]
+    fn valid_skill_names() {
+        assert!(is_valid_skill_name("rust-lifetime-debugging"));
+        assert!(is_valid_skill_name("git-rebase"));
+        assert!(is_valid_skill_name("a"));
+    }
+
+    #[test]
+    fn invalid_skill_names() {
+        assert!(!is_valid_skill_name(""));
+        assert!(!is_valid_skill_name("-leading"));
+        assert!(!is_valid_skill_name("trailing-"));
+        assert!(!is_valid_skill_name("has spaces"));
+        assert!(!is_valid_skill_name("UpperCase"));
+    }
+
+    #[test]
+    fn valid_categories() {
+        assert!(is_valid_category("coding"));
+        assert!(is_valid_category("debugging"));
+        assert!(!is_valid_category("invalid"));
+    }
+
+    #[test]
+    fn vfs_path_format() {
+        let skill = SkillExtraction {
+            name: "rust-lifetime-debugging".to_string(),
+            category: "coding".to_string(),
+            description: "Debug lifetime errors".to_string(),
+            content: "# Steps\n1. Check borrow scope".to_string(),
+            is_update: false,
+        };
+        assert_eq!(
+            skill.vfs_path(),
+            "aleph://skills/coding/rust-lifetime-debugging/"
+        );
+    }
 
     #[test]
     fn clone_shares_state() {
