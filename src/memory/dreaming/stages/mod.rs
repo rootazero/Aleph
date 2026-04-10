@@ -7,6 +7,8 @@ pub mod summarize;
 pub mod synthesis;
 pub mod tunnel;
 pub mod types;
+pub mod wiki_ingest;
+pub mod wiki_lint;
 
 use async_trait::async_trait;
 
