@@ -26,6 +26,8 @@ pub enum FactType {
     Tool,
     /// Lesson learned from experience (symptom → cause → fix).
     Lesson,
+    /// Reusable procedural knowledge extracted by LLM self-growth.
+    Skill,
     /// Other facts that don't fit above categories
     #[default]
     Other,
@@ -51,6 +53,7 @@ impl FactType {
             FactType::Personal => "personal",
             FactType::Tool => "tool",
             FactType::Lesson => "lesson",
+            FactType::Skill => "skill",
             FactType::Other => "other",
             FactType::SubagentRun => "subagent_run",
             FactType::SubagentSession => "subagent_session",
@@ -74,6 +77,7 @@ impl FactType {
             FactType::Project => "aleph://knowledge/projects/",
             FactType::Tool => "aleph://agent/tools/",
             FactType::Lesson => "aleph://knowledge/lessons/",
+            FactType::Skill => "aleph://skills/",
             FactType::Other => "aleph://knowledge/",
             FactType::SubagentRun
             | FactType::SubagentSession
@@ -88,7 +92,7 @@ impl FactType {
             FactType::Preference => MemoryCategory::Preferences,
             FactType::Plan | FactType::Personal => MemoryCategory::Profile,
             FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
-            FactType::Tool => MemoryCategory::Patterns,
+            FactType::Tool | FactType::Skill => MemoryCategory::Patterns,
             FactType::Lesson => MemoryCategory::Cases,
             FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
                 MemoryCategory::Cases
@@ -110,6 +114,7 @@ impl std::str::FromStr for FactType {
             "personal" => Ok(FactType::Personal),
             "tool" => Ok(FactType::Tool),
             "lesson" => Ok(FactType::Lesson),
+            "skill" => Ok(FactType::Skill),
             "subagent_run" => Ok(FactType::SubagentRun),
             "subagent_session" => Ok(FactType::SubagentSession),
             "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
