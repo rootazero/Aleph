@@ -1,7 +1,7 @@
 # Self-Growth Module Redesign
 
 **Date**: 2026-04-10
-**Status**: Approved
+**Status**: Approved (Rev.2 — Skill-as-Fact integration)
 **Inspired by**: hermes-agent skill extraction mechanism
 **Principle**: Prompt-first (R8 LLM Sovereignty + R9 Everything is a Tool + R10 Intelligence Lives in the Prompt)
 
@@ -9,7 +9,7 @@
 
 ## Overview
 
-Redesign Aleph's self-growth capability to follow the prompt-first principle. Replace algorithmic memory processing (DBSCAN clustering, 8-dimensional scoring, hardcoded signal detection) with LLM-driven skill extraction during conversation reflection. Skills are normalized prompts — reusable knowledge extracted by the LLM and stored as Markdown files.
+Redesign Aleph's self-growth capability to follow the prompt-first principle. Replace algorithmic memory processing (DBSCAN clustering, 8-dimensional scoring, hardcoded signal detection) with LLM-driven skill extraction during conversation reflection. Skills are normalized prompts — reusable knowledge extracted by the LLM and stored as facts within the existing MemoryStore.
 
 ### Core Concept
 
@@ -17,11 +17,24 @@ Redesign Aleph's self-growth capability to follow the prompt-first principle. Re
 Conversation ends
     → Reflection (existing, extended)
     → LLM outputs structured skill definitions
-    → skill_manage tool writes SKILL.md to filesystem
-    → MemoryStore indexes skill embedding + metadata
-    → Next conversation: SkillRecaller injects relevant skills into system prompt
+    → skill_manage tool inserts FactType::Skill into MemoryStore
+    → Knowledge graph connects skill to related concepts
+    → Next conversation: hybrid_retrieval with fact_type=Skill filter
     → LLM uses skill, evaluates freshness, patches if outdated
+    → Dreaming pipeline naturally manages lifecycle (decay, drift, promotion)
 ```
+
+### Key Insight (Rev.2)
+
+Skills are stored as `FactType::Skill` facts in the existing MemoryStore rather than in a separate skill_index table. This means skills automatically inherit:
+- Vector + BM25 hybrid retrieval (RAG)
+- Knowledge graph connections
+- Tier model (ShortTerm → LongTerm → Core)
+- Decay (unused skills naturally fade)
+- Drift detection (contradictions caught)
+- Scope isolation (Global / Persona via existing MemoryScope)
+
+Zero new storage infrastructure required.
 
 ---
 
@@ -30,11 +43,12 @@ Conversation ends
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Trigger mode | Real-time (reflection) | Skill extraction is semantic judgment; needs full conversation context |
-| Storage | Dual-write (filesystem + DB index) | Human-readable SKILL.md + machine-searchable embedding |
+| Storage | FactType::Skill in MemoryStore | Reuses all existing infra (RAG, graph, decay, drift); natural lifecycle |
+| File export | Optional SKILL.md export | Human-readable but not source of truth; MemoryStore is authoritative |
 | Pipeline cleanup | Layered: keep infra, remove algorithmic judgment | R8: decay is math (keep), clustering is semantic judgment (remove) |
-| Skill evolution | Real-time via reflection | YAGNI — LLM judges staleness at use time; git provides version history |
-| Skill recall | Hybrid (frequent skills pinned + semantic retrieval) | Deterministic recall for high-freq + coverage for long tail |
-| Skill scope | Two-level (Global + Persona) | Skills bind to roles; workspace-specific knowledge belongs in facts |
+| Skill evolution | Real-time via reflection + dreaming drift detection | LLM judges staleness at use time; drift stage catches contradictions |
+| Skill recall | On-demand via hybrid_retrieval (no pinning) | Scales naturally; decay handles cleanup; no separate index |
+| Skill scope | Two-level (Global + Persona) via existing MemoryScope | Skills bind to roles; workspace-specific knowledge belongs in regular facts |
 
 ---
 
@@ -51,30 +65,41 @@ LLM outputs structured skill YAML
     ↓
 skill_manage tool (new AlephTool)
     ↓ create / patch / delete
-Filesystem: ~/.aleph/skills/learned/{scope}/{category}/{name}/SKILL.md
-    ↓ sync
-MemoryStore: skill_index table (embedding + metadata)
+MemoryStore: insert FactType::Skill fact
+    ↓ embedding auto-generated
+    ↓ knowledge graph edges created (skill → related concepts)
+    ↓ VFS path: aleph://skills/{category}/{name}
     ↓
 Next conversation prompt assembly
     ↓
-SkillRecaller (new)
-    ↓ frequent pinned + semantic retrieval
-Inject relevant skills into system prompt
+hybrid_retrieval(fact_type_filter=Skill)
+    ↓ vector + BM25 + RRF
+Inject top-K relevant skill contents into system prompt
+    ↓
+LLM uses skill → reflection evaluates → patch if outdated
+    ↓
+Dreaming pipeline (background)
+    ↓ decay: unused skills fade
+    ↓ drift: contradictions flagged
+    ↓ consolidate: validated skills promoted ShortTerm → LongTerm → Core
 ```
 
-### Separation of Concerns
+### Skill Lifecycle via Memory Tiers
 
-- **Learned skills** (`~/.aleph/skills/learned/`): LLM-generated growth skills
-- **Installed skills** (`~/.aleph/skills/installed/`): User-installed external skills (unchanged)
-- **Generated skills** (`~/.aleph/skills/generated/`): Evolution auto-generated skills (unchanged)
+| Tier | Behavior | Decay |
+|------|----------|-------|
+| **ShortTerm** | New skills start here. Retrieved via RAG when relevant. | 1 day half-life (fast fade if unused) |
+| **LongTerm** | Skills validated through repeated use. Higher retrieval priority. | 30 days half-life |
+| **Core** | Fundamental skills. Always retrieved (strength never drops below threshold). | 365 days half-life |
 
-All three share the `markdown_skill` loading/parsing infrastructure.
+Promotion happens via the dreaming consolidate stage (LLM-driven after refactor). A skill used repeatedly across sessions naturally accumulates signal_count, qualifying it for promotion.
 
 ### Constraints
 
 - Reflection is the sole entry point for skill extraction (no mid-conversation interruption)
 - LLM operates through `skill_manage` tool for all CRUD (R9: Everything is a Tool)
-- Learned skills are prompt-only (sandbox: host, confirmation: never, network: none) — they inject text, not execute commands
+- Learned skills are prompt-only text — they don't execute commands
+- MemoryStore is source of truth; SKILL.md export is optional convenience
 
 ---
 
@@ -132,83 +157,52 @@ pub struct SkillExtraction {
 ### Mapper Change
 
 Skills section results no longer map to `FactType::Lesson`. Instead:
-1. Call `skill_manage` tool logic to create/patch SKILL.md
-2. Sync update skill_index in MemoryStore
-3. Backward compatible: if LLM outputs old one-line format, fall back to existing behavior
+1. Create `FactType::Skill` fact via skill_manage tool logic
+2. VFS path: `aleph://skills/{category}/{name}`
+3. Fact content = skill markdown body (description, when-to-use, steps, pitfalls)
+4. Metadata: name, category, description stored in fact metadata fields
+5. Backward compatible: if LLM outputs old one-line format, fall back to existing behavior
 
 ---
 
 ## Section 3: Skill Storage & Tools
 
-### Filesystem Structure
+### Storage Model: FactType::Skill
 
-```
-~/.aleph/skills/
-├── learned/                          # LLM-generated (source of truth)
-│   ├── global/                       # Global scope
-│   │   └── {category}/
-│   │       └── {name}/
-│   │           └── SKILL.md
-│   └── {persona-id}/                 # Persona scope
-│       └── {category}/
-│           └── {name}/
-│               └── SKILL.md
-├── installed/                        # User-installed (unchanged)
-│   └── ...
-└── generated/                        # Evolution auto-generated (unchanged)
-    └── ...
+Skills are stored as regular facts in MemoryStore with `fact_type = Skill`:
+
+```rust
+// New variant added to existing FactType enum
+pub enum FactType {
+    // ... existing variants ...
+    Skill,  // Reusable procedural knowledge extracted by LLM
+}
 ```
 
-### SKILL.md Format (Learned Skill)
+**Fact fields mapping:**
 
-Reuses existing `AlephSkillSpec` frontmatter with `evolution.source: learned`:
+| Fact Field | Skill Usage |
+|------------|-------------|
+| `content` | Full skill markdown (When to Use, Steps, Pitfalls) |
+| `fact_type` | `FactType::Skill` |
+| `tier` | ShortTerm (new) → LongTerm (validated) → Core (fundamental) |
+| `scope` | Global or Persona (via existing MemoryScope) |
+| `vfs_path` | `aleph://skills/{category}/{name}` |
+| `embedding` | Auto-generated from content for semantic retrieval |
+| `strength` | Managed by decay stage |
+| `signal_count` | Incremented on each use (retrieval + loading) |
+| `confidence` | Set by LLM during extraction (default 0.8) |
+| `metadata` | JSON: `{"skill_name": "...", "skill_category": "...", "skill_description": "..."}` |
 
-```yaml
----
-name: rust-lifetime-debugging
-description: Debug Rust lifetime errors systematically
-metadata:
-  aleph:
-    evolution:
-      source: learned
-      learned_at: "2026-04-10T14:30:00Z"
-      learned_from_session: "session-abc123"
-    security:
-      sandbox: host
-      confirmation: never
-      network: none
----
+### Optional SKILL.md Export
 
-# Rust Lifetime Debugging
+For human readability, a `skill_export` tool can dump skills to filesystem:
 
-## When to Use
-When encountering Rust lifetime errors that involve...
-
-## Steps
-1. ...
-
-## Pitfalls
-- ...
+```
+~/.aleph/skills/learned/{category}/{name}/SKILL.md
 ```
 
-### skill_index Table (MemoryStore)
-
-```sql
-CREATE TABLE skill_index (
-    name TEXT PRIMARY KEY,
-    scope TEXT NOT NULL,          -- 'global' or persona_id
-    category TEXT NOT NULL,
-    description TEXT NOT NULL,
-    file_path TEXT NOT NULL,      -- absolute path
-    embedding BLOB,              -- vector for semantic retrieval
-    use_count INTEGER DEFAULT 0, -- determines frequent pinning
-    last_used_at INTEGER,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-```
-
-Filesystem is source of truth. skill_index is a search acceleration layer. Rebuilt from filesystem scan on startup (reuses existing loader logic).
+This is a one-way export (MemoryStore → filesystem), not a sync mechanism. Users who edit the file can re-import via `skill_manage(action=import)`.
 
 ### skill_manage Tool
 
@@ -218,21 +212,23 @@ Static `AlephTool` implementation:
 pub struct SkillManageTool { /* ... */ }
 
 pub struct SkillManageArgs {
-    pub action: SkillAction,     // create | patch | delete | list
+    pub action: SkillAction,     // create | patch | delete | list | export
     pub name: Option<String>,
     pub category: Option<String>,
     pub scope: Option<String>,   // global | persona (default: persona)
-    pub content: Option<String>, // full SKILL.md content (for create)
+    pub content: Option<String>, // full skill markdown (for create)
+    pub description: Option<String>, // one-line description
     pub old_text: Option<String>,// patch old text
     pub new_text: Option<String>,// patch new text
 }
 ```
 
 Operations:
-- **create**: validate name → write SKILL.md → generate embedding → insert skill_index
-- **patch**: find file → find-and-replace → rewrite → update embedding + updated_at
-- **delete**: remove file + directory → delete skill_index row
-- **list**: query skill_index → return name + description list
+- **create**: validate name → create FactType::Skill fact → generate embedding → insert via MemoryStore::insert_fact()
+- **patch**: find fact by VFS path → update content → regenerate embedding → update via MemoryStore::update_fact()
+- **delete**: find fact by VFS path → invalidate via MemoryStore::invalidate_fact()
+- **list**: query MemoryStore with fact_type=Skill filter → return name + description list
+- **export**: dump skill fact content to SKILL.md file on disk
 
 ### skill_search Tool
 
@@ -246,57 +242,65 @@ pub struct SkillSearchArgs {
 }
 ```
 
-Vector search on skill_index embeddings. Returns matching skill names + descriptions + relevance scores.
+Thin wrapper around existing `hybrid_retrieval` with `fact_type_filter = Skill`. Returns matching skill names + descriptions + relevance scores.
 
 ---
 
 ## Section 4: Skill Recall (Prompt Assembly)
 
-### SkillRecaller Component
+### Recall Strategy: Pure RAG (No Pinning)
 
-Called during prompt assembly, before conversation starts.
+Unlike the previous design that pinned frequent skills, all skill recall now goes through existing hybrid_retrieval. This scales naturally:
+
+- **Few skills (0-20)**: All relevant skills retrieved efficiently
+- **Many skills (100+)**: Vector search + BM25 surfaces best matches; decay has already faded irrelevant ones
+- **Thousands of skills**: Same mechanism; no index bloat in system prompt
 
 ### Recall Flow
 
 ```
 Prompt assembly begins
     ↓
-1. Frequent layer: query skill_index where use_count >= 3
-    → inject name + description (index level, no full text)
+1. Take current conversation context (user message + recent history)
     ↓
-2. Semantic layer: embed current user message
-    → vector search skill_index, top-K (excluding frequent layer)
-    → inject name + description
+2. hybrid_retrieval(query, fact_type_filter=Skill, scope_filter=current, limit=5)
+    → vector search + BM25 + RRF fusion
+    → returns top-K skill facts ranked by relevance
     ↓
-3. Assemble as system prompt fragment
+3. For each retrieved skill:
+    → increment signal_count (tracks usage for tier promotion)
+    → inject full content into system prompt
+    ↓
+4. Assemble as system prompt fragment
 ```
 
-### Injection Format (Progressive Disclosure)
+### Injection Format
 
 ```
-## Available Skills
-Before replying, scan these skills. If one matches your task,
-load it with skill_search or skill_view and follow its instructions.
+## Learned Skills (auto-retrieved)
+The following skills were learned from past sessions and may be relevant.
+Follow them if applicable. If a skill is outdated, update it via skill_manage.
 
-### Frequently Used
-- rust-lifetime-debugging: Debug Rust lifetime errors systematically
-- git-rebase-workflow: Interactive rebase with conflict resolution
+### rust-lifetime-debugging
+When encountering Rust lifetime errors that involve...
+1. Check the borrow scope...
+2. ...
 
-### Possibly Relevant
-- async-tokio-patterns: Common async patterns in Tokio (relevance: 0.82)
-- sqlx-migration-tips: SQLx migration best practices (relevance: 0.71)
+### async-tokio-patterns
+Common async patterns in Tokio...
+1. ...
 ```
 
 ### Token Budget
 
-- Index-level injection: ~15-20 tokens per skill (name + one-line description)
-- Frequent layer cap: 10 skills (~200 tokens)
-- Semantic layer cap: 5 skills (~100 tokens)
-- Total: ~300 tokens
+- Each skill: ~100-300 tokens (full content, not just index)
+- Retrieved limit: 5 skills per conversation
+- Total: ~500-1500 tokens (acceptable; skills are high-value context)
+- Skills with low strength (decayed) won't surface — natural token control
 
-### use_count Update
+### Tier-Based Retrieval Boost
 
-Incremented when LLM loads skill full text via `skill_view`. Also updates `last_used_at`.
+Core tier skills get a retrieval boost (higher base strength → higher RRF score). This means fundamental skills surface more easily without explicit pinning. The existing strength field acts as an implicit frequency signal.
 
 ---
 
@@ -332,6 +336,7 @@ Change:
 - Send candidate pairs to LLM using existing prompt template
 - LLM returns `Supersede | Merge | Coexist | Ignore`
 - Execute corresponding fact operations
+- **Skill-aware**: drift detection now also catches skill facts that contradict newer knowledge
 
 **2. `stages/synthesis.rs`** — Wire LLM synthesis
 
@@ -351,6 +356,7 @@ Change:
 - Send candidate pairs above threshold to LLM
 - LLM judges "is this cross-domain connection meaningful?"
 - Only create tunnel edge for LLM-confirmed pairs
+- **Skill-aware**: tunnels can now connect skills to related concept clusters
 
 **4. `stages/summarize.rs`** — Replace with LLM summarization
 
@@ -370,6 +376,7 @@ Change:
 - Simple rule filter (signal_count >= 3, age >= 24h, unique_queries >= 2) for candidates
 - Send candidates to LLM: "Is this fact worth promoting from ShortTerm to LongTerm?"
 - Preserve pruning logic (strength < 0.1 non-Core facts invalidated)
+- **Skill-aware**: FactType::Skill facts participate in the same promotion pipeline — frequently used skills naturally get promoted to LongTerm/Core
 
 ### LLM Unavailability Fallback
 
@@ -394,32 +401,32 @@ vec![Summarize, Drift, Consolidate, Tunnel, Decay]
 ### New Code
 
 ```
-src/skill/                              # New module
-├── mod.rs                              # Module exports
-├── recaller.rs                         # SkillRecaller - recall during prompt assembly
-├── index.rs                            # SkillIndex - skill_index table CRUD
+src/skill/                              # New module (thin layer over MemoryStore)
+├── mod.rs                              # Module exports, SkillExtraction struct
+├── recaller.rs                         # Skill recall via hybrid_retrieval wrapper
 └── tools/
     ├── mod.rs
-    ├── manage.rs                       # SkillManageTool (create/patch/delete/list)
-    └── search.rs                       # SkillSearchTool (vector search)
+    ├── manage.rs                       # SkillManageTool (create/patch/delete/list/export)
+    └── search.rs                       # SkillSearchTool (hybrid_retrieval wrapper)
 ```
 
 ### Modified Code
 
 ```
-src/memory/reflection/
-├── prompt.rs                           # Extend Skills section prompt
-├── parser.rs                           # Add SkillExtraction parsing
-└── mapper.rs                           # Skills mapping → call SkillIndex
-
-src/memory/dreaming/
-├── mod.rs                              # Remove Collect/Cluster stage registration
-├── stages/
-│   ├── drift.rs                        # Wire LLM arbitration
-│   ├── synthesis.rs                    # Remove DBSCAN, use LLM
-│   ├── tunnel.rs                       # Add LLM judgment layer
-│   ├── summarize.rs                    # Replace with LLM summary
-│   └── consolidate.rs                  # Remove promotion_scorer, use LLM
+src/memory/
+├── context/types.rs                    # Add FactType::Skill variant
+├── reflection/
+│   ├── prompt.rs                       # Extend Skills section prompt
+│   ├── parser.rs                       # Add SkillExtraction parsing
+│   └── mapper.rs                       # Skills mapping → create FactType::Skill facts
+└── dreaming/
+    ├── mod.rs                          # Remove Collect/Cluster stage registration
+    ├── stages/
+    │   ├── drift.rs                    # Wire LLM arbitration
+    │   ├── synthesis.rs                # Remove DBSCAN, use LLM
+    │   ├── tunnel.rs                   # Add LLM judgment layer
+    │   ├── summarize.rs               # Replace with LLM summary
+    │   └── consolidate.rs             # Remove promotion_scorer, use LLM
 ```
 
 ### Deleted Code
@@ -433,78 +440,93 @@ src/memory/value_estimator/signals.rs           # Entire file (+ parent if empty
 
 ### Reused Code (No Modification)
 
-- `src/tools/markdown_skill/parser.rs` — Parse SKILL.md frontmatter + content
-- `src/tools/markdown_skill/generator.rs` — Generate SKILL.md files
-- `src/tools/markdown_skill/loader.rs` — Startup filesystem scan
-- `src/tools/markdown_skill/watcher.rs` — File change hot-reload
+- `src/tools/markdown_skill/generator.rs` — Generate SKILL.md for export
+- `src/tools/markdown_skill/parser.rs` — Parse SKILL.md for import
 - `src/tools/traits.rs` — AlephTool trait for tool registration
+- `src/memory/hybrid_retrieval/` — RAG retrieval (used by skill recall)
+- `src/memory/store/` — MemoryStore trait (used by skill CRUD)
 
 ### Dependency Graph
 
 ```
-skill::tools::manage  →  skill::index (write index)
-                      →  markdown_skill::generator (generate files)
-                      →  markdown_skill::parser (parse files)
+skill::tools::manage  →  memory::store (MemoryStore fact CRUD)
+                      →  markdown_skill::generator (optional export)
 
-skill::recaller       →  skill::index (query index)
+skill::tools::search  →  memory::hybrid_retrieval (RAG search)
 
-reflection::mapper    →  skill::tools::manage (create/update skills)
+skill::recaller       →  memory::hybrid_retrieval (RAG search)
+
+reflection::mapper    →  skill::tools::manage (create/update skill facts)
 
 dreaming::stages::*   →  does NOT depend on skill module (independent refactor)
+                      →  FactType::Skill facts processed naturally alongside other facts
 ```
 
 ### Constraints
 
+- `src/skill/` is a thin layer — most logic lives in existing MemoryStore and hybrid_retrieval
 - `src/skill/` does NOT depend on `src/memory/dreaming/` (direction: reflection → skill, dreaming is independent)
-- `src/skill/index.rs` may depend on `src/memory/store/` embedding infrastructure (reuse vector computation)
-- `markdown_skill` module stays unchanged; new module reuses via calling, not modifying
+- Dreaming stages process FactType::Skill facts alongside all other facts — no special-casing needed
+- `markdown_skill` module stays unchanged; only used for optional SKILL.md export/import
 
 ---
 
 ## Section 7: Advantages Over Hermes-Agent
 
-### 1. Rust Type-Safe Skill Validation
+### 1. Unified Memory Architecture
 
-Hermes validates skills at runtime with Python string checks. Aleph uses Rust's type system:
-- `SkillExtraction` struct guarantees field completeness at compile time
-- SKILL.md parsing reuses `AlephSkillSpec` (serde_yaml deserialization) — format errors caught before write
-- No separate security_scan needed — learned skills don't execute external commands (prompt-only text injection)
+Hermes maintains separate systems for skills (filesystem) and memory (MEMORY.md). Aleph stores skills as facts in the same MemoryStore, gaining:
+- Single retrieval pipeline (RAG) for all knowledge types
+- Knowledge graph connects skills to related facts and concepts
+- No separate index to maintain or rebuild
 
-### 2. Semantic Retrieval vs Text Index
+### 2. Natural Lifecycle Management
 
-Hermes skill recall relies on keyword matching (skill name + description string search). Aleph has full vector search infrastructure:
-- skill_index stores embeddings for semantic-level matching
+Hermes skills persist forever unless manually deleted. Aleph skills have natural lifecycle:
+- **Decay**: Unused skills fade via Ebbinghaus curve (ShortTerm: 1-day half-life)
+- **Promotion**: Frequently used skills promoted to LongTerm/Core (longer half-life)
+- **Drift detection**: Skills contradicting newer knowledge get flagged for update
+- **No explosion**: Decay naturally prevents skill accumulation beyond useful capacity
+
+### 3. Semantic Retrieval vs Text Index
+
+Hermes skill recall relies on keyword matching (skill name + description string search). Aleph uses:
+- Vector search + BM25 + RRF fusion for semantic-level matching
 - "handle borrow checker errors" matches `rust-lifetime-debugging` skill even without keyword overlap
 
-### 3. Scope Isolation
+### 4. Scope Isolation
 
-Hermes skills are globally shared with no role isolation. Aleph's Global + Persona two-level scope:
+Hermes skills are globally shared with no role isolation. Aleph's Global + Persona scope via existing MemoryScope:
 - Coding assistant persona's skills don't pollute writing assistant persona's context
-- Cross-persona knowledge (e.g., user preferences) stored as Global scope skills
+- Cross-persona knowledge stored as Global scope skills
 
-### 4. Dreaming Pipeline Synergy
+### 5. Knowledge Graph Integration
 
-Hermes has no offline memory processing. Aleph's dreaming pipeline (refactored) provides additional knowledge evolution:
-- **Drift detection**: LLM discovers skill content contradicts new facts → marks skill for update
-- **Synthesis**: Accumulated LongTerm facts across days may produce new insights → written to DailyInsight, available for next reflection
+Skills participate in the knowledge graph:
+- Tunnel stage discovers cross-domain connections between skills and other facts
+- Graph edges link skills to related concepts, enabling association-based retrieval
+- Example: a `rust-lifetime-debugging` skill gets graph-linked to facts about specific Rust projects
 
-### 5. Atomic Writes + File Watching
+### 6. Rust Type Safety
 
-Existing markdown_skill module already provides:
-- `watcher.rs`: notify + debouncer file monitoring, skill changes take effect immediately
-- Users can directly edit `~/.aleph/skills/learned/` SKILL.md files with any editor, no LLM needed
+- `SkillExtraction` struct guarantees field completeness at compile time
+- `FactType::Skill` variant enforced by Rust's enum exhaustiveness checks
+- No runtime type confusion between skills and other fact types
 
 ---
 
 ## Summary
 
-This redesign transforms Aleph's self-growth from an algorithm-heavy batch processing system into a prompt-first, LLM-driven skill extraction system. The key changes are:
+This redesign transforms Aleph's self-growth from an algorithm-heavy batch processing system into a prompt-first, LLM-driven skill extraction system. The Rev.2 change integrates skills directly into the MemoryStore as `FactType::Skill` facts, eliminating the need for separate storage infrastructure.
+
+Key changes:
 
 1. **Skill extraction via reflection** — LLM extracts reusable knowledge at conversation end
-2. **Skills as normalized prompts** — stored as human-readable SKILL.md files
-3. **Dual-write storage** — filesystem (source of truth) + DB index (search acceleration)
-4. **Hybrid recall** — frequent skills pinned + semantic retrieval for long tail
+2. **Skills as facts** — `FactType::Skill` in MemoryStore with full RAG/graph/decay/drift support
+3. **On-demand recall** — hybrid_retrieval with type filter, no index pinning needed
+4. **Natural lifecycle** — decay fades unused skills, promotion elevates validated ones, drift catches contradictions
 5. **Pipeline cleanup** — delete algorithmic judgment code, wire LLM into remaining stages
 6. **Tool-first interface** — all skill CRUD through `skill_manage` tool (R9)
+7. **Optional export** — SKILL.md files for human readability, not source of truth
 
-Total impact: ~6 files deleted, ~8 files modified, ~6 files created.
+Total impact: ~4 files deleted, ~8 files modified, ~4 files created. Significantly less new code than Rev.1 due to MemoryStore reuse.
