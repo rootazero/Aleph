@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
-use crate::memory::store::MemoryBackend;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::resilience::database::StateDatabase;
 
 use super::commands::*;
@@ -24,6 +24,40 @@ pub struct MemoryCommandHandler {
 impl MemoryCommandHandler {
     pub fn new(db: Arc<StateDatabase>, memory_store: Option<MemoryBackend>) -> Self {
         Self { db, memory_store }
+    }
+
+    /// Project the current event stream for a fact into the facts table.
+    ///
+    /// Called after appending an event to the event log. If `memory_store`
+    /// is None, this is a no-op (test mode).
+    async fn project_to_store(&self, fact_id: &str) -> Result<(), AlephError> {
+        let Some(ref store) = self.memory_store else {
+            return Ok(());
+        };
+
+        let events = self.db.get_memory_events_for_fact(fact_id).await?;
+        let projected = super::projector::EventProjector::fold_events_to_fact(&events)?;
+
+        match projected {
+            Some(fact) => {
+                // Try update first; if the fact doesn't exist yet, insert.
+                if store.get_fact(fact_id).await?.is_some() {
+                    if let Err(e) = store.update_fact(&fact).await {
+                        tracing::error!(fact_id, error = %e, "Dual-write: failed to update fact in store");
+                    }
+                } else if let Err(e) = store.insert_fact(&fact).await {
+                    tracing::error!(fact_id, error = %e, "Dual-write: failed to insert fact into store");
+                }
+            }
+            None => {
+                // Fact was deleted — remove from store
+                if let Err(e) = store.delete_fact(fact_id).await {
+                    tracing::error!(fact_id, error = %e, "Dual-write: failed to delete fact from store");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Create a new fact. Returns the generated fact_id.
