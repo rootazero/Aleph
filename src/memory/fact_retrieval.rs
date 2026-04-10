@@ -6,10 +6,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
+use crate::memory::query_expander;
 use crate::memory::context::MemoryFact;
+use crate::memory::hybrid_retrieval::HybridSearchConfig;
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
+use crate::memory::scoring_pipeline::context::ScoringContext;
+use crate::memory::scoring_pipeline::ScoringPipeline;
+use crate::memory::store::types::{ScoredFact, SearchFilter};
+use crate::memory::rerank::{build_provider, blend_scores, RerankConfig};
+use crate::memory::store::{HybridSearchParams, MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 
@@ -54,10 +60,18 @@ impl RetrievalResult {
 }
 
 /// Fact-first retrieval service
+///
+/// Uses hybrid search (vector + BM25 RRF fusion) with the full
+/// [`ScoringPipeline`] applied.  Falls back to pure vector search
+/// if the hybrid path encounters an error.
 pub struct FactRetrieval {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
     config: FactRetrievalConfig,
+    hybrid_config: HybridSearchConfig,
+    scoring_pipeline: ScoringPipeline,
+    scoring_config: ScoringPipelineConfig,
+    rerank_config: RerankConfig,
 }
 
 impl FactRetrieval {
@@ -67,10 +81,16 @@ impl FactRetrieval {
         embedder: Arc<dyn EmbeddingProvider>,
         config: FactRetrievalConfig,
     ) -> Self {
+        let scoring_config = ScoringPipelineConfig::default();
+        let scoring_pipeline = ScoringPipeline::from_config(&scoring_config);
         Self {
             database,
             embedder,
             config,
+            hybrid_config: HybridSearchConfig::default(),
+            scoring_pipeline,
+            scoring_config,
+            rerank_config: RerankConfig::default(),
         }
     }
 
@@ -79,11 +99,17 @@ impl FactRetrieval {
         Self::new(database, embedder, FactRetrievalConfig::default())
     }
 
+    /// Set the rerank configuration (enables cross-encoder reranking when config.enabled = true)
+    pub fn with_rerank_config(mut self, config: RerankConfig) -> Self {
+        self.rerank_config = config;
+        self
+    }
+
     /// Retrieve relevant context for a query
     ///
-    /// Priority:
-    /// 1. Compressed facts (from memory_facts table)
-    /// 2. Raw memories (fallback when facts insufficient)
+    /// Uses hybrid search (vector + BM25 RRF fusion) with the full
+    /// scoring pipeline applied.  Falls back to pure vector search
+    /// when the hybrid path encounters an error.
     pub async fn retrieve(&self, query: &str) -> Result<RetrievalResult, AlephError> {
         // Generate query embedding
         let query_embedding = self
@@ -92,31 +118,9 @@ impl FactRetrieval {
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
-        // 1. Search facts first
-        let dim_hint = query_embedding.len() as u32;
         let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
-        let scored_facts = self
-            .database
-            .vector_search(
-                &query_embedding,
-                dim_hint,
-                &filter,
-                self.config.max_facts as usize,
-            )
-            .await?;
-
-        // Map ScoredFact -> MemoryFact with similarity_score, and filter by threshold
-        let facts: Vec<MemoryFact> = scored_facts
-            .into_iter()
-            .filter(|sf| sf.score >= self.config.similarity_threshold)
-            .map(|sf| {
-                let mut fact = sf.fact;
-                fact.similarity_score = Some(sf.score);
-                fact
-            })
-            .collect();
-
-        Ok(RetrievalResult { facts })
+        self.hybrid_search_with_fallback(query, &query_embedding, &filter)
+            .await
     }
 
     /// Retrieve relevant context for a query within a specific workspace.
@@ -148,7 +152,8 @@ impl FactRetrieval {
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
-        self.retrieve_with_embedding(&query_embedding, filter).await
+        self.retrieve_with_embedding(query, &query_embedding, filter)
+            .await
     }
 
     /// Internal: retrieve using a pre-computed embedding vector.
@@ -156,34 +161,14 @@ impl FactRetrieval {
     /// across multiple workspace scopes (e.g., smart recall Phase 1 + Phase 2).
     async fn retrieve_with_embedding(
         &self,
+        query_text: &str,
         query_embedding: &[f32],
         filter: crate::gateway::agent_env::AgentEnvFilter,
     ) -> Result<RetrievalResult, AlephError> {
-        // Build search filter with workspace scope
-        let dim_hint = query_embedding.len() as u32;
         let search_filter =
             SearchFilter::valid_only(Some(NamespaceScope::Owner)).with_agent_filter(filter.clone());
-        let scored_facts = self
-            .database
-            .vector_search(
-                query_embedding,
-                dim_hint,
-                &search_filter,
-                self.config.max_facts as usize,
-            )
-            .await?;
-
-        let facts: Vec<MemoryFact> = scored_facts
-            .into_iter()
-            .filter(|sf| sf.score >= self.config.similarity_threshold)
-            .map(|sf| {
-                let mut fact = sf.fact;
-                fact.similarity_score = Some(sf.score);
-                fact
-            })
-            .collect();
-
-        Ok(RetrievalResult { facts })
+        self.hybrid_search_with_fallback(query_text, query_embedding, &search_filter)
+            .await
     }
 
     /// Retrieve with custom limits
@@ -199,13 +184,84 @@ impl FactRetrieval {
             .await
             .map_err(|e| AlephError::other(format!("Failed to embed query: {}", e)))?;
 
-        let dim_hint = query_embedding.len() as u32;
         let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
-        let scored_facts = self
-            .database
-            .vector_search(&query_embedding, dim_hint, &filter, max_facts as usize)
-            .await?;
+        let result = self
+            .hybrid_search_with_fallback_limit(
+                query,
+                &query_embedding,
+                &filter,
+                max_facts as usize,
+            )
+            .await;
 
+        let _ = max_raw_fallback; // no longer used — raw memory fallback removed
+
+        result
+    }
+
+    // ── Hybrid search core ───────────────────────────────────────────────
+
+    /// Run hybrid search (vector + BM25 RRF fusion) with scoring pipeline,
+    /// falling back to pure vector search on error.
+    async fn hybrid_search_with_fallback(
+        &self,
+        query_text: &str,
+        query_embedding: &[f32],
+        filter: &SearchFilter,
+    ) -> Result<RetrievalResult, AlephError> {
+        self.hybrid_search_with_fallback_limit(
+            query_text,
+            query_embedding,
+            filter,
+            self.config.max_facts as usize,
+        )
+        .await
+    }
+
+    /// Run hybrid search with a custom result limit.
+    async fn hybrid_search_with_fallback_limit(
+        &self,
+        query_text: &str,
+        query_embedding: &[f32],
+        filter: &SearchFilter,
+        limit: usize,
+    ) -> Result<RetrievalResult, AlephError> {
+        let dim_hint = query_embedding.len() as u32;
+
+        // Expand query for BM25 (appends Chinese synonyms for CJK queries)
+        let expanded = query_expander::expand(query_text);
+
+        // Try hybrid search first (vector + BM25 RRF fusion)
+        let scored_facts = match self
+            .database
+            .hybrid_search(&HybridSearchParams {
+                embedding: query_embedding,
+                dim_hint,
+                query_text: &expanded.bm25_query,
+                vector_weight: self.hybrid_config.vector_weight,
+                text_weight: self.hybrid_config.text_weight,
+                filter,
+                limit,
+            })
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                // Fallback to pure vector search
+                tracing::warn!(
+                    error = %e,
+                    "Hybrid search failed, falling back to vector-only"
+                );
+                self.database
+                    .vector_search(query_embedding, dim_hint, filter, limit)
+                    .await?
+            }
+        };
+
+        // Apply scoring pipeline for re-ranking
+        let scored_facts = self.apply_pipeline(scored_facts, query_embedding, query_text);
+
+        // Filter by threshold and convert
         let facts: Vec<MemoryFact> = scored_facts
             .into_iter()
             .filter(|sf| sf.score >= self.config.similarity_threshold)
@@ -216,9 +272,26 @@ impl FactRetrieval {
             })
             .collect();
 
-        let _ = max_raw_fallback; // no longer used — raw memory fallback removed
-
         Ok(RetrievalResult { facts })
+    }
+
+    /// Apply the scoring pipeline to re-rank candidates.
+    fn apply_pipeline(
+        &self,
+        scored: Vec<ScoredFact>,
+        query_embedding: &[f32],
+        query_text: &str,
+    ) -> Vec<ScoredFact> {
+        let ctx = ScoringContext {
+            query: query_text.to_string(),
+            query_embedding: Some(query_embedding.to_vec()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+            config: self.scoring_config.clone(),
+        };
+        self.scoring_pipeline.run(scored, &ctx)
     }
 
     /// Format retrieval result as context for LLM
@@ -276,6 +349,7 @@ impl FactRetrieval {
         // Phase 1: Search primary workspace
         let primary = self
             .retrieve_with_embedding(
+                query,
                 &query_embedding,
                 AgentEnvFilter::Single(primary_workspace.to_string()),
             )
@@ -328,7 +402,7 @@ impl FactRetrieval {
         );
 
         let all_results = self
-            .retrieve_with_embedding(&query_embedding, AgentEnvFilter::All)
+            .retrieve_with_embedding(query, &query_embedding, AgentEnvFilter::All)
             .await?;
 
         // Collect primary fact IDs for deduplication
