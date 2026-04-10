@@ -719,16 +719,21 @@ pub(in crate::commands::start) fn init_compression_service(
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
     policy: &alephcore::CompressionPolicy,
     daemon: bool,
+    command_handler: Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
 ) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
     let config = CompressionConfig::from_policy(policy);
-    let service = std::sync::Arc::new(CompressionService::new(
+    let mut service = CompressionService::new(
         memory_db.clone(),
         provider,
         embedder,
         config,
-    ));
+    );
+    if let Some(handler) = command_handler {
+        service = service.with_command_handler(handler);
+    }
+    let service = std::sync::Arc::new(service);
 
     // Start background compression loop (hourly check)
     let _handle = service.clone().start_background_task();
@@ -741,6 +746,48 @@ pub(in crate::commands::start) fn init_compression_service(
     }
 
     service
+}
+
+// ─── init_command_handler ───────────────────────────────────────────────────
+
+pub(in crate::commands::start) async fn init_command_handler(
+    state_db: &std::sync::Arc<alephcore::resilience::database::StateDatabase>,
+    memory_db: &alephcore::memory::store::MemoryBackend,
+    daemon: bool,
+) -> std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler> {
+    use alephcore::memory::events::handler::MemoryCommandHandler;
+    use alephcore::memory::events::migration::EventSourcingMigration;
+    use alephcore::memory::store::MemoryStore;
+
+    let handler = std::sync::Arc::new(MemoryCommandHandler::new(
+        std::sync::Arc::clone(state_db),
+        Some(memory_db.clone()),
+    ));
+
+    // Run one-shot migration (idempotent)
+    let migration = EventSourcingMigration::new(std::sync::Arc::clone(state_db));
+    match memory_db.get_all_facts(true, None).await {
+        Ok(facts) => {
+            match migration.run_if_needed(&facts).await {
+                Ok(report) => {
+                    if report.migrated > 0 && !daemon {
+                        println!(
+                            "Event sourcing migration: {} facts migrated, {} skipped",
+                            report.migrated, report.skipped
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Event sourcing migration failed (non-fatal)");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to load facts for event sourcing migration (non-fatal)");
+        }
+    }
+
+    handler
 }
 
 // ─── init_memory_context_provider ────────────────────────────────────────────

@@ -52,6 +52,9 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
     /// Coord task store for team RPC handlers (unified task system)
     pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
+    /// Event-sourced memory command handler
+    pub command_handler:
+        Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -84,6 +87,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
+    > = None;
+    let mut command_handler_out: Option<
+        std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
     > = None;
     let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
     let mut channel_reg_cell: Option<
@@ -915,6 +921,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_workspace_manager(wm.clone());
         }
 
+        // Create event-sourced memory command handler (requires state_db + memory_db)
+        let command_handler: Option<
+            std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
+        > = if let Some(ref state_db_arc) = resilience_db {
+            Some(super::init_command_handler(state_db_arc, memory_db, daemon).await)
+        } else {
+            None
+        };
+
         // Create compression service for Layer 1 -> Layer 2 fact extraction
         let compression_svc: Option<
             std::sync::Arc<alephcore::memory::compression::CompressionService>,
@@ -926,6 +941,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     emb.clone(),
                     &app_config.policies.memory.compression,
                     daemon,
+                    command_handler.clone(),
                 )
             })
         } else {
@@ -936,6 +952,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_compression_service(cs.clone());
         }
         compression_out = compression_svc;
+        command_handler_out = command_handler;
 
         // Create session compactor for intra-session context compression
         {
@@ -947,6 +964,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 );
                 if let Some(ref prov) = default_prov {
                     compactor = compactor.with_provider(prov.clone());
+                }
+                if let Some(ref emb) = embedder_out {
+                    compactor = compactor.with_embedder(emb.clone());
                 }
                 let compactor = std::sync::Arc::new(compactor);
                 engine = engine.with_session_compactor(compactor);
@@ -1590,5 +1610,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         tool_registry: tool_reg_out,
         team_store,
         coord_task_store: coord_store,
+        command_handler: command_handler_out,
     }
 }
