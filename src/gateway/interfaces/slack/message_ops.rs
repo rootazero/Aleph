@@ -4,8 +4,8 @@
 //! These are separated from the channel struct for testability.
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage, MessageId, MessageMeta,
-    SendResult, UserId,
+    ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage, InboundMessageSender,
+    MessageId, MessageMeta, SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::sync_primitives::Arc;
@@ -31,11 +31,11 @@ struct DebounceEntry {
 struct SlackDebouncer {
     entries: std::collections::HashMap<String, DebounceEntry>,
     debounce_ms: u64,
-    inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+    inbound_tx: InboundMessageSender,
 }
 
 impl SlackDebouncer {
-    fn new(debounce_ms: u64, inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>) -> Self {
+    fn new(debounce_ms: u64, inbound_tx: InboundMessageSender) -> Self {
         Self {
             entries: std::collections::HashMap::new(),
             debounce_ms,
@@ -95,7 +95,7 @@ impl SlackDebouncer {
     }
 
     async fn send_immediate(&self, msg: InboundMessage) -> bool {
-        self.inbound_tx.send(msg).await.is_ok()
+        self.inbound_tx.send(msg).is_ok()
     }
 
     async fn flush_entry(&self, entry: DebounceEntry) {
@@ -131,7 +131,7 @@ impl SlackDebouncer {
             }
         };
 
-        let _ = self.inbound_tx.send(combined).await;
+        let _ = self.inbound_tx.send(combined);
     }
 }
 
@@ -807,7 +807,7 @@ impl SlackMessageOps {
         bot_user_id: Arc<RwLock<Option<String>>>,
         channel_id: ChannelId,
         config: SlackConfig,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
         use futures_util::{SinkExt, StreamExt};

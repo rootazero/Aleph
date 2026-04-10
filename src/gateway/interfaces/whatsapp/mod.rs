@@ -42,8 +42,8 @@ pub use config::{
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
-    PairingData, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessageSender, MessageId,
+    OutboundMessage, PairingData, SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -179,7 +179,7 @@ async fn transition_state(
 async fn event_loop(
     mut event_rx: mpsc::Receiver<BridgeEvent>,
     pairing_state: Arc<RwLock<PairingState>>,
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    inbound_tx: InboundMessageSender,
     channel_id: ChannelId,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
@@ -286,7 +286,7 @@ async fn event_loop(
                     }
                     BridgeEvent::Message { .. } => {
                         if let Some(msg) = message::bridge_message_to_inbound(&event, &channel_id) {
-                            if inbound_tx.send(msg).await.is_err() {
+                            if inbound_tx.send(msg).is_err() {
                                 tracing::debug!(
                                     channel = %channel_id,
                                     "Inbound receiver dropped, stopping event loop"

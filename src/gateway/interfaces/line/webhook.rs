@@ -9,10 +9,10 @@ use sha2::Sha256;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 
 use crate::gateway::channel::{
-    ChannelId, ChannelStatus, ConversationId, InboundMessage, MessageId, UserId,
+    ChannelId, ChannelStatus, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    UserId,
 };
 
 use super::config::LineConfig;
@@ -25,7 +25,7 @@ const WEBHOOK_BODY_LIMIT: usize = 64 * 1024;
 pub struct WebhookContext {
     pub config: LineConfig,
     pub channel_id: ChannelId,
-    pub sender: mpsc::Sender<InboundMessage>,
+    pub sender: InboundMessageSender,
     pub status_handle: Arc<tokio::sync::RwLock<ChannelStatus>>,
 }
 
@@ -292,8 +292,7 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
 
     ctx.sender
         .send(inbound)
-        .await
-        .map_err(|e| format!("Failed to send inbound message: {}", e))?;
+        .map_err(|e| format!("Failed to send inbound message: {:?}", e))?;
 
     Ok(())
 }

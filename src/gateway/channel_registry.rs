@@ -26,13 +26,13 @@
 
 use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
 use super::channel::{
     Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelId,
     ChannelInfo, ChannelResult, ChannelStatus, ConversationId, HealthStatus, InboundMessage,
-    OutboundMessage, SendResult,
+    InboundMessageSender, OutboundMessage, SendResult,
 };
 use super::voice::VoiceState;
 
@@ -46,9 +46,9 @@ pub struct ChannelRegistry {
     /// Channel factories by type
     factories: RwLock<HashMap<String, Arc<dyn ChannelFactory>>>,
     /// Unified inbound message sender
-    inbound_tx: mpsc::Sender<InboundMessage>,
+    inbound_tx: InboundMessageSender,
     /// Unified inbound message receiver (for consumers)
-    inbound_rx: Arc<Mutex<Option<mpsc::Receiver<InboundMessage>>>>,
+    inbound_rx: Arc<Mutex<Option<broadcast::Receiver<InboundMessage>>>>,
     /// Per-channel voice mode state
     voice_states: RwLock<HashMap<String, VoiceState>>,
 }
@@ -56,12 +56,12 @@ pub struct ChannelRegistry {
 impl ChannelRegistry {
     /// Create a new channel registry
     pub fn new() -> Self {
-        let (inbound_tx, inbound_rx) = mpsc::channel(1000);
+        let (inbound_tx, inbound_rx) = broadcast::channel(1000);
 
         Self {
             channels: RwLock::new(HashMap::new()),
             factories: RwLock::new(HashMap::new()),
-            inbound_tx,
+            inbound_tx: InboundMessageSender::from(inbound_tx),
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
             voice_states: RwLock::new(HashMap::new()),
         }
@@ -325,13 +325,13 @@ impl ChannelRegistry {
     /// Take the inbound message receiver
     ///
     /// This can only be called once - subsequent calls return None.
-    pub fn take_inbound_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
+    pub fn take_inbound_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         let mut rx_guard = self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner());
         rx_guard.take()
     }
 
     /// Get a clone of the inbound sender (for channel implementations)
-    pub fn inbound_sender(&self) -> mpsc::Sender<InboundMessage> {
+    pub fn inbound_sender(&self) -> InboundMessageSender {
         self.inbound_tx.clone()
     }
 
@@ -340,29 +340,26 @@ impl ChannelRegistry {
         let inbound_tx = self.inbound_tx.clone();
 
         tokio::spawn(async move {
-            // Get the channel's inbound receiver
-            let channel = channel_arc.write().await;
-            let receiver = channel.inbound_receiver();
-            drop(channel);
+            let receiver = {
+                let channel = channel_arc.read().await;
+                channel.inbound_subscribe()
+            };
 
-            if let Some(mut rx) = receiver {
+            info!(
+                "[Forwarder] Channel {} forwarder started — broadcast receiver obtained",
+                channel_id
+            );
+            let mut rx = receiver;
+            while let Ok(message) = rx.recv().await {
                 info!(
-                    "[Forwarder] Channel {} forwarder started — receiver obtained",
-                    channel_id
+                    "[Forwarder] Forwarding message from channel {} (text: {:?})",
+                    channel_id,
+                    message.text.get(..50).unwrap_or(&message.text)
                 );
-                while let Some(message) = rx.recv().await {
-                    info!(
-                        "[Forwarder] Forwarding message from channel {} (text: {:?})",
-                        channel_id,
-                        message.text.get(..50).unwrap_or(&message.text)
-                    );
-                    if let Err(e) = inbound_tx.send(message).await {
-                        error!("Failed to forward message: {}", e);
-                        break;
-                    }
+                if let Err(e) = inbound_tx.send(message) {
+                    error!(error = ?e, "Failed to forward message");
+                    break;
                 }
-            } else {
-                warn!("[Forwarder] Channel {} inbound_receiver() returned None! Forwarder NOT started.", channel_id);
             }
 
             info!("[Forwarder] Channel {} forwarder stopped", channel_id);

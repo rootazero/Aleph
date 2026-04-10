@@ -6,10 +6,10 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 
 use crate::gateway::channel::{
-    ChannelId, ChannelStatus, ConversationId, InboundMessage, MessageId, UserId,
+    ChannelId, ChannelStatus, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    UserId,
 };
 
 use super::api::FeishuApi;
@@ -27,7 +27,7 @@ pub struct WebhookContext {
     pub config: FeishuConfig,
     pub channel_id: ChannelId,
     pub bot_open_id: String,
-    pub sender: mpsc::Sender<InboundMessage>,
+    pub sender: InboundMessageSender,
     pub status_handle: Arc<tokio::sync::RwLock<ChannelStatus>>,
     pub api: Arc<FeishuApi>,
     pub user_cache: Arc<UserProfileCache>,
@@ -321,7 +321,7 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
                 metadata: vec![],
             };
 
-            if ctx.sender.send(inbound).await.is_err() {
+            if ctx.sender.send(inbound).is_err() {
                 tracing::warn!("Feishu inbound channel closed");
             }
 
@@ -389,7 +389,7 @@ async fn process_event(ctx: &WebhookContext, event: FeishuEvent) -> String {
                 raw: None,
                 metadata: vec![],
             };
-            if ctx.sender.send(inbound).await.is_err() {
+            if ctx.sender.send(inbound).is_err() {
                 tracing::warn!("Feishu inbound channel closed");
             }
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()

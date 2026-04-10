@@ -33,7 +33,8 @@ pub use message_ops::WebhookMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, InboundMessageSender,
+    OutboundMessage, SendResult,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
 use crate::sync_primitives::Arc;
@@ -106,7 +107,7 @@ impl WebhookChannel {
     ///
     /// This sender should be passed to `WebhookReceiver::start()` so that
     /// incoming webhook messages are forwarded into the channel's inbound queue.
-    pub fn inbound_sender(&self) -> tokio::sync::mpsc::Sender<InboundMessage> {
+    pub fn inbound_sender(&self) -> InboundMessageSender {
         self.channel_state.sender()
     }
 
@@ -294,15 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn test_take_receiver() {
+    fn test_inbound_subscribe() {
         let config = WebhookChannelConfig::default();
         let channel = WebhookChannel::new("webhook", config);
 
-        // First take should succeed (via Channel trait default → ChannelState)
-        assert!(channel.inbound_receiver().is_some());
-
-        // Second take should return None
-        assert!(channel.inbound_receiver().is_none());
+        let _rx1 = channel.inbound_subscribe();
+        let _rx2 = channel.inbound_subscribe();
     }
 
     #[test]

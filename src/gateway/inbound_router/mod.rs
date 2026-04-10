@@ -17,7 +17,7 @@ pub use types::{ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SLASH_COMMAN
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
 use super::agent_instance::AgentRegistry;
@@ -267,7 +267,7 @@ impl InboundMessageRouter {
     }
 
     /// Main message processing loop
-    async fn run_loop(self: Arc<Self>, mut rx: mpsc::Receiver<InboundMessage>) {
+    async fn run_loop(self: Arc<Self>, mut rx: broadcast::Receiver<InboundMessage>) {
         info!("InboundMessageRouter started");
 
         let has_coalescer = self.coalescer.is_some();
@@ -282,7 +282,7 @@ impl InboundMessageRouter {
                 tokio::select! {
                     msg = rx.recv() => {
                         match msg {
-                            Some(msg) => {
+                            Ok(msg) => {
                                 // Deduplication check
                                 if !self.dedup_check(&msg).await {
                                     continue;
@@ -300,7 +300,7 @@ impl InboundMessageRouter {
                                     }
                                 }
                             }
-                            None => break, // channel closed
+                            Err(_) => break, // channel closed
                         }
                     }
                     _ = tick_interval.tick() => {
@@ -337,7 +337,7 @@ impl InboundMessageRouter {
             }
         } else {
             // No coalescer — original direct-dispatch path (backward compatible)
-            while let Some(msg) = rx.recv().await {
+            while let Ok(msg) = rx.recv().await {
                 if !self.dedup_check(&msg).await {
                     continue;
                 }

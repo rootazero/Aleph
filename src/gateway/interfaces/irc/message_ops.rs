@@ -7,7 +7,8 @@
 //! No external IRC dependencies required.
 
 use crate::gateway::channel::{
-    ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
+    ChannelError, ChannelId, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
@@ -197,7 +198,7 @@ impl IrcMessageOps {
     pub async fn run_irc_loop(
         config: IrcConfig,
         channel_id: ChannelId,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         mut write_cmd_rx: tokio::sync::mpsc::Receiver<String>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -340,7 +341,7 @@ impl IrcMessageOps {
                                         msg.sender_id.as_str(),
                                         &msg.text[..msg.text.len().min(50)]
                                     );
-                                    if inbound_tx.send(msg).await.is_err() {
+                                    if inbound_tx.send(msg).is_err() {
                                         tracing::error!("IRC: inbound channel closed");
                                         return;
                                     }

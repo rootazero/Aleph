@@ -24,10 +24,12 @@
 //! ```
 
 pub mod config;
+pub mod error;
 pub mod message_ops;
 
 pub use config::SignalConfig;
-pub use message_ops::SignalMessageOps;
+pub use error::SignalError;
+pub use message_ops::{SignalMessageOps, SignalMonitor};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -122,19 +124,18 @@ impl Channel for SignalChannel {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Spawn polling loop
+        // Spawn SSE monitor
         let client = self.client.clone();
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
         let inbound_tx = self.channel_state.sender();
         let status = self.channel_state.status_handle();
 
+        let handle = SignalMonitor::start(client, config, channel_id, inbound_tx, shutdown_rx);
+
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
-
-            SignalMessageOps::run_poll_loop(client, config, channel_id, inbound_tx, shutdown_rx)
-                .await;
-
+            let _ = handle.await;
             *status.write().await = ChannelStatus::Disconnected;
         });
 
@@ -258,15 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn test_take_receiver() {
+    fn test_inbound_subscribe_multi_consumer() {
         let config = SignalConfig::default();
         let channel = SignalChannel::new("signal", config);
 
-        // First take should succeed (via ChannelState)
-        assert!(channel.state().take_receiver().is_some());
+        let rx1 = channel.state().take_receiver();
+        let rx2 = channel.state().take_receiver();
+        let rx3 = channel.state().take_receiver();
 
-        // Second take should return None
-        assert!(channel.state().take_receiver().is_none());
+        assert!(rx1.is_some() && rx2.is_some() && rx3.is_some());
     }
 
     #[tokio::test]

@@ -147,9 +147,7 @@ impl CliChannel {
             metadata: vec![],
         };
 
-        tx.send(message)
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {}", e)))?;
+        tx.send(message).map_err(|e| ChannelError::Internal(format!("Failed to inject message: {:?}", e)))?;
         Ok(())
     }
 }
@@ -227,7 +225,7 @@ impl Channel for CliChannel {
                             metadata: vec![],
                         };
 
-                        if inbound_tx.send(message).await.is_err() {
+                        if inbound_tx.send(message).is_err() {
                             debug!("CLI channel receiver dropped");
                             break;
                         }

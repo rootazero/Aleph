@@ -1,6 +1,6 @@
 //! Nostr relay connection loop and message operations.
 
-use crate::gateway::channel::{ChannelId, InboundMessage};
+use crate::gateway::channel::{ChannelId, InboundMessageSender};
 
 use super::protocol::{
     build_close_message, build_subscription, convert_event_to_inbound, parse_relay_message,
@@ -28,7 +28,7 @@ impl NostrMessageOps {
         config: super::super::config::NostrConfig,
         own_pubkey: String,
         channel_id: ChannelId,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
+        inbound_tx: InboundMessageSender,
         mut write_cmd_rx: tokio::sync::mpsc::Receiver<String>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) {
@@ -171,7 +171,7 @@ impl NostrMessageOps {
                                 event.pubkey.get(..16).unwrap_or(&event.pubkey),
                                 inbound.text.get(..50).unwrap_or(&inbound.text)
                             );
-                            if inbound_tx.send(inbound).await.is_err() {
+                            if inbound_tx.send(inbound).is_err() {
                                 tracing::error!("Nostr: inbound channel closed");
                                 return;
                             }

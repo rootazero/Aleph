@@ -3,10 +3,11 @@ use std::sync::Mutex as StdMutex;
 
 use chrono::Utc;
 use futures_util::StreamExt;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 use crate::gateway::channel::{
-    ChannelId, ChannelStatus, ConversationId, InboundMessage, MessageId, UserId,
+    ChannelId, ChannelStatus, ConversationId, InboundMessage, InboundMessageSender, MessageId,
+    UserId,
 };
 
 use super::api::FeishuApi;
@@ -24,7 +25,7 @@ pub(super) struct WsLoopContext {
     pub(super) channel_id: ChannelId,
     pub(super) config: FeishuConfig,
     pub(super) bot_open_id: String,
-    pub(super) sender: mpsc::Sender<InboundMessage>,
+    pub(super) sender: InboundMessageSender,
     pub(super) status_handle: Arc<tokio::sync::RwLock<ChannelStatus>>,
     pub(super) shutdown_rx: watch::Receiver<bool>,
     pub(super) api: Arc<FeishuApi>,
@@ -127,7 +128,7 @@ async fn handle_text_frame(
     config: &FeishuConfig,
     bot_open_id: &str,
     channel_id: &ChannelId,
-    sender: &mpsc::Sender<InboundMessage>,
+    sender: &InboundMessageSender,
     user_cache: &UserProfileCache,
     api: &FeishuApi,
 ) {
@@ -238,7 +239,7 @@ async fn handle_text_frame(
                 metadata: vec![],
             };
 
-            if sender.send(inbound).await.is_err() {
+            if sender.send(inbound).is_err() {
                 tracing::warn!("Feishu inbound channel closed");
             }
         }
@@ -313,7 +314,7 @@ async fn handle_text_frame(
                 raw: None,
                 metadata: vec![],
             };
-            if sender.send(inbound).await.is_err() {
+            if sender.send(inbound).is_err() {
                 tracing::warn!("Feishu inbound channel closed");
             }
         }
