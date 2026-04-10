@@ -261,6 +261,13 @@ impl FactRetrieval {
         // Apply scoring pipeline for re-ranking
         let scored_facts = self.apply_pipeline(scored_facts, query_embedding, query_text);
 
+        // Apply cross-encoder reranking if enabled
+        let scored_facts = if self.rerank_config.enabled {
+            self.apply_rerank(query_text, scored_facts).await
+        } else {
+            scored_facts
+        };
+
         // Filter by threshold and convert
         let facts: Vec<MemoryFact> = scored_facts
             .into_iter()
@@ -292,6 +299,55 @@ impl FactRetrieval {
             config: self.scoring_config.clone(),
         };
         self.scoring_pipeline.run(scored, &ctx)
+    }
+
+    /// Apply cross-encoder reranking to scored results.
+    ///
+    /// Calls the configured rerank provider (HTTP API), then blends the
+    /// cross-encoder scores with the original retrieval scores.
+    /// Returns the original results unchanged on any error.
+    async fn apply_rerank(
+        &self,
+        query: &str,
+        results: Vec<ScoredFact>,
+    ) -> Vec<ScoredFact> {
+        if results.is_empty() {
+            return results;
+        }
+
+        let provider = build_provider(&self.rerank_config);
+        let documents: Vec<String> = results.iter().map(|sf| sf.fact.content.clone()).collect();
+        let top_n = results.len();
+
+        let rerank_results = match provider.rerank(query, &documents, top_n).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "Rerank failed, returning un-reranked results");
+                return results;
+            }
+        };
+
+        let originals: Vec<(String, f32)> = results
+            .iter()
+            .map(|sf| (sf.fact.id.clone(), sf.score))
+            .collect();
+
+        let blended = blend_scores(
+            &originals,
+            &rerank_results,
+            self.rerank_config.rerank_weight,
+        );
+
+        let mut reranked = Vec::with_capacity(blended.len());
+        for (id, score) in &blended {
+            if let Some(sf) = results.iter().find(|sf| &sf.fact.id == id) {
+                reranked.push(ScoredFact {
+                    fact: sf.fact.clone(),
+                    score: *score,
+                });
+            }
+        }
+        reranked
     }
 
     /// Format retrieval result as context for LLM
