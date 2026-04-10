@@ -48,7 +48,7 @@ impl DreamStage for WikiLintStage {
             .filter_map(|f| {
                 f.path
                     .split('/')
-                    .last()
+                    .next_back()
                     .map(|s| s.trim_end_matches(".md").to_string())
             })
             .collect();
@@ -60,7 +60,7 @@ impl DreamStage for WikiLintStage {
             let slug = fact
                 .path
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("")
                 .trim_end_matches(".md")
                 .to_string();

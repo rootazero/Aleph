@@ -40,14 +40,14 @@ pub fn parse_frontmatter(markdown: &str) -> Option<WikiFrontmatter> {
     let map = yaml.as_mapping()?;
 
     let get_str = |key: &str| -> String {
-        map.get(&serde_yaml::Value::String(key.to_string()))
+        map.get(serde_yaml::Value::String(key.to_string()))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string()
     };
 
     let get_vec = |key: &str| -> Vec<String> {
-        map.get(&serde_yaml::Value::String(key.to_string()))
+        map.get(serde_yaml::Value::String(key.to_string()))
             .and_then(|v| v.as_sequence())
             .map(|seq| {
                 seq.iter()

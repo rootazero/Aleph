@@ -131,9 +131,9 @@ impl WikiManageTool {
         let agent_dir = self
             .git
             .ensure_agent_dir(agent_id)
-            .map_err(|e| AlephError::tool(e))?;
+            .map_err(AlephError::tool)?;
 
-        write_index(&agent_dir, &entries).map_err(|e| AlephError::tool(e))?;
+        write_index(&agent_dir, &entries).map_err(AlephError::tool)?;
 
         Ok(())
     }
@@ -159,14 +159,14 @@ impl WikiManageTool {
             .ok_or_else(|| AlephError::tool("content is required for create"))?;
 
         validate_args_for_create(page_slug, title, summary, content)
-            .map_err(|e| AlephError::tool(e))?;
+            .map_err(AlephError::tool)?;
 
         // Ensure git repo and agent directory
-        self.git.ensure_repo().map_err(|e| AlephError::tool(e))?;
+        self.git.ensure_repo().map_err(AlephError::tool)?;
         let _agent_dir = self
             .git
             .ensure_agent_dir(agent_id)
-            .map_err(|e| AlephError::tool(e))?;
+            .map_err(AlephError::tool)?;
 
         // Check if page already exists
         let file_path = wiki_file_path(&self.data_dir, agent_id, page_slug);
