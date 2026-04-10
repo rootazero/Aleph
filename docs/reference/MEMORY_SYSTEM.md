@@ -7,15 +7,11 @@
 ## Overview
 
 Aleph's memory system provides:
-- **Facts Database**: LanceDB for unified vector + metadata storage (migrated from SQLite + sqlite-vec)
-- **Hybrid Retrieval**: Vector similarity (ANN) + BM25 full-text search
+- **Facts Database**: SQLite + sqlite-vec for unified vector + metadata storage
+- **Hybrid Retrieval**: Vector similarity (ANN) + BM25 full-text search via FactRetrieval + ScoringPipeline
 - **Context Augmentation**: Inject relevant memories into prompts
 - **Intelligent Compression**: Automatic session compaction with importance scoring
-- **Transcript Indexing**: Near-realtime conversation indexing with semantic chunking
 - **Context Arbitration**: Redundancy detection and token budget management
-- **Knowledge Exploration**: Multi-hop traversal for related fact discovery
-- **Contradiction Resolution**: Automatic detection and evolution tracking
-- **User Profiling**: Frequency-based characteristic distillation
 
 **Location**: `src/memory/`
 
@@ -40,7 +36,7 @@ Aleph's memory system provides:
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │                    Storage Layer                           │  │
 │  │  ┌──────────────────────────────────────────────────┐    │  │
-│  │  │              LanceDB (Unified)                    │    │  │
+│  │  │         SQLite + sqlite-vec (Unified)              │    │  │
 │  │  │                                                    │    │  │
 │  │  │  facts       │ graph_nodes │ graph_edges │ memories│    │  │
 │  │  │  • content   │ • name      │ • relation  │ • input │    │  │
@@ -72,53 +68,51 @@ Aleph's memory system provides:
 
 ## Facts Database
 
-**Location**: `src/memory/store/` (LanceDB backend)
+**Location**: `src/memory/store/` (SQLite + sqlite-vec backend)
 
-> **Migration Note**: The storage layer was migrated from SQLite + sqlite-vec to LanceDB in Feb 2026.
-> All memory operations (facts, sessions, graph, search) now use LanceDB via the `MemoryBackend` type alias.
-> SQLite (`StateDatabase`) is retained only for resilience state management at `src/resilience/database/`.
+> **Historical Note**: An earlier plan proposed migrating to LanceDB, but the production backend
+> remains SQLite + sqlite-vec. All memory operations (facts, graph, search) use SQLite via
+> `SqliteMemoryBackend`, exposed as `MemoryBackend` (= `Arc<SqliteMemoryBackend>`).
 
 ### Storage Architecture
 
-LanceDB provides unified columnar storage with embedded vector indexes:
+SQLite + sqlite-vec provides unified storage with embedded vector indexes:
 
 ```
-memory.lance/
-├── facts/          -- MemoryFact records with embeddings + FTS index
-├── graph_nodes/    -- Knowledge graph entity nodes
-├── graph_edges/    -- Knowledge graph relationships
-└── memories/       -- Raw conversation memory entries (Layer 1)
+memory.db (SQLite)
+├── facts            -- MemoryFact records with embeddings + FTS index
+├── graph_nodes      -- Knowledge graph entity nodes
+├── graph_edges      -- Knowledge graph relationships
+└── compression_sessions -- Session compaction records
 ```
 
 ### Storage Traits
 
 ```rust
-/// Layer 2: Compressed facts
+/// Layer 2: Compressed facts — CRUD, vector/text/hybrid search, VFS path operations
 pub trait MemoryStore: Send + Sync {
     async fn insert_fact(&self, fact: &MemoryFact) -> Result<()>;
     async fn vector_search(&self, embedding: &[f32], dim_hint: u32,
                            filter: &SearchFilter, limit: usize) -> Result<Vec<ScoredFact>>;
-    async fn hybrid_search(&self, embedding: &[f32], dim_hint: u32,
-                           query_text: &str, ...) -> Result<Vec<ScoredFact>>;
+    async fn hybrid_search(&self, params: &HybridSearchParams<'_>) -> Result<Vec<ScoredFact>>;
     // ... 17 total methods
 }
 
-/// Knowledge graph
+/// Knowledge graph — node/edge management, entity resolution, temporal decay
 pub trait GraphStore: Send + Sync {
     async fn upsert_node(&self, node: &GraphNode) -> Result<()>;
     async fn resolve_entity(&self, query: &str, context_key: Option<&str>) -> Result<Vec<ResolvedEntity>>;
     // ... 7 total methods
 }
 
-/// Layer 1: Raw memories
-pub trait SessionStore: Send + Sync {
-    async fn insert_memory(&self, memory: &MemoryEntry) -> Result<()>;
-    async fn search_memories(&self, embedding: &[f32], filter: &MemoryFilter, limit: usize) -> Result<Vec<MemoryEntry>>;
-    // ... 10 total methods
-}
+/// Dream pipeline persistence — daily insights, dream status
+pub trait DreamStore: Send + Sync { /* ... */ }
+
+/// Compression session persistence
+pub trait CompressionStore: Send + Sync { /* ... */ }
 
 /// Unified backend type
-pub type MemoryBackend = Arc<LanceMemoryBackend>;
+pub type MemoryBackend = Arc<SqliteMemoryBackend>;
 ```
 
 ### Fact Structure
@@ -181,7 +175,7 @@ pub struct RemoteEmbeddingProvider {
 
 ### Multi-Dimension Support
 
-LanceDB stores multiple vector columns (`vec_768`, `vec_1024`, `vec_1536`) allowing provider switching without data loss.
+SQLite-vec stores multiple vector columns (`vec_768`, `vec_1024`, `vec_1536`) allowing provider switching without data loss.
 
 ---
 
@@ -484,9 +478,9 @@ pub struct RetentionPolicy {
 
 The memory graph maintains lightweight entity nodes and relations used for disambiguation and
 graph-assisted filtering. Entities are extracted from compressed facts and DreamDaemon summaries,
-then stored in LanceDB via the `GraphStore` trait.
+then stored in SQLite via the `GraphStore` trait.
 
-LanceDB tables:
+SQLite tables:
 - `graph_nodes` (entity nodes with decay scores)
 - `graph_edges` (weighted relations between entities)
 
@@ -494,75 +488,34 @@ LanceDB tables:
 
 ## DreamDaemon
 
-**Location**: `src/memory/dreaming.rs`
+**Location**: `src/memory/dreaming/`
 
-DreamDaemon runs during idle windows to:
-- Cluster recent memories (default lookback: 24h)
-- Produce a daily insight summary
-- Update graph nodes/edges from the summary
-- Apply decay to memory facts and graph scores
+DreamDaemon runs during idle windows via `DreamPipeline`, which chains composable stages.
 
-Daily insights are stored in `daily_insights` and can be queried by date.
+### Daily Pipeline (5 stages)
+
+| # | Stage | Purpose |
+|---|-------|---------|
+| 1 | `SummarizeStage` | Cluster recent memories, produce daily insight summary |
+| 2 | `DriftDetectStage` | Detect semantic drift between new and existing facts |
+| 3 | `ConsolidateStage` | Promote high-strength STM facts to LTM |
+| 4 | `WikiLintStage` | Lint wiki pages for quality issues |
+| 5 | `DecayStage` | Apply Ebbinghaus decay to memory facts and graph scores |
+
+### Weekly Pipeline (6 stages)
+
+Daily stages + `DeepSynthesisStage` (cross-cluster pattern discovery).
+
+### Implemented but Not Yet Registered
+
+- `WikiIngestStage` — ingest wiki page content into memory
+- `TunnelDiscoveryStage` — discover hidden connections between facts
+
+Daily insights are stored in `daily_insights` (via `DreamStore` trait) and can be queried by date.
 
 ---
 
-## Memory System Evolution (New)
-
-The following components were added in the Memory System Evolution project to provide intelligent memory management and cognitive features.
-
-### TranscriptIndexer
-
-**Location**: `src/memory/transcript_indexer/`
-
-Provides near-realtime conversation transcript indexing with semantic chunking.
-
-```rust
-pub struct TranscriptIndexer {
-    database: MemoryBackend,
-    embedder: Arc<dyn EmbeddingProvider>,
-    config: TranscriptIndexerConfig,
-}
-
-pub struct TranscriptIndexerConfig {
-    /// Chunk size in tokens
-    pub chunk_size: usize,  // default: 400
-
-    /// Overlap between chunks in tokens
-    pub overlap: usize,  // default: 80
-
-    /// Enable semantic boundary detection
-    pub semantic_chunking: bool,  // default: false
-}
-```
-
-#### Semantic Chunking
-
-Advanced chunking that preserves semantic coherence using embedding-based boundary detection:
-
-```rust
-pub struct SemanticChunker {
-    embedder: Arc<dyn EmbeddingProvider>,
-    config: SemanticChunkerConfig,
-}
-
-pub struct SemanticChunkerConfig {
-    /// Minimum chunk size in tokens
-    pub min_chunk_size: usize,  // default: 100
-
-    /// Maximum chunk size in tokens
-    pub max_chunk_size: usize,  // default: 800
-
-    /// Similarity threshold for boundaries (0.0-1.0)
-    pub boundary_threshold: f32,  // default: 0.85
-}
-```
-
-**How it works**:
-1. Split text into sentences
-2. Compute embeddings for each sentence
-3. Calculate cosine similarity between adjacent sentences
-4. Create boundaries where similarity < threshold
-5. Merge small chunks to meet minimum size
+## Additional Components
 
 ### ContextComptroller
 
@@ -698,130 +651,6 @@ pub struct CompressionDaemonConfig {
 - Configurable compression function
 - Graceful shutdown
 
-### RippleTask
-
-**Location**: `src/memory/ripple/`
-
-Local knowledge exploration through multi-hop vector similarity traversal.
-
-```rust
-pub struct RippleTask {
-    database: MemoryBackend,
-    config: RippleConfig,
-}
-
-pub struct RippleConfig {
-    /// Maximum hops from seed fact
-    pub max_hops: usize,  // default: 3
-
-    /// Facts to retrieve per hop
-    pub facts_per_hop: usize,  // default: 5
-
-    /// Minimum similarity threshold
-    pub similarity_threshold: f32,  // default: 0.7
-}
-```
-
-**How it works**:
-1. Start with seed fact(s)
-2. Find similar facts using vector search
-3. Expand to next hop from discovered facts
-4. Continue until max_hops reached
-5. Return all discovered facts with hop distance
-
-**Use cases**:
-- Expand context from single fact to related knowledge network
-- Discover connections between seemingly unrelated facts
-- Build comprehensive context for complex queries
-
-### Fact Evolution Chain
-
-**Location**: `src/memory/evolution/`
-
-Automatic contradiction detection and resolution with evolution tracking.
-
-```rust
-pub struct ContradictionDetector {
-    provider: Arc<dyn AiProvider>,
-    embedder: Arc<dyn EmbeddingProvider>,
-}
-
-pub struct EvolutionChain {
-    database: MemoryBackend,
-}
-
-pub enum ResolutionStrategy {
-    /// Keep newer fact, mark older as superseded
-    PreferNewer,
-
-    /// Keep fact with higher confidence
-    PreferHigherConfidence,
-
-    /// Create evolution chain linking both
-    CreateEvolution,
-}
-```
-
-**Features**:
-- **LLM-driven Detection**: Uses AI to identify contradictions
-- **Keyword Fallback**: Falls back to keyword matching if LLM unavailable
-- **Evolution Tracking**: Maintains complete audit trail
-- **Flexible Resolution**: Three strategies for handling conflicts
-
-**Example**:
-```
-Fact A (2024-01-01): "User prefers Python"
-Fact B (2024-06-01): "User prefers Rust"
-
-→ Contradiction detected
-→ Strategy: CreateEvolution
-→ Result: Fact B supersedes Fact A, evolution chain created
-```
-
-### ConsolidationTask
-
-**Location**: `src/memory/consolidation/`
-
-User profile distillation through frequency analysis and categorization.
-
-```rust
-pub struct ConsolidationAnalyzer {
-    database: MemoryBackend,
-    embedder: Arc<dyn EmbeddingProvider>,
-    config: ConsolidationConfig,
-}
-
-pub struct ConsolidationConfig {
-    /// Minimum frequency score
-    pub min_frequency_score: f32,  // default: 0.7
-
-    /// Similarity threshold for consolidation
-    pub similarity_threshold: f32,  // default: 0.9
-
-    /// Lookback period in days
-    pub lookback_days: u32,  // default: 90
-}
-```
-
-**Frequency Scoring**:
-```
-frequency_score = (confidence * 0.7) + (recency * 0.3)
-```
-
-Where:
-- `confidence`: Fact confidence score (0.0-1.0)
-- `recency`: Time-based decay (1.0 for recent, 0.0 for old)
-
-**Categories**:
-- Preferences
-- Plans
-- Learning
-- Projects
-- Personal
-- Other
-
-**Output**: `UserProfile` with categorized high-frequency facts
-
 ### memory_search Tool
 
 **Location**: `src/builtin_tools/memory_search.rs`
@@ -891,13 +720,6 @@ conflict_similarity_threshold = 0.85
 max_facts_in_context = 5
 raw_memory_fallback_count = 3
 
-# Memory System Evolution features
-[memory.transcript_indexer]
-enabled = true
-chunk_size = 400
-overlap = 80
-semantic_chunking = false
-
 [memory.context_comptroller]
 enabled = true
 redundancy_threshold = 0.95
@@ -909,30 +731,6 @@ enabled = true
 use_llm = false  # Enable for more accurate scoring
 llm_weight = 0.7
 keyword_weight = 0.3
-
-[memory.compression_daemon]
-enabled = true
-check_interval_secs = 3600  # 1 hour
-idle_threshold_secs = 300   # 5 minutes
-
-[memory.ripple]
-enabled = true
-max_hops = 3
-facts_per_hop = 5
-similarity_threshold = 0.7
-
-[memory.evolution]
-enabled = true
-resolution_strategy = "CreateEvolution"  # PreferNewer | PreferHigherConfidence | CreateEvolution
-
-[memory.consolidation]
-enabled = true
-min_frequency_score = 0.7
-similarity_threshold = 0.9
-lookback_days = 90
-conflict_similarity_threshold = 0.85
-max_facts_in_context = 5
-raw_memory_fallback_count = 3
 
 [memory.dreaming]
 enabled = true
@@ -986,55 +784,6 @@ println!("Found {} facts, saved {} tokens",
 );
 ```
 
-### Knowledge Exploration with RippleTask
-
-```rust
-use alephcore::memory::ripple::RippleTask;
-
-let ripple = RippleTask::new(database, config);
-let seed_facts = vec![fact_id];
-
-// Explore 3 hops from seed fact
-let discovered = ripple.explore(seed_facts, 3).await?;
-println!("Discovered {} related facts across {} hops",
-    discovered.len(),
-    discovered.iter().map(|f| f.hop_distance).max().unwrap()
-);
-```
-
-### Contradiction Detection
-
-```rust
-use alephcore::memory::evolution::{ContradictionDetector, ResolutionStrategy};
-
-let detector = ContradictionDetector::new(provider, embedder);
-let chain = EvolutionChain::new(database);
-
-// Check for contradictions
-if detector.detect_contradiction(&fact_a, &fact_b).await? {
-    // Resolve using evolution chain
-    chain.resolve(
-        &fact_a,
-        &fact_b,
-        ResolutionStrategy::CreateEvolution
-    ).await?;
-}
-```
-
-### User Profile Distillation
-
-```rust
-use alephcore::memory::consolidation::ConsolidationAnalyzer;
-
-let analyzer = ConsolidationAnalyzer::new(database, embedder, config);
-
-// Analyze last 90 days
-let profile = analyzer.analyze_user_profile(90).await?;
-
-for (category, facts) in profile.categories {
-    println!("{}: {} high-frequency facts", category, facts.len());
-}
-```
 
 ---
 
@@ -1058,18 +807,6 @@ for (category, facts) in profile.categories {
 2. **Use keyword scoring** for cost-sensitive or high-throughput scenarios
 3. **Tune hybrid weights** (70% LLM, 30% keyword) based on your data
 
-### Knowledge Exploration
-
-1. **Start with 2-3 hops** for RippleTask to avoid over-expansion
-2. **Set similarity threshold** ≥ 0.7 to maintain relevance
-3. **Limit facts per hop** (5 default) to control result size
-
-### Contradiction Management
-
-1. **Use CreateEvolution** strategy to maintain audit trail
-2. **Enable LLM detection** for nuanced contradictions
-3. **Review evolution chains** periodically to understand knowledge changes
-
 ### Performance Optimization
 
 1. **Enable CompressionDaemon** for automatic background compression
@@ -1085,21 +822,18 @@ for (category, facts) in profile.categories {
 
 | Component | Memory Usage | Notes |
 |-----------|--------------|-------|
-| TranscriptIndexer | ~10MB | Lazy loading, minimal overhead |
 | ContextComptroller | ~5MB | In-memory deduplication cache |
 | ValueEstimator | ~2MB | Signal detection only |
-| RippleTask | ~20MB | Temporary during exploration |
-| Evolution Chain | ~5MB | Lightweight tracking |
+| ScoringPipeline | ~2MB | Configurable scoring stages |
 
 ### Latency
 
 | Operation | Typical Latency | Notes |
 |-----------|-----------------|-------|
 | Memory Search | 50-200ms | Depends on result count |
-| Semantic Chunking | 100-300ms | Per 1000 tokens |
+| Hybrid Search (FactRetrieval) | 100-300ms | Vector + BM25 fusion |
 | LLM Scoring | 500-2000ms | Per fact, cacheable |
-| Contradiction Detection | 1-3s | LLM-based, fallback available |
-| RippleTask (3 hops) | 200-500ms | Vector search only |
+| ScoringPipeline | 5-20ms | Post-retrieval scoring stages |
 
 ### Token Savings
 
@@ -1139,15 +873,21 @@ for (category, facts) in profile.categories {
 3. Use RippleTask for broader exploration
 4. Check redundancy threshold: `memory.context_comptroller.redundancy_threshold = 0.98`
 
-### Contradictory Information
+---
 
-**Symptom**: Conflicting facts in results
+## Pending Connection
 
-**Solutions**:
-1. Enable evolution chain: `memory.evolution.enabled = true`
-2. Run contradiction detection periodically
-3. Review and resolve conflicts manually
-4. Use PreferNewer strategy for time-sensitive data
+The following modules are implemented but **not yet wired into production paths**:
+
+| Module | Location | Description |
+|--------|----------|-------------|
+| **rerank/** | `src/memory/rerank/` | 5 cross-encoder reranking providers (Jina, Voyage, SiliconFlow, vLLM, Pinecone) |
+| **query_expander** | `src/memory/query_expander.rs` | Chinese synonym expansion for improved recall |
+| **Event sourcing** | `src/memory/events/` | `MemoryCommandHandler`, `EventProjector`, `MemoryTimeTraveler` — full event-sourced fact lifecycle |
+| **RippleTask** | `src/memory/ripple/` | Multi-hop knowledge exploration via vector similarity traversal |
+| **TranscriptIndexer** | `src/memory/transcript_indexer/` | Near-realtime conversation indexing with semantic chunking |
+
+These are candidates for future integration once their production wiring is validated.
 
 ---
 
@@ -1157,4 +897,3 @@ for (category, facts) in profile.categories {
 - [Agent System](AGENT_SYSTEM.md) - How memory is used
 - [Gateway](GATEWAY.md) - Memory RPC methods
 - [Tool System](TOOL_SYSTEM.md) - Memory tools documentation
-- [Memory Evolution Summary](MEMORY_EVOLUTION_SUMMARY.md) - Implementation details
