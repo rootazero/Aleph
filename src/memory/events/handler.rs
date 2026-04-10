@@ -11,17 +11,19 @@ use uuid::Uuid;
 
 use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+use crate::memory::store::MemoryBackend;
 use crate::resilience::database::StateDatabase;
 
 use super::commands::*;
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
+    memory_store: Option<MemoryBackend>,
 }
 
 impl MemoryCommandHandler {
-    pub fn new(db: Arc<StateDatabase>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<StateDatabase>, memory_store: Option<MemoryBackend>) -> Self {
+        Self { db, memory_store }
     }
 
     /// Create a new fact. Returns the generated fact_id.
@@ -212,7 +214,7 @@ mod tests {
 
     fn make_handler() -> MemoryCommandHandler {
         let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
-        MemoryCommandHandler::new(db)
+        MemoryCommandHandler::new(db, None)
     }
 
     /// Helper: create a fact and return (handler, fact_id)
