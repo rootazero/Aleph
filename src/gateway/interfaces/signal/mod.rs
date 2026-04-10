@@ -24,9 +24,11 @@
 //! ```
 
 pub mod config;
+pub mod error;
 pub mod message_ops;
 
 pub use config::SignalConfig;
+pub use error::SignalError;
 pub use message_ops::{SignalMessageOps, SignalMonitor};
 
 use crate::gateway::channel::{

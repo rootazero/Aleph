@@ -16,6 +16,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use super::config::{EventSourceConfig, SignalConfig};
+use super::error::SignalError;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -133,12 +134,13 @@ impl SignalMonitor {
         channel_id: &ChannelId,
         config: &SignalConfig,
         inbound_tx: &InboundMessageSender,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), SignalError> {
         let request = client
             .get(sse_url)
             .header("Accept", "text/event-stream");
 
-        let mut es = EventSource::new(request)?;
+        let mut es = EventSource::new(request)
+            .map_err(|e| SignalError::SseConnection(e.to_string()))?;
 
         tracing::debug!("Signal EventSource created, waiting for events");
 
@@ -167,8 +169,7 @@ impl SignalMonitor {
                     }
                 }
                 Err(e) => {
-                    // Return error to trigger reconnection in the outer loop
-                    return Err(Box::new(e));
+                    return Err(SignalError::SseStream(e.to_string()));
                 }
             }
         }
