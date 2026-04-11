@@ -351,31 +351,40 @@ pub fn migrate_tunnel_pending(conn: &Connection) -> Result<(), AlephError> {
 
 const NOTES_INDEX_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_index (
-    filename        TEXT PRIMARY KEY,
+    path            TEXT NOT NULL,
+    filename        TEXT NOT NULL,
+    agent_id        TEXT NOT NULL DEFAULT 'default',
     category        TEXT NOT NULL,
     tags_json       TEXT NOT NULL DEFAULT '[]',
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     last_accessed_at INTEGER,
-    content_hash    TEXT NOT NULL
+    content_hash    TEXT NOT NULL,
+    PRIMARY KEY (agent_id, path)
 );
+CREATE INDEX IF NOT EXISTS idx_notes_filename ON notes_index(filename);
+CREATE INDEX IF NOT EXISTS idx_notes_agent ON notes_index(agent_id);
+CREATE INDEX IF NOT EXISTS idx_notes_category ON notes_index(category);
 "#;
 
 const NOTES_LINKS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS notes_links (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
     from_note   TEXT NOT NULL,
     to_note     TEXT NOT NULL,
-    UNIQUE(from_note, to_note)
+    UNIQUE(agent_id, from_note, to_note)
 );
-CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(from_note);
-CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(to_note);
+CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
+CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
 "#;
 
 const NOTES_FTS_DDL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+    path,
     filename,
     content,
+    agent_id UNINDEXED,
     tokenize='unicode61'
 );
 "#;
@@ -446,6 +455,46 @@ pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
         (768, "facts_vec_768"),
         (1024, "facts_vec_1024"),
         (1536, "facts_vec_1536"),
+    ];
+
+    for (dim, name) in &tables {
+        let ddl = vec_table_ddl(*dim, name);
+        conn.execute_batch(&ddl).map_err(|e| {
+            AlephError::config(format!("Failed to create vec table {name}: {e}"))
+        })?;
+    }
+
+    // Notes vec tables + mapping table
+    init_notes_vec_tables(conn)?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Notes vector tables
+// ---------------------------------------------------------------------------
+
+const NOTES_VEC_MAP_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_vec_map (
+    rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
+    path        TEXT NOT NULL,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
+    UNIQUE(agent_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);
+"#;
+
+/// Initialize notes_vec virtual tables for 768, 1024, and 1536 dimensions,
+/// plus the mapping table that links `(path, agent_id)` to numeric rowids.
+pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch(NOTES_VEC_MAP_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create notes_vec_map table: {e}"))
+    })?;
+
+    let tables = [
+        (768, "notes_vec_768"),
+        (1024, "notes_vec_1024"),
+        (1536, "notes_vec_1536"),
     ];
 
     for (dim, name) in &tables {

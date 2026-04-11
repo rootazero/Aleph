@@ -32,7 +32,7 @@ pub fn register_sqlite_vec() {
     }
 }
 
-/// Map an embedding dimension to the corresponding vec0 table name.
+/// Map an embedding dimension to the corresponding facts vec0 table name.
 ///
 /// Returns an error if `dim` is not one of 768, 1024, or 1536.
 pub fn vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
@@ -40,6 +40,20 @@ pub fn vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
         768 => Ok("facts_vec_768"),
         1024 => Ok("facts_vec_1024"),
         1536 => Ok("facts_vec_1536"),
+        _ => Err(AlephError::config(format!(
+            "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
+        ))),
+    }
+}
+
+/// Map an embedding dimension to the corresponding notes vec0 table name.
+///
+/// Returns an error if `dim` is not one of 768, 1024, or 1536.
+pub fn notes_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
+    match dim {
+        768 => Ok("notes_vec_768"),
+        1024 => Ok("notes_vec_1024"),
+        1536 => Ok("notes_vec_1536"),
         _ => Err(AlephError::config(format!(
             "unsupported embedding dimension: {dim} (expected 768, 1024, or 1536)"
         ))),
