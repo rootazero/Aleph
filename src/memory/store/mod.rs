@@ -1,14 +1,12 @@
 //! Storage abstraction layer for the memory system.
 //!
-//! Provides the core storage trait definitions (`MemoryStore`, `GraphStore`)
+//! Provides the core storage trait definitions (`MemoryStore`)
 //! and supporting types used by SQLite-backed storage implementations.
 //!
 //! ## Trait Overview
 //!
 //! - **`MemoryStore`** -- CRUD, vector/text/hybrid search, VFS path operations
 //!   for `MemoryFact` (Layer 2 compressed facts).
-//! - **`GraphStore`** -- Knowledge graph node/edge management, entity resolution,
-//!   and temporal decay.
 
 pub mod sqlite;
 pub mod types;
@@ -17,7 +15,6 @@ pub use sqlite::SqliteMemoryBackend;
 
 use async_trait::async_trait;
 
-use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
 use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryFact};
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
@@ -54,92 +51,6 @@ pub struct StoreStats {
     pub total_facts: usize,
     /// Number of currently valid facts.
     pub valid_facts: usize,
-    /// Total knowledge-graph nodes.
-    pub total_graph_nodes: usize,
-    /// Total knowledge-graph edges.
-    pub total_graph_edges: usize,
-}
-
-/// Result of a graph decay sweep.
-#[derive(Debug, Clone, Default)]
-pub struct DecayStats {
-    /// Nodes whose score was reduced.
-    pub nodes_decayed: usize,
-    /// Nodes removed because their score fell below the threshold.
-    pub nodes_pruned: usize,
-    /// Edges whose score was reduced.
-    pub edges_decayed: usize,
-    /// Edges removed because their score fell below the threshold.
-    pub edges_pruned: usize,
-}
-
-/// A resolved entity returned by graph entity resolution.
-#[derive(Debug, Clone)]
-pub struct ResolvedEntity {
-    /// Node ID in the graph.
-    pub node_id: String,
-    /// Canonical name of the entity.
-    pub name: String,
-    /// Entity kind/type (e.g. "person", "project", "tool").
-    pub kind: String,
-    /// Alternative names / aliases for this entity.
-    pub aliases: Vec<String>,
-    /// Context-weighted relevance score.
-    pub context_score: f32,
-    /// Whether the resolution is ambiguous (multiple candidates).
-    pub ambiguous: bool,
-}
-
-/// A knowledge-graph node.
-#[derive(Debug, Clone)]
-pub struct GraphNode {
-    /// Unique node identifier.
-    pub id: String,
-    /// Canonical display name.
-    pub name: String,
-    /// Node kind/type (e.g. "person", "project", "concept").
-    pub kind: String,
-    /// Alternative names / aliases.
-    pub aliases: Vec<String>,
-    /// Arbitrary metadata serialized as JSON.
-    pub metadata_json: String,
-    /// Temporal decay score (starts at 1.0, decreases over time).
-    pub decay_score: f32,
-    /// Creation timestamp (Unix seconds).
-    pub created_at: i64,
-    /// Last update timestamp (Unix seconds).
-    pub updated_at: i64,
-    /// Domain isolation agent ID.
-    pub agent: String,
-}
-
-/// A knowledge-graph edge.
-#[derive(Debug, Clone)]
-pub struct GraphEdge {
-    /// Unique edge identifier.
-    pub id: String,
-    /// Source node ID.
-    pub from_id: String,
-    /// Target node ID.
-    pub to_id: String,
-    /// Relation label (e.g. "uses", "knows", "works_on").
-    pub relation: String,
-    /// Edge weight (application-specific).
-    pub weight: f32,
-    /// Confidence score [0.0, 1.0].
-    pub confidence: f32,
-    /// Context key for scoping edges to a particular context.
-    pub context_key: String,
-    /// Temporal decay score (starts at 1.0, decreases over time).
-    pub decay_score: f32,
-    /// Creation timestamp (Unix seconds).
-    pub created_at: i64,
-    /// Last update timestamp (Unix seconds).
-    pub updated_at: i64,
-    /// Timestamp of most recent reference (Unix seconds).
-    pub last_seen_at: i64,
-    /// Domain isolation agent ID.
-    pub agent: String,
 }
 
 /// A VFS path entry returned by directory listing operations.
@@ -335,121 +246,6 @@ pub trait MemoryStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// GraphStore -- Knowledge graph storage trait
-// ---------------------------------------------------------------------------
-
-/// Abstraction over knowledge-graph storage.
-///
-/// Provides node/edge CRUD, entity resolution, and temporal decay operations.
-#[async_trait]
-pub trait GraphStore: Send + Sync {
-    /// Insert or update a graph node (upsert by ID).
-    async fn upsert_node(&self, node: &GraphNode, workspace: &str) -> Result<(), AlephError>;
-
-    /// Retrieve a node by ID, or `None` if not found.
-    async fn get_node(&self, id: &str, workspace: &str) -> Result<Option<GraphNode>, AlephError>;
-
-    /// Insert or update a graph edge (upsert by ID).
-    async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError>;
-
-    /// Resolve an entity mention to candidate graph nodes.
-    ///
-    /// The optional `context_key` narrows results to edges in that context.
-    async fn resolve_entity(
-        &self,
-        query: &str,
-        context_key: Option<&str>,
-        workspace: &str,
-    ) -> Result<Vec<ResolvedEntity>, AlephError>;
-
-    /// Get all edges connected to a node, optionally filtered by context key.
-    async fn get_edges_for_node(
-        &self,
-        node_id: &str,
-        context_key: Option<&str>,
-        workspace: &str,
-    ) -> Result<Vec<GraphEdge>, AlephError>;
-
-    /// Count edges for a node within a specific context.
-    async fn count_edges_in_context(
-        &self,
-        node_id: &str,
-        context_key: &str,
-        workspace: &str,
-    ) -> Result<usize, AlephError>;
-
-    /// Apply temporal decay to all nodes and edges, pruning those below
-    /// the minimum score threshold.
-    async fn apply_decay(
-        &self,
-        policy: &GraphDecayPolicy,
-        workspace: &str,
-    ) -> Result<DecayStats, AlephError>;
-
-    /// Link a fact to a graph node with weight and source.
-    async fn link_memory_entity(
-        &self,
-        fact_id: &str,
-        node_id: &str,
-        weight: f32,
-        source: &str,
-        workspace: &str,
-    ) -> Result<(), AlephError>;
-
-    /// Get all graph nodes associated with a fact.
-    async fn get_nodes_for_fact(
-        &self,
-        fact_id: &str,
-        workspace: &str,
-    ) -> Result<Vec<(GraphNode, f32)>, AlephError>;
-
-    /// Get all fact IDs associated with a graph node.
-    async fn get_facts_for_node(
-        &self,
-        node_id: &str,
-        workspace: &str,
-    ) -> Result<Vec<(String, f32)>, AlephError>;
-
-    /// Remove a fact↔node association.
-    async fn unlink_memory_entity(
-        &self,
-        fact_id: &str,
-        node_id: &str,
-        workspace: &str,
-    ) -> Result<(), AlephError>;
-
-    /// Delete all memory_entities records for a given fact.
-    async fn delete_memory_entities_for_fact(
-        &self,
-        fact_id: &str,
-        workspace: &str,
-    ) -> Result<usize, AlephError>;
-
-    /// Delete all memory_entities records for a given node.
-    async fn delete_memory_entities_for_node(
-        &self,
-        node_id: &str,
-        workspace: &str,
-    ) -> Result<usize, AlephError>;
-
-    /// Delete memory_entities records for a fact filtered by source.
-    async fn delete_memory_entities_by_source(
-        &self,
-        fact_id: &str,
-        source: &str,
-        workspace: &str,
-    ) -> Result<usize, AlephError>;
-
-    /// Get graph nodes with decay_score above a threshold, sorted by score descending.
-    async fn get_high_score_nodes(
-        &self,
-        min_score: f32,
-        limit: usize,
-        workspace: &str,
-    ) -> Result<Vec<GraphNode>, AlephError>;
-}
-
-// ---------------------------------------------------------------------------
 // DreamStore -- Dream daemon persistence trait
 // ---------------------------------------------------------------------------
 
@@ -501,7 +297,7 @@ pub trait CompressionStore: Send + Sync {
 
 use crate::sync_primitives::Arc;
 
-/// Unified memory backend — provides MemoryStore + GraphStore.
+/// Unified memory backend — provides MemoryStore.
 ///
 /// This is the single entry point for all memory storage operations.
 /// Wraps `SqliteMemoryBackend` in an `Arc` for shared ownership across

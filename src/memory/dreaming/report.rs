@@ -1,7 +1,7 @@
 //! DreamReport and run metadata for the dream pipeline.
 
 use super::stages::decay::MemoryDecayReport;
-use crate::memory::graph::GraphDecayReport;
+use super::GraphDecayReport;
 use serde::{Deserialize, Serialize};
 
 /// The type of dream run (daily vs weekly).

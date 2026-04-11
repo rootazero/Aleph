@@ -461,7 +461,7 @@ mod tests {
         use super::DreamContext;
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::stages::drift::DriftAction;
-        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::memory::dreaming::GraphDecayConfig;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -479,7 +479,6 @@ mod tests {
             activity_checker: Arc::new(|| false),
             synthesis_insights_count: 0,
             database: database.clone(),
-            graph_store: GraphStore::new(database),
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,
@@ -501,7 +500,7 @@ mod tests {
         use super::DreamContext;
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::stages::drift::DriftAction;
-        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::memory::dreaming::GraphDecayConfig;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -519,7 +518,6 @@ mod tests {
             activity_checker: Arc::new(|| false),
             synthesis_insights_count: 0,
             database: database.clone(),
-            graph_store: GraphStore::new(database),
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,
@@ -545,7 +543,7 @@ mod tests {
         use super::DreamContext;
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::stages::drift::DriftAction;
-        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::memory::dreaming::GraphDecayConfig;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -564,7 +562,6 @@ mod tests {
             activity_checker: Arc::new(|| false),
             synthesis_insights_count: 0,
             database: database.clone(),
-            graph_store: GraphStore::new(database),
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,

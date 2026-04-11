@@ -96,54 +96,17 @@ impl RippleTask {
         })
     }
 
-    /// Explore cross-domain facts via tunnel edges in the knowledge graph.
+    /// Explore cross-domain facts via tunnel edges.
+    ///
+    /// Previously used graph_nodes/graph_edges for tunnel discovery.
+    /// That graph system has been deprecated. This is now a no-op stub.
+    /// Future: tunnel discovery will use notes_links for cross-domain linking.
     pub async fn explore_tunnels(
         &self,
-        seed_facts: &[MemoryFact],
-        graph_store: &crate::memory::graph::GraphStore,
-        visited: &mut std::collections::HashSet<String>,
+        _seed_facts: &[MemoryFact],
+        _visited: &mut std::collections::HashSet<String>,
     ) -> Result<Vec<MemoryFact>> {
-        if !self.config.enable_tunnels {
-            return Ok(Vec::new());
-        }
-
-        let mut tunnel_facts = Vec::new();
-        let max = self.config.max_facts_per_hop * self.config.max_tunnel_hops;
-
-        'outer: for fact in seed_facts {
-            let node_id = format!("fact:{}", fact.id);
-
-            // Query graph for tunnel edges from this node
-            let edges = graph_store.get_edges_by_relation(&node_id, "tunnel").await?;
-
-            for edge in edges {
-                let target_node = if edge.from_id == node_id {
-                    &edge.to_id
-                } else {
-                    &edge.from_id
-                };
-
-                // Extract fact ID from node ID ("fact:uuid" -> "uuid")
-                let target_fact_id = target_node.strip_prefix("fact:").unwrap_or(target_node);
-
-                if visited.contains(target_fact_id) {
-                    continue;
-                }
-
-                if let Ok(Some(target_fact)) = self.database.get_fact(target_fact_id).await {
-                    if target_fact.is_valid && target_fact.is_currently_valid() {
-                        visited.insert(target_fact_id.to_string());
-                        tunnel_facts.push(target_fact);
-
-                        if tunnel_facts.len() >= max {
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(tunnel_facts)
+        Ok(Vec::new())
     }
 
     /// Check if a candidate fact meets the similarity threshold.

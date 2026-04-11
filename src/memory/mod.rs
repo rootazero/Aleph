@@ -10,8 +10,8 @@
 //! ## Storage Traits
 //!
 //! - `MemoryStore`: Fact CRUD, vector search, path operations
-//! - `GraphStore`: Entity relationship graph operations
 //! - `DreamStore`, `CompressionStore`: Specialized operations
+//! - `NoteStore`: Knowledge Notes index operations
 
 // Public submodules
 pub mod ai_retrieval;
@@ -29,7 +29,6 @@ pub mod embedding_manager;
 pub mod embedding_provider;
 pub mod events;
 pub mod fact_retrieval;
-pub mod graph;
 pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
@@ -107,7 +106,6 @@ pub use events::{
 pub use fact_retrieval::{
     CrossWorkspaceFact, FactRetrieval, FactRetrievalConfig, RetrievalResult, SmartRetrievalResult,
 };
-pub use graph::{GraphDecayConfig, GraphDecayReport, GraphStore, ResolvedEntity};
 pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
 pub use namespace::NamespaceScope;

@@ -1,7 +1,7 @@
 //! Common types used by the storage traits.
 //!
 //! Provides filter, scoring, and query types shared across
-//! MemoryStore, GraphStore, and SessionStore implementations.
+//! MemoryStore and SessionStore implementations.
 
 use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{

@@ -1,7 +1,7 @@
 //! DecayStage: applies Ebbinghaus decay to memory facts and graph.
 
 use async_trait::async_trait;
-use tracing::{debug, info};
+use tracing::info;
 
 use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
@@ -25,15 +25,11 @@ impl DreamStage for DecayStage {
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
-        // 1. Apply graph decay
-        let graph_report = ctx.graph_store.apply_decay(&ctx.graph_decay_config).await?;
-        debug!(
-            pruned_nodes = graph_report.pruned_nodes,
-            pruned_edges = graph_report.pruned_edges,
-            "DecayStage: graph decay applied"
-        );
+        // Graph decay is no longer applied — Knowledge Notes are the single
+        // source of truth. The graph_nodes/graph_edges tables are deprecated.
+        let graph_report = crate::memory::dreaming::GraphDecayReport::default();
 
-        // 2. Apply fact decay with Ebbinghaus exponential curve
+        // Apply fact decay with Ebbinghaus exponential curve
         let half_life_days = ctx.memory_decay_config.half_life_days;
         let _min_strength = ctx.memory_decay_config.min_strength;
         let now_ts = crate::memory::dreaming::now_timestamp();

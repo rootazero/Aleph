@@ -572,7 +572,7 @@ impl HandlerRegistry {
             )
         });
 
-        // Graph visualization handlers (placeholders — actual handlers wired with GraphStore in Gateway startup)
+        // Graph visualization handlers (backed by NoteStore — Knowledge Notes are the source of truth)
         registry.register("graph.query", graph::handle_query);
         registry.register("graph.neighbors", graph::handle_neighbors);
         registry.register("graph.node_detail", graph::handle_node_detail);

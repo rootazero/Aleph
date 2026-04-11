@@ -279,20 +279,14 @@ pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpc
     let raw_count = db.count_raw_memories().unwrap_or(0);
     let fact_count = db.count_compressed_facts().unwrap_or(0);
 
-    // Graph stats
-    let (graph_nodes, graph_edges) = match db.get_graph_stats().await {
-        Ok((n, e)) => (n, e),
-        Err(_) => (0, 0),
-    };
-
     JsonRpcResponse::success(
         request.id,
         json!({
             "totalMemories": raw_count,
             "totalFacts": fact_count,
             "validFacts": fact_count,
-            "totalGraphNodes": graph_nodes,
-            "totalGraphEdges": graph_edges,
+            "totalGraphNodes": 0,
+            "totalGraphEdges": 0,
         }),
     )
 }

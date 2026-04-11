@@ -13,7 +13,6 @@ use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::events::handler::MemoryCommandHandler;
-use crate::memory::graph::GraphStore;
 use crate::memory::store::{CompressionStore, MemoryBackend, MemoryStore};
 use crate::memory::vfs::L1Generator;
 use crate::memory::EmbeddingProvider;
@@ -69,7 +68,6 @@ pub struct CompressionService {
     config: CompressionConfig,
     provider_name: String,
     signal_detector: SignalDetector,
-    graph_store: GraphStore,
     l1_generator: Option<Arc<L1Generator>>,
     command_handler: Option<Arc<MemoryCommandHandler>>,
 }
@@ -116,8 +114,6 @@ impl CompressionService {
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
-        let graph_store = GraphStore::new(database.clone());
-
         Self {
             database,
             extractor,
@@ -126,7 +122,6 @@ impl CompressionService {
             config,
             provider_name,
             signal_detector: SignalDetector::new(),
-            graph_store,
             l1_generator,
             command_handler: None,
         }
@@ -332,65 +327,6 @@ impl CompressionService {
                         error = %e,
                         "Failed to store fact"
                     );
-                }
-            }
-        }
-
-        // 4x. Update knowledge graph from extracted entities and relationships
-        for entity in &unified_result.entities {
-            if let Err(e) = self
-                .graph_store
-                .upsert_entity(&entity.name, &entity.kind, &entity.aliases)
-                .await
-            {
-                tracing::warn!(error = %e, entity = %entity.name, "Failed to upsert entity");
-            }
-        }
-        for rel in &unified_result.relationships {
-            if let Err(e) = self
-                .graph_store
-                .upsert_relationship(
-                    &rel.subject,
-                    &rel.relation,
-                    &rel.object,
-                    rel.context.as_deref(),
-                )
-                .await
-            {
-                tracing::warn!(error = %e, "Failed to upsert relationship");
-            }
-        }
-
-        // 4y. Build fact ↔ graph node associations for stored facts
-        for stored_fact in &stored_facts {
-            let entity_names =
-                crate::memory::graph::GraphStore::extract_entities_from_text(&stored_fact.content);
-            for name in &entity_names {
-                if let Ok(resolved) = self.graph_store.resolve_entity(name, None).await {
-                    if let Some(best) = resolved.first() {
-                        if let Err(e) = self
-                            .graph_store
-                            .link_memory_entity(&stored_fact.id, &best.node_id, 0.8, "extracted")
-                            .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                fact_id = %stored_fact.id,
-                                node = %best.node_id,
-                                "Failed to link fact to entity"
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Wiki-specific: sync wikilinks to graph
-            if stored_fact.fact_type == crate::memory::context::FactType::Wiki {
-                if let Err(e) =
-                    crate::memory::wiki_sync::sync_wikilinks_to_graph(stored_fact, &self.graph_store)
-                        .await
-                {
-                    tracing::warn!(error = %e, fact_id = %stored_fact.id, "Failed to sync wikilinks");
                 }
             }
         }

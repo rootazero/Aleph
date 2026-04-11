@@ -181,41 +181,9 @@ impl DreamStage for TunnelDiscoveryStage {
                     );
 
                     if sim >= TUNNEL_SIMILARITY_THRESHOLD {
-                        // Create a tunnel edge in the knowledge graph
-                        let context_key = format!("tunnel:{topic}");
-
-                        // Ensure nodes exist for both facts
-                        let node_a = ctx
-                            .graph_store
-                            .upsert_node(
-                                &fact_a.content,
-                                fact_a.fact_type.as_str(),
-                                &[],
-                                None,
-                            )
-                            .await?;
-
-                        let node_b = ctx
-                            .graph_store
-                            .upsert_node(
-                                &fact_b.content,
-                                fact_b.fact_type.as_str(),
-                                &[],
-                                None,
-                            )
-                            .await?;
-
-                        ctx.graph_store
-                            .upsert_edge(
-                                &node_a.id,
-                                &node_b.id,
-                                "tunnel",
-                                &context_key,
-                                sim,  // confidence = similarity
-                                1.0,  // weight_delta
-                            )
-                            .await?;
-
+                        // NOTE: Tunnel edges were previously stored in graph_nodes/graph_edges.
+                        // That system has been replaced by Knowledge Notes. Tunnel discovery
+                        // now only logs the relationship — wiring to notes_links is a future task.
                         tunnels_created += 1;
                         debug!(
                             topic = %topic,

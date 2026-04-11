@@ -70,6 +70,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
 // Graph tables + indexes
 // ---------------------------------------------------------------------------
 
+// Deprecated: graph tables are no longer created for new databases.
+// Constants retained for reference until explicit migration drops these tables.
+#[allow(dead_code)]
 const GRAPH_NODES_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS graph_nodes (
     id          TEXT PRIMARY KEY,
@@ -88,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_graph_nodes_kind  ON graph_nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_agent ON graph_nodes(agent);
 "#;
 
+#[allow(dead_code)]
 const GRAPH_EDGES_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS graph_edges (
     id           TEXT PRIMARY KEY,
@@ -115,6 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_graph_edges_agent        ON graph_edges(agent);
 // Memory entities table + indexes (fact ↔ node bidirectional index)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 const MEMORY_ENTITIES_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS memory_entities (
     id          TEXT PRIMARY KEY,
@@ -400,14 +405,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(FACTS_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create facts_fts table: {e}")))?;
 
-    conn.execute_batch(GRAPH_NODES_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create graph_nodes table: {e}")))?;
-
-    conn.execute_batch(GRAPH_EDGES_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create graph_edges table: {e}")))?;
-
-    conn.execute_batch(MEMORY_ENTITIES_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create memory_entities table: {e}")))?;
+    // NOTE: graph_nodes, graph_edges, memory_entities tables are deprecated.
+    // They are no longer created for new databases. Existing data remains
+    // until explicit cleanup. Knowledge Notes are the single source of truth.
 
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;

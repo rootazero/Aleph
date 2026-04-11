@@ -14,7 +14,6 @@ use crate::config::{
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
 use crate::memory::decay::DecayConfig;
-use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
 use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
 use crate::memory::store::{DreamStore, MemoryBackend};
 use crate::providers::AiProvider;
@@ -35,6 +34,36 @@ pub use stages::{
     WikiIngestStage, WikiLintStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster};
+
+// ---------------------------------------------------------------------------
+// Graph decay types (deprecated — kept for backward compatibility with
+// existing DreamReport and DecayStage until fully migrated to Notes)
+// ---------------------------------------------------------------------------
+
+/// Graph decay summary.
+#[derive(Debug, Clone, Default)]
+pub struct GraphDecayReport {
+    pub pruned_nodes: u64,
+    pub pruned_edges: u64,
+}
+
+/// Config for graph decay.
+#[derive(Debug, Clone)]
+pub struct GraphDecayConfig {
+    pub node_decay_per_day: f32,
+    pub edge_decay_per_day: f32,
+    pub min_score: f32,
+}
+
+impl Default for GraphDecayConfig {
+    fn default() -> Self {
+        Self {
+            node_decay_per_day: 0.02,
+            edge_decay_per_day: 0.03,
+            min_score: 0.1,
+        }
+    }
+}
 
 // Re-export gate types
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
@@ -57,7 +86,6 @@ pub struct DreamContext {
     pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
     pub synthesis_insights_count: usize,
     pub database: MemoryBackend,
-    pub graph_store: GraphStore,
     pub graph_decay_config: GraphDecayConfig,
     pub memory_decay_config: DecayConfig,
     pub command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
@@ -275,7 +303,6 @@ struct DreamRunReport {
 /// DreamDaemon orchestrates idle-time consolidation and decay.
 pub struct DreamDaemon {
     database: MemoryBackend,
-    graph_store: GraphStore,
     config: ConfigDreamingConfig,
     graph_decay: GraphDecayConfig,
     memory_decay: DecayConfig,
@@ -297,7 +324,6 @@ impl DreamDaemon {
         let memory_decay = decay_config_from_policy(&config.memory_decay);
 
         Ok(Self {
-            graph_store: GraphStore::new(database.clone()),
             database,
             config: config.dreaming.clone(),
             graph_decay,
@@ -533,7 +559,6 @@ impl DreamDaemon {
             activity_checker: Arc::new(move || last_activity_timestamp() > activity_snapshot),
             synthesis_insights_count: 0,
             database: self.database.clone(),
-            graph_store: self.graph_store.clone(),
             graph_decay_config: self.graph_decay.clone(),
             memory_decay_config: self.memory_decay.clone(),
             command_handler: self.command_handler.clone(),
@@ -768,7 +793,6 @@ mod pipeline_integration_tests {
         let backend = SqliteMemoryBackend::new(tmp.path())
                 .unwrap();
         let database: MemoryBackend = Arc::new(backend);
-        let graph_store = GraphStore::new(database.clone());
 
         let ctx = DreamContext {
             memories: Vec::new(),
@@ -784,7 +808,6 @@ mod pipeline_integration_tests {
             activity_checker: Arc::new(move || activity_detected),
             synthesis_insights_count: 0,
             database,
-            graph_store,
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,

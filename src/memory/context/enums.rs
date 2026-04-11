@@ -3,8 +3,8 @@
 //! In Aleph's memory system, a "Fact" ([`MemoryFact`](super::MemoryFact)) is the
 //! universal unit of persisted knowledge — not limited to factual statements, but
 //! encompassing preferences, wiki pages, skills, transcripts, synthesized insights,
-//! and agent experiences. Each Fact is connected to the knowledge graph via the
-//! `memory_entities` table, enabling structural retrieval across all knowledge types.
+//! and agent experiences. Knowledge Notes are the primary structural layer, with
+//! wikilink-based linking replacing the deprecated graph_nodes/graph_edges system.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

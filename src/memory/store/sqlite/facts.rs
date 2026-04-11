@@ -1009,10 +1009,6 @@ impl MemoryStore for SqliteMemoryBackend {
 
         self.update_fact(&fact).await?;
 
-        // Cascade: clean up memory_entities for invalidated fact
-        use crate::memory::store::GraphStore;
-        let _ = GraphStore::delete_memory_entities_for_fact(self, id, &fact.agent).await;
-
         Ok(())
     }
 

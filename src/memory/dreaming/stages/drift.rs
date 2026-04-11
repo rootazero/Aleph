@@ -472,7 +472,7 @@ mod tests {
     async fn execute_with_empty_new_facts_returns_empty_resolutions() {
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
-        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::memory::dreaming::GraphDecayConfig;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -494,7 +494,6 @@ mod tests {
             activity_checker: Arc::new(|| false),
             synthesis_insights_count: 0,
             database: database.clone(),
-            graph_store: GraphStore::new(database),
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,
@@ -565,7 +564,7 @@ mod tests {
     async fn execute_with_new_facts_no_similar_existing_returns_empty_resolutions() {
         use crate::memory::decay::DecayConfig;
         use crate::memory::dreaming::report::{DreamRunMetadata, DreamRunType};
-        use crate::memory::graph::{GraphDecayConfig, GraphStore};
+        use crate::memory::dreaming::GraphDecayConfig;
         use crate::sync_primitives::Arc;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -595,7 +594,6 @@ mod tests {
             activity_checker: Arc::new(|| false),
             synthesis_insights_count: 0,
             database: database.clone(),
-            graph_store: GraphStore::new(database),
             graph_decay_config: GraphDecayConfig::default(),
             memory_decay_config: DecayConfig::default(),
             command_handler: None,

@@ -12,7 +12,7 @@ mod tests {
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::types::SearchFilter;
-    use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
+    use crate::memory::store::MemoryStore;
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
@@ -85,72 +85,10 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Test 2: Graph nodes in different workspaces are isolated.
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_workspace_isolation_graph() {
-        let tmp = tempfile::tempdir().unwrap();
-        let backend = SqliteMemoryBackend::new(tmp.path())
-                .unwrap();
-
-        // Create "Bitcoin" node as kind="asset" in workspace ws-a
-        let node_a = GraphNode {
-            id: "bitcoin-ws-a".to_string(),
-            name: "Bitcoin".to_string(),
-            kind: "asset".to_string(),
-            aliases: vec!["BTC".to_string()],
-            metadata_json: "{}".to_string(),
-            decay_score: 1.0,
-            created_at: 1700000000,
-            updated_at: 1700000000,
-            agent: "ws-a".to_string(),
-        };
-        backend.upsert_node(&node_a, "ws-a").await.unwrap();
-
-        // Create "Bitcoin" node as kind="character" in workspace ws-b
-        let node_b = GraphNode {
-            id: "bitcoin-ws-b".to_string(),
-            name: "Bitcoin".to_string(),
-            kind: "character".to_string(),
-            aliases: vec![],
-            metadata_json: "{}".to_string(),
-            decay_score: 1.0,
-            created_at: 1700000000,
-            updated_at: 1700000000,
-            agent: "ws-b".to_string(),
-        };
-        backend.upsert_node(&node_b, "ws-b").await.unwrap();
-
-        // Resolve "Bitcoin" in workspace ws-a — should be "asset"
-        let resolved_a = backend
-            .resolve_entity("Bitcoin", None, "ws-a")
-            .await
-            .unwrap();
-        assert_eq!(resolved_a.len(), 1, "should find exactly 1 entity in ws-a");
-        assert_eq!(resolved_a[0].kind, "asset");
-
-        // Resolve "Bitcoin" in workspace ws-b — should be "character"
-        let resolved_b = backend
-            .resolve_entity("Bitcoin", None, "ws-b")
-            .await
-            .unwrap();
-        assert_eq!(resolved_b.len(), 1, "should find exactly 1 entity in ws-b");
-        assert_eq!(resolved_b[0].kind, "character");
-
-        // get_node should respect workspace
-        let got_a = backend.get_node("bitcoin-ws-a", "ws-a").await.unwrap();
-        assert!(got_a.is_some(), "node should exist in ws-a");
-        assert_eq!(got_a.unwrap().kind, "asset");
-
-        let got_b = backend.get_node("bitcoin-ws-b", "ws-b").await.unwrap();
-        assert!(got_b.is_some(), "node should exist in ws-b");
-        assert_eq!(got_b.unwrap().kind, "character");
-    }
+    // NOTE: Graph workspace isolation test removed — graph tables are deprecated.
 
     // -----------------------------------------------------------------------
-    // Test 3: Default workspace backward compatibility.
+    // Test 2: Default workspace backward compatibility.
     // -----------------------------------------------------------------------
 
     #[tokio::test]

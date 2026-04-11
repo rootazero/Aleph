@@ -8,7 +8,6 @@ pub mod schema;
 pub mod vec;
 
 mod facts;
-mod graph;
 pub mod dream_reports;
 pub mod notes;
 pub mod recall_signals;
@@ -236,24 +235,6 @@ impl SqliteMemoryBackend {
 
         conn.query_row(&sql, [], |row| row.get(0))
             .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
-    }
-
-    /// Count graph nodes and edges.
-    pub async fn get_graph_stats(&self) -> Result<(i64, i64), AlephError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
-
-        let nodes: i64 = conn
-            .query_row("SELECT COUNT(*) FROM graph_nodes", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("count graph_nodes failed: {e}")))?;
-
-        let edges: i64 = conn
-            .query_row("SELECT COUNT(*) FROM graph_edges", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("count graph_edges failed: {e}")))?;
-
-        Ok((nodes, edges))
     }
 
     /// Get uncompressed raw session chunks for the compression pipeline.
