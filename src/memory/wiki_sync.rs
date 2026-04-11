@@ -104,13 +104,13 @@ mod tests {
             is_valid: true,
             invalidation_reason: None,
             decay_invalidated_at: None,
-            specificity: FactSpecificity::General,
+            specificity: FactSpecificity::default(),
             temporal_scope: TemporalScope::Permanent,
             namespace: "owner".to_string(),
             agent: "default".to_string(),
             similarity_score: None,
             path: path.to_string(),
-            layer: MemoryLayer::Core,
+            layer: MemoryLayer::L2Detail,
             category: MemoryCategory::Patterns,
             fact_source: FactSource::Manual,
             content_hash: String::new(),
@@ -123,7 +123,7 @@ mod tests {
             access_count: 0,
             last_accessed_at: None,
             valid_from: None,
-            expires_at: None,
+            valid_to: None,
         }
     }
 
@@ -131,7 +131,7 @@ mod tests {
     fn returns_empty_report_for_non_wiki_fact() {
         // Verify the early-return logic without async (structural check)
         let fact = MemoryFact {
-            fact_type: FactType::Observation,
+            fact_type: FactType::Other,
             ..make_wiki_fact("f1", "aleph://notes/test.md", "no wikilinks here")
         };
         assert_ne!(fact.fact_type, FactType::Wiki);
