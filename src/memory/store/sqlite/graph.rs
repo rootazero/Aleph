@@ -641,6 +641,35 @@ impl GraphStore for SqliteMemoryBackend {
 
         Ok(count)
     }
+
+    async fn get_high_score_nodes(
+        &self,
+        min_score: f32,
+        limit: usize,
+        workspace: &str,
+    ) -> Result<Vec<GraphNode>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, kind, aliases, metadata, decay_score, created_at, updated_at, agent \
+                 FROM graph_nodes \
+                 WHERE decay_score > ?1 AND agent = ?2 \
+                 ORDER BY decay_score DESC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| AlephError::config(format!("get_high_score_nodes prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(
+                params![min_score as f64, workspace, limit as i64],
+                row_to_node,
+            )
+            .map_err(|e| AlephError::config(format!("get_high_score_nodes query: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("get_high_score_nodes collect: {e}")))?;
+
+        Ok(rows)
+    }
 }
 
 // ============================================================================
@@ -1056,5 +1085,34 @@ mod tests {
             .edge_count_for_entities(&unknown, "default")
             .unwrap();
         assert!(counts3.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_high_score_nodes() {
+        let (_tmp, backend) = create_test_backend();
+
+        // Insert nodes with different decay scores
+        let mut node1 = make_test_node("gn-high", "Rust", "language");
+        node1.decay_score = 0.9;
+        backend.upsert_node(&node1, "default").await.unwrap();
+
+        let mut node2 = make_test_node("gn-low", "Python", "language");
+        node2.decay_score = 0.2;
+        backend.upsert_node(&node2, "default").await.unwrap();
+
+        let mut node3 = make_test_node("gn-mid", "Go", "language");
+        node3.decay_score = 0.6;
+        backend.upsert_node(&node3, "default").await.unwrap();
+
+        // Query with threshold 0.5 — should return Rust (0.9) and Go (0.6), sorted desc
+        let nodes = backend.get_high_score_nodes(0.5, 10, "default").await.unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].name, "Rust");
+        assert_eq!(nodes[1].name, "Go");
+
+        // Query with limit 1 — should return only Rust
+        let nodes = backend.get_high_score_nodes(0.5, 1, "default").await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "Rust");
     }
 }

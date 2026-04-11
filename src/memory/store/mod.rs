@@ -439,6 +439,14 @@ pub trait GraphStore: Send + Sync {
         source: &str,
         workspace: &str,
     ) -> Result<usize, AlephError>;
+
+    /// Get graph nodes with decay_score above a threshold, sorted by score descending.
+    async fn get_high_score_nodes(
+        &self,
+        min_score: f32,
+        limit: usize,
+        workspace: &str,
+    ) -> Result<Vec<GraphNode>, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
