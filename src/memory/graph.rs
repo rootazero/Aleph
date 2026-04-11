@@ -376,18 +376,19 @@ impl GraphStore {
         Ok(GraphEdge::from(store_edge))
     }
 
-    /// Link a memory to a graph entity.
-    ///
-    /// TODO: Implement via MemoryBackend when memory_entities support is added.
+    /// Link a memory fact to a graph entity via `memory_entities`.
     pub async fn link_memory_entity(
         &self,
-        _memory_id: &str,
-        _node_id: &str,
-        _weight: f32,
-        _source: &str,
+        fact_id: &str,
+        node_id: &str,
+        weight: f32,
+        source: &str,
     ) -> Result<(), AlephError> {
-        // TODO: Delegate to store trait when memory_entities table is available in Lance
-        Ok(())
+        use crate::memory::store::GraphStore as StoreGraphStore;
+        StoreGraphStore::link_memory_entity(
+            self.database.as_ref(), fact_id, node_id, weight, source, "default",
+        )
+        .await
     }
 
     /// Resolve entities by name or alias.
@@ -415,15 +416,37 @@ impl GraphStore {
             .collect())
     }
 
-    /// Get memory IDs linked to an entity.
-    ///
-    /// TODO: Implement via MemoryBackend when memory_entities support is added.
-    pub async fn get_memory_ids_for_entity(
+    /// Get fact IDs linked to a graph entity via `memory_entities`.
+    pub async fn get_fact_ids_for_entity(
         &self,
-        _node_id: &str,
-    ) -> Result<Vec<String>, AlephError> {
-        // TODO: Delegate to store trait when memory_entities table is available in Lance
-        Ok(Vec::new())
+        node_id: &str,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
+        use crate::memory::store::GraphStore as StoreGraphStore;
+        StoreGraphStore::get_facts_for_node(
+            self.database.as_ref(), node_id, "default",
+        )
+        .await
+    }
+
+    /// Get graph nodes linked to a fact via `memory_entities`.
+    pub async fn get_nodes_for_fact(
+        &self,
+        fact_id: &str,
+    ) -> Result<Vec<(GraphNode, f32)>, AlephError> {
+        use crate::memory::store::GraphStore as StoreGraphStore;
+        let store_nodes = StoreGraphStore::get_nodes_for_fact(
+            self.database.as_ref(), fact_id, "default",
+        )
+        .await?;
+        Ok(store_nodes
+            .into_iter()
+            .map(|(sn, w)| (GraphNode::from(sn), w))
+            .collect())
+    }
+
+    /// Access the underlying MemoryBackend for direct trait calls.
+    pub fn database_ref(&self) -> &dyn crate::memory::store::GraphStore {
+        self.database.as_ref()
     }
 
     /// Apply decay to nodes and edges and prune below threshold.
