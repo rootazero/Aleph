@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
-use crate::memory::context::FactType;
+use crate::memory::context::{FactSource, FactType};
 use crate::memory::store::MemoryStore;
 use crate::wiki::wikilink::extract_wikilinks;
 
@@ -87,6 +87,36 @@ impl DreamStage for WikiLintStage {
         for slug in &known_slugs {
             if !inbound_links.contains(slug) {
                 report.orphan_pages.push(slug.clone());
+            }
+        }
+
+        // Source-fact staleness detection for synthesis wiki pages
+        let stale_threshold: f32 = 0.5;
+        for fact in &wiki_facts {
+            if fact.fact_source != FactSource::Synthesis {
+                continue;
+            }
+            let total = fact.source_memory_ids.len();
+            if total == 0 {
+                continue;
+            }
+            let valid = fact
+                .source_memory_ids
+                .iter()
+                .filter(|sid| all_facts.iter().any(|f| f.id == **sid && f.is_valid))
+                .count();
+            let ratio = valid as f32 / total as f32;
+            if ratio < stale_threshold {
+                let slug = fact
+                    .path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or("")
+                    .trim_end_matches(".md")
+                    .to_string();
+                if !report.stale_pages.contains(&slug) {
+                    report.stale_pages.push(slug);
+                }
             }
         }
 
