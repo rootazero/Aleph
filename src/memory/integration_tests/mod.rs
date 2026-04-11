@@ -76,6 +76,134 @@ mod integration_tests {
 }
 
 // =============================================================================
+// Graph-Augmented Retrieval — end-to-end integration test
+// =============================================================================
+
+#[cfg(test)]
+mod graph_augmented_retrieval {
+    use crate::memory::context::FactType;
+    use crate::memory::context::MemoryFact;
+    use crate::memory::hybrid_retrieval::graph_expander::{GraphExpander, GraphExpansionConfig};
+    use crate::memory::store::types::ScoredFact;
+    use crate::memory::store::{GraphEdge, GraphNode, GraphStore, MemoryStore, SqliteMemoryBackend};
+    use crate::sync_primitives::Arc;
+
+    #[tokio::test]
+    async fn test_graph_augmented_retrieval_flow() {
+        // 1. Set up in-memory test backend
+        let backend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
+
+        // 2. Create two facts about related topics
+        let fact_a = MemoryFact::new(
+            "The user prefers Rust for systems programming".to_string(),
+            FactType::Preference,
+            vec![],
+        );
+        let fact_b = MemoryFact::new(
+            "Aleph is built with Rust and uses axum".to_string(),
+            FactType::Project,
+            vec![],
+        );
+
+        backend.insert_fact(&fact_a).await.unwrap();
+        backend.insert_fact(&fact_b).await.unwrap();
+
+        // 3. Create graph node "Rust" and link both facts to it
+        let rust_node = GraphNode {
+            id: "gn-rust".to_string(),
+            name: "Rust".to_string(),
+            kind: "technology".to_string(),
+            aliases: vec![],
+            metadata_json: String::new(),
+            decay_score: 1.0,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            agent: "default".to_string(),
+        };
+        backend.upsert_node(&rust_node, "default").await.unwrap();
+
+        backend
+            .link_memory_entity(&fact_a.id, "gn-rust", 0.8, "extracted", "default")
+            .await
+            .unwrap();
+        backend
+            .link_memory_entity(&fact_b.id, "gn-rust", 0.9, "extracted", "default")
+            .await
+            .unwrap();
+
+        // 4. Verify bidirectional lookups
+        let nodes = backend
+            .get_nodes_for_fact(&fact_a.id, "default")
+            .await
+            .unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].0.name, "Rust");
+
+        let facts = backend
+            .get_facts_for_node("gn-rust", "default")
+            .await
+            .unwrap();
+        assert_eq!(facts.len(), 2);
+
+        // 5. Create a second node and edge so fact_b is reachable from fact_a via graph traversal:
+        //    fact_a → gn-rust --[used_by]--> gn-aleph → fact_b
+        let aleph_node = GraphNode {
+            id: "gn-aleph".to_string(),
+            name: "Aleph".to_string(),
+            kind: "project".to_string(),
+            aliases: vec![],
+            metadata_json: String::new(),
+            decay_score: 1.0,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            agent: "default".to_string(),
+        };
+        backend.upsert_node(&aleph_node, "default").await.unwrap();
+        backend
+            .link_memory_entity(&fact_b.id, "gn-aleph", 0.9, "extracted", "default")
+            .await
+            .unwrap();
+
+        let edge = GraphEdge {
+            id: "ge-rust-aleph".to_string(),
+            from_id: "gn-rust".to_string(),
+            to_id: "gn-aleph".to_string(),
+            relation: "used_by".to_string(),
+            weight: 1.0,
+            confidence: 0.9,
+            context_key: String::new(),
+            decay_score: 1.0,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            last_seen_at: 1700000000,
+            agent: "default".to_string(),
+        };
+        backend.upsert_edge(&edge, "default").await.unwrap();
+
+        // 6. Run GraphExpander seeded with fact_a only; fact_b should be discovered
+        let seeds = vec![ScoredFact {
+            fact: fact_a.clone(),
+            score: 0.9,
+        }];
+
+        let expander = GraphExpander::new(backend.clone(), GraphExpansionConfig::default());
+        let expanded = expander.expand(&seeds, "default").await.unwrap();
+
+        // fact_b should be discovered via: fact_a → gn-rust → used_by → gn-aleph → fact_b
+        assert!(
+            !expanded.is_empty(),
+            "Should discover fact_b via graph expansion"
+        );
+        assert_eq!(expanded[0].scored_fact.fact.id, fact_b.id);
+        assert!(
+            expanded[0].scored_fact.score < 0.9,
+            "Expanded score ({}) should be lower than seed score (0.9)",
+            expanded[0].scored_fact.score
+        );
+    }
+}
+
+// =============================================================================
 // Event Sourcing — full round-trip integration test
 // =============================================================================
 
