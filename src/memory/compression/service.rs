@@ -466,6 +466,160 @@ impl CompressionService {
         Ok(result)
     }
 
+    /// Compress memories into Knowledge Notes instead of raw facts.
+    ///
+    /// This method follows the same pipeline as `compress_in_workspace` but
+    /// routes extracted information into markdown-based Knowledge Notes via
+    /// `NoteIndexer` instead of storing individual `MemoryFact` rows.
+    pub async fn compress_to_notes<S: crate::memory::notes::store::NoteStore + Send + Sync>(
+        &self,
+        workspace_id: &str,
+        indexer: &crate::memory::notes::NoteIndexer<S>,
+    ) -> Result<CompressionResult, AlephError> {
+        let start = Instant::now();
+
+        // 1. Get last compression timestamp
+        let last_timestamp = self
+            .database
+            .get_last_compression_timestamp()
+            .await?
+            .unwrap_or(0);
+
+        // 2. Fetch raw session chunks (same as compress_in_workspace)
+        let raw_facts = self
+            .database
+            .get_uncompressed_session_facts(
+                last_timestamp,
+                if workspace_id == crate::memory::DEFAULT_AGENT {
+                    None
+                } else {
+                    Some(workspace_id)
+                },
+                self.config.batch_size as usize,
+            )
+            .map_err(|e| AlephError::other(format!("Failed to fetch session facts: {e}")))?;
+
+        let raw_facts: Vec<_> = raw_facts
+            .into_iter()
+            .filter(|f| f.fact_type != crate::memory::context::FactType::Transcript)
+            .collect();
+
+        let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts
+            .iter()
+            .map(|fact| {
+                crate::memory::context::MemoryEntry::new(
+                    fact.id.clone(),
+                    crate::memory::context::ContextAnchor::now("".to_string()),
+                    fact.content.clone(),
+                    String::new(),
+                )
+            })
+            .collect();
+
+        if memories.is_empty() {
+            tracing::debug!("No uncompressed session memories for note-based compression");
+            return Ok(CompressionResult::empty());
+        }
+
+        tracing::info!(
+            memory_count = memories.len(),
+            "Starting note-based compression"
+        );
+
+        // 3. Get existing note titles
+        let existing_notes = indexer.store().list_notes().await.unwrap_or_default();
+        let existing_titles: Vec<String> = existing_notes.iter().map(|n| n.title.clone()).collect();
+
+        // 4. Extract note updates via LLM
+        let note_updates = self
+            .extractor
+            .extract_note_updates(&memories, &existing_titles)
+            .await?;
+
+        // 5. Apply note updates
+        let mut notes_created = 0u32;
+        let mut facts_stored = 0u32;
+
+        for update in &note_updates.updates {
+            use crate::memory::notes::extractor::NoteAction;
+
+            match update.action {
+                NoteAction::Create => {
+                    let note = crate::memory::notes::KnowledgeNote {
+                        title: update.note_title.clone(),
+                        category: update
+                            .category
+                            .clone()
+                            .unwrap_or_else(|| "other".to_string()),
+                        tags: update.tags.clone().unwrap_or_default(),
+                        facts: update.new_facts.clone(),
+                        links: update.links.clone(),
+                        created_at: chrono::Utc::now().timestamp(),
+                        updated_at: chrono::Utc::now().timestamp(),
+                        content_hash: String::new(),
+                    };
+                    if let Err(e) = indexer.write_note(&note).await {
+                        tracing::warn!(
+                            error = %e,
+                            title = %update.note_title,
+                            "Failed to create note"
+                        );
+                        continue;
+                    }
+                    let path = indexer
+                        .notes_dir()
+                        .join(format!("{}.md", update.note_title));
+                    let _ = indexer.index_file(&path).await;
+                    notes_created += 1;
+                    facts_stored += update.new_facts.len() as u32;
+                }
+                NoteAction::Append | NoteAction::Update => {
+                    if let Err(e) = indexer
+                        .append_to_note(&update.note_title, &update.new_facts, &update.links)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            title = %update.note_title,
+                            "Failed to append to note"
+                        );
+                        continue;
+                    }
+                    facts_stored += update.new_facts.len() as u32;
+                }
+            }
+        }
+
+        // 6. Invalidate consumed raw chunks
+        let consumed_ids: Vec<String> = raw_facts.iter().map(|f| f.id.clone()).collect();
+        match self.database.invalidate_consumed_chunks(&consumed_ids) {
+            Ok(n) => tracing::info!(invalidated = n, "Invalidated consumed raw chunks (notes)"),
+            Err(e) => tracing::warn!(error = %e, "Failed to invalidate consumed raw chunks"),
+        }
+
+        // 7. Update compression timestamp
+        let latest_timestamp = raw_facts.iter().map(|f| f.created_at).max().unwrap_or(0);
+        self.database
+            .set_last_compression_timestamp(latest_timestamp)
+            .await?;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        tracing::info!(
+            notes_created,
+            facts_stored,
+            duration_ms,
+            "Note-based compression complete"
+        );
+
+        Ok(CompressionResult {
+            memories_processed: memories.len() as u32,
+            facts_extracted: facts_stored,
+            facts_invalidated: 0,
+            duration_ms,
+        })
+    }
+
     /// Check if compression should be triggered and execute if needed
     pub async fn check_and_compress(&self) -> Result<Option<CompressionResult>, AlephError> {
         let trigger = self.scheduler.should_trigger_compression();

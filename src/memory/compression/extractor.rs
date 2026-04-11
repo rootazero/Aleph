@@ -229,6 +229,47 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
         Ok(facts_with_embeddings)
     }
 
+    /// Extract note updates from conversation memories.
+    ///
+    /// Uses the note extraction prompt to ask the LLM which knowledge notes
+    /// should be created, appended to, or updated based on the conversation.
+    pub async fn extract_note_updates(
+        &self,
+        memories: &[MemoryEntry],
+        existing_titles: &[String],
+    ) -> Result<crate::memory::notes::extractor::NoteExtractionResponse, AlephError> {
+        use crate::memory::notes::extractor::{build_note_extraction_prompt, NoteExtractionResponse};
+
+        if memories.is_empty() {
+            return Ok(NoteExtractionResponse { updates: vec![] });
+        }
+
+        let system_prompt = build_note_extraction_prompt(existing_titles);
+        let user_prompt = self.build_extraction_prompt(memories);
+
+        let msgs = [UnifiedMessage::user(&user_prompt)];
+        let response = self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(&system_prompt)))
+            .await
+            .map_err(|e| AlephError::other(format!("Note extraction LLM call failed: {e}")))?;
+
+        let text = response.text_content();
+
+        let json_value = match extract_json_robust(&text) {
+            Some(v) => v,
+            None => {
+                warn!("No JSON found in note extraction response, returning empty updates");
+                return Ok(NoteExtractionResponse { updates: vec![] });
+            }
+        };
+
+        serde_json::from_value(json_value).map_err(|e| {
+            warn!("Failed to parse note extraction JSON: {e}");
+            AlephError::other(format!("Failed to parse note extraction: {e}"))
+        })
+    }
+
     /// Get the system prompt for fact extraction
     fn get_system_prompt(&self) -> String {
         r#"You are a memory compression assistant. Extract key facts, preferences, and plans from conversations.

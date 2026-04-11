@@ -41,6 +41,11 @@ impl<S: NoteStore> NoteIndexer<S> {
         &self.notes_dir
     }
 
+    /// Getter for the underlying store.
+    pub fn store(&self) -> &Arc<S> {
+        &self.store
+    }
+
     /// Full rebuild: scan all `.md` files, parse, and index.
     ///
     /// Skips files whose `content_hash` matches the existing index entry.
