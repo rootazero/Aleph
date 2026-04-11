@@ -72,10 +72,14 @@ pub fn GraphCanvas(
 
         let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
 
-        // Set canvas size to container
-        let rect = canvas.get_bounding_client_rect();
-        let w = rect.width();
-        let h = rect.height();
+        // Initial canvas size — rAF loop will resize dynamically from parent
+        let (w, h) = canvas
+            .parent_element()
+            .map(|p| {
+                let r = p.get_bounding_client_rect();
+                (r.width().max(1.0), r.height().max(1.0))
+            })
+            .unwrap_or((800.0, 600.0));
         let dpr = web_sys::window()
             .map(|w| w.device_pixel_ratio())
             .unwrap_or(1.0);
@@ -105,10 +109,31 @@ pub fn GraphCanvas(
         let raf_h_inner = raf_h.clone();
         let raf_c_inner = raf_c.clone();
 
+        let canvas_for_resize = canvas.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             let mut state = gs_render.borrow_mut();
             if !state.is_running {
                 return;
+            }
+
+            // Dynamic canvas resize: check parent size each frame
+            if let Some(parent) = canvas_for_resize.parent_element() {
+                let rect = parent.get_bounding_client_rect();
+                let pw = rect.width();
+                let ph = rect.height();
+                if pw > 1.0 && ph > 1.0 {
+                    let cur_w = canvas_for_resize.width() as f64 / dpr;
+                    let cur_h = canvas_for_resize.height() as f64 / dpr;
+                    if (pw - cur_w).abs() > 1.0 || (ph - cur_h).abs() > 1.0 {
+                        canvas_for_resize.set_width((pw * dpr) as u32);
+                        canvas_for_resize.set_height((ph * dpr) as u32);
+                        let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
+                        state.viewport.width = pw;
+                        state.viewport.height = ph;
+                        state.viewport.offset.x = pw / 2.0;
+                        state.viewport.offset.y = ph / 2.0;
+                    }
+                }
             }
 
             // Physics tick — use destructuring to get disjoint borrows
