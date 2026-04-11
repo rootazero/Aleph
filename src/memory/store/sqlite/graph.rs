@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
+use std::time::SystemTime;
 
 use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
@@ -464,6 +465,173 @@ impl GraphStore for SqliteMemoryBackend {
 
         Ok(stats)
     }
+
+    async fn link_memory_entity(
+        &self,
+        fact_id: &str,
+        node_id: &str,
+        weight: f32,
+        source: &str,
+        workspace: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        let id = format!("me_{}", uuid::Uuid::new_v4());
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        conn.execute(
+            "INSERT INTO memory_entities (id, fact_id, node_id, weight, source, created_at, agent) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(fact_id, node_id) DO UPDATE SET weight = ?4, source = ?5",
+            params![id, fact_id, node_id, weight as f64, source, now, workspace],
+        )
+        .map_err(|e| AlephError::config(format!("link_memory_entity: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn get_nodes_for_fact(
+        &self,
+        fact_id: &str,
+        workspace: &str,
+    ) -> Result<Vec<(GraphNode, f32)>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT gn.id, gn.name, gn.kind, gn.aliases, gn.metadata, \
+                        gn.decay_score, gn.created_at, gn.updated_at, gn.agent, \
+                        me.weight \
+                 FROM memory_entities me \
+                 JOIN graph_nodes gn ON gn.id = me.node_id \
+                 WHERE me.fact_id = ?1 AND me.agent = ?2",
+            )
+            .map_err(|e| AlephError::config(format!("get_nodes_for_fact prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![fact_id, workspace], |row| {
+                let aliases_json: Option<String> = row.get("aliases")?;
+                let aliases: Vec<String> = aliases_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                let node = GraphNode {
+                    id: row.get("id")?,
+                    name: row.get("name")?,
+                    kind: row.get("kind")?,
+                    aliases,
+                    metadata_json: row.get::<_, Option<String>>("metadata")?.unwrap_or_default(),
+                    decay_score: row.get::<_, Option<f64>>("decay_score")?.unwrap_or(1.0) as f32,
+                    created_at: row.get("created_at")?,
+                    updated_at: row.get("updated_at")?,
+                    agent: row.get::<_, Option<String>>("agent")?.unwrap_or_default(),
+                };
+                let weight: f64 = row.get("weight")?;
+                Ok((node, weight as f32))
+            })
+            .map_err(|e| AlephError::config(format!("get_nodes_for_fact query: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("get_nodes_for_fact collect: {e}")))?;
+
+        Ok(rows)
+    }
+
+    async fn get_facts_for_node(
+        &self,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT fact_id, weight FROM memory_entities \
+                 WHERE node_id = ?1 AND agent = ?2",
+            )
+            .map_err(|e| AlephError::config(format!("get_facts_for_node prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![node_id, workspace], |row| {
+                let fact_id: String = row.get(0)?;
+                let weight: f64 = row.get(1)?;
+                Ok((fact_id, weight as f32))
+            })
+            .map_err(|e| AlephError::config(format!("get_facts_for_node query: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AlephError::config(format!("get_facts_for_node collect: {e}")))?;
+
+        Ok(rows)
+    }
+
+    async fn unlink_memory_entity(
+        &self,
+        fact_id: &str,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+
+        conn.execute(
+            "DELETE FROM memory_entities WHERE fact_id = ?1 AND node_id = ?2 AND agent = ?3",
+            params![fact_id, node_id, workspace],
+        )
+        .map_err(|e| AlephError::config(format!("unlink_memory_entity: {e}")))?;
+
+        Ok(())
+    }
+
+    async fn delete_memory_entities_for_fact(
+        &self,
+        fact_id: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let count = conn
+            .execute(
+                "DELETE FROM memory_entities WHERE fact_id = ?1 AND agent = ?2",
+                params![fact_id, workspace],
+            )
+            .map_err(|e| AlephError::config(format!("delete_memory_entities_for_fact: {e}")))?;
+
+        Ok(count)
+    }
+
+    async fn delete_memory_entities_for_node(
+        &self,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let count = conn
+            .execute(
+                "DELETE FROM memory_entities WHERE node_id = ?1 AND agent = ?2",
+                params![node_id, workspace],
+            )
+            .map_err(|e| AlephError::config(format!("delete_memory_entities_for_node: {e}")))?;
+
+        Ok(count)
+    }
+
+    async fn delete_memory_entities_by_source(
+        &self,
+        fact_id: &str,
+        source: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let count = conn
+            .execute(
+                "DELETE FROM memory_entities WHERE fact_id = ?1 AND source = ?2 AND agent = ?3",
+                params![fact_id, source, workspace],
+            )
+            .map_err(|e| AlephError::config(format!("delete_memory_entities_by_source: {e}")))?;
+
+        Ok(count)
+    }
 }
 
 // ============================================================================
@@ -713,6 +881,115 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn test_link_and_get_nodes_for_fact() {
+        let (_tmp, backend) = create_test_backend();
+        let node = make_test_node("gn-001", "Rust", "language");
+        backend.upsert_node(&node, "default").await.unwrap();
+
+        backend
+            .link_memory_entity("fact-001", "gn-001", 0.8, "extracted", "default")
+            .await
+            .unwrap();
+
+        let nodes = backend.get_nodes_for_fact("fact-001", "default").await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].0.id, "gn-001");
+        assert!((nodes[0].1 - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_get_facts_for_node() {
+        let (_tmp, backend) = create_test_backend();
+        let node = make_test_node("gn-001", "Rust", "language");
+        backend.upsert_node(&node, "default").await.unwrap();
+
+        backend
+            .link_memory_entity("fact-001", "gn-001", 0.9, "extracted", "default")
+            .await
+            .unwrap();
+        backend
+            .link_memory_entity("fact-002", "gn-001", 0.7, "wikilink", "default")
+            .await
+            .unwrap();
+
+        let facts = backend.get_facts_for_node("gn-001", "default").await.unwrap();
+        assert_eq!(facts.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_link_upserts_on_duplicate() {
+        let (_tmp, backend) = create_test_backend();
+        let node = make_test_node("gn-001", "Rust", "language");
+        backend.upsert_node(&node, "default").await.unwrap();
+
+        backend
+            .link_memory_entity("fact-001", "gn-001", 0.5, "extracted", "default")
+            .await
+            .unwrap();
+        backend
+            .link_memory_entity("fact-001", "gn-001", 0.9, "extracted", "default")
+            .await
+            .unwrap();
+
+        let nodes = backend.get_nodes_for_fact("fact-001", "default").await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert!((nodes[0].1 - 0.9).abs() < f32::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_unlink_memory_entity() {
+        let (_tmp, backend) = create_test_backend();
+        let node = make_test_node("gn-001", "Rust", "language");
+        backend.upsert_node(&node, "default").await.unwrap();
+
+        backend
+            .link_memory_entity("fact-001", "gn-001", 0.8, "extracted", "default")
+            .await
+            .unwrap();
+        backend
+            .unlink_memory_entity("fact-001", "gn-001", "default")
+            .await
+            .unwrap();
+
+        let nodes = backend.get_nodes_for_fact("fact-001", "default").await.unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_entities_for_fact() {
+        let (_tmp, backend) = create_test_backend();
+        let node_a = make_test_node("gn-a", "Rust", "language");
+        let node_b = make_test_node("gn-b", "Python", "language");
+        backend.upsert_node(&node_a, "default").await.unwrap();
+        backend.upsert_node(&node_b, "default").await.unwrap();
+
+        backend.link_memory_entity("fact-001", "gn-a", 0.8, "extracted", "default").await.unwrap();
+        backend.link_memory_entity("fact-001", "gn-b", 0.7, "wikilink", "default").await.unwrap();
+
+        let deleted = backend.delete_memory_entities_for_fact("fact-001", "default").await.unwrap();
+        assert_eq!(deleted, 2);
+
+        let nodes = backend.get_nodes_for_fact("fact-001", "default").await.unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_delete_memory_entities_for_node() {
+        let (_tmp, backend) = create_test_backend();
+        let node = make_test_node("gn-001", "Rust", "language");
+        backend.upsert_node(&node, "default").await.unwrap();
+
+        backend.link_memory_entity("fact-001", "gn-001", 0.8, "extracted", "default").await.unwrap();
+        backend.link_memory_entity("fact-002", "gn-001", 0.7, "extracted", "default").await.unwrap();
+
+        let deleted = backend.delete_memory_entities_for_node("gn-001", "default").await.unwrap();
+        assert_eq!(deleted, 2);
+
+        let facts = backend.get_facts_for_node("gn-001", "default").await.unwrap();
+        assert!(facts.is_empty());
     }
 
     #[test]
