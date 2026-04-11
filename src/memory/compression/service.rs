@@ -184,6 +184,13 @@ impl CompressionService {
             )
             .map_err(|e| AlephError::other(format!("Failed to fetch session facts: {e}")))?;
 
+        // Transcript facts are raw conversation data stored for direct retrieval;
+        // they must not be re-compressed into structured facts.
+        let raw_facts: Vec<_> = raw_facts
+            .into_iter()
+            .filter(|f| f.fact_type != crate::memory::context::FactType::Transcript)
+            .collect();
+
         let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts
             .iter()
             .map(|fact| {
@@ -349,6 +356,42 @@ impl CompressionService {
                 .await
             {
                 tracing::warn!(error = %e, "Failed to upsert relationship");
+            }
+        }
+
+        // 4y. Build fact ↔ graph node associations for stored facts
+        for fact_id in &stored_fact_ids {
+            if let Ok(Some(stored_fact)) = self.database.get_fact(fact_id).await {
+                let entity_names =
+                    crate::memory::graph::GraphStore::extract_entities_from_text(&stored_fact.content);
+                for name in &entity_names {
+                    if let Ok(resolved) = self.graph_store.resolve_entity(name, None).await {
+                        if let Some(best) = resolved.first() {
+                            if let Err(e) = self
+                                .graph_store
+                                .link_memory_entity(fact_id, &best.node_id, 0.8, "extracted")
+                                .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    fact_id = %fact_id,
+                                    node = %best.node_id,
+                                    "Failed to link fact to entity"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Wiki-specific: sync wikilinks to graph
+                if stored_fact.fact_type == crate::memory::context::FactType::Wiki {
+                    if let Err(e) =
+                        crate::memory::wiki_sync::sync_wikilinks_to_graph(&stored_fact, &self.graph_store)
+                            .await
+                    {
+                        tracing::warn!(error = %e, fact_id = %fact_id, "Failed to sync wikilinks");
+                    }
+                }
             }
         }
 
