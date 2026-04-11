@@ -3,8 +3,7 @@
 //! All fact mutations go through this handler:
 //! 1. Build MemoryEvent from command
 //! 2. Append to SQLite event store
-//!
-//! Projection to SQLite happens downstream.
+//! 3. Project to facts table via `project_to_store` (dual-write)
 
 use crate::sync_primitives::Arc;
 use uuid::Uuid;
