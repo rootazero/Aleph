@@ -49,6 +49,7 @@ pub mod store;
 pub mod transcript_indexer;
 pub mod value_estimator;
 pub mod vfs;
+pub mod wiki_sync;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
