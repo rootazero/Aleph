@@ -69,6 +69,8 @@ pub mod exec_approvals;
 pub mod execution_config;
 pub mod general_config;
 pub mod generation;
+pub mod graph;
+pub mod graph_types;
 pub mod generation_config;
 pub mod generation_providers;
 pub mod group_chat;
@@ -569,6 +571,12 @@ impl HandlerRegistry {
                 "agents.teams requires TeamStore — wire in Gateway startup".to_string(),
             )
         });
+
+        // Graph visualization handlers (placeholders — actual handlers wired with GraphStore in Gateway startup)
+        registry.register("graph.query", graph::handle_query);
+        registry.register("graph.neighbors", graph::handle_neighbors);
+        registry.register("graph.node_detail", graph::handle_node_detail);
+        registry.register("graph.search", graph::handle_search);
 
         // Tools visibility handlers (placeholders — actual handlers wired with ToolRegistry)
         registry.register("tools.catalog", tools_visibility::handle_catalog_stub);
