@@ -385,6 +385,60 @@ pub trait GraphStore: Send + Sync {
         policy: &GraphDecayPolicy,
         workspace: &str,
     ) -> Result<DecayStats, AlephError>;
+
+    /// Link a fact to a graph node with weight and source.
+    async fn link_memory_entity(
+        &self,
+        fact_id: &str,
+        node_id: &str,
+        weight: f32,
+        source: &str,
+        workspace: &str,
+    ) -> Result<(), AlephError>;
+
+    /// Get all graph nodes associated with a fact.
+    async fn get_nodes_for_fact(
+        &self,
+        fact_id: &str,
+        workspace: &str,
+    ) -> Result<Vec<(GraphNode, f32)>, AlephError>;
+
+    /// Get all fact IDs associated with a graph node.
+    async fn get_facts_for_node(
+        &self,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<Vec<(String, f32)>, AlephError>;
+
+    /// Remove a fact↔node association.
+    async fn unlink_memory_entity(
+        &self,
+        fact_id: &str,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<(), AlephError>;
+
+    /// Delete all memory_entities records for a given fact.
+    async fn delete_memory_entities_for_fact(
+        &self,
+        fact_id: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError>;
+
+    /// Delete all memory_entities records for a given node.
+    async fn delete_memory_entities_for_node(
+        &self,
+        node_id: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError>;
+
+    /// Delete memory_entities records for a fact filtered by source.
+    async fn delete_memory_entities_by_source(
+        &self,
+        fact_id: &str,
+        source: &str,
+        workspace: &str,
+    ) -> Result<usize, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
