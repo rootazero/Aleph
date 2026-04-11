@@ -26,6 +26,10 @@ fn arb_fact_type() -> impl Strategy<Value = FactType> {
         Just(FactType::SubagentSession),
         Just(FactType::SubagentCheckpoint),
         Just(FactType::SubagentTranscript),
+        Just(FactType::Lesson),
+        Just(FactType::Skill),
+        Just(FactType::Wiki),
+        Just(FactType::Transcript),
     ]
 }
 

@@ -269,6 +269,7 @@ impl CompressionService {
 
         // 4. Process each fact (conflict detection and storage)
         //    Tag each fact with the target workspace for memory isolation.
+        let mut stored_facts: Vec<crate::memory::context::MemoryFact> = Vec::new();
         let mut stored_fact_ids = Vec::new();
         let mut total_invalidated = 0u32;
         let mut affected_paths: HashSet<String> = HashSet::new();
@@ -323,6 +324,7 @@ impl CompressionService {
                     );
                     // Graph updates are now done in bulk after the storage loop
                     // using unified extraction results (entities + relationships).
+                    stored_facts.push(fact);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -360,37 +362,35 @@ impl CompressionService {
         }
 
         // 4y. Build fact ↔ graph node associations for stored facts
-        for fact_id in &stored_fact_ids {
-            if let Ok(Some(stored_fact)) = self.database.get_fact(fact_id).await {
-                let entity_names =
-                    crate::memory::graph::GraphStore::extract_entities_from_text(&stored_fact.content);
-                for name in &entity_names {
-                    if let Ok(resolved) = self.graph_store.resolve_entity(name, None).await {
-                        if let Some(best) = resolved.first() {
-                            if let Err(e) = self
-                                .graph_store
-                                .link_memory_entity(fact_id, &best.node_id, 0.8, "extracted")
-                                .await
-                            {
-                                tracing::warn!(
-                                    error = %e,
-                                    fact_id = %fact_id,
-                                    node = %best.node_id,
-                                    "Failed to link fact to entity"
-                                );
-                            }
+        for stored_fact in &stored_facts {
+            let entity_names =
+                crate::memory::graph::GraphStore::extract_entities_from_text(&stored_fact.content);
+            for name in &entity_names {
+                if let Ok(resolved) = self.graph_store.resolve_entity(name, None).await {
+                    if let Some(best) = resolved.first() {
+                        if let Err(e) = self
+                            .graph_store
+                            .link_memory_entity(&stored_fact.id, &best.node_id, 0.8, "extracted")
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                fact_id = %stored_fact.id,
+                                node = %best.node_id,
+                                "Failed to link fact to entity"
+                            );
                         }
                     }
                 }
+            }
 
-                // Wiki-specific: sync wikilinks to graph
-                if stored_fact.fact_type == crate::memory::context::FactType::Wiki {
-                    if let Err(e) =
-                        crate::memory::wiki_sync::sync_wikilinks_to_graph(&stored_fact, &self.graph_store)
-                            .await
-                    {
-                        tracing::warn!(error = %e, fact_id = %fact_id, "Failed to sync wikilinks");
-                    }
+            // Wiki-specific: sync wikilinks to graph
+            if stored_fact.fact_type == crate::memory::context::FactType::Wiki {
+                if let Err(e) =
+                    crate::memory::wiki_sync::sync_wikilinks_to_graph(stored_fact, &self.graph_store)
+                        .await
+                {
+                    tracing::warn!(error = %e, fact_id = %stored_fact.id, "Failed to sync wikilinks");
                 }
             }
         }
