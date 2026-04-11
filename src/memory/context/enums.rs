@@ -1,4 +1,10 @@
 //! Enum definitions for memory fact classification and metadata.
+//!
+//! In Aleph's memory system, a "Fact" ([`MemoryFact`](super::MemoryFact)) is the
+//! universal unit of persisted knowledge — not limited to factual statements, but
+//! encompassing preferences, wiki pages, skills, transcripts, synthesized insights,
+//! and agent experiences. Each Fact is connected to the knowledge graph via the
+//! `memory_entities` table, enabling structural retrieval across all knowledge types.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -30,6 +36,8 @@ pub enum FactType {
     Skill,
     /// Structured Markdown wiki page (first-class knowledge document).
     Wiki,
+    /// Conversation transcript chunk (embedded for direct retrieval)
+    Transcript,
     /// Other facts that don't fit above categories
     #[default]
     Other,
@@ -57,6 +65,7 @@ impl FactType {
             FactType::Lesson => "lesson",
             FactType::Skill => "skill",
             FactType::Wiki => "wiki",
+            FactType::Transcript => "transcript",
             FactType::Other => "other",
             FactType::SubagentRun => "subagent_run",
             FactType::SubagentSession => "subagent_session",
@@ -82,6 +91,7 @@ impl FactType {
             FactType::Lesson => "aleph://knowledge/lessons/",
             FactType::Skill => "aleph://skills/",
             FactType::Wiki => "aleph://wiki/",
+            FactType::Transcript => "aleph://transcript/",
             FactType::Other => "aleph://knowledge/",
             FactType::SubagentRun
             | FactType::SubagentSession
@@ -101,7 +111,7 @@ impl FactType {
             FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
                 MemoryCategory::Cases
             }
-            FactType::SubagentTranscript => MemoryCategory::Events,
+            FactType::SubagentTranscript | FactType::Transcript => MemoryCategory::Events,
         }
     }
 }
@@ -124,6 +134,7 @@ impl std::str::FromStr for FactType {
             "subagent_session" => Ok(FactType::SubagentSession),
             "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
             "subagent_transcript" => Ok(FactType::SubagentTranscript),
+            "transcript" => Ok(FactType::Transcript),
             "other" => Ok(FactType::Other),
             _ => Err(format!("Unknown fact type: {}", s)),
         }
