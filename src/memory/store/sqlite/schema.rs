@@ -112,6 +112,28 @@ CREATE INDEX IF NOT EXISTS idx_graph_edges_agent        ON graph_edges(agent);
 "#;
 
 // ---------------------------------------------------------------------------
+// Memory entities table + indexes (fact ↔ node bidirectional index)
+// ---------------------------------------------------------------------------
+
+const MEMORY_ENTITIES_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_entities (
+    id          TEXT PRIMARY KEY,
+    fact_id     TEXT NOT NULL,
+    node_id     TEXT NOT NULL,
+    weight      REAL NOT NULL DEFAULT 1.0,
+    source      TEXT NOT NULL DEFAULT 'extracted',
+    created_at  INTEGER NOT NULL,
+    agent       TEXT,
+
+    UNIQUE(fact_id, node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_me_fact_id ON memory_entities(fact_id);
+CREATE INDEX IF NOT EXISTS idx_me_node_id ON memory_entities(node_id);
+CREATE INDEX IF NOT EXISTS idx_me_agent   ON memory_entities(agent);
+"#;
+
+// ---------------------------------------------------------------------------
 // Recall signals table + indexes
 // ---------------------------------------------------------------------------
 
@@ -166,6 +188,43 @@ CREATE TABLE IF NOT EXISTS dream_reports (
 
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started
     ON dream_reports(started_at);
+"#;
+
+// ---------------------------------------------------------------------------
+// Dream status table (singleton row)
+// ---------------------------------------------------------------------------
+
+const DREAM_STATUS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS dream_status (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    last_run_at      INTEGER,
+    last_status      TEXT,
+    last_duration_ms INTEGER
+);
+"#;
+
+// ---------------------------------------------------------------------------
+// Daily insights table
+// ---------------------------------------------------------------------------
+
+const DAILY_INSIGHTS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS daily_insights (
+    date                 TEXT PRIMARY KEY,
+    content              TEXT NOT NULL,
+    source_memory_count  INTEGER NOT NULL DEFAULT 0,
+    created_at           INTEGER NOT NULL
+);
+"#;
+
+// ---------------------------------------------------------------------------
+// Compression metadata KV table
+// ---------------------------------------------------------------------------
+
+const COMPRESSION_METADATA_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS compression_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
 // ---------------------------------------------------------------------------
@@ -312,11 +371,23 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(GRAPH_EDGES_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create graph_edges table: {e}")))?;
 
+    conn.execute_batch(MEMORY_ENTITIES_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create memory_entities table: {e}")))?;
+
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
 
     conn.execute_batch(DREAM_REPORTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
+
+    conn.execute_batch(DREAM_STATUS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create dream_status table: {e}")))?;
+
+    conn.execute_batch(DAILY_INSIGHTS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create daily_insights table: {e}")))?;
+
+    conn.execute_batch(COMPRESSION_METADATA_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create compression_metadata table: {e}")))?;
 
     migrate_palace_topology(conn)?;
     migrate_temporal_validity(conn)?;
