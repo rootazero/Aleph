@@ -82,40 +82,21 @@ impl Color {
     }
 }
 
-pub fn kind_color(kind: &str) -> Color {
-    match kind {
-        "person" => Color::new(37, 99, 235),
-        "concept" => Color::new(124, 58, 237),
-        "project" => Color::new(5, 150, 105),
-        "tool" => Color::new(217, 119, 6),
-        "skill" => Color::new(220, 38, 38),
-        "event" => Color::new(8, 145, 178),
-        _ => Color::new(107, 114, 128),
-    }
-}
+/// Obsidian-style single purple color for all nodes.
+pub const NOTE_COLOR: Color = Color::new(167, 139, 250); // #a78bfa
 
-pub fn kind_icon(kind: &str) -> &'static str {
-    match kind {
-        "person" => "\u{1F464}",
-        "concept" => "\u{1F4A1}",
-        "project" => "\u{1F4C1}",
-        "tool" => "\u{1F527}",
-        "skill" => "\u{1F3AF}",
-        "event" => "\u{1F4C5}",
-        _ => "\u{2753}",
-    }
+/// Compute node radius from link count.
+pub fn note_radius(link_count: usize) -> f64 {
+    4.0 + (link_count as f64 + 1.0).ln() * 4.0
 }
 
 #[derive(Debug, Clone)]
 pub struct CanvasNode {
     pub id: String,
     pub name: String,
-    pub kind: String,
-    pub aliases: Vec<String>,
-    pub icon: &'static str,
+    pub category: String,
     pub color: Color,
     pub radius: f64,
-    pub has_wiki: bool,
     pub position: Vec2,
     pub velocity: Vec2,
     pub pinned: bool,

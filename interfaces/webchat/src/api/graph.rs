@@ -31,7 +31,7 @@ impl GraphApi {
     pub async fn node_detail(
         state: &DashboardState,
         node_id: &str,
-    ) -> Result<NodeDetailResponse, String> {
+    ) -> Result<NoteDetailResponse, String> {
         let params = json!({ "node_id": node_id });
         let result = state.rpc_call("graph.node_detail", params).await?;
         serde_json::from_value(result)

@@ -88,7 +88,18 @@ impl ForceLayout {
             total_energy += speed * speed;
         }
 
-        self.is_settled = total_energy < self.config.convergence_threshold;
+        // Continuous drift — never fully settle
+        if total_energy < self.config.convergence_threshold * 10.0 {
+            for node in nodes.iter_mut() {
+                if !node.pinned {
+                    let jx = (js_sys::Math::random() - 0.5) * 0.1;
+                    let jy = (js_sys::Math::random() - 0.5) * 0.1;
+                    node.velocity += Vec2::new(jx, jy);
+                    total_energy += 0.1;
+                }
+            }
+        }
+        self.is_settled = false; // Never stop animating
         total_energy
     }
 

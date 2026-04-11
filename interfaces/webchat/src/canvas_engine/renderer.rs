@@ -35,7 +35,7 @@ impl Renderer {
     }
 
     fn is_node_visible(node: &CanvasNode, kind_filter: &HashSet<String>) -> bool {
-        kind_filter.is_empty() || kind_filter.contains(&node.kind)
+        kind_filter.is_empty() || kind_filter.contains(&node.category)
     }
 
     fn draw_edges(
@@ -114,6 +114,8 @@ impl Renderer {
         hovered: Option<&str>,
         kind_filter: &HashSet<String>,
     ) {
+        use std::f64::consts::TAU;
+
         for node in nodes {
             if !Self::is_node_visible(node, kind_filter) {
                 continue;
@@ -126,69 +128,51 @@ impl Renderer {
             let y = node.position.y;
             let r = node.radius;
 
-            // Outer glow ring for selected / hovered nodes
-            if is_selected || is_hovered {
-                let glow_color = node.color.to_css_alpha(0.25);
-                ctx.set_fill_style_str(&glow_color);
-                ctx.begin_path();
-                let _ = ctx.arc(x, y, r + 8.0, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-            }
-
-            // Main node circle
-            let fill_color = node.color.to_css_alpha(if is_selected { 1.0 } else { 0.85 });
-            ctx.set_fill_style_str(&fill_color);
+            // Glow (larger, semi-transparent circle behind the dot)
+            let glow_alpha = if is_selected {
+                0.5
+            } else if is_hovered {
+                0.35
+            } else {
+                0.15
+            };
+            let glow_radius = r + if is_selected || is_hovered { 6.0 } else { 3.0 };
+            ctx.set_fill_style_str(&node.color.to_css_alpha(glow_alpha));
             ctx.begin_path();
-            let _ = ctx.arc(x, y, r, 0.0, std::f64::consts::TAU);
+            let _ = ctx.arc(x, y, glow_radius, 0.0, TAU);
             ctx.fill();
 
-            // Border ring
-            let border_color = if is_selected {
-                "rgba(255,255,255,0.9)".to_string()
-            } else if is_hovered {
-                "rgba(255,255,255,0.6)".to_string()
-            } else {
-                node.color.to_css_alpha(0.4)
-            };
-            ctx.set_stroke_style_str(&border_color);
-            ctx.set_line_width(if is_selected { 2.0 } else { 1.0 });
+            // Main dot
+            let dot_alpha = if is_selected { 1.0 } else { 0.85 };
+            ctx.set_fill_style_str(&node.color.to_css_alpha(dot_alpha));
             ctx.begin_path();
-            let _ = ctx.arc(x, y, r, 0.0, std::f64::consts::TAU);
-            ctx.stroke();
+            let _ = ctx.arc(x, y, r, 0.0, TAU);
+            ctx.fill();
 
-            // Small yellow dot for nodes that have a wiki page
-            if node.has_wiki {
-                ctx.set_fill_style_str("rgba(250,204,21,0.9)");
-                ctx.begin_path();
-                let _ = ctx.arc(x + r * 0.65, y - r * 0.65, 3.0, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-            }
-
-            // Icon emoji, only when the node is large enough to show it
-            if r >= 12.0 {
-                ctx.set_fill_style_str("rgba(255,255,255,0.9)");
-                ctx.set_font(&format!("{}px sans-serif", (r * 0.85).min(16.0)));
-                ctx.set_text_align("center");
-                ctx.set_text_baseline("middle");
-                let _ = ctx.fill_text(node.icon, x, y);
-            }
-
-            // Node name label below the circle
+            // Label — title is the star
             let label_color = if is_selected || is_hovered {
-                "rgba(241,245,249,1.0)"
+                "rgba(226,232,240,1.0)"
             } else {
                 "rgba(148,163,184,0.85)"
             };
             ctx.set_fill_style_str(label_color);
-            ctx.set_font("11px sans-serif");
+            let font_size = if is_selected || is_hovered {
+                12.0
+            } else {
+                11.0
+            };
+            ctx.set_font(&format!("{font_size}px sans-serif"));
             ctx.set_text_align("center");
             ctx.set_text_baseline("top");
-            let label = if node.name.len() > 20 {
-                format!("{}…", &node.name[..19])
+
+            // Truncate with char_indices for UTF-8 safety
+            let label = if node.name.chars().count() > 20 {
+                let truncated: String = node.name.chars().take(19).collect();
+                format!("{truncated}\u{2026}")
             } else {
                 node.name.clone()
             };
-            let _ = ctx.fill_text(&label, x, y + r + 12.0);
+            let _ = ctx.fill_text(&label, x, y + r + 6.0);
         }
     }
 }

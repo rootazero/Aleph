@@ -10,7 +10,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{adapt_graph_response, NodeDetailResponse};
+use crate::canvas_engine::adapter::{adapt_graph_response, NoteDetailResponse};
 use leptos::callback::Callback;
 
 use crate::canvas_engine::interaction::CanvasEvent;
@@ -29,7 +29,7 @@ pub fn CanvasView() -> impl IntoView {
     // Reactive signals
     let (view_mode, set_view_mode) = signal(ViewMode::Global { top_k: 100 });
     let (selected_node, set_selected_node) = signal(None::<String>);
-    let (node_detail, set_node_detail) = signal(None::<NodeDetailResponse>);
+    let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
     let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
     let search_query = RwSignal::new(String::new());
 
