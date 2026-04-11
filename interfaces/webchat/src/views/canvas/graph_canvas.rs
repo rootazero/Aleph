@@ -25,6 +25,10 @@ pub struct GraphState {
     pub hovered_node: Option<String>,
     pub kind_filter: HashSet<String>,
     pub is_running: bool,
+    /// Target position for smooth pan animation (world coordinates).
+    pub pan_target: Option<Vec2>,
+    /// Animation progress (0.0 → 1.0).
+    pub pan_progress: f64,
 }
 
 impl GraphState {
@@ -39,6 +43,8 @@ impl GraphState {
             hovered_node: None,
             kind_filter: HashSet::new(),
             is_running: false,
+            pan_target: None,
+            pan_progress: 0.0,
         }
     }
 }
@@ -147,6 +153,57 @@ pub fn GraphCanvas(
                 layout.tick(nodes, edges);
             }
 
+            // Smooth pan-to-center animation
+            if let Some(target) = state.pan_target {
+                state.pan_progress += 0.08; // ~300ms at 60fps
+                if state.pan_progress >= 1.0 {
+                    // Snap to target
+                    state.viewport.offset.x =
+                        state.viewport.width / 2.0 - target.x * state.viewport.scale;
+                    state.viewport.offset.y =
+                        state.viewport.height / 2.0 - target.y * state.viewport.scale;
+                    state.pan_target = None;
+                    state.pan_progress = 0.0;
+                } else {
+                    // Ease-out interpolation
+                    let t = 1.0 - (1.0 - state.pan_progress).powi(3);
+                    let current_center_x = (state.viewport.width / 2.0
+                        - state.viewport.offset.x)
+                        / state.viewport.scale;
+                    let current_center_y = (state.viewport.height / 2.0
+                        - state.viewport.offset.y)
+                        / state.viewport.scale;
+                    let new_x = current_center_x + (target.x - current_center_x) * t;
+                    let new_y = current_center_y + (target.y - current_center_y) * t;
+                    state.viewport.offset.x =
+                        state.viewport.width / 2.0 - new_x * state.viewport.scale;
+                    state.viewport.offset.y =
+                        state.viewport.height / 2.0 - new_y * state.viewport.scale;
+                }
+            }
+
+            // Compute highlighted neighbors for hover dimming
+            let highlighted_neighbors: HashSet<String> =
+                if let Some(ref hov_id) = state.hovered_node {
+                    state
+                        .edges
+                        .iter()
+                        .filter_map(|e| {
+                            let from = state.nodes.get(e.from_idx)?;
+                            let to = state.nodes.get(e.to_idx)?;
+                            if from.id == *hov_id {
+                                Some(to.id.clone())
+                            } else if to.id == *hov_id {
+                                Some(from.id.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    HashSet::new()
+                };
+
             // Render
             Renderer::draw(
                 &ctx,
@@ -156,6 +213,7 @@ pub fn GraphCanvas(
                 state.selected_node.as_deref(),
                 state.hovered_node.as_deref(),
                 &state.kind_filter,
+                &highlighted_neighbors,
             );
 
             drop(state);
@@ -254,9 +312,13 @@ pub fn GraphCanvas(
                     drop(state);
                     on_event.run(CanvasEvent::EnterLocalView(node_id));
                 } else {
-                    // Single click: select
+                    // Single click: select + pan to center
                     state.selected_node = Some(node_id.clone());
                     state.interaction.last_click_time = now;
+                    if let Some(node) = state.nodes.get(idx) {
+                        state.pan_target = Some(node.position);
+                        state.pan_progress = 0.0;
+                    }
                     drop(state);
                     on_event.run(CanvasEvent::SelectNode(node_id));
                 }

@@ -18,6 +18,7 @@ impl Renderer {
         selected: Option<&str>,
         hovered: Option<&str>,
         kind_filter: &HashSet<String>,
+        highlighted_neighbors: &HashSet<String>,
     ) {
         // Clear background
         ctx.clear_rect(0.0, 0.0, viewport.width, viewport.height);
@@ -28,8 +29,8 @@ impl Renderer {
         let _ = ctx.translate(viewport.offset.x, viewport.offset.y);
         let _ = ctx.scale(viewport.scale, viewport.scale);
 
-        Self::draw_edges(ctx, nodes, edges, selected, kind_filter);
-        Self::draw_nodes(ctx, nodes, selected, hovered, kind_filter);
+        Self::draw_edges(ctx, nodes, edges, selected, hovered, kind_filter);
+        Self::draw_nodes(ctx, nodes, selected, hovered, kind_filter, highlighted_neighbors);
 
         ctx.restore();
     }
@@ -43,6 +44,7 @@ impl Renderer {
         nodes: &[CanvasNode],
         edges: &[CanvasEdge],
         selected: Option<&str>,
+        hovered: Option<&str>,
         kind_filter: &HashSet<String>,
     ) {
         let solid_dash = Array::new();
@@ -66,11 +68,24 @@ impl Renderer {
                 continue;
             }
 
-            let is_highlighted = selected
+            let is_selected_edge = selected
                 .map(|s| from.id == s || to.id == s)
                 .unwrap_or(false);
+            let is_hovered_edge = hovered
+                .map(|h| from.id == h || to.id == h)
+                .unwrap_or(false);
+            let is_highlighted = is_selected_edge || is_hovered_edge;
 
-            let alpha = if is_highlighted { 0.7 } else { 0.2 };
+            // Dim edges not connected to the hovered node when hovering
+            let is_dimmed = hovered.is_some() && !is_hovered_edge && !is_selected_edge;
+
+            let alpha = if is_highlighted {
+                0.7
+            } else if is_dimmed {
+                0.05
+            } else {
+                0.2
+            };
             let color = if edge.is_wikilink {
                 format!("rgba(139,92,246,{alpha})")
             } else {
@@ -113,6 +128,7 @@ impl Renderer {
         selected: Option<&str>,
         hovered: Option<&str>,
         kind_filter: &HashSet<String>,
+        highlighted_neighbors: &HashSet<String>,
     ) {
         use std::f64::consts::TAU;
 
@@ -124,12 +140,20 @@ impl Renderer {
             let is_selected = selected.map(|s| s == node.id).unwrap_or(false);
             let is_hovered = hovered.map(|h| h == node.id).unwrap_or(false);
 
+            // Dim nodes that are not the hovered node, not selected, and not a neighbor
+            let is_dimmed = hovered.is_some()
+                && !is_hovered
+                && !is_selected
+                && !highlighted_neighbors.contains(&node.id);
+
             let x = node.position.x;
             let y = node.position.y;
             let r = node.radius;
 
             // Glow (larger, semi-transparent circle behind the dot)
-            let glow_alpha = if is_selected {
+            let glow_alpha = if is_dimmed {
+                0.05
+            } else if is_selected {
                 0.5
             } else if is_hovered {
                 0.35
@@ -143,14 +167,22 @@ impl Renderer {
             ctx.fill();
 
             // Main dot
-            let dot_alpha = if is_selected { 1.0 } else { 0.85 };
+            let dot_alpha = if is_dimmed {
+                0.2
+            } else if is_selected {
+                1.0
+            } else {
+                0.85
+            };
             ctx.set_fill_style_str(&node.color.to_css_alpha(dot_alpha));
             ctx.begin_path();
             let _ = ctx.arc(x, y, r, 0.0, TAU);
             ctx.fill();
 
             // Label — title is the star
-            let label_color = if is_selected || is_hovered {
+            let label_color = if is_dimmed {
+                "rgba(148,163,184,0.2)"
+            } else if is_selected || is_hovered {
                 "rgba(226,232,240,1.0)"
             } else {
                 "rgba(148,163,184,0.85)"
