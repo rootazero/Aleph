@@ -105,7 +105,7 @@ fn MainContent() -> impl IntoView {
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />
         </div>
-        <div style:display=move || if mode.get() == PanelMode::Canvas { "contents" } else { "none" }>
+        <div style:display=move || if mode.get() == PanelMode::Memory { "contents" } else { "none" }>
             <CanvasView />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>

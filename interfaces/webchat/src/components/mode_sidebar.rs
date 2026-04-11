@@ -18,8 +18,8 @@ pub fn ModeSidebar() -> impl IntoView {
 
     view! {
         {move || {
-            // Canvas mode uses full-width layout, no sidebar
-            if mode.get() == PanelMode::Canvas {
+            // Memory mode uses full-width layout, no sidebar
+            if mode.get() == PanelMode::Memory {
                 view! { <div class="hidden" /> }.into_any()
             } else {
                 view! {
@@ -28,7 +28,7 @@ pub fn ModeSidebar() -> impl IntoView {
                             PanelMode::Chat => view! { <ChatSidebar /> }.into_any(),
                             PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                             PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
-                            PanelMode::Canvas => view! { <div /> }.into_any(),
+                            PanelMode::Memory => view! { <div /> }.into_any(),
                             PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
                         }}
                     </aside>
