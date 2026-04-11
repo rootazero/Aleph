@@ -17,7 +17,17 @@ pub struct WikiLintReport {
     pub orphan_pages: Vec<String>,
     pub stale_pages: Vec<String>,
     pub suggested_pages: Vec<String>,
+    pub suggested_links: Vec<SuggestedLink>,
     pub auto_fixed: usize,
+}
+
+/// A suggested wikilink based on graph topology.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SuggestedLink {
+    pub from_page: String,
+    pub to_page: String,
+    pub reason: String,
+    pub confidence: f32,
 }
 
 /// Health checks for wiki pages.
@@ -80,10 +90,70 @@ impl DreamStage for WikiLintStage {
             }
         }
 
+        // Graph-based link suggestions: find wiki nodes connected by graph edges
+        // but not connected by wikilinks in content.
+        use crate::memory::store::GraphStore as StoreGS;
+        for fact in &wiki_facts {
+            let slug = fact
+                .path
+                .split('/')
+                .next_back()
+                .unwrap_or("")
+                .trim_end_matches(".md")
+                .to_string();
+
+            let content_links: std::collections::HashSet<String> =
+                extract_wikilinks(&fact.content)
+                    .into_iter()
+                    .map(|l| l.to_lowercase())
+                    .collect();
+
+            // Find nodes associated with this fact
+            if let Ok(nodes) =
+                StoreGS::get_nodes_for_fact(ctx.database.as_ref(), &fact.id, "default").await
+            {
+                for (node, _weight) in &nodes {
+                    if let Ok(edges) = StoreGS::get_edges_for_node(
+                        ctx.database.as_ref(),
+                        &node.id,
+                        None,
+                        "default",
+                    )
+                    .await
+                    {
+                        for edge in &edges {
+                            let neighbor_id = if edge.from_id == node.id {
+                                &edge.to_id
+                            } else {
+                                &edge.from_id
+                            };
+                            if let Ok(Some(neighbor)) =
+                                StoreGS::get_node(ctx.database.as_ref(), neighbor_id, "default")
+                                    .await
+                            {
+                                if neighbor.kind == "wiki"
+                                    && !content_links.contains(&neighbor.name.to_lowercase())
+                                    && neighbor.name.to_lowercase() != slug.to_lowercase()
+                                {
+                                    report.suggested_links.push(SuggestedLink {
+                                        from_page: slug.clone(),
+                                        to_page: neighbor.name.clone(),
+                                        reason: edge.relation.clone(),
+                                        confidence: edge.weight,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         info!(
             broken_links = report.broken_links.len(),
             orphan_pages = report.orphan_pages.len(),
             stale_pages = report.stale_pages.len(),
+            suggested_links = report.suggested_links.len(),
             auto_fixed = report.auto_fixed,
             "WikiLintStage complete"
         );
