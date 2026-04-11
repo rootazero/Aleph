@@ -183,6 +183,10 @@ impl DreamStage for WikiIngestStage {
             });
 
             if let Some(existing) = existing_wiki {
+                // Never recompile manually curated pages — only auto-compiled ones
+                if existing.fact_source != FactSource::Synthesis {
+                    continue;
+                }
                 // Check staleness: what ratio of source_memory_ids are still valid?
                 let total_sources = existing.source_memory_ids.len();
                 if total_sources > 0 {
