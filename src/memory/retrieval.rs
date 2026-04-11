@@ -1,25 +1,25 @@
 /// Memory retrieval module
 ///
-/// This module previously handled retrieval of raw memories (Layer 1)
-/// via SessionStore. Raw memory retrieval has been removed — facts
-/// (Layer 2) are now the primary retrieval target via FactRetrieval.
-///
-/// The MemoryRetrieval struct is retained as a stub returning empty
-/// results so that existing callers continue to compile.
+/// Tries note-based retrieval first (knowledge notes with vector search).
+/// If no notes are found, falls back to `FactRetrieval` for backward
+/// compatibility with callers that still use the `MemoryEntry` type.
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::record_activity;
+use crate::memory::fact_retrieval::{FactRetrieval, FactRetrievalConfig};
+use crate::memory::notes::{NoteContent, NoteRetrieval};
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+use crate::utils::paths::get_data_dir;
 use tracing::debug;
 
-/// Memory retrieval service (stub — raw memory search removed)
+/// Memory retrieval service — delegates to `FactRetrieval`
 #[derive(Clone)]
 pub struct MemoryRetrieval {
-    _database: MemoryBackend,
-    _embedder: Arc<dyn EmbeddingProvider>,
+    database: MemoryBackend,
+    embedder: Arc<dyn EmbeddingProvider>,
     config: Arc<MemoryConfig>,
 }
 
@@ -31,42 +31,120 @@ impl MemoryRetrieval {
         config: Arc<MemoryConfig>,
     ) -> Self {
         Self {
-            _database: database,
-            _embedder: embedder,
+            database,
+            embedder,
             config,
         }
     }
 
-    /// Retrieve memories for current context (returns empty — use FactRetrieval instead)
+    /// Retrieve memories — tries knowledge notes first, falls back to facts.
     pub async fn retrieve_memories(
         &self,
         _context: &ContextAnchor,
-        _query: &str,
+        query: &str,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
 
         if !self.config.enabled {
             debug!("Memory retrieval skipped: memory disabled");
+            return Ok(Vec::new());
         }
 
-        // Raw memory search removed — facts are the primary retrieval target.
-        Ok(Vec::new())
+        // Try note-based retrieval first
+        if let Some(entries) = self.try_note_retrieval(query, 5).await {
+            if !entries.is_empty() {
+                debug!("Returning {} notes from NoteRetrieval", entries.len());
+                return Ok(entries);
+            }
+        }
+
+        // Fall back to fact retrieval
+        let fact_retrieval = FactRetrieval::with_defaults(
+            self.database.clone(),
+            self.embedder.clone(),
+        )
+        .with_rerank_config(self.config.rerank.clone());
+        let result = fact_retrieval.retrieve(query).await?;
+        Ok(result.facts.into_iter().map(fact_to_entry).collect())
     }
 
-    /// Retrieve memories with custom limit (returns empty — use FactRetrieval instead)
+    /// Retrieve memories with custom limit — tries notes first, falls back to facts.
     pub async fn retrieve_memories_with_limit(
         &self,
         _context: &ContextAnchor,
-        _query: &str,
-        _limit: usize,
+        query: &str,
+        limit: usize,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
         record_activity();
 
         if !self.config.enabled {
             debug!("Memory retrieval skipped: memory disabled");
+            return Ok(Vec::new());
         }
 
-        Ok(Vec::new())
+        // Try note-based retrieval first
+        if let Some(entries) = self.try_note_retrieval(query, limit).await {
+            if !entries.is_empty() {
+                debug!("Returning {} notes from NoteRetrieval (limit={})", entries.len(), limit);
+                return Ok(entries);
+            }
+        }
+
+        // Fall back to fact retrieval
+        let fact_retrieval = FactRetrieval::new(
+            self.database.clone(),
+            self.embedder.clone(),
+            FactRetrievalConfig {
+                max_facts: limit as u32,
+                ..FactRetrievalConfig::default()
+            },
+        )
+        .with_rerank_config(self.config.rerank.clone());
+        let result = fact_retrieval.retrieve(query).await?;
+        Ok(result.facts.into_iter().map(fact_to_entry).collect())
+    }
+
+    /// Attempt note retrieval; returns `None` on any error (graceful fallback).
+    async fn try_note_retrieval(&self, query: &str, limit: usize) -> Option<Vec<MemoryEntry>> {
+        let memory_dir = get_data_dir().ok()?.join("memory");
+        let note_retrieval = NoteRetrieval::new(
+            memory_dir,
+            self.database.clone(),
+            self.embedder.clone(),
+        );
+        let notes = note_retrieval
+            .retrieve(query, "default", limit)
+            .await
+            .ok()?;
+        Some(notes.into_iter().map(note_to_entry).collect())
+    }
+}
+
+/// Convert a `NoteContent` into a `MemoryEntry` for backward compatibility.
+fn note_to_entry(note: NoteContent) -> MemoryEntry {
+    MemoryEntry {
+        id: note.path.clone(),
+        context: ContextAnchor::now(String::new()),
+        user_input: note.content,
+        ai_output: String::new(),
+        embedding: None,
+        namespace: "owner".to_string(),
+        agent: "default".to_string(),
+        similarity_score: Some(note.score),
+    }
+}
+
+/// Convert a `MemoryFact` into a `MemoryEntry` for backward compatibility.
+fn fact_to_entry(fact: crate::memory::context::MemoryFact) -> MemoryEntry {
+    MemoryEntry {
+        id: fact.id,
+        context: ContextAnchor::with_timestamp(String::new(), fact.created_at),
+        user_input: fact.content,
+        ai_output: String::new(),
+        embedding: None,
+        namespace: fact.namespace,
+        agent: fact.agent,
+        similarity_score: fact.similarity_score,
     }
 }
 

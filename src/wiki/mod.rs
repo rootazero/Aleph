@@ -27,8 +27,18 @@ pub fn wiki_parent_path(agent_id: &str) -> String {
 }
 
 /// Build the physical file path for a wiki page.
+///
+/// New layout: `{data_dir}/memory/{agent_id}/wiki/{slug}.md`
+/// (previously `{data_dir}/wiki/{agent_id}/{slug}.md`).
 pub fn wiki_file_path(data_dir: &std::path::Path, agent_id: &str, slug: &str) -> std::path::PathBuf {
-    data_dir.join("wiki").join(agent_id).join(format!("{}.md", slug))
+    data_dir.join("memory").join(agent_id).join("wiki").join(format!("{}.md", slug))
+}
+
+/// Build the old (pre-migration) physical directory for wiki pages.
+///
+/// Old layout: `{data_dir}/wiki/{agent_id}/`
+pub fn wiki_old_dir(data_dir: &std::path::Path, agent_id: &str) -> std::path::PathBuf {
+    data_dir.join("wiki").join(agent_id)
 }
 
 #[cfg(test)]
@@ -66,6 +76,12 @@ mod tests {
     #[test]
     fn wiki_file_path_format() {
         let path = wiki_file_path(std::path::Path::new("/home/user/.aleph/data"), "default", "rust-ownership");
-        assert_eq!(path, std::path::PathBuf::from("/home/user/.aleph/data/wiki/default/rust-ownership.md"));
+        assert_eq!(path, std::path::PathBuf::from("/home/user/.aleph/data/memory/default/wiki/rust-ownership.md"));
+    }
+
+    #[test]
+    fn wiki_old_dir_format() {
+        let path = wiki_old_dir(std::path::Path::new("/home/user/.aleph/data"), "default");
+        assert_eq!(path, std::path::PathBuf::from("/home/user/.aleph/data/wiki/default"));
     }
 }

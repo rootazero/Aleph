@@ -1,8 +1,10 @@
-//! Wikilink extraction and rewriting for `[[link]]` syntax.
+//! Wikilink extraction, rewriting, and resolution for `[[link]]` syntax.
 
 use std::sync::LazyLock;
 
 use regex::Regex;
+
+use crate::memory::notes::store::NoteStore;
 
 /// Regex matching `[[...]]` wikilinks (non-greedy, no nested brackets).
 static WIKILINK_RE: LazyLock<Regex> =
@@ -34,6 +36,30 @@ pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
         .into_owned()
 }
 
+/// Resolve a wikilink target to a note path using Obsidian-compatible rules.
+///
+/// 1. If link contains '/' → exact path match
+/// 2. If no '/' → global filename search, resolve if exactly one match
+/// 3. Returns None if ambiguous or not found
+pub async fn resolve_wikilink<S: NoteStore>(
+    store: &S,
+    link: &str,
+    agent_id: &str,
+) -> Option<String> {
+    if link.contains('/') {
+        if store.get_note_index(link, agent_id).await.ok()?.is_some() {
+            return Some(link.to_string());
+        }
+        return None;
+    }
+
+    let matches = store.find_by_filename(link, agent_id).await.ok()?;
+    if matches.len() == 1 {
+        return Some(matches[0].clone());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +89,77 @@ mod tests {
         let text = "[[Alpha]] [[Beta]] [[Gamma]]";
         let result = rewrite_wikilinks(text, "Beta", "Delta");
         assert_eq!(result, "[[Alpha]] [[Delta]] [[Gamma]]");
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::SqliteMemoryBackend;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn create_test_db() -> Arc<SqliteMemoryBackend> {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("test_resolve_{}", Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
+    }
+
+    fn make_note(title: &str) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.to_string(),
+            category: "test".to_string(),
+            tags: vec![],
+            facts: vec!["fact".to_string()],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+            content_hash: format!("h_{title}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolves_exact_path() {
+        let db = create_test_db();
+        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+
+        let result = resolve_wikilink(&*db, "wiki/rust", "default").await;
+        assert_eq!(result, Some("wiki/rust".to_string()));
+    }
+
+    #[tokio::test]
+    async fn resolves_unique_filename() {
+        let db = create_test_db();
+        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+
+        let result = resolve_wikilink(&*db, "rust", "default").await;
+        assert_eq!(result, Some("wiki/rust".to_string()));
+    }
+
+    #[tokio::test]
+    async fn returns_none_for_ambiguous() {
+        let db = create_test_db();
+        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+        db.index_note(&make_note("rust"), "default", "learning").await.unwrap();
+
+        let result = resolve_wikilink(&*db, "rust", "default").await;
+        assert_eq!(result, None); // ambiguous
+    }
+
+    #[tokio::test]
+    async fn returns_none_for_not_found() {
+        let db = create_test_db();
+        let result = resolve_wikilink(&*db, "nonexistent", "default").await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn returns_none_for_wrong_path() {
+        let db = create_test_db();
+        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+
+        let result = resolve_wikilink(&*db, "skill/rust", "default").await;
+        assert_eq!(result, None); // no note at skill/rust
     }
 }

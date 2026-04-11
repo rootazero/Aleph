@@ -8,8 +8,12 @@ use rusqlite::Connection;
 
 // ---------------------------------------------------------------------------
 // Facts table + indexes
+// DEPRECATED: facts tables superseded by notes_index + notes_vec
+// Retained for Palace topology migration (generated columns on facts table).
+// No longer created for new databases.
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 const FACTS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS facts (
     id                   TEXT PRIMARY KEY,
@@ -56,8 +60,10 @@ CREATE INDEX IF NOT EXISTS idx_facts_layer         ON facts(layer);
 
 // ---------------------------------------------------------------------------
 // FTS5 full-text search
+// DEPRECATED: facts_fts superseded by notes_fts
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 const FACTS_FTS_DDL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
     content,
@@ -406,13 +412,22 @@ fn vec_table_ddl(dim: u32, table_name: &str) -> String {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Initialize the core relational schema (facts, graph nodes/edges, FTS5).
+/// Initialize the core relational schema.
+///
+/// DEPRECATED: facts tables are superseded by notes_index + notes_vec.
+/// The facts DDL is still executed because Palace topology migrations
+/// (generated columns) depend on the table existing. facts_fts is no
+/// longer created for new databases.
 pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
+    // DEPRECATED: facts table kept only for Palace topology migration compatibility.
+    // New code should use notes_index + notes_vec exclusively.
     conn.execute_batch(FACTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create facts table: {e}")))?;
 
-    conn.execute_batch(FACTS_FTS_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create facts_fts table: {e}")))?;
+    // DEPRECATED: facts_fts no longer created for new databases.
+    // Notes use notes_fts instead.
+    // conn.execute_batch(FACTS_FTS_DDL)
+    //     .map_err(|e| AlephError::config(format!("Failed to create facts_fts table: {e}")))?;
 
     // NOTE: graph_nodes, graph_edges, memory_entities tables are deprecated.
     // They are no longer created for new databases. Existing data remains

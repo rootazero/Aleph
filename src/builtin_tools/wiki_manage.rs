@@ -128,12 +128,11 @@ impl WikiManageTool {
             })
             .collect();
 
-        let agent_dir = self
-            .git
-            .ensure_agent_dir(agent_id)
-            .map_err(AlephError::tool)?;
+        let wiki_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
+        std::fs::create_dir_all(&wiki_dir)
+            .map_err(|e| AlephError::tool(format!("Failed to create wiki dir: {}", e)))?;
 
-        write_index(&agent_dir, &entries).map_err(AlephError::tool)?;
+        write_index(&wiki_dir, &entries).map_err(AlephError::tool)?;
 
         Ok(())
     }
@@ -161,12 +160,11 @@ impl WikiManageTool {
         validate_args_for_create(page_slug, title, summary, content)
             .map_err(AlephError::tool)?;
 
-        // Ensure git repo and agent directory
+        // Ensure git repo and wiki directory under memory/{agent_id}/wiki/
         self.git.ensure_repo().map_err(AlephError::tool)?;
-        let _agent_dir = self
-            .git
-            .ensure_agent_dir(agent_id)
-            .map_err(AlephError::tool)?;
+        let wiki_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
+        std::fs::create_dir_all(&wiki_dir)
+            .map_err(|e| AlephError::tool(format!("Failed to create wiki dir: {}", e)))?;
 
         // Build frontmatter + content
         let now = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -461,7 +459,7 @@ impl WikiManageTool {
             .collect();
 
         // Also read index.md content if it exists
-        let agent_dir = self.data_dir.join("wiki").join(agent_id);
+        let agent_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
         let index_path = agent_dir.join("index.md");
         let index_content = std::fs::read_to_string(&index_path).ok();
 

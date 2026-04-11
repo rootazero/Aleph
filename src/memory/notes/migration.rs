@@ -71,8 +71,8 @@ pub async fn migrate_facts_to_notes<S: NoteStore + MemoryStore>(
             content_hash: String::new(), // will be recomputed on write/index
         };
 
-        let path = indexer.write_note(&note).await?;
-        indexer.index_file(&path).await?;
+        let path = indexer.write_note("default", &category, &note).await?;
+        indexer.index_file("default", &category, &path).await?;
 
         stats.notes_created += 1;
     }
@@ -113,6 +113,54 @@ fn fact_type_to_category(ft: &FactType) -> String {
         _ => "other",
     }
     .to_string()
+}
+
+/// Migrate wiki files from old location (`~/.aleph/data/wiki/{agent_id}/`)
+/// to the new memory/notes structure (`~/.aleph/data/memory/{agent_id}/wiki/`).
+///
+/// Only copies `.md` files that do not already exist at the destination,
+/// making this function safe to call repeatedly (idempotent).
+pub async fn migrate_wiki_files(
+    old_wiki_dir: &std::path::Path,
+    memory_dir: &std::path::Path,
+    agent_id: &str,
+) -> Result<usize, AlephError> {
+    let dest_dir = memory_dir.join(agent_id).join("wiki");
+    tokio::fs::create_dir_all(&dest_dir).await.map_err(|e| {
+        AlephError::other(format!("Failed to create wiki dest dir: {}", e))
+    })?;
+
+    let mut entries = match tokio::fs::read_dir(old_wiki_dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => {
+            return Err(AlephError::other(format!(
+                "Failed to read old wiki dir: {}",
+                e
+            )))
+        }
+    };
+
+    let mut migrated = 0;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(filename) = path.file_name() {
+            let dest = dest_dir.join(filename);
+            if !dest.exists() {
+                tokio::fs::copy(&path, &dest).await.map_err(|e| {
+                    AlephError::other(format!(
+                        "Failed to copy wiki file {:?}: {}",
+                        filename, e
+                    ))
+                })?;
+                migrated += 1;
+            }
+        }
+    }
+    Ok(migrated)
 }
 
 #[cfg(test)]
@@ -157,5 +205,60 @@ mod tests {
         assert_eq!(fact_type_to_category(&FactType::Wiki), "wiki");
         assert_eq!(fact_type_to_category(&FactType::Other), "other");
         assert_eq!(fact_type_to_category(&FactType::Transcript), "other");
+    }
+
+    #[tokio::test]
+    async fn migrate_wiki_files_copies_md_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_wiki = tmp.path().join("wiki").join("default");
+        std::fs::create_dir_all(&old_wiki).unwrap();
+        std::fs::write(old_wiki.join("rust-ownership.md"), "# Rust Ownership").unwrap();
+        std::fs::write(old_wiki.join("llm-prompts.md"), "# LLM Prompts").unwrap();
+        std::fs::write(old_wiki.join("notes.txt"), "not a markdown file").unwrap();
+
+        let memory_dir = tmp.path().join("memory");
+        let count = migrate_wiki_files(&old_wiki, &memory_dir, "default")
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let dest = memory_dir.join("default").join("wiki");
+        assert!(dest.join("rust-ownership.md").exists());
+        assert!(dest.join("llm-prompts.md").exists());
+        assert!(!dest.join("notes.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn migrate_wiki_files_skips_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_wiki = tmp.path().join("wiki").join("default");
+        std::fs::create_dir_all(&old_wiki).unwrap();
+        std::fs::write(old_wiki.join("page.md"), "old content").unwrap();
+
+        let memory_dir = tmp.path().join("memory");
+        let dest = memory_dir.join("default").join("wiki");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("page.md"), "new content").unwrap();
+
+        let count = migrate_wiki_files(&old_wiki, &memory_dir, "default")
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+
+        // Existing content should not be overwritten
+        let content = std::fs::read_to_string(dest.join("page.md")).unwrap();
+        assert_eq!(content, "new content");
+    }
+
+    #[tokio::test]
+    async fn migrate_wiki_files_handles_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nonexistent = tmp.path().join("no-such-dir");
+        let memory_dir = tmp.path().join("memory");
+
+        let count = migrate_wiki_files(&nonexistent, &memory_dir, "default")
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

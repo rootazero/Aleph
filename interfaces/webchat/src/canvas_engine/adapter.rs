@@ -6,6 +6,7 @@ use super::types::*;
 pub struct NoteNodeDto {
     pub id: String,
     pub name: String,
+    pub path: String,
     pub category: String,
     #[serde(default)]
     pub tags: Vec<String>,

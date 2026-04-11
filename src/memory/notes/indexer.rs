@@ -1,7 +1,7 @@
 //! NoteIndexer — file I/O, full rebuild, incremental update, and rename cascade.
 //!
-//! Scans a directory of `.md` files, parses them into `KnowledgeNote`s, and
-//! maintains the SQLite index via a `NoteStore` implementation.
+//! Scans `memory_dir/{agent_id}/{category}/*.md` files, parses them into
+//! `KnowledgeNote`s, and maintains the SQLite index via a `NoteStore` implementation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +13,14 @@ use crate::error::AlephError;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
 use crate::memory::notes::{sanitize_title, KnowledgeNote};
 use crate::memory::notes::store::NoteStore;
+
+/// All valid category subdirectories under `memory/{agent_id}/`.
+pub const CATEGORY_DIRS: &[&str] = &[
+    "preference", "plan", "learning", "project", "personal",
+    "tool", "lesson", "skill", "wiki", "transcript",
+    "subagent-run", "subagent-session", "subagent-checkpoint",
+    "subagent-transcript", "other",
+];
 
 /// Statistics from an indexing operation.
 #[derive(Debug, Clone, Default)]
@@ -26,19 +34,22 @@ pub struct IndexStats {
 ///
 /// Generic over `S: NoteStore` so tests can swap in any backend.
 pub struct NoteIndexer<S: NoteStore> {
-    notes_dir: PathBuf,
+    memory_dir: PathBuf,
     store: Arc<S>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
-    /// Create a new indexer for the given directory and store.
-    pub fn new(notes_dir: PathBuf, store: Arc<S>) -> Self {
-        Self { notes_dir, store }
+    /// Create a new indexer for the given memory directory and store.
+    ///
+    /// `memory_dir` should point to `~/.aleph/data/memory/` (the parent of
+    /// all agent directories).
+    pub fn new(memory_dir: PathBuf, store: Arc<S>) -> Self {
+        Self { memory_dir, store }
     }
 
-    /// Getter for the notes directory.
-    pub fn notes_dir(&self) -> &Path {
-        &self.notes_dir
+    /// Getter for the memory directory.
+    pub fn memory_dir(&self) -> &Path {
+        &self.memory_dir
     }
 
     /// Getter for the underlying store.
@@ -46,36 +57,47 @@ impl<S: NoteStore> NoteIndexer<S> {
         &self.store
     }
 
-    /// Full rebuild: scan all `.md` files, parse, and index.
+    /// Ensure all category subdirectories exist for the given agent.
+    pub async fn ensure_dirs(&self, agent_id: &str) -> Result<(), AlephError> {
+        let agent_dir = self.memory_dir.join(agent_id);
+        for cat in CATEGORY_DIRS {
+            fs::create_dir_all(agent_dir.join(cat)).await.map_err(|e| {
+                AlephError::ConfigError {
+                    message: format!("Failed to create {}/{cat}: {e}", agent_dir.display()),
+                    suggestion: None,
+                }
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Full rebuild: scan all `.md` files across all category dirs for an agent,
+    /// parse, and index.
     ///
     /// Skips files whose `content_hash` matches the existing index entry.
-    pub async fn full_rebuild(&self) -> Result<IndexStats, AlephError> {
+    pub async fn full_rebuild(&self, agent_id: &str) -> Result<IndexStats, AlephError> {
+        self.ensure_dirs(agent_id).await?;
         let mut stats = IndexStats::default();
+        let agent_dir = self.memory_dir.join(agent_id);
 
-        let mut entries = fs::read_dir(&self.notes_dir).await.map_err(|e| {
-            AlephError::ConfigError {
-                message: format!("Failed to read notes dir {:?}: {e}", self.notes_dir),
-                suggestion: None,
-            }
-        })?;
-
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            AlephError::ConfigError {
-                message: format!("Failed to read directory entry: {e}"),
-                suggestion: None,
-            }
-        })? {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-
-            match self.index_file(&path).await {
-                Ok(true) => stats.indexed += 1,
-                Ok(false) => stats.skipped += 1,
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "Failed to index note");
-                    stats.errors += 1;
+        for category in CATEGORY_DIRS {
+            let cat_dir = agent_dir.join(category);
+            let mut entries = match fs::read_dir(&cat_dir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                match self.index_file(agent_id, category, &path).await {
+                    Ok(true) => stats.indexed += 1,
+                    Ok(false) => stats.skipped += 1,
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "Failed to index");
+                        stats.errors += 1;
+                    }
                 }
             }
         }
@@ -87,7 +109,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     ///
     /// Returns `Ok(true)` if the file was (re-)indexed, `Ok(false)` if skipped
     /// because the content hash is unchanged.
-    pub async fn index_file(&self, path: &Path) -> Result<bool, AlephError> {
+    pub async fn index_file(&self, agent_id: &str, category: &str, path: &Path) -> Result<bool, AlephError> {
         let content = fs::read_to_string(path).await.map_err(|e| {
             AlephError::ConfigError {
                 message: format!("Failed to read {:?}: {e}", path),
@@ -106,28 +128,36 @@ impl<S: NoteStore> NoteIndexer<S> {
         let hash = sha2_hash(&content);
 
         // Check if the index already has this hash — skip if unchanged.
-        if let Some(existing) = self.store.get_note_index(title).await? {
+        let note_path = format!("{category}/{title}");
+
+        if let Some(existing) = self.store.get_note_index(&note_path, agent_id).await? {
             if existing.content_hash == hash {
                 return Ok(false);
             }
         }
 
         let note = KnowledgeNote::from_markdown(title, &content)?;
-        self.store.index_note(&note).await?;
+        self.store.index_note(&note, agent_id, category).await?;
 
         Ok(true)
     }
 
     /// Write a `KnowledgeNote` to disk as a markdown file.
     ///
+    /// The file is written to `{memory_dir}/{agent_id}/{category}/{title}.md`.
     /// Returns the path of the written file.
     ///
     /// The title is sanitized to prevent path traversal.
-    pub async fn write_note(&self, note: &KnowledgeNote) -> Result<PathBuf, AlephError> {
+    pub async fn write_note(&self, agent_id: &str, category: &str, note: &KnowledgeNote) -> Result<PathBuf, AlephError> {
         let safe_title = sanitize_title(&note.title);
-        let path = self.notes_dir.join(format!("{safe_title}.md"));
-        let content = note.to_markdown();
+        let path = self.memory_dir.join(agent_id).join(category).join(format!("{safe_title}.md"));
 
+        // Ensure parent dir exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.ok();
+        }
+
+        let content = note.to_markdown();
         fs::write(&path, &content).await.map_err(|e| {
             AlephError::ConfigError {
                 message: format!("Failed to write {:?}: {e}", path),
@@ -140,28 +170,40 @@ impl<S: NoteStore> NoteIndexer<S> {
 
     /// Append facts and links to an existing note, or create a new one.
     ///
+    /// `note_path` is `"category/filename"` (e.g. `"preference/Editor Preferences"`).
     /// Deduplicates links, bumps `updated_at`, then writes and indexes.
     pub async fn append_to_note(
         &self,
-        title: &str,
+        agent_id: &str,
+        note_path: &str,
         new_facts: &[String],
         new_links: &[String],
     ) -> Result<(), AlephError> {
-        let safe_title = sanitize_title(title);
-        let path = self.notes_dir.join(format!("{safe_title}.md"));
+        let (category, filename) = note_path.split_once('/')
+            .ok_or_else(|| AlephError::ConfigError {
+                message: format!("Invalid note_path (expected 'category/filename'): {note_path}"),
+                suggestion: None,
+            })?;
 
-        let mut note = if path.exists() {
-            let content = fs::read_to_string(&path).await.map_err(|e| {
+        let safe_title = sanitize_title(filename);
+        let file_path = self.memory_dir.join(agent_id).join(category).join(format!("{safe_title}.md"));
+
+        let mut note = if file_path.exists() {
+            let content = fs::read_to_string(&file_path).await.map_err(|e| {
                 AlephError::ConfigError {
-                    message: format!("Failed to read {:?}: {e}", path),
+                    message: format!("Failed to read {:?}: {e}", file_path),
                     suggestion: None,
                 }
             })?;
-            KnowledgeNote::from_markdown(title, &content)?
+            KnowledgeNote::from_markdown(filename, &content)?
         } else {
+            // Ensure parent dir exists
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent).await.ok();
+            }
             KnowledgeNote {
-                title: title.to_string(),
-                category: "other".to_string(),
+                title: filename.to_string(),
+                category: category.to_string(),
                 tags: vec![],
                 facts: vec![],
                 links: vec![],
@@ -189,13 +231,13 @@ impl<S: NoteStore> NoteIndexer<S> {
         note.content_hash = sha2_hash(&md);
 
         // Write file + index
-        fs::write(&path, &md).await.map_err(|e| {
+        fs::write(&file_path, &md).await.map_err(|e| {
             AlephError::ConfigError {
-                message: format!("Failed to write {:?}: {e}", path),
+                message: format!("Failed to write {:?}: {e}", file_path),
                 suggestion: None,
             }
         })?;
-        self.store.index_note(&note).await?;
+        self.store.index_note(&note, agent_id, category).await?;
 
         Ok(())
     }
@@ -204,13 +246,24 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// remove old index entry, and re-index affected files.
     pub async fn rename_note(
         &self,
+        agent_id: &str,
         old_title: &str,
         new_title: &str,
     ) -> Result<(), AlephError> {
         let safe_old = sanitize_title(old_title);
         let safe_new = sanitize_title(new_title);
-        let old_path = self.notes_dir.join(format!("{safe_old}.md"));
-        let new_path = self.notes_dir.join(format!("{safe_new}.md"));
+
+        // Find the old note to determine its category
+        let old_paths = self.store.find_by_filename(old_title, agent_id).await.unwrap_or_default();
+        let category = if let Some(first_path) = old_paths.first() {
+            first_path.split('/').next().unwrap_or("other").to_string()
+        } else {
+            "other".to_string()
+        };
+
+        let cat_dir = self.memory_dir.join(agent_id).join(&category);
+        let old_path = cat_dir.join(format!("{safe_old}.md"));
+        let new_path = cat_dir.join(format!("{safe_new}.md"));
 
         // Rename the file
         fs::rename(&old_path, &new_path).await.map_err(|e| {
@@ -220,51 +273,50 @@ impl<S: NoteStore> NoteIndexer<S> {
             }
         })?;
 
-        // Remove old index entry
-        self.store.remove_note_index(old_title).await?;
+        // Remove old index entries
+        for old_p in &old_paths {
+            self.store.remove_note_index(old_p, agent_id).await?;
+        }
 
-        // Scan all other .md files and rewrite [[old_title]] → [[new_title]]
-        let mut entries = fs::read_dir(&self.notes_dir).await.map_err(|e| {
-            AlephError::ConfigError {
-                message: format!("Failed to read notes dir: {e}"),
-                suggestion: None,
-            }
-        })?;
-
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            AlephError::ConfigError {
-                message: format!("Failed to read directory entry: {e}"),
-                suggestion: None,
-            }
-        })? {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            // Skip the renamed file itself — we'll index it separately below.
-            if path == new_path {
-                continue;
-            }
-
-            let content = match fs::read_to_string(&path).await {
-                Ok(c) => c,
+        // Scan all category dirs and rewrite [[old_title]] → [[new_title]]
+        let agent_dir = self.memory_dir.join(agent_id);
+        for cat in CATEGORY_DIRS {
+            let dir = agent_dir.join(cat);
+            let mut entries = match fs::read_dir(&dir).await {
+                Ok(e) => e,
                 Err(_) => continue,
             };
 
-            let rewritten = rewrite_wikilinks(&content, old_title, new_title);
-            if rewritten != content {
-                // Write the updated content
-                if let Err(e) = fs::write(&path, &rewritten).await {
-                    tracing::warn!(path = %path.display(), error = %e, "Failed to rewrite wikilinks");
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
                     continue;
                 }
-                // Re-index the affected file
-                let _ = self.index_file(&path).await;
+                // Skip the renamed file itself — we'll index it separately below.
+                if path == new_path {
+                    continue;
+                }
+
+                let content = match fs::read_to_string(&path).await {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let rewritten = rewrite_wikilinks(&content, old_title, new_title);
+                if rewritten != content {
+                    // Write the updated content
+                    if let Err(e) = fs::write(&path, &rewritten).await {
+                        tracing::warn!(path = %path.display(), error = %e, "Failed to rewrite wikilinks");
+                        continue;
+                    }
+                    // Re-index the affected file
+                    let _ = self.index_file(agent_id, cat, &path).await;
+                }
             }
         }
 
         // Index the renamed file
-        let _ = self.index_file(&new_path).await;
+        let _ = self.index_file(agent_id, &category, &new_path).await;
 
         Ok(())
     }
@@ -283,6 +335,8 @@ mod tests {
     use crate::memory::store::SqliteMemoryBackend;
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    const AGENT: &str = "default";
 
     fn create_test_db() -> Arc<SqliteMemoryBackend> {
         let temp_dir = std::env::temp_dir();
@@ -309,59 +363,84 @@ mod tests {
         out
     }
 
+    /// Create memory_dir/{agent_id}/{category}/ directory structure.
+    async fn setup_category_dir(memory_dir: &Path, agent_id: &str, category: &str) -> PathBuf {
+        let cat_dir = memory_dir.join(agent_id).join(category);
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        cat_dir
+    }
+
+    #[tokio::test]
+    async fn ensure_dirs_creates_all_categories() {
+        let dir = TempDir::new().unwrap();
+        let memory_dir = dir.path().to_path_buf();
+        let db = create_test_db();
+        let indexer = NoteIndexer::new(memory_dir.clone(), db);
+
+        indexer.ensure_dirs(AGENT).await.unwrap();
+
+        for cat in CATEGORY_DIRS {
+            assert!(memory_dir.join(AGENT).join(cat).is_dir(), "Missing dir: {cat}");
+        }
+    }
+
     #[tokio::test]
     async fn full_rebuild_indexes_all_notes() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        // Write 2 .md files
+        // Write files into category subdirs
+        let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
+        let skill_dir = setup_category_dir(&memory_dir, AGENT, "skill").await;
+
         let note1 = sample_md("preference", &["User likes Vim"], &["Dev Environment"]);
         let note2 = sample_md("skill", &["User knows Rust"], &["Editor Preferences"]);
 
-        fs::write(notes_dir.join("Editor Preferences.md"), &note1)
+        fs::write(pref_dir.join("Editor Preferences.md"), &note1)
             .await
             .unwrap();
-        fs::write(notes_dir.join("Rust Learning.md"), &note2)
+        fs::write(skill_dir.join("Rust Learning.md"), &note2)
             .await
             .unwrap();
 
-        let indexer = NoteIndexer::new(notes_dir, db.clone());
+        let indexer = NoteIndexer::new(memory_dir, db.clone());
 
-        let stats = indexer.full_rebuild().await.unwrap();
+        let stats = indexer.full_rebuild(AGENT).await.unwrap();
         assert_eq!(stats.indexed, 2);
         assert_eq!(stats.errors, 0);
         assert_eq!(stats.skipped, 0);
 
         // Verify indexed
-        let notes = db.list_notes().await.unwrap();
+        let notes = db.list_notes(AGENT).await.unwrap();
         assert_eq!(notes.len(), 2);
 
         // Verify wikilinks are indexed
-        let out_links = db.get_outgoing_links("Editor Preferences").await.unwrap();
+        let out_links = db.get_outgoing_links("preference/Editor Preferences", AGENT).await.unwrap();
         assert!(out_links.contains(&"Dev Environment".to_string()));
 
-        let out_links2 = db.get_outgoing_links("Rust Learning").await.unwrap();
+        let out_links2 = db.get_outgoing_links("skill/Rust Learning", AGENT).await.unwrap();
         assert!(out_links2.contains(&"Editor Preferences".to_string()));
     }
 
     #[tokio::test]
     async fn full_rebuild_skips_unchanged() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        let note1 = sample_md("misc", &["fact one"], &[]);
-        fs::write(notes_dir.join("Note1.md"), &note1).await.unwrap();
+        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+        let note1 = sample_md("other", &["fact one"], &[]);
+        fs::write(misc_dir.join("Note1.md"), &note1).await.unwrap();
 
-        let indexer = NoteIndexer::new(notes_dir, db.clone());
+        let indexer = NoteIndexer::new(memory_dir, db.clone());
 
         // First rebuild
-        let stats1 = indexer.full_rebuild().await.unwrap();
+        let stats1 = indexer.full_rebuild(AGENT).await.unwrap();
         assert_eq!(stats1.indexed, 1);
 
         // Second rebuild — same content → skip
-        let stats2 = indexer.full_rebuild().await.unwrap();
+        let stats2 = indexer.full_rebuild(AGENT).await.unwrap();
         assert_eq!(stats2.skipped, 1);
         assert_eq!(stats2.indexed, 0);
     }
@@ -369,40 +448,41 @@ mod tests {
     #[tokio::test]
     async fn index_file_detects_change() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        let path = notes_dir.join("Dynamic.md");
-        fs::write(&path, sample_md("misc", &["v1"], &[]))
+        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+        let path = misc_dir.join("Dynamic.md");
+        fs::write(&path, sample_md("other", &["v1"], &[]))
             .await
             .unwrap();
 
-        let indexer = NoteIndexer::new(notes_dir, db.clone());
+        let indexer = NoteIndexer::new(memory_dir, db.clone());
 
         // First index
-        assert!(indexer.index_file(&path).await.unwrap());
+        assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
         // Same content → skip
-        assert!(!indexer.index_file(&path).await.unwrap());
+        assert!(!indexer.index_file(AGENT, "other", &path).await.unwrap());
 
         // Change content
-        fs::write(&path, sample_md("misc", &["v2"], &[]))
+        fs::write(&path, sample_md("other", &["v2"], &[]))
             .await
             .unwrap();
         // Changed → re-index
-        assert!(indexer.index_file(&path).await.unwrap());
+        assert!(indexer.index_file(AGENT, "other", &path).await.unwrap());
     }
 
     #[tokio::test]
     async fn write_note_creates_file() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        let indexer = NoteIndexer::new(notes_dir.clone(), db);
+        let indexer = NoteIndexer::new(memory_dir.clone(), db);
 
         let note = KnowledgeNote {
             title: "Test Note".to_string(),
-            category: "misc".to_string(),
+            category: "other".to_string(),
             tags: vec!["a".to_string()],
             facts: vec!["hello".to_string()],
             links: vec![],
@@ -411,30 +491,33 @@ mod tests {
             content_hash: String::new(),
         };
 
-        let path = indexer.write_note(&note).await.unwrap();
+        let path = indexer.write_note(AGENT, "other", &note).await.unwrap();
         assert!(path.exists());
+        assert!(path.starts_with(memory_dir.join(AGENT).join("other")));
 
         let content = fs::read_to_string(&path).await.unwrap();
-        assert!(content.contains("category: misc"));
+        assert!(content.contains("category: other"));
         assert!(content.contains("- hello"));
     }
 
     #[tokio::test]
     async fn append_to_existing_note() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
+        let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
         let initial = sample_md("preference", &["fact1"], &["Link1"]);
-        fs::write(notes_dir.join("Target.md"), &initial)
+        fs::write(pref_dir.join("Target.md"), &initial)
             .await
             .unwrap();
 
-        let indexer = NoteIndexer::new(notes_dir.clone(), db.clone());
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
         indexer
             .append_to_note(
-                "Target",
+                AGENT,
+                "preference/Target",
                 &["fact2".to_string()],
                 &["Link1".to_string(), "Link2".to_string()],
             )
@@ -442,7 +525,7 @@ mod tests {
             .unwrap();
 
         // Read back the file
-        let content = fs::read_to_string(notes_dir.join("Target.md"))
+        let content = fs::read_to_string(pref_dir.join("Target.md"))
             .await
             .unwrap();
         assert!(content.contains("- fact1"));
@@ -451,70 +534,73 @@ mod tests {
         assert!(content.contains("[[Link2]]"));
 
         // Verify indexed
-        let entry = db.get_note_index("Target").await.unwrap().unwrap();
+        let entry = db.get_note_index("preference/Target", AGENT).await.unwrap().unwrap();
         assert_eq!(entry.link_count, 2); // Link1 deduped + Link2
     }
 
     #[tokio::test]
     async fn append_creates_new_note() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        let indexer = NoteIndexer::new(notes_dir.clone(), db.clone());
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
         indexer
-            .append_to_note("Brand New", &["a fact".to_string()], &[])
+            .append_to_note(AGENT, "other/Brand New", &["a fact".to_string()], &[])
             .await
             .unwrap();
 
-        assert!(notes_dir.join("Brand New.md").exists());
+        assert!(memory_dir.join(AGENT).join("other").join("Brand New.md").exists());
 
-        let entry = db.get_note_index("Brand New").await.unwrap().unwrap();
+        let entry = db.get_note_index("other/Brand New", AGENT).await.unwrap().unwrap();
         assert_eq!(entry.category, "other");
     }
 
     #[tokio::test]
     async fn rename_note_cascades_wikilinks() {
         let dir = TempDir::new().unwrap();
-        let notes_dir = dir.path().to_path_buf();
+        let memory_dir = dir.path().to_path_buf();
         let db = create_test_db();
 
-        // Create two notes: A links to B
-        let note_a = sample_md("misc", &["fact A"], &["Old Name"]);
-        let note_b = sample_md("misc", &["fact B"], &[]);
-        fs::write(notes_dir.join("Linker.md"), &note_a)
+        // Create two notes in the same category
+        let misc_dir = setup_category_dir(&memory_dir, AGENT, "other").await;
+        let note_a = sample_md("other", &["fact A"], &["Old Name"]);
+        let note_b = sample_md("other", &["fact B"], &[]);
+        fs::write(misc_dir.join("Linker.md"), &note_a)
             .await
             .unwrap();
-        fs::write(notes_dir.join("Old Name.md"), &note_b)
+        fs::write(misc_dir.join("Old Name.md"), &note_b)
             .await
             .unwrap();
 
-        let indexer = NoteIndexer::new(notes_dir.clone(), db.clone());
+        let indexer = NoteIndexer::new(memory_dir.clone(), db.clone());
 
         // Initial index
-        indexer.full_rebuild().await.unwrap();
+        indexer.full_rebuild(AGENT).await.unwrap();
 
         // Rename "Old Name" → "New Name"
-        indexer.rename_note("Old Name", "New Name").await.unwrap();
+        indexer.rename_note(AGENT, "Old Name", "New Name").await.unwrap();
 
         // Old file gone, new file exists
-        assert!(!notes_dir.join("Old Name.md").exists());
-        assert!(notes_dir.join("New Name.md").exists());
+        assert!(!misc_dir.join("Old Name.md").exists());
+        assert!(misc_dir.join("New Name.md").exists());
 
         // Linker.md should now reference [[New Name]]
-        let linker_content = fs::read_to_string(notes_dir.join("Linker.md"))
+        let linker_content = fs::read_to_string(misc_dir.join("Linker.md"))
             .await
             .unwrap();
         assert!(linker_content.contains("[[New Name]]"));
         assert!(!linker_content.contains("[[Old Name]]"));
 
         // Old index entry removed, new one present
-        assert!(db.get_note_index("Old Name").await.unwrap().is_none());
-        assert!(db.get_note_index("New Name").await.unwrap().is_some());
+        let old_paths = db.find_by_filename("Old Name", AGENT).await.unwrap();
+        assert!(old_paths.is_empty());
+        let new_paths = db.find_by_filename("New Name", AGENT).await.unwrap();
+        assert!(!new_paths.is_empty());
 
         // Linker's outgoing links updated
-        let out = db.get_outgoing_links("Linker").await.unwrap();
+        let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
         assert!(out.contains(&"New Name".to_string()));
         assert!(!out.contains(&"Old Name".to_string()));
     }

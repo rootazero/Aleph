@@ -15,8 +15,9 @@ use crate::memory::store::MemoryBackend;
 /// Convert a NoteIndexEntry into a NoteNodeDto.
 fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
     NoteNodeDto {
-        id: entry.title.clone(),
-        name: entry.title.clone(),
+        id: entry.path.clone(),
+        name: entry.filename.clone(),
+        path: entry.path.clone(),
         category: entry.category.clone(),
         tags: entry.tags.clone(),
         link_count: entry.link_count,
@@ -27,7 +28,7 @@ fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
 fn notes_dir() -> std::path::PathBuf {
     crate::utils::paths::get_data_dir()
         .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-        .join("notes")
+        .join("memory")
 }
 
 /// Handle graph.query — returns nodes and edges for visualization.
@@ -101,7 +102,7 @@ pub async fn handle_query_impl(
         }
     };
 
-    let (entries, links) = match db.get_graph_data(params.limit).await {
+    let (entries, links) = match db.get_graph_data("default", params.limit).await {
         Ok(data) => data,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -150,7 +151,7 @@ pub async fn handle_neighbors_impl(
     };
 
     let (entries, links) = match db
-        .get_neighbors(&params.node_id, params.depth, params.limit)
+        .get_neighbors(&params.node_id, "default", params.depth, params.limit)
         .await
     {
         Ok(data) => data,
@@ -201,7 +202,7 @@ pub async fn handle_node_detail_impl(
     };
 
     // Fetch the note index entry.
-    let entry = match db.get_note_index(&params.node_id).await {
+    let entry = match db.get_note_index(&params.node_id, "default").await {
         Ok(Some(e)) => e,
         Ok(None) => {
             return JsonRpcResponse::error(
@@ -219,15 +220,16 @@ pub async fn handle_node_detail_impl(
         }
     };
 
-    // Read the markdown file from disk.
-    let md_path = notes_dir().join(format!("{}.md", params.node_id));
+    // Read the markdown file from disk using the full path (includes category subdirectory).
+    let agent_id = "default"; // TODO: derive from request when multi-agent is wired
+    let md_path = notes_dir().join(agent_id).join(format!("{}.md", entry.path));
     let content = match tokio::fs::read_to_string(&md_path).await {
         Ok(c) => c,
         Err(_) => String::new(), // graceful fallback if file is missing
     };
 
     // Fetch backlinks (incoming links).
-    let backlinks = match db.get_incoming_links(&params.node_id).await {
+    let backlinks = match db.get_incoming_links(&params.node_id, "default").await {
         Ok(links) => links,
         Err(_) => Vec::new(),
     };
@@ -267,7 +269,7 @@ pub async fn handle_search_impl(
         }
     };
 
-    let entries = match db.search_notes_fts(&params.query, params.limit).await {
+    let entries = match db.search_notes_fts(&params.query, "default", params.limit).await {
         Ok(e) => e,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -281,16 +283,16 @@ pub async fn handle_search_impl(
     let results: Vec<SearchResultDto> = entries
         .into_iter()
         .map(|entry| {
-            // Determine match field heuristic: check if title contains the query.
+            // Determine match field heuristic: check if filename contains the query.
             let match_field =
-                if entry.title.to_lowercase().contains(&params.query.to_lowercase()) {
+                if entry.filename.to_lowercase().contains(&params.query.to_lowercase()) {
                     "title".to_string()
                 } else {
                     "content".to_string()
                 };
             SearchResultDto {
-                id: entry.title.clone(),
-                name: entry.title,
+                id: entry.path.clone(),
+                name: entry.filename,
                 category: entry.category,
                 match_field,
             }

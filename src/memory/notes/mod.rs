@@ -8,9 +8,11 @@ pub mod extractor;
 pub mod indexer;
 pub mod migration;
 mod note;
+pub mod retrieval;
 pub mod store;
 mod wikilink;
 
-pub use indexer::{IndexStats, NoteIndexer};
+pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{sanitize_title, KnowledgeNote};
-pub use wikilink::{extract_wikilinks, rewrite_wikilinks};
+pub use retrieval::{NoteContent, NoteRetrieval};
+pub use wikilink::{extract_wikilinks, resolve_wikilink, rewrite_wikilinks};

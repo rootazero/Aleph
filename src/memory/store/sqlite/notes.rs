@@ -437,34 +437,82 @@ impl NoteStore for SqliteMemoryBackend {
         let conn = lock_conn!(self)?;
         let blob = vec::embedding_to_blob(embedding);
 
-        // Overshoot k to account for agent_id filtering
+        // Overshoot k to account for agent_id post-filtering
         let k = limit.saturating_mul(3).max(limit);
 
+        // Step 1: KNN search on the notes vec0 table alone (sqlite-vec requirement)
+        let knn_results = {
+            let mut knn_stmt = conn
+                .prepare(&format!(
+                    "SELECT rowid, distance FROM {table} WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2"
+                ))
+                .map_err(|e| AlephError::config(format!("vector_search knn prepare: {e}")))?;
+
+            let rows = knn_stmt
+                .query_map(params![blob, k as i64], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+                })
+                .map_err(|e| AlephError::config(format!("vector_search knn query: {e}")))?;
+
+            let mut results = Vec::with_capacity(k);
+            for row in rows {
+                let pair = row.map_err(|e| AlephError::config(format!("vector_search knn row: {e}")))?;
+                results.push(pair);
+            }
+            results
+        };
+
+        if knn_results.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Step 2: Look up paths and filter by agent_id via the map table
+        let rowid_placeholders: Vec<String> =
+            (1..=knn_results.len()).map(|i| format!("?{i}")).collect();
+        let agent_param_idx = knn_results.len() + 1;
+
+        let sql = format!(
+            "SELECT rowid, path FROM notes_vec_map \
+             WHERE rowid IN ({}) AND agent_id = ?{agent_param_idx}",
+            rowid_placeholders.join(", ")
+        );
+
         let mut stmt = conn
-            .prepare(&format!(
-                "SELECT m.path, v.distance \
-                 FROM {table} v \
-                 JOIN notes_vec_map m ON m.rowid = v.rowid \
-                 WHERE v.embedding MATCH ?1 AND m.agent_id = ?2 \
-                 ORDER BY v.distance \
-                 LIMIT ?3"
-            ))
+            .prepare(&sql)
             .map_err(|e| AlephError::config(format!("vector_search prepare: {e}")))?;
 
+        // Build distance lookup
+        let distance_map: std::collections::HashMap<i64, f64> =
+            knn_results.iter().copied().collect();
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = knn_results
+            .iter()
+            .map(|(rowid, _)| Box::new(*rowid) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        param_values.push(Box::new(agent_id.to_string()));
+
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
         let rows = stmt
-            .query_map(params![blob, agent_id, k as i64], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)? as f32))
+            .query_map(params_ref.as_slice(), |row| {
+                let rowid: i64 = row.get(0)?;
+                let path: String = row.get(1)?;
+                Ok((rowid, path))
             })
             .map_err(|e| AlephError::config(format!("vector_search query: {e}")))?;
 
-        let mut results = Vec::with_capacity(limit);
+        let mut results: Vec<(String, f32)> = Vec::with_capacity(limit);
         for row in rows {
-            let pair = row.map_err(|e| AlephError::config(format!("vector_search row: {e}")))?;
-            results.push(pair);
-            if results.len() >= limit {
-                break;
+            let (rowid, path) = row.map_err(|e| AlephError::config(format!("vector_search row: {e}")))?;
+            if let Some(&dist) = distance_map.get(&rowid) {
+                results.push((path, dist as f32));
             }
         }
+
+        // Sort by distance and truncate to limit
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
 
         Ok(results)
     }

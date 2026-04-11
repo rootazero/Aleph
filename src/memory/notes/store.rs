@@ -11,8 +11,10 @@ use crate::memory::notes::KnowledgeNote;
 /// Lightweight index entry for a knowledge note (no full content).
 #[derive(Debug, Clone)]
 pub struct NoteIndexEntry {
-    pub title: String,
-    pub category: String,
+    pub path: String,        // "wiki/rust-ownership" (relative within agent)
+    pub filename: String,    // "rust-ownership" (for global wikilink resolution)
+    pub agent_id: String,    // "default"
+    pub category: String,    // "wiki"
     pub tags: Vec<String>,
     pub link_count: usize,
     pub created_at: i64,
@@ -21,36 +23,43 @@ pub struct NoteIndexEntry {
 }
 
 /// Persistence contract for the notes index, link graph, and full-text search.
+///
+/// All methods are scoped by `agent_id` to support the `memory/{agent_id}/{category}/`
+/// hierarchy.  Notes are identified by `path` (e.g. `"wiki/rust-ownership"`).
 #[async_trait]
 pub trait NoteStore: Send + Sync {
     /// Insert or update the index entry, links, and FTS content for a note.
-    async fn index_note(&self, note: &KnowledgeNote) -> Result<(), AlephError>;
+    ///
+    /// `path` is computed as `"{category}/{note.title}"` inside the implementation.
+    async fn index_note(&self, note: &KnowledgeNote, agent_id: &str, category: &str) -> Result<(), AlephError>;
 
-    /// Remove a note's index entry, links, and FTS content by title.
-    async fn remove_note_index(&self, title: &str) -> Result<(), AlephError>;
+    /// Remove a note's index entry, links, and FTS content by path.
+    async fn remove_note_index(&self, path: &str, agent_id: &str) -> Result<(), AlephError>;
 
-    /// Look up a single note index entry by title.
-    async fn get_note_index(&self, title: &str) -> Result<Option<NoteIndexEntry>, AlephError>;
+    /// Look up a single note index entry by path.
+    async fn get_note_index(&self, path: &str, agent_id: &str) -> Result<Option<NoteIndexEntry>, AlephError>;
 
-    /// List all indexed notes, ordered by most recently updated first.
-    async fn list_notes(&self) -> Result<Vec<NoteIndexEntry>, AlephError>;
+    /// List all indexed notes for an agent, ordered by most recently updated first.
+    async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
-    /// Titles of notes that this note links to.
-    async fn get_outgoing_links(&self, title: &str) -> Result<Vec<String>, AlephError>;
+    /// Paths of notes that this note links to.
+    async fn get_outgoing_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
 
-    /// Titles of notes that link to this note.
-    async fn get_incoming_links(&self, title: &str) -> Result<Vec<String>, AlephError>;
+    /// Paths of notes that link to this note.
+    async fn get_incoming_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
 
     /// Full-text search over note content.
     async fn search_notes_fts(
         &self,
         query: &str,
+        agent_id: &str,
         limit: usize,
     ) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
     /// Top notes by link count + recency, plus edges between visible nodes.
     async fn get_graph_data(
         &self,
+        agent_id: &str,
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
 
@@ -58,9 +67,19 @@ pub trait NoteStore: Send + Sync {
     async fn get_neighbors(
         &self,
         center: &str,
+        agent_id: &str,
         depth: u8,
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
+
+    /// Find all note paths that share the given filename (for wikilink resolution).
+    async fn find_by_filename(&self, filename: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
+
+    /// Store or update the embedding vector for a note.  Stub for now.
+    async fn upsert_embedding(&self, path: &str, agent_id: &str, embedding: &[f32], dim: u32) -> Result<(), AlephError>;
+
+    /// Search notes by embedding similarity.  Stub for now.
+    async fn vector_search(&self, embedding: &[f32], dim: u32, agent_id: &str, limit: usize) -> Result<Vec<(String, f32)>, AlephError>;
 }
 
 #[cfg(test)]
@@ -70,16 +89,18 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
+    const AGENT: &str = "default";
+
     fn create_test_db() -> Arc<SqliteMemoryBackend> {
         let temp_dir = std::env::temp_dir();
         let db_path = temp_dir.join(format!("test_notes_{}", Uuid::new_v4()));
         Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
     }
 
-    fn sample_note(title: &str, links: Vec<&str>) -> KnowledgeNote {
+    fn sample_note(title: &str, category: &str, links: Vec<&str>) -> KnowledgeNote {
         KnowledgeNote {
             title: title.to_string(),
-            category: "preference".to_string(),
+            category: category.to_string(),
             tags: vec!["test".to_string()],
             facts: vec!["A test fact".to_string()],
             links: links.into_iter().map(|s| s.to_string()).collect(),
@@ -92,17 +113,19 @@ mod tests {
     #[tokio::test]
     async fn indexes_and_retrieves_note() {
         let db = create_test_db();
-        let note = sample_note("Editor Preferences", vec!["Vim", "Neovim"]);
+        let note = sample_note("Editor Preferences", "preference", vec!["Vim", "Neovim"]);
 
-        db.index_note(&note).await.unwrap();
+        db.index_note(&note, AGENT, "preference").await.unwrap();
 
         let entry = db
-            .get_note_index("Editor Preferences")
+            .get_note_index("preference/Editor Preferences", AGENT)
             .await
             .unwrap()
             .expect("should exist");
 
-        assert_eq!(entry.title, "Editor Preferences");
+        assert_eq!(entry.path, "preference/Editor Preferences");
+        assert_eq!(entry.filename, "Editor Preferences");
+        assert_eq!(entry.agent_id, AGENT);
         assert_eq!(entry.category, "preference");
         assert_eq!(entry.tags, vec!["test"]);
         assert_eq!(entry.link_count, 2);
@@ -115,22 +138,54 @@ mod tests {
     async fn stores_and_queries_links() {
         let db = create_test_db();
 
-        let note_a = sample_note("Rust", vec!["Cargo", "Clippy"]);
-        let note_b = sample_note("Cargo", vec!["Rust"]);
-        let note_c = sample_note("Clippy", vec![]);
+        let note_a = sample_note("Rust", "wiki", vec!["Cargo", "Clippy"]);
+        let note_b = sample_note("Cargo", "wiki", vec!["Rust"]);
+        let note_c = sample_note("Clippy", "wiki", vec![]);
 
-        db.index_note(&note_a).await.unwrap();
-        db.index_note(&note_b).await.unwrap();
-        db.index_note(&note_c).await.unwrap();
+        db.index_note(&note_a, AGENT, "wiki").await.unwrap();
+        db.index_note(&note_b, AGENT, "wiki").await.unwrap();
+        db.index_note(&note_c, AGENT, "wiki").await.unwrap();
 
-        // Outgoing from Rust
-        let out = db.get_outgoing_links("Rust").await.unwrap();
+        // Outgoing from Rust (from_note = "wiki/Rust", to_note = raw link targets)
+        let out = db.get_outgoing_links("wiki/Rust", AGENT).await.unwrap();
         assert_eq!(out.len(), 2);
         assert!(out.contains(&"Cargo".to_string()));
         assert!(out.contains(&"Clippy".to_string()));
 
-        // Incoming to Rust (only Cargo links back)
-        let inc = db.get_incoming_links("Rust").await.unwrap();
-        assert_eq!(inc, vec!["Cargo"]);
+        // Incoming to "Rust" — to_note stores raw wikilink targets (filenames),
+        // so we query by the raw target name, not the full path.
+        let inc = db.get_incoming_links("Rust", AGENT).await.unwrap();
+        assert_eq!(inc.len(), 1);
+        assert!(inc[0].starts_with("wiki/Cargo"));
+    }
+
+    #[tokio::test]
+    async fn find_by_filename_returns_paths() {
+        let db = create_test_db();
+
+        let note = sample_note("rust-ownership", "wiki", vec![]);
+        db.index_note(&note, AGENT, "wiki").await.unwrap();
+
+        let paths = db.find_by_filename("rust-ownership", AGENT).await.unwrap();
+        assert_eq!(paths, vec!["wiki/rust-ownership"]);
+    }
+
+    #[tokio::test]
+    async fn list_notes_scoped_by_agent() {
+        let db = create_test_db();
+
+        let note_a = sample_note("NoteA", "wiki", vec![]);
+        let note_b = sample_note("NoteB", "wiki", vec![]);
+
+        db.index_note(&note_a, "agent1", "wiki").await.unwrap();
+        db.index_note(&note_b, "agent2", "wiki").await.unwrap();
+
+        let agent1_notes = db.list_notes("agent1").await.unwrap();
+        assert_eq!(agent1_notes.len(), 1);
+        assert_eq!(agent1_notes[0].filename, "NoteA");
+
+        let agent2_notes = db.list_notes("agent2").await.unwrap();
+        assert_eq!(agent2_notes.len(), 1);
+        assert_eq!(agent2_notes[0].filename, "NoteB");
     }
 }

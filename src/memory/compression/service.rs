@@ -138,11 +138,31 @@ impl CompressionService {
 
     /// Execute a compression operation
     ///
-    /// Extracted facts are tagged with DEFAULT_AGENT ("default").
-    /// Use `compress_in_workspace()` to tag facts with a specific workspace.
+    /// Routes through `compress_to_notes` by default, producing Knowledge
+    /// Notes instead of raw facts.  Falls back to the legacy
+    /// `compress_in_workspace` path only when the notes directory cannot be
+    /// determined.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
-        self.compress_in_workspace(crate::memory::DEFAULT_AGENT)
+        self.compress_default_notes(crate::memory::DEFAULT_AGENT)
             .await
+    }
+
+    /// Internal helper: build a `NoteIndexer` from the data directory and
+    /// delegate to `compress_to_notes`.
+    async fn compress_default_notes(
+        &self,
+        workspace_id: &str,
+    ) -> Result<CompressionResult, AlephError> {
+        let memory_dir = crate::utils::paths::get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+            .join("memory");
+
+        let indexer = crate::memory::notes::NoteIndexer::new(
+            memory_dir,
+            self.database.clone(),
+        );
+
+        self.compress_to_notes(workspace_id, &indexer).await
     }
 
     /// Execute a compression operation with workspace tagging.
@@ -463,8 +483,8 @@ impl CompressionService {
         );
 
         // 3. Get existing note titles
-        let existing_notes = indexer.store().list_notes().await.unwrap_or_default();
-        let existing_titles: Vec<String> = existing_notes.iter().map(|n| n.title.clone()).collect();
+        let existing_notes = indexer.store().list_notes("default").await.unwrap_or_default();
+        let existing_titles: Vec<String> = existing_notes.iter().map(|n| n.path.clone()).collect();
 
         // 4. Extract note updates via LLM
         let note_updates = self
@@ -472,21 +492,27 @@ impl CompressionService {
             .extract_note_updates(&memories, &existing_titles)
             .await?;
 
-        // 5. Apply note updates
+        // 5. Ensure directory structure exists
+        let _ = indexer.ensure_dirs(workspace_id).await;
+
+        // 6. Apply note updates
         let mut notes_created = 0u32;
         let mut facts_stored = 0u32;
 
         for update in &note_updates.updates {
             use crate::memory::notes::extractor::NoteAction;
 
+            // Derive category and filename from note_path ("category/filename")
+            let (category, filename) = match update.note_path.split_once('/') {
+                Some((cat, name)) => (cat, name),
+                None => ("other", update.note_path.as_str()),
+            };
+
             match update.action {
                 NoteAction::Create => {
                     let note = crate::memory::notes::KnowledgeNote {
-                        title: update.note_title.clone(),
-                        category: update
-                            .category
-                            .clone()
-                            .unwrap_or_else(|| "other".to_string()),
+                        title: filename.to_string(),
+                        category: category.to_string(),
                         tags: update.tags.clone().unwrap_or_default(),
                         facts: update.new_facts.clone(),
                         links: update.links.clone(),
@@ -494,46 +520,68 @@ impl CompressionService {
                         updated_at: chrono::Utc::now().timestamp(),
                         content_hash: String::new(),
                     };
-                    if let Err(e) = indexer.write_note(&note).await {
+                    if let Err(e) = indexer.write_note(workspace_id, category, &note).await {
                         tracing::warn!(
                             error = %e,
-                            title = %update.note_title,
+                            note_path = %update.note_path,
                             "Failed to create note"
                         );
                         continue;
                     }
-                    let path = indexer
-                        .notes_dir()
-                        .join(format!("{}.md", update.note_title));
-                    let _ = indexer.index_file(&path).await;
+                    // Generate embedding for the new note
+                    let body = note.body_text();
+                    if let Ok(embedding) = self.extractor.embedder().embed(&body).await {
+                        let dim = embedding.len() as u32;
+                        let _ = indexer.store().upsert_embedding(&update.note_path, workspace_id, &embedding, dim).await;
+                    }
+                    let note_file = indexer
+                        .memory_dir()
+                        .join(workspace_id)
+                        .join(category)
+                        .join(format!("{filename}.md"));
+                    let _ = indexer.index_file(workspace_id, category, &note_file).await;
                     notes_created += 1;
                     facts_stored += update.new_facts.len() as u32;
                 }
                 NoteAction::Append | NoteAction::Update => {
                     if let Err(e) = indexer
-                        .append_to_note(&update.note_title, &update.new_facts, &update.links)
+                        .append_to_note(workspace_id, &update.note_path, &update.new_facts, &update.links)
                         .await
                     {
                         tracing::warn!(
                             error = %e,
-                            title = %update.note_title,
+                            note_path = %update.note_path,
                             "Failed to append to note"
                         );
                         continue;
+                    }
+                    // Re-embed the updated note body (not frontmatter)
+                    let note_file = indexer
+                        .memory_dir()
+                        .join(workspace_id)
+                        .join(category)
+                        .join(format!("{filename}.md"));
+                    if let Ok(content) = tokio::fs::read_to_string(&note_file).await {
+                        if let Ok(parsed) = crate::memory::notes::KnowledgeNote::from_markdown(filename, &content) {
+                            if let Ok(embedding) = self.extractor.embedder().embed(&parsed.body_text()).await {
+                                let dim = embedding.len() as u32;
+                                let _ = indexer.store().upsert_embedding(&update.note_path, workspace_id, &embedding, dim).await;
+                            }
+                        }
                     }
                     facts_stored += update.new_facts.len() as u32;
                 }
             }
         }
 
-        // 6. Invalidate consumed raw chunks
+        // 7. Invalidate consumed raw chunks
         let consumed_ids: Vec<String> = raw_facts.iter().map(|f| f.id.clone()).collect();
         match self.database.invalidate_consumed_chunks(&consumed_ids) {
             Ok(n) => tracing::info!(invalidated = n, "Invalidated consumed raw chunks (notes)"),
             Err(e) => tracing::warn!(error = %e, "Failed to invalidate consumed raw chunks"),
         }
 
-        // 7. Update compression timestamp
+        // 8. Update compression timestamp
         let latest_timestamp = raw_facts.iter().map(|f| f.created_at).max().unwrap_or(0);
         self.database
             .set_last_compression_timestamp(latest_timestamp)

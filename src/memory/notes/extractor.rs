@@ -18,14 +18,14 @@ pub enum NoteAction {
 /// A single note update extracted by the LLM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteUpdate {
-    pub note_title: String,
+    /// Path in `"category/filename"` format (e.g. `"preference/editor"`).
+    /// The category is derived from the first segment before `/`.
+    pub note_path: String,
     pub action: NoteAction,
     #[serde(default)]
     pub new_facts: Vec<String>,
     #[serde(default)]
     pub links: Vec<String>,
-    #[serde(default)]
-    pub category: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
 }
@@ -63,21 +63,19 @@ pub fn build_note_extraction_prompt(existing_titles: &[String]) -> String {
 1. Write every fact in THIRD PERSON (e.g. "He prefers Helix editor", not "I prefer Helix editor").
 2. Each fact must be a single atomic statement — one idea per bullet.
 3. Group related facts into the SAME note.
-4. If an existing note already covers the topic, use action "append" with that note's title.
-5. If no existing note fits, use action "create" with a clear, short title (2-4 words).
+4. If an existing note already covers the topic, use action "append" with that note's path.
+5. If no existing note fits, use action "create" with a path in "category/filename" format.
 6. Use action "update" only to correct previously stored facts that are now wrong.
-7. Add [[wikilinks]] in the `links` array to connect related notes (use exact note titles).
+7. Add [[wikilinks]] in the `links` array to connect related notes (use "category/filename" paths).
 8. Focus on ACTIONABLE or MEMORABLE information — preferences, decisions, plans, learnings, skills.
 9. Ignore greetings, small talk, transient information, and pleasantries.
 10. Extract 0-10 facts max per batch. Quality over quantity.
 
-## Note titles
+## note_path format
 
-Keep titles short: 2-4 words, title case (e.g. "Editor Preferences", "Rust Learning").
+Use "category/filename" format. The filename should be short: 1-3 words, kebab-case (e.g. "preference/editor", "learning/rust-async").
 
-## Categories
-
-Use exactly one of: preference, plan, learning, project, personal, tool, lesson, skill, wiki, other
+CATEGORIES (use as path prefix): preference, plan, learning, project, personal, tool, lesson, skill, wiki, transcript, other
 
 ## {titles_section}
 
@@ -88,11 +86,10 @@ Respond with valid JSON only. No markdown fences, no commentary.
 {{
   "updates": [
     {{
-      "note_title": "Example Note",
+      "note_path": "preference/editor",
       "action": "create",
       "new_facts": ["Fact one in third person", "Fact two in third person"],
-      "links": ["Related Note"],
-      "category": "preference",
+      "links": ["learning/rust-async"],
       "tags": ["tag1", "tag2"]
     }}
   ]
@@ -112,18 +109,17 @@ mod tests {
         let json = r#"{
             "updates": [
                 {
-                    "note_title": "Editor Preferences",
+                    "note_path": "preference/editor",
                     "action": "append",
                     "new_facts": ["The user started using Helix editor"],
-                    "links": ["Rust Learning"],
-                    "category": "preference",
+                    "links": ["learning/rust-async"],
                     "tags": ["editor"]
                 }
             ]
         }"#;
         let response: NoteExtractionResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.updates.len(), 1);
-        assert_eq!(response.updates[0].note_title, "Editor Preferences");
+        assert_eq!(response.updates[0].note_path, "preference/editor");
         assert_eq!(response.updates[0].action, NoteAction::Append);
     }
 
@@ -139,18 +135,19 @@ mod tests {
         let json = r#"{
             "updates": [
                 {
-                    "note_title": "Rust Learning",
+                    "note_path": "learning/rust-async",
                     "action": "create",
                     "new_facts": ["He is learning async Rust"],
                     "links": [],
-                    "category": "learning",
                     "tags": ["rust", "async"]
                 }
             ]
         }"#;
         let response: NoteExtractionResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.updates[0].action, NoteAction::Create);
-        assert_eq!(response.updates[0].category.as_deref(), Some("learning"));
+        // Category is derived from note_path prefix
+        let (category, _filename) = response.updates[0].note_path.split_once('/').unwrap();
+        assert_eq!(category, "learning");
     }
 
     #[test]
@@ -159,7 +156,7 @@ mod tests {
         let json = r#"{
             "updates": [
                 {
-                    "note_title": "Test",
+                    "note_path": "other/test",
                     "action": "update"
                 }
             ]
@@ -168,16 +165,15 @@ mod tests {
         assert_eq!(response.updates[0].action, NoteAction::Update);
         assert!(response.updates[0].new_facts.is_empty());
         assert!(response.updates[0].links.is_empty());
-        assert!(response.updates[0].category.is_none());
         assert!(response.updates[0].tags.is_none());
     }
 
     #[test]
     fn prompt_includes_existing_titles() {
-        let titles = vec!["Editor Preferences".to_string(), "Rust Learning".to_string()];
+        let titles = vec!["preference/editor".to_string(), "learning/rust-async".to_string()];
         let prompt = build_note_extraction_prompt(&titles);
-        assert!(prompt.contains("- Editor Preferences"));
-        assert!(prompt.contains("- Rust Learning"));
+        assert!(prompt.contains("- preference/editor"));
+        assert!(prompt.contains("- learning/rust-async"));
     }
 
     #[test]
