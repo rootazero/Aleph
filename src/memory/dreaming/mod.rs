@@ -32,7 +32,7 @@ use tracing::{info, warn};
 pub use stages::decay::MemoryDecayReport;
 pub use stages::{
     ConsolidateStage, DecayStage, DeepSynthesisStage, DriftDetectStage, SummarizeStage,
-    WikiLintStage,
+    WikiIngestStage, WikiLintStage,
 };
 pub use stages::{DreamStage, DriftAction, MemoryCluster};
 
@@ -91,12 +91,13 @@ impl DreamPipeline {
         self
     }
 
-    /// Build the standard daily pipeline (5 stages).
+    /// Build the standard daily pipeline (6 stages).
     pub fn daily() -> Self {
         Self::new()
             .stage(SummarizeStage)
             .stage(DriftDetectStage)
             .stage(ConsolidateStage)
+            .stage(WikiIngestStage)
             .stage(WikiLintStage)
             .stage(DecayStage)
     }
@@ -172,6 +173,7 @@ pub fn ensure_dream_daemon(
     database: MemoryBackend,
     config: Arc<MemoryConfig>,
     provider: Option<Arc<dyn AiProvider>>,
+    command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
 ) {
     if cfg!(test) {
         return;
@@ -199,6 +201,12 @@ pub fn ensure_dream_daemon(
             warn!(error = %err, "DreamDaemon not started: invalid config");
             return;
         }
+    };
+
+    let daemon_builder = if let Some(handler) = command_handler {
+        daemon_builder.with_command_handler(handler)
+    } else {
+        daemon_builder
     };
 
     let daemon = if let Some(p) = provider {
@@ -700,13 +708,13 @@ mod tests {
     #[test]
     fn test_pipeline_builder() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 5);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 
     #[test]
-    fn test_pipeline_weekly_has_six_stages() {
+    fn test_pipeline_weekly_has_seven_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 6);
+        assert_eq!(pipeline.stages.len(), 7);
     }
 }
 
@@ -814,14 +822,14 @@ mod pipeline_integration_tests {
     }
 
     #[tokio::test]
-    async fn daily_pipeline_has_five_stages() {
+    async fn daily_pipeline_has_six_stages() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 5);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 
     #[tokio::test]
-    async fn weekly_pipeline_has_six_stages() {
+    async fn weekly_pipeline_has_seven_stages() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 6);
+        assert_eq!(pipeline.stages.len(), 7);
     }
 }
