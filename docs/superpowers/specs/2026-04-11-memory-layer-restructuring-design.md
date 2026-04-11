@@ -12,21 +12,24 @@ Evolve the Knowledge Notes system from a flat `~/.aleph/data/notes/` directory i
 ## Concept Model
 
 ```
-Raw Sources (原始资料)                Memory Layer (记忆层)
-┌─────────────────────┐        ┌──────────────────────────────────┐
-│ Conversation history │        │ ~/.aleph/data/memory/            │
-│ File attachments     │  LLM   │   {agent_id}/                    │
-│ Images/audio         │ ────→  │     {category}/*.md              │
-│ Web excerpts         │extract │                                  │
-└─────────────────────┘        │ SQLite = rebuildable index        │
-                               │ Canvas = Obsidian-style graph     │
-                               └──────────────────────────────────┘
+~/.aleph/data/
+├── sources/{agent_id}/          Raw Sources（原始资料，按 agent 隔离，不分类）
+│   ├── conversations/           对话历史
+│   ├── attachments/             文件附件、图片、音频等
+│   └── ...                      SQLite 做路径引用即可
+│
+└── memory/{agent_id}/           Memory Layer（记忆层，按 category 分类）
+    ├── {category}/*.md          LLM 提取的知识笔记
+    └── ...                      SQLite = 可重建索引 + Canvas = Obsidian 风格图谱
+
+                sources ──LLM提取──→ memory
 ```
 
 ## Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
+| Raw sources | `sources/{agent_id}/` flat, SQLite references | Agent-isolated, no category subdivision; SQLite stores path references |
 | Directory structure | `memory/{agent_id}/{category}/` | Agent isolation + category organization at filesystem level |
 | Category folders | 15 FactType enums as kebab-case dirs | Natural mapping, no new taxonomy needed |
 | Note granularity | Knowledge note (grouped facts per topic) | LLM decides grouping within each category |
