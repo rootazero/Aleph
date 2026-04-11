@@ -1007,7 +1007,13 @@ impl MemoryStore for SqliteMemoryBackend {
         fact.decay_invalidated_at = Some(now_unix());
         fact.updated_at = now_unix();
 
-        self.update_fact(&fact).await
+        self.update_fact(&fact).await?;
+
+        // Cascade: clean up memory_entities for invalidated fact
+        use crate::memory::store::GraphStore;
+        let _ = GraphStore::delete_memory_entities_for_fact(self, id, &fact.agent).await;
+
+        Ok(())
     }
 
     async fn close_fact_validity(&self, id: &str, valid_to: i64) -> Result<(), AlephError> {

@@ -394,6 +394,15 @@ impl GraphStore for SqliteMemoryBackend {
                         AlephError::config(format!("apply_decay cascade edges: {e}"))
                     })?;
                     stats.edges_pruned += cascade_count;
+                    // Cascade: delete memory_entities for this pruned node
+                    conn.execute(
+                        "DELETE FROM memory_entities WHERE node_id = ?1 AND agent = ?2",
+                        params![node.id, workspace],
+                    )
+                    .map_err(|e| {
+                        let _ = conn.execute_batch("ROLLBACK");
+                        AlephError::config(format!("apply_decay cascade memory_entities: {e}"))
+                    })?;
                     conn.execute(
                         "DELETE FROM graph_nodes WHERE id = ?1 AND agent = ?2",
                         params![node.id, workspace],
