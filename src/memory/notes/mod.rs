@@ -5,6 +5,7 @@
 //! SQLite is a rebuildable index; the markdown files are the source of truth.
 
 pub mod indexer;
+pub mod migration;
 mod note;
 pub mod store;
 mod wikilink;
