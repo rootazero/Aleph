@@ -237,7 +237,7 @@ ALTER TABLE facts ADD COLUMN domain TEXT
     CASE WHEN path LIKE 'aleph://%/%'
     THEN substr(path, 9, instr(substr(path, 9), '/') - 1)
     ELSE '' END
-  ) STORED;
+  ) VIRTUAL;
 "#;
 
 const PALACE_TOPOLOGY_DDL_TOPIC: &str = r#"
@@ -247,7 +247,7 @@ ALTER TABLE facts ADD COLUMN topic TEXT
     THEN substr(path, 9 + instr(substr(path, 9), '/'),
          instr(substr(path, 9 + instr(substr(path, 9), '/')), '/') - 1)
     ELSE '' END
-  ) STORED;
+  ) VIRTUAL;
 "#;
 
 const PALACE_TOPOLOGY_INDEX_DDL: &str = r#"
