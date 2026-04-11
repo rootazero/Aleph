@@ -213,7 +213,7 @@ pub fn CanvasView() -> impl IntoView {
             })}
 
             <div class="flex flex-1 overflow-hidden">
-                <div class="flex-1 relative">
+                <div class="flex-1 relative bg-[#0a0a0f]">
                     <GraphCanvas
                         graph_state=graph_state.clone()
                         on_event=Callback::new(on_event)
