@@ -11,7 +11,7 @@ use tokio::fs;
 
 use crate::error::AlephError;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
-use crate::memory::notes::KnowledgeNote;
+use crate::memory::notes::{sanitize_title, KnowledgeNote};
 use crate::memory::notes::store::NoteStore;
 
 /// Statistics from an indexing operation.
@@ -121,8 +121,11 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// Write a `KnowledgeNote` to disk as a markdown file.
     ///
     /// Returns the path of the written file.
+    ///
+    /// The title is sanitized to prevent path traversal.
     pub async fn write_note(&self, note: &KnowledgeNote) -> Result<PathBuf, AlephError> {
-        let path = self.notes_dir.join(format!("{}.md", note.title));
+        let safe_title = sanitize_title(&note.title);
+        let path = self.notes_dir.join(format!("{safe_title}.md"));
         let content = note.to_markdown();
 
         fs::write(&path, &content).await.map_err(|e| {
@@ -144,7 +147,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         new_facts: &[String],
         new_links: &[String],
     ) -> Result<(), AlephError> {
-        let path = self.notes_dir.join(format!("{title}.md"));
+        let safe_title = sanitize_title(title);
+        let path = self.notes_dir.join(format!("{safe_title}.md"));
 
         let mut note = if path.exists() {
             let content = fs::read_to_string(&path).await.map_err(|e| {
@@ -203,8 +207,10 @@ impl<S: NoteStore> NoteIndexer<S> {
         old_title: &str,
         new_title: &str,
     ) -> Result<(), AlephError> {
-        let old_path = self.notes_dir.join(format!("{old_title}.md"));
-        let new_path = self.notes_dir.join(format!("{new_title}.md"));
+        let safe_old = sanitize_title(old_title);
+        let safe_new = sanitize_title(new_title);
+        let old_path = self.notes_dir.join(format!("{safe_old}.md"));
+        let new_path = self.notes_dir.join(format!("{safe_new}.md"));
 
         // Rename the file
         fs::rename(&old_path, &new_path).await.map_err(|e| {

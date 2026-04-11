@@ -12,5 +12,5 @@ pub mod store;
 mod wikilink;
 
 pub use indexer::{IndexStats, NoteIndexer};
-pub use note::KnowledgeNote;
+pub use note::{sanitize_title, KnowledgeNote};
 pub use wikilink::{extract_wikilinks, rewrite_wikilinks};

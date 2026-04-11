@@ -3,8 +3,6 @@
 //! Handles JSON-RPC requests for knowledge graph visualization.
 //! These handlers query the NoteStore for note index data and links.
 
-use std::path::PathBuf;
-
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
     GraphNeighborsParams, GraphNodeDetailParams, GraphQueryParams, GraphQueryResponse,
@@ -25,13 +23,10 @@ fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
     }
 }
 
-/// Resolve the notes directory path.
-/// Uses `~/.aleph/data/notes/` as the standard location.
-fn notes_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".aleph")
-        .join("data")
+/// Resolve the notes directory path via the canonical data directory.
+fn notes_dir() -> std::path::PathBuf {
+    crate::utils::paths::get_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
         .join("notes")
 }
 

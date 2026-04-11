@@ -174,6 +174,18 @@ fn extract_facts(body: &str) -> Vec<String> {
         .collect()
 }
 
+/// Sanitize a note title for safe use as a filename.
+///
+/// Strips path separators, null bytes, and filesystem-unsafe characters
+/// to prevent path traversal attacks from LLM-generated titles.
+pub fn sanitize_title(title: &str) -> String {
+    title
+        .replace(['/', '\\', '\0', ':', '*', '?', '"', '<', '>', '|'], "")
+        .replace("..", "")
+        .trim()
+        .to_string()
+}
+
 /// Compute SHA-256 hex digest of content.
 fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
@@ -245,6 +257,16 @@ Related: [[Rust Learning]] [[Dev Environment]]
     fn rejects_missing_frontmatter() {
         let result = KnowledgeNote::from_markdown("Bad", "No frontmatter here");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sanitize_title_strips_path_traversal() {
+        assert_eq!(sanitize_title("../../etc/passwd"), "etcpasswd");
+        assert_eq!(sanitize_title("normal title"), "normal title");
+        assert_eq!(sanitize_title("has/slash"), "hasslash");
+        assert_eq!(sanitize_title("has\\back"), "hasback");
+        assert_eq!(sanitize_title("a]b*c?d"), "a]bcd");
+        assert_eq!(sanitize_title("  spaces  "), "spaces");
     }
 
     #[test]
