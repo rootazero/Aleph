@@ -719,6 +719,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         register_teams_handlers(&mut server, ts, cs);
     }
 
+    // Graph visualization handlers (wired with MemoryBackend + default agent)
+    register_graph_handlers(&mut server, &memory_db, &default_agent_id);
+
     // Identity resolver (shared for session-level overrides)
     let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver =
         Arc::new(tokio::sync::RwLock::new(

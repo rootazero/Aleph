@@ -1804,3 +1804,59 @@ pub(in crate::commands::start) fn register_teams_handlers(
     register_handler!(server, "teams.delete", teams::handle_delete, store);
     register_handler!(server, "agents.teams", teams::handle_agent_teams, store);
 }
+
+// ─── register_graph_handlers ──────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_graph_handlers(
+    server: &mut GatewayServer,
+    memory_db: &MemoryBackend,
+    default_agent_id: &str,
+) {
+    use alephcore::gateway::handlers::graph;
+
+    {
+        let db = ::std::sync::Arc::clone(memory_db);
+        let agent_id = default_agent_id.to_string();
+        server.handlers_mut().register("graph.query", move |req| {
+            let db = ::std::sync::Arc::clone(&db);
+            let agent_id = agent_id.clone();
+            async move { graph::handle_query_impl(req, db, agent_id).await }
+        });
+    }
+
+    {
+        let db = ::std::sync::Arc::clone(memory_db);
+        let agent_id = default_agent_id.to_string();
+        server
+            .handlers_mut()
+            .register("graph.neighbors", move |req| {
+                let db = ::std::sync::Arc::clone(&db);
+                let agent_id = agent_id.clone();
+                async move { graph::handle_neighbors_impl(req, db, agent_id).await }
+            });
+    }
+
+    {
+        let db = ::std::sync::Arc::clone(memory_db);
+        let agent_id = default_agent_id.to_string();
+        server
+            .handlers_mut()
+            .register("graph.node_detail", move |req| {
+                let db = ::std::sync::Arc::clone(&db);
+                let agent_id = agent_id.clone();
+                async move { graph::handle_node_detail_impl(req, db, agent_id).await }
+            });
+    }
+
+    {
+        let db = ::std::sync::Arc::clone(memory_db);
+        let agent_id = default_agent_id.to_string();
+        server
+            .handlers_mut()
+            .register("graph.search", move |req| {
+                let db = ::std::sync::Arc::clone(&db);
+                let agent_id = agent_id.clone();
+                async move { graph::handle_search_impl(req, db, agent_id).await }
+            });
+    }
+}
