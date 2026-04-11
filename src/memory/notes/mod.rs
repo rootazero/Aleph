@@ -4,6 +4,7 @@
 //! tags, bullet-point facts, and `[[wikilinks]]` to other notes.
 //! SQLite is a rebuildable index; the markdown files are the source of truth.
 
+pub mod extractor;
 pub mod indexer;
 pub mod migration;
 mod note;
