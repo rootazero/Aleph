@@ -17,15 +17,24 @@ pub fn ModeSidebar() -> impl IntoView {
     let mode = Memo::new(move |_| PanelMode::from_path(&location.pathname.get()));
 
     view! {
-        <aside class="w-64 border-r border-border bg-sidebar flex flex-col flex-shrink-0 overflow-hidden">
-            {move || match mode.get() {
-                PanelMode::Chat => view! { <ChatSidebar /> }.into_any(),
-                PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
-                PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
-                PanelMode::Canvas => view! { <DashboardSidebar /> }.into_any(),
-                PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
-            }}
-        </aside>
+        {move || {
+            // Canvas mode uses full-width layout, no sidebar
+            if mode.get() == PanelMode::Canvas {
+                view! { <div class="hidden" /> }.into_any()
+            } else {
+                view! {
+                    <aside class="w-64 border-r border-border bg-sidebar flex flex-col flex-shrink-0 overflow-hidden">
+                        {move || match mode.get() {
+                            PanelMode::Chat => view! { <ChatSidebar /> }.into_any(),
+                            PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
+                            PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
+                            PanelMode::Canvas => view! { <div /> }.into_any(),
+                            PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
+                        }}
+                    </aside>
+                }.into_any()
+            }
+        }}
     }
 }
 
