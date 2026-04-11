@@ -72,6 +72,9 @@ pub trait NoteStore: Send + Sync {
         limit: usize,
     ) -> Result<(Vec<NoteIndexEntry>, Vec<(String, String)>), AlephError>;
 
+    /// Count all notes across all agents.
+    async fn count_all_notes(&self) -> Result<i64, AlephError>;
+
     /// Find all note paths that share the given filename (for wikilink resolution).
     async fn find_by_filename(&self, filename: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
 

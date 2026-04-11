@@ -482,7 +482,7 @@ impl CompressionService {
         );
 
         // 3. Get existing note titles
-        let existing_notes = indexer.store().list_notes("default").await.unwrap_or_default();
+        let existing_notes = indexer.store().list_notes(workspace_id).await.unwrap_or_default();
         let existing_titles: Vec<String> = existing_notes.iter().map(|n| n.path.clone()).collect();
 
         // 4. Extract note updates via LLM

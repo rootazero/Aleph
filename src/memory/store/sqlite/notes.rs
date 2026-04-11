@@ -182,6 +182,12 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(entries)
     }
 
+    async fn count_all_notes(&self) -> Result<i64, AlephError> {
+        let conn = lock_conn!(self)?;
+        conn.query_row("SELECT COUNT(*) FROM notes_index", [], |row| row.get(0))
+            .map_err(|e| AlephError::config(format!("count_all_notes failed: {e}")))
+    }
+
     async fn get_outgoing_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
 

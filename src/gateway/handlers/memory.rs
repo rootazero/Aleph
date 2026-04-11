@@ -212,32 +212,36 @@ pub struct FactEntry {
     pub path: String,
 }
 
-/// List compressed facts (Layer 2 data, excluding raw session summaries).
+/// List note memories (compiled knowledge notes from notes_index).
 pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    use crate::memory::notes::store::NoteStore;
+
     let params: ListFactsParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db.get_compressed_facts(
-        params.include_invalid,
-        params.agent_id.as_deref(),
-        params.limit,
-    ) {
-        Ok(facts) => {
-            let entries: Vec<FactEntry> = facts
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
+    match db.list_notes(agent_id).await {
+        Ok(notes) => {
+            let entries: Vec<FactEntry> = notes
                 .into_iter()
-                .map(|f| FactEntry {
-                    id: f.id,
-                    agent_id: f.agent,
-                    content: f.content,
-                    note_type: format!("{:?}", f.note_type),
-                    confidence: f.confidence,
-                    is_valid: f.is_valid,
-                    created_at: f.created_at,
-                    category: format!("{:?}", f.category),
-                    path: f.path,
+                .take(params.limit)
+                .map(|n| FactEntry {
+                    id: n.path.clone(),
+                    agent_id: n.agent_id,
+                    content: n.filename.clone(),
+                    note_type: n.category.clone(),
+                    confidence: 1.0,
+                    is_valid: true,
+                    created_at: n.created_at,
+                    category: n.category,
+                    path: n.path,
                 })
                 .collect();
 
@@ -246,7 +250,7 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("List facts failed: {}", e),
+            format!("List notes failed: {}", e),
         ),
     }
 }
@@ -276,17 +280,28 @@ pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> 
 
 /// Get memory statistics
 pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    use crate::memory::notes::store::NoteStore;
+
     let raw_count = db.count_raw_memories().unwrap_or(0);
-    let fact_count = db.count_compressed_facts().unwrap_or(0);
+
+    // Note memory: count across all agents
+    let note_count = db.count_all_notes().await.unwrap_or(0);
+
+    // Graph stats for default agent
+    let agent_id = crate::routing::DEFAULT_AGENT_ID;
+    let (graph_nodes, graph_edges) = match db.get_graph_data(agent_id, 10000).await {
+        Ok((entries, links)) => (entries.len() as i64, links.len() as i64),
+        Err(_) => (0, 0),
+    };
 
     JsonRpcResponse::success(
         request.id,
         json!({
             "totalMemories": raw_count,
-            "totalFacts": fact_count,
-            "validFacts": fact_count,
-            "totalGraphNodes": 0,
-            "totalGraphEdges": 0,
+            "totalFacts": note_count,
+            "validFacts": note_count,
+            "totalGraphNodes": graph_nodes,
+            "totalGraphEdges": graph_edges,
         }),
     )
 }

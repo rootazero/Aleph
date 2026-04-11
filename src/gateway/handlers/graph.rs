@@ -101,7 +101,7 @@ pub async fn handle_query_impl(
         }
     };
 
-    let (entries, links) = match db.get_graph_data("default", params.limit).await {
+    let (entries, links) = match db.get_graph_data(crate::routing::DEFAULT_AGENT_ID, params.limit).await {
         Ok(data) => data,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -150,7 +150,7 @@ pub async fn handle_neighbors_impl(
     };
 
     let (entries, links) = match db
-        .get_neighbors(&params.node_id, "default", params.depth, params.limit)
+        .get_neighbors(&params.node_id, crate::routing::DEFAULT_AGENT_ID, params.depth, params.limit)
         .await
     {
         Ok(data) => data,
@@ -201,7 +201,7 @@ pub async fn handle_node_detail_impl(
     };
 
     // Fetch the note index entry.
-    let entry = match db.get_note_index(&params.node_id, "default").await {
+    let entry = match db.get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID).await {
         Ok(Some(e)) => e,
         Ok(None) => {
             return JsonRpcResponse::error(
@@ -220,7 +220,7 @@ pub async fn handle_node_detail_impl(
     };
 
     // Read the markdown file from disk using the full path (includes category subdirectory).
-    let agent_id = "default"; // TODO: derive from request when multi-agent is wired
+    let agent_id = crate::routing::DEFAULT_AGENT_ID; // TODO: derive from request when multi-agent is wired
     let md_path = notes_dir().join(agent_id).join(format!("{}.md", entry.path));
     let content = match tokio::fs::read_to_string(&md_path).await {
         Ok(c) => c,
@@ -228,7 +228,7 @@ pub async fn handle_node_detail_impl(
     };
 
     // Fetch backlinks (incoming links).
-    let backlinks = match db.get_incoming_links(&params.node_id, "default").await {
+    let backlinks = match db.get_incoming_links(&params.node_id, crate::routing::DEFAULT_AGENT_ID).await {
         Ok(links) => links,
         Err(_) => Vec::new(),
     };
@@ -268,7 +268,7 @@ pub async fn handle_search_impl(
         }
     };
 
-    let entries = match db.search_notes_fts(&params.query, "default", params.limit).await {
+    let entries = match db.search_notes_fts(&params.query, crate::routing::DEFAULT_AGENT_ID, params.limit).await {
         Ok(e) => e,
         Err(e) => {
             return JsonRpcResponse::error(

@@ -722,6 +722,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Graph visualization handlers (wired with MemoryBackend + default agent)
     register_graph_handlers(&mut server, &memory_db, &default_agent_id);
 
+    // Rebuild note index at startup (scans ~/.aleph/memory/note/{agent_id}/)
+    {
+        let db = memory_db.clone();
+        let agent_id = default_agent_id.clone();
+        tokio::spawn(async move {
+            let memory_dir = alephcore::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+            tracing::info!(dir = %memory_dir.display(), agent = %agent_id, "Rebuilding note index");
+            let indexer = alephcore::memory::notes::NoteIndexer::new(memory_dir, db);
+            match indexer.full_rebuild(&agent_id).await {
+                Ok(stats) => {
+                    tracing::info!(
+                        indexed = stats.indexed,
+                        skipped = stats.skipped,
+                        errors = stats.errors,
+                        "Note index rebuild complete"
+                    );
+                }
+                Err(e) => tracing::warn!(error = %e, "Failed to rebuild note index at startup"),
+            }
+        });
+    }
+
     // Identity resolver (shared for session-level overrides)
     let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver =
         Arc::new(tokio::sync::RwLock::new(
