@@ -1,7 +1,7 @@
 //! Tool Index Coordinator - synchronizes tools with Memory system
 //!
 //! The coordinator is responsible for:
-//! - Adding/updating tools as MemoryFacts with FactType::Tool
+//! - Adding/updating tools as MemoryFacts with NoteType::Tool
 //! - Removing tools by invalidating their facts
 //! - Bulk synchronization of tools
 //! - Retrieving all valid tool facts
@@ -10,7 +10,7 @@ use super::inference::SemanticPurposeInferrer;
 use crate::error::AlephError;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{
-    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::skill::{SkillSystem, SkillSystemEvent};
@@ -71,7 +71,7 @@ impl ToolMeta {
 
 /// Coordinates tool synchronization with Memory system
 ///
-/// Stores tools as MemoryFacts with FactType::Tool for semantic retrieval.
+/// Stores tools as MemoryFacts with NoteType::Tool for semantic retrieval.
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
     db: MemoryBackend,
@@ -172,7 +172,7 @@ impl ToolIndexCoordinator {
             let fact = MemoryFact {
                 id: fact_id.clone(),
                 content,
-                fact_type: FactType::Tool,
+                note_type: NoteType::Tool,
                 embedding,
                 source_memory_ids: vec![], // Tools don't have source memories
                 created_at: now,
@@ -306,7 +306,7 @@ impl ToolIndexCoordinator {
         // Use a large limit to get all tools (typical systems have <100 tools)
         // Tool facts are system-level, so use Owner namespace
         self.db
-            .get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, "default", 1000)
+            .get_facts_by_type(NoteType::Tool, &NamespaceScope::Owner, "default", 1000)
             .await
     }
 

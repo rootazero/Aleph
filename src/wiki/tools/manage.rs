@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::memory::context::{
-    FactSource, FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
 };
 use crate::wiki::is_valid_page_slug;
 
@@ -92,7 +92,7 @@ pub fn validate_args_for_create(
 pub fn build_wiki_fact(agent_id: &str, page_slug: &str, summary: &str) -> MemoryFact {
     let path = crate::wiki::wiki_path(agent_id, page_slug);
 
-    MemoryFact::new(summary.to_string(), FactType::Wiki, Vec::new())
+    MemoryFact::new(summary.to_string(), NoteType::Wiki, Vec::new())
         .with_confidence(0.9)
         .with_tier(MemoryTier::LongTerm)
         .with_scope(MemoryScope::Global)
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn builds_wiki_fact_correctly() {
         let fact = build_wiki_fact("default", "rust-ownership", "Rust ownership and borrowing rules");
-        assert_eq!(fact.fact_type, FactType::Wiki);
+        assert_eq!(fact.note_type, NoteType::Wiki);
         assert_eq!(fact.path, "aleph://wiki/default/rust-ownership.md");
         assert_eq!(fact.tier, MemoryTier::LongTerm);
         assert_eq!(fact.scope, MemoryScope::Global);

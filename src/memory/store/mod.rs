@@ -16,7 +16,7 @@ pub use sqlite::SqliteMemoryBackend;
 use async_trait::async_trait;
 
 use crate::error::AlephError;
-use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryFact};
+use crate::memory::context::{CompressionSession, FactStats, NoteType, MemoryFact};
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
 use crate::memory::namespace::NamespaceScope;
 
@@ -150,7 +150,7 @@ pub trait MemoryStore: Send + Sync {
     /// Retrieve facts of a specific type within a namespace.
     async fn get_facts_by_type(
         &self,
-        fact_type: FactType,
+        note_type: NoteType,
         ns: &NamespaceScope,
         workspace: &str,
         limit: usize,

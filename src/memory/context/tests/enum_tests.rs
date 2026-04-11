@@ -55,33 +55,33 @@ fn test_temporal_scope_as_str() {
 }
 
 #[test]
-fn test_fact_type_tool() {
-    assert_eq!(FactType::Tool.as_str(), "tool");
-    assert_eq!(FactType::from_str_or_other("tool"), FactType::Tool);
+fn test_note_type_tool() {
+    assert_eq!(NoteType::Tool.as_str(), "tool");
+    assert_eq!(NoteType::from_str_or_other("tool"), NoteType::Tool);
 }
 
 #[test]
-fn test_subagent_fact_types() {
+fn test_subagent_note_types() {
     assert_eq!(
-        FactType::from_str_or_other("subagent_run"),
-        FactType::SubagentRun
+        NoteType::from_str_or_other("subagent_run"),
+        NoteType::SubagentRun
     );
     assert_eq!(
-        FactType::from_str_or_other("subagent_session"),
-        FactType::SubagentSession
+        NoteType::from_str_or_other("subagent_session"),
+        NoteType::SubagentSession
     );
     assert_eq!(
-        FactType::from_str_or_other("subagent_checkpoint"),
-        FactType::SubagentCheckpoint
+        NoteType::from_str_or_other("subagent_checkpoint"),
+        NoteType::SubagentCheckpoint
     );
     assert_eq!(
-        FactType::from_str_or_other("subagent_transcript"),
-        FactType::SubagentTranscript
+        NoteType::from_str_or_other("subagent_transcript"),
+        NoteType::SubagentTranscript
     );
-    assert_eq!(FactType::SubagentRun.as_str(), "subagent_run");
-    assert_eq!(FactType::SubagentSession.as_str(), "subagent_session");
-    assert_eq!(FactType::SubagentCheckpoint.as_str(), "subagent_checkpoint");
-    assert_eq!(FactType::SubagentTranscript.as_str(), "subagent_transcript");
+    assert_eq!(NoteType::SubagentRun.as_str(), "subagent_run");
+    assert_eq!(NoteType::SubagentSession.as_str(), "subagent_session");
+    assert_eq!(NoteType::SubagentCheckpoint.as_str(), "subagent_checkpoint");
+    assert_eq!(NoteType::SubagentTranscript.as_str(), "subagent_transcript");
 }
 
 #[test]
@@ -172,25 +172,25 @@ fn test_memory_scope_roundtrip() {
 }
 
 #[test]
-fn test_fact_type_default_path() {
+fn test_note_type_default_path() {
     assert_eq!(
-        FactType::Preference.default_path(),
+        NoteType::Preference.default_path(),
         "aleph://user/preferences/"
     );
-    assert_eq!(FactType::Personal.default_path(), "aleph://user/personal/");
-    assert_eq!(FactType::Plan.default_path(), "aleph://user/plans/");
+    assert_eq!(NoteType::Personal.default_path(), "aleph://user/personal/");
+    assert_eq!(NoteType::Plan.default_path(), "aleph://user/plans/");
     assert_eq!(
-        FactType::Learning.default_path(),
+        NoteType::Learning.default_path(),
         "aleph://knowledge/learning/"
     );
     assert_eq!(
-        FactType::Project.default_path(),
+        NoteType::Project.default_path(),
         "aleph://knowledge/projects/"
     );
-    assert_eq!(FactType::Tool.default_path(), "aleph://agent/tools/");
-    assert_eq!(FactType::Other.default_path(), "aleph://knowledge/");
+    assert_eq!(NoteType::Tool.default_path(), "aleph://agent/tools/");
+    assert_eq!(NoteType::Other.default_path(), "aleph://knowledge/");
     assert_eq!(
-        FactType::SubagentRun.default_path(),
+        NoteType::SubagentRun.default_path(),
         "aleph://agent/experiences/"
     );
 }

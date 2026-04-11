@@ -38,12 +38,12 @@ impl ScoringStage for ImportanceWeightStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
     use crate::memory::scoring_pipeline::context::ScoringContext;
 
     fn scored_with_confidence(content: &str, score: f32, confidence: f32) -> ScoredFact {
-        let mut fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
         fact.confidence = confidence;
         ScoredFact { fact, score }
     }

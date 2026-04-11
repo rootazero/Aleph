@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::context::{FactType, MemoryFact, MemoryScope};
+use crate::memory::context::{NoteType, MemoryFact, MemoryScope};
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::adapter::RequestPayload;
@@ -121,6 +121,7 @@ pub struct SessionCompactor {
     provider: Option<Arc<dyn AiProvider>>,
     config: SessionCompactorConfig,
     metrics: Arc<CompactorMetrics>,
+    indexer: Option<crate::memory::transcript_indexer::TranscriptIndexer>,
 }
 
 impl SessionCompactor {
@@ -131,6 +132,7 @@ impl SessionCompactor {
             provider: None,
             config,
             metrics: Arc::new(CompactorMetrics::default()),
+            indexer: None,
         }
     }
 
@@ -149,6 +151,18 @@ impl SessionCompactor {
     /// When absent, all summaries use deterministic truncation only.
     pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
         self.provider = Some(provider);
+        self
+    }
+
+    /// Attach an embedding provider for transcript indexing.
+    ///
+    /// When set, each compressed turn is also embedded and stored as a
+    /// `NoteType::Transcript` fact for direct conversation retrieval.
+    pub fn with_embedder(mut self, embedder: Arc<dyn crate::memory::EmbeddingProvider>) -> Self {
+        self.indexer = Some(crate::memory::transcript_indexer::TranscriptIndexer::new(
+            self.database.clone(),
+            embedder,
+        ));
         self
     }
 
@@ -432,6 +446,18 @@ impl SessionCompactor {
                     .join("\n\n");
                 self.store_raw_chunk(&session_id, next_seq as usize, &raw_content)
                     .await?;
+
+                // Index raw content as transcript for direct retrieval
+                if let Some(ref indexer) = self.indexer {
+                    indexer.index_turn_text(
+                        &session_id,
+                        next_seq,
+                        &raw_content,
+                        "", // AI output already included in raw_content
+                        "owner",
+                        &agent_id,
+                    ).await;
+                }
             }
 
             next_seq += 1;
@@ -619,7 +645,7 @@ impl SessionCompactor {
         content: &str,
     ) -> Result<(), AlephError> {
         let path = format!("aleph://session/{}/raw/{}", session_id, seq);
-        let fact = MemoryFact::new(content.to_string(), FactType::Other, Vec::new())
+        let fact = MemoryFact::new(content.to_string(), NoteType::Other, Vec::new())
             .with_fact_source(crate::memory::context::FactSource::SessionCompressed)
             .with_path(path)
             .with_scope(MemoryScope::SessionLocal)

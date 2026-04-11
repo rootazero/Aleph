@@ -6,7 +6,7 @@
 use super::context_window::estimate_tokens;
 use super::fallback::{target_tokens, FallbackLevel};
 use crate::agent_loop::compaction::summary_utils::IDENTIFIER_PRESERVATION;
-use crate::memory::{FactSource, FactType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
+use crate::memory::{FactSource, NoteType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
 
 // Re-export for backwards compatibility.
 pub use crate::agent_loop::compaction::summary_utils::strip_analysis_block;
@@ -199,7 +199,7 @@ pub fn summary_to_fact(
 
     let path = format!("aleph://session/{session_id}/d{depth}/{seq}");
 
-    MemoryFact::new(summary_text, FactType::Other, Vec::new())
+    MemoryFact::new(summary_text, NoteType::Other, Vec::new())
         .with_fact_source(FactSource::SessionCompressed)
         .with_scope(MemoryScope::SessionLocal)
         .with_tier(MemoryTier::ShortTerm)

@@ -217,10 +217,10 @@ impl DreamStage for TunnelDiscoveryStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
 
     fn make_fact(id: &str, path: &str, strength: f32, embedding: Option<Vec<f32>>) -> MemoryFact {
-        let mut fact = MemoryFact::with_id(id.into(), "test content".into(), FactType::Other);
+        let mut fact = MemoryFact::with_id(id.into(), "test content".into(), NoteType::Other);
         fact.path = path.into();
         fact.strength = strength;
         fact.embedding = embedding;

@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::memory::context::{
-    FactSource, FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
 };
 use crate::skill::{is_valid_category, is_valid_skill_name};
 
@@ -97,7 +97,7 @@ pub fn build_skill_fact(
     let path = format!("aleph://skills/{}/{}/", category, name);
     let full_content = format!("{}\n\n{}", description, content);
 
-    MemoryFact::new(full_content, FactType::Skill, Vec::new())
+    MemoryFact::new(full_content, NoteType::Skill, Vec::new())
         .with_confidence(0.80)
         .with_tier(MemoryTier::ShortTerm)
         .with_scope(MemoryScope::Persona)
@@ -132,7 +132,7 @@ mod tests {
             "Debug Rust errors",
             "# Steps\n1. Read error",
         );
-        assert_eq!(fact.fact_type, FactType::Skill);
+        assert_eq!(fact.note_type, NoteType::Skill);
         assert_eq!(fact.path, "aleph://skills/coding/rust-debug/");
         assert_eq!(fact.tier, MemoryTier::ShortTerm);
         assert!(fact.content.contains("Debug Rust errors"));

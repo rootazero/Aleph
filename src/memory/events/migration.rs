@@ -139,7 +139,7 @@ mod tests {
         MemoryFact {
             id: id.into(),
             content: content.into(),
-            fact_type: FactType::Preference,
+            note_type: NoteType::Preference,
             embedding: None,
             source_memory_ids: vec![],
             created_at: 1000,

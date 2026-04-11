@@ -7,7 +7,7 @@
 
 use super::config::ToolRetrievalConfig;
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryFact};
+use crate::memory::context::{NoteType, MemoryFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 
 /// Hydration level for a retrieved tool
@@ -137,7 +137,7 @@ impl ToolRetrieval {
         // Filter to only tool facts and apply hard threshold
         let mut tools: Vec<HydratedTool> = facts
             .into_iter()
-            .filter(|f| f.fact_type == FactType::Tool)
+            .filter(|f| f.note_type == NoteType::Tool)
             .filter(|f| f.similarity_score.unwrap_or(0.0) >= self.config.hard_threshold)
             .map(|f| HydratedTool::from_fact(f, &self.config))
             .collect();
@@ -190,7 +190,7 @@ impl ToolRetrieval {
 
         let mut tools: Vec<HydratedTool> = facts
             .into_iter()
-            .filter(|f| f.fact_type == FactType::Tool)
+            .filter(|f| f.note_type == NoteType::Tool)
             .map(|f| HydratedTool::from_fact(f, &self.config))
             .collect();
 
@@ -304,21 +304,21 @@ mod tests {
         let mut fact_full = MemoryFact::with_id(
             "tool:read_file".to_string(),
             "Read contents of a file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_full.similarity_score = Some(0.85);
 
         let mut fact_summary = MemoryFact::with_id(
             "tool:write_file".to_string(),
             "Write contents to a file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_summary.similarity_score = Some(0.65);
 
         let mut fact_minimal = MemoryFact::with_id(
             "tool:delete_file".to_string(),
             "Delete a file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_minimal.similarity_score = Some(0.45);
 
@@ -347,7 +347,7 @@ mod tests {
         let mut fact = MemoryFact::with_id(
             "tool:execute_shell".to_string(),
             "Execute shell commands in a sandboxed environment".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact.similarity_score = Some(0.72);
 

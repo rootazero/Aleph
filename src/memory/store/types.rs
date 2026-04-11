@@ -5,7 +5,7 @@
 
 use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{
-    FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
 };
 use crate::memory::namespace::NamespaceScope;
 
@@ -42,7 +42,7 @@ pub fn escape_sql_string(s: &str) -> String {
 /// let filter = SearchFilter::new()
 ///     .with_valid_only()
 ///     .with_namespace(NamespaceScope::Owner)
-///     .with_fact_type(FactType::Preference);
+///     .with_note_type(NoteType::Preference);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
@@ -50,8 +50,8 @@ pub struct SearchFilter {
     pub namespace: Option<NamespaceScope>,
     /// Restrict to a specific agent.
     pub agent_filter: Option<AgentEnvFilter>,
-    /// Restrict to a specific fact type.
-    pub fact_type: Option<FactType>,
+    /// Restrict to a specific note type.
+    pub note_type: Option<NoteType>,
     /// Restrict to a specific memory layer.
     pub layer: Option<MemoryLayer>,
     /// Restrict to a specific memory category.
@@ -114,9 +114,9 @@ impl SearchFilter {
         self
     }
 
-    /// Set fact type filter.
-    pub fn with_fact_type(mut self, ft: FactType) -> Self {
-        self.fact_type = Some(ft);
+    /// Set note type filter.
+    pub fn with_note_type(mut self, ft: NoteType) -> Self {
+        self.note_type = Some(ft);
         self
     }
 
@@ -243,7 +243,7 @@ impl SearchFilter {
             }
         }
 
-        if let Some(ref ft) = self.fact_type {
+        if let Some(ref ft) = self.note_type {
             clauses.push(format!("fact_type = '{}'", escape_sql_string(ft.as_str())));
         }
 
@@ -448,7 +448,7 @@ mod tests {
         let f = SearchFilter::new()
             .with_valid_only()
             .with_namespace(NamespaceScope::Owner)
-            .with_fact_type(FactType::Preference)
+            .with_note_type(NoteType::Preference)
             .with_path_prefix("aleph://user/")
             .with_min_confidence(0.8);
 

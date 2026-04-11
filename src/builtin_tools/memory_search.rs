@@ -52,7 +52,7 @@ fn default_max_results() -> usize {
 #[derive(Debug, Clone, Serialize)]
 pub struct FactResult {
     pub content: String,
-    pub fact_type: String,
+    pub note_type: String,
     pub confidence: f32,
     pub similarity_score: f32,
     pub path: String,
@@ -318,7 +318,7 @@ impl MemorySearchTool {
                                 let status = if f.is_valid { "active" } else { "condensed" };
                                 FactResult {
                                     content: f.content,
-                                    fact_type: format!("SessionSummary(d{},{})", depth, status),
+                                    note_type: format!("SessionSummary(d{},{})", depth, status),
                                     confidence: f.confidence,
                                     similarity_score: 1.0, // path-matched, no vector score
                                     path: f.path,
@@ -411,7 +411,7 @@ impl MemorySearchTool {
                 .into_iter()
                 .map(|f| FactResult {
                     content: f.content,
-                    fact_type: format!("{:?}", f.fact_type),
+                    note_type: format!("{:?}", f.note_type),
                     confidence: f.confidence,
                     similarity_score: f.similarity_score.unwrap_or(0.0),
                     path: f.path.clone(),
@@ -597,28 +597,28 @@ mod tests {
         let facts = vec![
             FactResult {
                 content: "Fact 1".into(),
-                fact_type: "Preference".into(),
+                note_type: "Preference".into(),
                 confidence: 0.9,
                 similarity_score: 0.8,
                 path: "aleph://user/preferences/coding/".into(),
             },
             FactResult {
                 content: "Fact 2".into(),
-                fact_type: "Preference".into(),
+                note_type: "Preference".into(),
                 confidence: 0.85,
                 similarity_score: 0.75,
                 path: "aleph://user/preferences/coding/".into(),
             },
             FactResult {
                 content: "Fact 3".into(),
-                fact_type: "Preference".into(),
+                note_type: "Preference".into(),
                 confidence: 0.8,
                 similarity_score: 0.7,
                 path: "aleph://user/preferences/coding/".into(),
             },
             FactResult {
                 content: "Fact 4".into(),
-                fact_type: "Learning".into(),
+                note_type: "Learning".into(),
                 confidence: 0.9,
                 similarity_score: 0.6,
                 path: "aleph://knowledge/learning/".into(),

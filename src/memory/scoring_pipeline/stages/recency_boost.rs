@@ -46,12 +46,12 @@ impl ScoringStage for RecencyBoostStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
     use crate::memory::scoring_pipeline::context::ScoringContext;
 
     fn scored_at(content: &str, score: f32, created_at: i64) -> ScoredFact {
-        let mut fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
         fact.created_at = created_at;
         ScoredFact { fact, score }
     }

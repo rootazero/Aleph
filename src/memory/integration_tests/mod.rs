@@ -108,7 +108,7 @@ mod event_sourcing {
         let fact_id = handler
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust for systems programming".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/user/preferences/language".into(),

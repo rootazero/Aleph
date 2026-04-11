@@ -33,7 +33,7 @@ mod tests {
     async fn sync_returns_empty_report() {
         let fact = crate::memory::context::MemoryFact::new(
             "test".into(),
-            crate::memory::context::FactType::Wiki,
+            crate::memory::context::NoteType::Wiki,
             vec![],
         );
         let report = sync_wikilinks_to_graph(&fact, &()).await.unwrap();

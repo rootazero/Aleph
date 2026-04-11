@@ -67,7 +67,7 @@ impl MemoryCommandHandler {
         let event = MemoryEvent::FactCreated {
             fact_id: fact_id.clone(),
             content: cmd.content,
-            fact_type: cmd.fact_type,
+            note_type: cmd.note_type,
             tier: cmd.tier,
             scope: cmd.scope,
             path: cmd.path,
@@ -257,7 +257,7 @@ impl MemoryCommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
+    use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
     use crate::memory::events::projector::EventProjector;
 
     fn make_handler() -> MemoryCommandHandler {
@@ -271,7 +271,7 @@ mod tests {
         let fact_id = handler
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/user/preferences".into(),
@@ -294,7 +294,7 @@ mod tests {
         let fact_id = handler
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/user/preferences".into(),
@@ -328,7 +328,7 @@ mod tests {
             .expect("should produce a fact");
         assert_eq!(fact.id, fact_id);
         assert_eq!(fact.content, "User prefers Rust");
-        assert_eq!(fact.fact_type, FactType::Preference);
+        assert_eq!(fact.note_type, NoteType::Preference);
         assert_eq!(fact.tier, MemoryTier::ShortTerm);
     }
 
@@ -502,7 +502,7 @@ mod tests {
             let fid = handler
                 .create_fact(CreateFactCommand {
                     content: format!("Fact {i}"),
-                    fact_type: FactType::Learning,
+                    note_type: NoteType::Learning,
                     tier: MemoryTier::ShortTerm,
                     scope: MemoryScope::Global,
                     path: format!("/test/fact{i}"),
@@ -588,7 +588,7 @@ mod tests {
         let fid1 = handler
             .create_fact(CreateFactCommand {
                 content: "User likes Rust".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/user/preferences/lang1".into(),
@@ -606,7 +606,7 @@ mod tests {
         let fid2 = handler
             .create_fact(CreateFactCommand {
                 content: "User likes Go".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/user/preferences/lang2".into(),
@@ -674,7 +674,7 @@ mod tests {
         let fact_id = handler
             .create_fact(CreateFactCommand {
                 content: "Dual-write test".into(),
-                fact_type: FactType::Learning,
+                note_type: NoteType::Learning,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/test/dual".into(),
@@ -701,7 +701,7 @@ mod tests {
             .unwrap()
             .expect("fact should exist in store");
         assert_eq!(fact.content, "Dual-write test");
-        assert_eq!(fact.fact_type, FactType::Learning);
+        assert_eq!(fact.note_type, NoteType::Learning);
     }
 
     #[tokio::test]
@@ -717,7 +717,7 @@ mod tests {
         let fact_id = handler
             .create_fact(CreateFactCommand {
                 content: "Original".into(),
-                fact_type: FactType::Learning,
+                note_type: NoteType::Learning,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "/test/lifecycle".into(),

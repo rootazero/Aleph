@@ -5,7 +5,7 @@ use crate::sync_primitives::Arc;
 use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
-    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::Result;
 
@@ -24,7 +24,7 @@ fn create_test_fact(id: &str, content: &str, embedding: Vec<f32>) -> MemoryFact 
     MemoryFact {
         id: id.to_string(),
         content: content.to_string(),
-        fact_type: FactType::Preference,
+        note_type: NoteType::Preference,
         embedding: Some(emb_1024),
         source_memory_ids: vec![],
         created_at: 0,

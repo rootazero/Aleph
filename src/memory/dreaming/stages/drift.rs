@@ -169,8 +169,8 @@ impl DreamStage for DriftDetectStage {
                 .iter()
                 .map(|c| {
                     (
-                        c.existing_fact.fact_type.to_string(),
-                        c.new_fact.fact_type.to_string(),
+                        c.existing_fact.note_type.to_string(),
+                        c.new_fact.note_type.to_string(),
                     )
                 })
                 .collect();
@@ -575,7 +575,7 @@ mod tests {
         // Create a fact with an embedding so that the vector_search path is exercised.
         let mut fact = MemoryFact::new(
             "The user prefers dark mode".to_string(),
-            crate::memory::context::FactType::Preference,
+            crate::memory::context::NoteType::Preference,
             vec![],
         );
         fact.embedding = Some(vec![0.1; 768]);
@@ -626,13 +626,13 @@ mod tests {
             DriftCandidate {
                 new_fact: MemoryFact::new(
                     "new A".to_string(),
-                    crate::memory::context::FactType::Preference,
+                    crate::memory::context::NoteType::Preference,
                     vec![],
                 ),
                 existing_fact: {
                     let mut f = MemoryFact::new(
                         "old A".to_string(),
-                        crate::memory::context::FactType::Preference,
+                        crate::memory::context::NoteType::Preference,
                         vec![],
                     );
                     f.id = "old-a".to_string();
@@ -644,7 +644,7 @@ mod tests {
                 new_fact: {
                     let mut f = MemoryFact::new(
                         "new B".to_string(),
-                        crate::memory::context::FactType::Learning,
+                        crate::memory::context::NoteType::Learning,
                         vec![],
                     );
                     f.id = "new-b".to_string();
@@ -653,7 +653,7 @@ mod tests {
                 existing_fact: {
                     let mut f = MemoryFact::new(
                         "old B".to_string(),
-                        crate::memory::context::FactType::Learning,
+                        crate::memory::context::NoteType::Learning,
                         vec![],
                     );
                     f.id = "old-b".to_string();
@@ -665,7 +665,7 @@ mod tests {
                 new_fact: {
                     let mut f = MemoryFact::new(
                         "new C".to_string(),
-                        crate::memory::context::FactType::Other,
+                        crate::memory::context::NoteType::Other,
                         vec![],
                     );
                     f.id = "new-c".to_string();
@@ -674,7 +674,7 @@ mod tests {
                 existing_fact: {
                     let mut f = MemoryFact::new(
                         "old C".to_string(),
-                        crate::memory::context::FactType::Other,
+                        crate::memory::context::NoteType::Other,
                         vec![],
                     );
                     f.id = "old-c".to_string();

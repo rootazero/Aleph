@@ -322,7 +322,7 @@ impl MemoryEventRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
+    use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
     use crate::resilience::database::StateDatabase;
 
     fn make_test_db() -> StateDatabase {
@@ -333,7 +333,7 @@ mod tests {
         MemoryEvent::FactCreated {
             fact_id: fact_id.into(),
             content: "User prefers Rust".into(),
-            fact_type: FactType::Preference,
+            note_type: NoteType::Preference,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
             path: "aleph://user/preferences/language".into(),

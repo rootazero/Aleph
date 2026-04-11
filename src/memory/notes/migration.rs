@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::AlephError;
-use crate::memory::context::FactType;
+use crate::memory::context::NoteType;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{KnowledgeNote, NoteIndexer};
 use crate::memory::store::MemoryStore;
@@ -41,8 +41,8 @@ pub async fn migrate_facts_to_notes<S: NoteStore + MemoryStore>(
 
         stats.facts_processed += 1;
 
-        let title = derive_note_title(&fact.path, &fact.fact_type);
-        let category = fact_type_to_category(&fact.fact_type);
+        let title = derive_note_title(&fact.path, &fact.note_type);
+        let category = note_type_to_category(&fact.note_type);
 
         let entry = groups
             .entry(title)
@@ -83,7 +83,7 @@ pub async fn migrate_facts_to_notes<S: NoteStore + MemoryStore>(
 /// Derive a human-readable note title from a VFS path and fact type.
 ///
 /// Path format: `"aleph://user/preferences/coding"` → `"coding"`.
-fn derive_note_title(path: &str, fact_type: &FactType) -> String {
+fn derive_note_title(path: &str, note_type: &NoteType) -> String {
     let segments: Vec<&str> = path
         .strip_prefix("aleph://")
         .unwrap_or(path)
@@ -94,22 +94,22 @@ fn derive_note_title(path: &str, fact_type: &FactType) -> String {
     match segments.as_slice() {
         [_, _, topic, ..] => topic.replace('_', " "),
         [_, topic] => topic.replace('_', " "),
-        _ => format!("{:?}", fact_type).to_lowercase(),
+        _ => format!("{:?}", note_type).to_lowercase(),
     }
 }
 
-/// Map a `FactType` enum variant to a note category string.
-fn fact_type_to_category(ft: &FactType) -> String {
+/// Map a `NoteType` enum variant to a note category string.
+fn note_type_to_category(ft: &NoteType) -> String {
     match ft {
-        FactType::Preference => "preference",
-        FactType::Plan => "plan",
-        FactType::Learning => "learning",
-        FactType::Project => "project",
-        FactType::Personal => "personal",
-        FactType::Tool => "tool",
-        FactType::Lesson => "lesson",
-        FactType::Skill => "skill",
-        FactType::Wiki => "wiki",
+        NoteType::Preference => "preference",
+        NoteType::Plan => "plan",
+        NoteType::Learning => "learning",
+        NoteType::Project => "project",
+        NoteType::Personal => "personal",
+        NoteType::Tool => "tool",
+        NoteType::Lesson => "lesson",
+        NoteType::Skill => "skill",
+        NoteType::Wiki => "wiki",
         _ => "other",
     }
     .to_string()
@@ -169,42 +169,42 @@ mod tests {
 
     #[test]
     fn derives_title_from_three_segment_path() {
-        let title = derive_note_title("aleph://user/preferences/coding", &FactType::Preference);
+        let title = derive_note_title("aleph://user/preferences/coding", &NoteType::Preference);
         assert_eq!(title, "coding");
     }
 
     #[test]
     fn derives_title_from_two_segment_path() {
-        let title = derive_note_title("aleph://user/hobbies", &FactType::Personal);
+        let title = derive_note_title("aleph://user/hobbies", &NoteType::Personal);
         assert_eq!(title, "hobbies");
     }
 
     #[test]
     fn replaces_underscores_with_spaces() {
         let title =
-            derive_note_title("aleph://user/preferences/dark_mode", &FactType::Preference);
+            derive_note_title("aleph://user/preferences/dark_mode", &NoteType::Preference);
         assert_eq!(title, "dark mode");
     }
 
     #[test]
-    fn falls_back_to_fact_type_for_empty_path() {
-        let title = derive_note_title("", &FactType::Learning);
+    fn falls_back_to_note_type_for_empty_path() {
+        let title = derive_note_title("", &NoteType::Learning);
         assert_eq!(title, "learning");
     }
 
     #[test]
-    fn maps_fact_types_to_categories() {
-        assert_eq!(fact_type_to_category(&FactType::Preference), "preference");
-        assert_eq!(fact_type_to_category(&FactType::Plan), "plan");
-        assert_eq!(fact_type_to_category(&FactType::Learning), "learning");
-        assert_eq!(fact_type_to_category(&FactType::Project), "project");
-        assert_eq!(fact_type_to_category(&FactType::Personal), "personal");
-        assert_eq!(fact_type_to_category(&FactType::Tool), "tool");
-        assert_eq!(fact_type_to_category(&FactType::Lesson), "lesson");
-        assert_eq!(fact_type_to_category(&FactType::Skill), "skill");
-        assert_eq!(fact_type_to_category(&FactType::Wiki), "wiki");
-        assert_eq!(fact_type_to_category(&FactType::Other), "other");
-        assert_eq!(fact_type_to_category(&FactType::Transcript), "other");
+    fn maps_note_types_to_categories() {
+        assert_eq!(note_type_to_category(&NoteType::Preference), "preference");
+        assert_eq!(note_type_to_category(&NoteType::Plan), "plan");
+        assert_eq!(note_type_to_category(&NoteType::Learning), "learning");
+        assert_eq!(note_type_to_category(&NoteType::Project), "project");
+        assert_eq!(note_type_to_category(&NoteType::Personal), "personal");
+        assert_eq!(note_type_to_category(&NoteType::Tool), "tool");
+        assert_eq!(note_type_to_category(&NoteType::Lesson), "lesson");
+        assert_eq!(note_type_to_category(&NoteType::Skill), "skill");
+        assert_eq!(note_type_to_category(&NoteType::Wiki), "wiki");
+        assert_eq!(note_type_to_category(&NoteType::Other), "other");
+        assert_eq!(note_type_to_category(&NoteType::Transcript), "other");
     }
 
     #[tokio::test]

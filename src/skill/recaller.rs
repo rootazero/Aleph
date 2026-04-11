@@ -38,11 +38,11 @@ pub fn format_skills_prompt(skills: &[MemoryFact]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
 
     fn make_skill_fact(name: &str, content: &str) -> MemoryFact {
         let path = format!("aleph://skills/coding/{}/", name);
-        let mut fact = MemoryFact::new(content.to_string(), FactType::Skill, Vec::new());
+        let mut fact = MemoryFact::new(content.to_string(), NoteType::Skill, Vec::new());
         fact.path = path;
         fact
     }

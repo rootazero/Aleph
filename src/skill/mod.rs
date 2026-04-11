@@ -532,7 +532,7 @@ fn guess_source(path: &Path) -> SkillSource {
 /// Structured skill extraction from LLM reflection output.
 ///
 /// Produced by the reflection stage and consumed by `SkillManageTool` to
-/// persist learned skills as `FactType::Skill` facts in MemoryStore.
+/// persist learned skills as `NoteType::Skill` facts in MemoryStore.
 #[derive(Debug, Clone)]
 pub struct SkillExtraction {
     /// Kebab-case identifier (e.g., "rust-lifetime-debugging")

@@ -14,7 +14,7 @@ pub use types::{ArbitratedContext, RetentionMode, TokenBudget};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::fact_retrieval::RetrievalResult;
 
     #[test]
@@ -27,7 +27,7 @@ mod tests {
         for i in 0..5 {
             let mut fact = MemoryFact::new(
                 format!("Fact number {} with some content", i),
-                FactType::Preference,
+                NoteType::Preference,
                 vec![],
             );
             fact.embedding = Some(vec![0.1 * (i as f32); 1024]);
@@ -59,7 +59,7 @@ mod tests {
 
         let mut fact1 = MemoryFact::new(
             "Low priority fact".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec![],
         );
         fact1.similarity_score = Some(0.3);
@@ -67,7 +67,7 @@ mod tests {
 
         let mut fact2 = MemoryFact::new(
             "High priority fact".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec![],
         );
         fact2.similarity_score = Some(0.9);

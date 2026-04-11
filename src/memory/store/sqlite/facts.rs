@@ -11,7 +11,7 @@ use rusqlite::OptionalExtension;
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    FactSource, FactSpecificity, FactStats, FactType, MemoryCategory, MemoryFact, MemoryLayer,
+    FactSource, FactSpecificity, FactStats, NoteType, MemoryCategory, MemoryFact, MemoryLayer,
     MemoryScope, MemoryTier, TemporalScope,
 };
 use crate::memory::namespace::NamespaceScope;
@@ -41,7 +41,7 @@ pub(super) fn row_to_fact_pub(row: &rusqlite::Row) -> rusqlite::Result<MemoryFac
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
 
-    let fact_type_str: String = row.get("fact_type")?;
+    let note_type_str: String = row.get("fact_type")?;
     let fact_source_str: String = row.get("fact_source")?;
     let specificity_str: Option<String> = row.get("specificity")?;
     let temporal_scope_str: Option<String> = row.get("temporal_scope")?;
@@ -54,7 +54,7 @@ pub(super) fn row_to_fact_pub(row: &rusqlite::Row) -> rusqlite::Result<MemoryFac
     Ok(MemoryFact {
         id: row.get("id")?,
         content: row.get("content")?,
-        fact_type: FactType::from_str_or_other(&fact_type_str),
+        note_type: NoteType::from_str_or_other(&note_type_str),
         embedding: None, // stored in vec tables, not returned here
         source_memory_ids,
         created_at: row.get("created_at")?,
@@ -151,7 +151,7 @@ fn build_filter_clause(
         }
     }
 
-    if let Some(ref ft) = filter.fact_type {
+    if let Some(ref ft) = filter.note_type {
         params.push(Box::new(ft.as_str().to_string()));
         clauses.push(format!("fact_type = ?{}", param_offset + params.len()));
     }
@@ -256,7 +256,7 @@ fn insert_fact_inner(
         rusqlite::params![
             fact.id,
             fact.content,
-            fact.fact_type.as_str(),
+            fact.note_type.as_str(),
             fact.fact_source.as_str(),
             fact.specificity.as_str(),
             fact.temporal_scope.as_str(),
@@ -858,7 +858,7 @@ impl MemoryStore for SqliteMemoryBackend {
 
     async fn get_facts_by_type(
         &self,
-        fact_type: FactType,
+        note_type: NoteType,
         ns: &NamespaceScope,
         workspace: &str,
         limit: usize,
@@ -873,7 +873,7 @@ impl MemoryStore for SqliteMemoryBackend {
                 (
                     "SELECT * FROM facts WHERE fact_type = ?1 AND agent = ?2 LIMIT ?3".into(),
                     vec![
-                        Box::new(fact_type.as_str().to_string()),
+                        Box::new(note_type.as_str().to_string()),
                         Box::new(workspace.to_string()),
                         Box::new(limit as i64),
                     ],
@@ -884,7 +884,7 @@ impl MemoryStore for SqliteMemoryBackend {
                     "SELECT * FROM facts WHERE fact_type = ?1 AND namespace = ?2 AND agent = ?3 LIMIT ?4"
                         .into(),
                     vec![
-                        Box::new(fact_type.as_str().to_string()),
+                        Box::new(note_type.as_str().to_string()),
                         Box::new(ns_value),
                         Box::new(workspace.to_string()),
                         Box::new(limit as i64),
@@ -1434,7 +1434,7 @@ mod tests {
 
     /// Create a test MemoryFact with minimal fields.
     fn test_fact(id: &str, content: &str) -> MemoryFact {
-        MemoryFact::with_id(id.to_string(), content.to_string(), FactType::Other)
+        MemoryFact::with_id(id.to_string(), content.to_string(), NoteType::Other)
     }
 
     #[tokio::test]
@@ -1449,7 +1449,7 @@ mod tests {
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.id, "fact-1");
         assert_eq!(retrieved.content, "The user likes Rust programming");
-        assert_eq!(retrieved.fact_type.as_str(), "other");
+        assert_eq!(retrieved.note_type.as_str(), "other");
         assert!(retrieved.is_valid);
     }
 
@@ -1650,18 +1650,18 @@ mod tests {
         let (backend, _dir) = test_backend();
 
         // Insert two raw chunk facts
-        let mut f1 = MemoryFact::new("raw chunk 1".into(), FactType::Other, vec![]);
+        let mut f1 = MemoryFact::new("raw chunk 1".into(), NoteType::Other, vec![]);
         f1.path = "aleph://session/s1/raw/0".into();
         f1.fact_source = FactSource::SessionCompressed;
         backend.insert_fact(&f1).await.unwrap();
 
-        let mut f2 = MemoryFact::new("raw chunk 2".into(), FactType::Other, vec![]);
+        let mut f2 = MemoryFact::new("raw chunk 2".into(), NoteType::Other, vec![]);
         f2.path = "aleph://session/s1/raw/1".into();
         f2.fact_source = FactSource::SessionCompressed;
         backend.insert_fact(&f2).await.unwrap();
 
         // Insert one non-raw fact (should NOT be invalidated)
-        let f3 = MemoryFact::new("extracted fact".into(), FactType::Preference, vec![]);
+        let f3 = MemoryFact::new("extracted fact".into(), NoteType::Preference, vec![]);
         backend.insert_fact(&f3).await.unwrap();
 
         // Invalidate consumed chunks
@@ -1693,7 +1693,7 @@ mod tests {
             .as_secs() as i64;
 
         // Insert an old session fact (25 hours ago)
-        let mut old = MemoryFact::new("old session summary".into(), FactType::Other, vec![]);
+        let mut old = MemoryFact::new("old session summary".into(), NoteType::Other, vec![]);
         old.path = "aleph://session/old-sess/d2/0".into();
         old.fact_source = FactSource::SessionCompressed;
         old.scope = MemoryScope::SessionLocal;
@@ -1702,7 +1702,7 @@ mod tests {
         backend.insert_fact(&old).await.unwrap();
 
         // Insert a recent session fact (1 hour ago)
-        let mut recent = MemoryFact::new("recent session".into(), FactType::Other, vec![]);
+        let mut recent = MemoryFact::new("recent session".into(), NoteType::Other, vec![]);
         recent.path = "aleph://session/new-sess/d0/0".into();
         recent.fact_source = FactSource::SessionCompressed;
         recent.scope = MemoryScope::SessionLocal;
@@ -1711,7 +1711,7 @@ mod tests {
         backend.insert_fact(&recent).await.unwrap();
 
         // Insert a global fact (should NOT be touched)
-        let global = MemoryFact::new("global fact".into(), FactType::Preference, vec![]);
+        let global = MemoryFact::new("global fact".into(), NoteType::Preference, vec![]);
         backend.insert_fact(&global).await.unwrap();
 
         // Cleanup with 24h retention

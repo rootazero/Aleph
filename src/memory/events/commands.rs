@@ -3,13 +3,13 @@
 //! Each command maps to one or more MemoryEvents.
 //! Commands are the input to [`super::handler::MemoryCommandHandler`].
 
-use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
+use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
 use crate::memory::events::EventActor;
 
 /// Create a new memory fact.
 pub struct CreateFactCommand {
     pub content: String,
-    pub fact_type: FactType,
+    pub note_type: NoteType,
     pub tier: MemoryTier,
     pub scope: MemoryScope,
     pub path: String,

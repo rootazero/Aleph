@@ -22,12 +22,12 @@ pub fn compute_directory_hash(facts: &[MemoryFact]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
 
     #[test]
     fn test_compute_directory_hash_deterministic() {
-        let fact1 = MemoryFact::with_id("aaa".into(), "Fact A".into(), FactType::Preference);
-        let fact2 = MemoryFact::with_id("bbb".into(), "Fact B".into(), FactType::Learning);
+        let fact1 = MemoryFact::with_id("aaa".into(), "Fact A".into(), NoteType::Preference);
+        let fact2 = MemoryFact::with_id("bbb".into(), "Fact B".into(), NoteType::Learning);
 
         let hash1 = compute_directory_hash(&[fact1.clone(), fact2.clone()]);
         let hash2 = compute_directory_hash(&[fact2.clone(), fact1.clone()]);
@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn test_compute_directory_hash_changes_on_update() {
-        let fact1 = MemoryFact::with_id("aaa".into(), "Fact A".into(), FactType::Preference);
+        let fact1 = MemoryFact::with_id("aaa".into(), "Fact A".into(), NoteType::Preference);
         let mut fact1_updated = fact1.clone();
         fact1_updated.updated_at += 1;
 

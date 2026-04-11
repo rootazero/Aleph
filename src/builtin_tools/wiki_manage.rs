@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
 use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::context::FactType;
+use crate::memory::context::NoteType;
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::tools::AlephTool;
@@ -49,7 +49,7 @@ impl WikiManageTool {
         path: &str,
     ) -> Result<Option<crate::memory::context::MemoryFact>> {
         let filter = SearchFilter::new()
-            .with_fact_type(FactType::Wiki)
+            .with_note_type(NoteType::Wiki)
             .with_valid_only()
             .with_path_prefix(path);
         let facts = self
@@ -73,7 +73,7 @@ impl WikiManageTool {
 
         Ok(all_facts
             .into_iter()
-            .find(|f| f.fact_type == FactType::Wiki && f.path == path))
+            .find(|f| f.note_type == NoteType::Wiki && f.path == path))
     }
 
     /// Regenerate index.md from all wiki facts for an agent.
@@ -86,7 +86,7 @@ impl WikiManageTool {
 
         let entries: Vec<WikiIndexEntry> = all_facts
             .iter()
-            .filter(|f| f.fact_type == FactType::Wiki && f.agent == agent_id && f.is_valid)
+            .filter(|f| f.note_type == NoteType::Wiki && f.agent == agent_id && f.is_valid)
             .filter_map(|f| {
                 // Extract slug from path: aleph://wiki/{agent}/{slug}.md
                 let path_str = &f.path;
@@ -316,7 +316,7 @@ impl WikiManageTool {
 
         // Search wiki facts by text
         let filter = SearchFilter::new()
-            .with_fact_type(FactType::Wiki)
+            .with_note_type(NoteType::Wiki)
             .with_valid_only()
             .with_agent_filter(AgentEnvFilter::Single(agent_id.to_string()));
 
@@ -438,7 +438,7 @@ impl WikiManageTool {
 
         let pages: Vec<WikiListEntry> = all_facts
             .iter()
-            .filter(|f| f.fact_type == FactType::Wiki && f.agent == agent_id && f.is_valid)
+            .filter(|f| f.note_type == NoteType::Wiki && f.agent == agent_id && f.is_valid)
             .filter_map(|f| {
                 let slug = f
                     .path

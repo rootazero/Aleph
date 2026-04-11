@@ -225,7 +225,8 @@ impl CapabilityExecutor {
 
         // Create fact retrieval service
         let fact_retrieval =
-            FactRetrieval::new(Arc::clone(db), Arc::clone(embedder), retrieval_config);
+            FactRetrieval::new(Arc::clone(db), Arc::clone(embedder), retrieval_config)
+                .with_rerank_config(config.rerank.clone());
 
         // Retrieve using fact-first strategy
         let result = fact_retrieval.retrieve(query).await?;

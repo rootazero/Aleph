@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_hydration_result_counts() {
-        use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::context::{NoteType, MemoryFact};
 
         let config = ToolRetrievalConfig::default();
 
@@ -290,14 +290,14 @@ mod tests {
         let mut fact1 = MemoryFact::with_id(
             "tool:read_file".to_string(),
             "Read file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact1.similarity_score = Some(0.85);
 
         let mut fact2 = MemoryFact::with_id(
             "tool:write_file".to_string(),
             "Write file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact2.similarity_score = Some(0.65);
 

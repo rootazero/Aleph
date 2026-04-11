@@ -4,7 +4,7 @@
 //! Facts that haven't been accessed in a long time decay in strength,
 //! while frequently accessed facts remain strong.
 
-use crate::memory::context::{FactType, MemoryFact, MemoryTier, TemporalScope};
+use crate::memory::context::{NoteType, MemoryFact, MemoryTier, TemporalScope};
 use serde::{Deserialize, Serialize};
 
 /// Memory strength tracking
@@ -62,10 +62,10 @@ impl MemoryStrength {
         &self,
         tiered_config: &TieredDecayConfig,
         tier: &MemoryTier,
-        fact_type: &FactType,
+        note_type: &NoteType,
         now: i64,
     ) -> f32 {
-        if tiered_config.protected_types.contains(fact_type) {
+        if tiered_config.protected_types.contains(note_type) {
             return 1.0;
         }
         let params = tiered_config.params_for_tier(tier);
@@ -99,14 +99,14 @@ impl MemoryStrength {
         &self,
         config: &DecayConfig,
         now: i64,
-        fact_type: &FactType,
+        note_type: &NoteType,
     ) -> f32 {
         // Protected types never decay
-        if config.is_protected(fact_type) {
+        if config.is_protected(note_type) {
             return 1.0;
         }
 
-        let effective_half_life = config.effective_half_life(fact_type);
+        let effective_half_life = config.effective_half_life(note_type);
         let days_since_access = (now - self.last_accessed) as f32 / 86400.0;
 
         // Handle infinite or non-positive half-life
@@ -142,7 +142,7 @@ pub struct DecayConfig {
     /// Minimum strength before cleanup (default: 0.1)
     pub min_strength: f32,
     /// Fact types that never decay
-    pub protected_types: Vec<FactType>,
+    pub protected_types: Vec<NoteType>,
 }
 
 impl Default for DecayConfig {
@@ -151,24 +151,24 @@ impl Default for DecayConfig {
             half_life_days: 30.0,
             access_boost: 0.2,
             min_strength: 0.1,
-            protected_types: vec![FactType::Personal],
+            protected_types: vec![NoteType::Personal],
         }
     }
 }
 
 impl DecayConfig {
     /// Get effective half-life for a fact type
-    pub fn effective_half_life(&self, fact_type: &FactType) -> f32 {
-        match fact_type {
-            FactType::Preference => self.half_life_days * 2.0, // More durable
-            FactType::Personal => f32::INFINITY,               // Never decay
+    pub fn effective_half_life(&self, note_type: &NoteType) -> f32 {
+        match note_type {
+            NoteType::Preference => self.half_life_days * 2.0, // More durable
+            NoteType::Personal => f32::INFINITY,               // Never decay
             _ => self.half_life_days,
         }
     }
 
     /// Check if a fact type is protected from decay
-    pub fn is_protected(&self, fact_type: &FactType) -> bool {
-        self.protected_types.contains(fact_type)
+    pub fn is_protected(&self, note_type: &NoteType) -> bool {
+        self.protected_types.contains(note_type)
     }
 
     /// Builder: set half-life
@@ -190,9 +190,9 @@ impl DecayConfig {
     }
 
     /// Builder: add protected type
-    pub fn with_protected_type(mut self, fact_type: FactType) -> Self {
-        if !self.protected_types.contains(&fact_type) {
-            self.protected_types.push(fact_type);
+    pub fn with_protected_type(mut self, note_type: NoteType) -> Self {
+        if !self.protected_types.contains(&note_type) {
+            self.protected_types.push(note_type);
         }
         self
     }
@@ -200,10 +200,10 @@ impl DecayConfig {
     /// Get effective half-life considering temporal scope
     pub fn effective_half_life_with_scope(
         &self,
-        fact_type: &FactType,
+        note_type: &NoteType,
         temporal_scope: &TemporalScope,
     ) -> f32 {
-        let base = self.effective_half_life(fact_type);
+        let base = self.effective_half_life(note_type);
 
         if base.is_infinite() {
             return base;
@@ -286,8 +286,8 @@ fn default_short_term_params() -> TierDecayParams {
     }
 }
 
-fn default_protected_types() -> Vec<FactType> {
-    vec![FactType::Personal]
+fn default_protected_types() -> Vec<NoteType> {
+    vec![NoteType::Personal]
 }
 
 /// Access-based half-life reinforcement.
@@ -363,7 +363,7 @@ pub struct TieredDecayConfig {
     pub short_term: TierDecayParams,
     /// Fact types that are protected from decay
     #[serde(default = "default_protected_types")]
-    pub protected_types: Vec<FactType>,
+    pub protected_types: Vec<NoteType>,
 }
 
 impl Default for TieredDecayConfig {
@@ -486,14 +486,14 @@ mod tests {
     #[test]
     fn test_preference_has_longer_half_life() {
         let config = DecayConfig::default();
-        let half_life = config.effective_half_life(&FactType::Preference);
+        let half_life = config.effective_half_life(&NoteType::Preference);
         assert!((half_life - 60.0).abs() < 0.01);
     }
 
     #[test]
     fn test_personal_never_decays() {
         let config = DecayConfig::default();
-        assert!(config.is_protected(&FactType::Personal));
+        assert!(config.is_protected(&NoteType::Personal));
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn test_update_strength_fresh_fact() {
         use crate::memory::context::MemoryFact;
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         let now = fact.created_at;
         update_strength(&mut fact, now, 30.0);
         assert!(
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn test_update_strength_decays_over_time() {
         use crate::memory::context::MemoryFact;
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         let now = fact.created_at + 30 * 86400; // 30 days, no access
         update_strength(&mut fact, now, 30.0);
         assert!(
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn test_update_strength_access_boost() {
         use crate::memory::context::MemoryFact;
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         fact.access_count = 10;
         fact.last_accessed_at = Some(fact.created_at + 29 * 86400); // accessed 1 day ago
         let now = fact.created_at + 30 * 86400;
@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn test_on_access_increments() {
         use crate::memory::context::MemoryFact;
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         assert_eq!(fact.access_count, 0);
         assert!(fact.last_accessed_at.is_none());
         let now = fact.created_at + 86400;
@@ -656,14 +656,14 @@ mod tests {
         };
         let now = 7 * 86400; // 7 days later
         let strength =
-            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &NoteType::Other, now);
         assert!(
             strength < 0.6,
             "ShortTerm should decay significantly in 7 days: got {strength}"
         );
 
         let core_strength =
-            ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
+            ms.calculate_strength_tiered(&config, &MemoryTier::Core, &NoteType::Other, now);
         assert!(
             core_strength > strength,
             "Core should decay slower than ShortTerm"
@@ -680,7 +680,7 @@ mod tests {
         };
         let now = 365 * 86400; // 1 year later
         let strength =
-            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Personal, now);
+            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &NoteType::Personal, now);
         assert!(
             (strength - 1.0).abs() < 0.001,
             "Protected type should always return 1.0, got {strength}"
@@ -698,7 +698,7 @@ mod tests {
             creation_time: 0,
         };
         let s_no =
-            ms_no.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+            ms_no.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &NoteType::Other, now);
         // 5 recent accesses (last accessed 1 day ago)
         let ms_yes = MemoryStrength {
             access_count: 5,
@@ -708,7 +708,7 @@ mod tests {
         let s_yes = ms_yes.calculate_strength_tiered(
             &config,
             &MemoryTier::ShortTerm,
-            &FactType::Other,
+            &NoteType::Other,
             now,
         );
         assert!(
@@ -730,11 +730,11 @@ mod tests {
         };
 
         // Normal type: ~0.71 after 15 days (half of half-life)
-        let normal_score = strength.calculate_strength_for_type(&config, now, &FactType::Other);
+        let normal_score = strength.calculate_strength_for_type(&config, now, &NoteType::Other);
 
         // Check that ephemeral scope gives faster decay
         let ephemeral_half_life =
-            config.effective_half_life_with_scope(&FactType::Other, &TemporalScope::Ephemeral);
+            config.effective_half_life_with_scope(&NoteType::Other, &TemporalScope::Ephemeral);
         assert!(ephemeral_half_life < config.half_life_days);
 
         // Ephemeral: 15 days (half-life with 0.5x multiplier = 15 days half-life)

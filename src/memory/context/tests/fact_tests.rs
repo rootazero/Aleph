@@ -67,7 +67,7 @@ fn test_context_anchor_serialization() {
 fn test_fact_specificity() {
     let fact = MemoryFact::new(
         "User prefers Rust".to_string(),
-        FactType::Preference,
+        NoteType::Preference,
         vec!["mem-1".to_string()],
     )
     .with_specificity(FactSpecificity::Pattern)
@@ -81,7 +81,7 @@ fn test_fact_specificity() {
 fn test_fact_specificity_default() {
     let fact = MemoryFact::new(
         "User likes coding".to_string(),
-        FactType::Preference,
+        NoteType::Preference,
         vec![],
     );
     // Default should be Pattern and Contextual
@@ -91,7 +91,7 @@ fn test_fact_specificity_default() {
 
 #[test]
 fn test_memory_fact_defaults_layer_and_category() {
-    let fact = MemoryFact::new("User likes Vim".to_string(), FactType::Preference, vec![]);
+    let fact = MemoryFact::new("User likes Vim".to_string(), NoteType::Preference, vec![]);
     assert_eq!(fact.layer, MemoryLayer::L2Detail);
     assert_eq!(fact.category, MemoryCategory::Preferences);
 }
@@ -100,7 +100,7 @@ fn test_memory_fact_defaults_layer_and_category() {
 fn test_memory_fact_new_has_path_fields() {
     let fact = MemoryFact::new(
         "User prefers Rust".to_string(),
-        FactType::Preference,
+        NoteType::Preference,
         vec!["src-1".to_string()],
     );
     assert_eq!(fact.path, "aleph://user/preferences/");
@@ -113,7 +113,7 @@ fn test_memory_fact_new_has_path_fields() {
 fn test_memory_fact_with_path() {
     let fact = MemoryFact::new(
         "Learning WebAssembly".to_string(),
-        FactType::Learning,
+        NoteType::Learning,
         vec![],
     )
     .with_path("aleph://knowledge/learning/wasm/".to_string());
@@ -137,7 +137,7 @@ fn test_compute_parent_path() {
 
 #[test]
 fn test_memory_fact_defaults_tier_and_scope() {
-    let fact = MemoryFact::new("User likes Vim".to_string(), FactType::Preference, vec![]);
+    let fact = MemoryFact::new("User likes Vim".to_string(), NoteType::Preference, vec![]);
     assert_eq!(fact.tier, MemoryTier::ShortTerm);
     assert_eq!(fact.scope, MemoryScope::Global);
     assert_eq!(fact.persona_id, None);
@@ -150,7 +150,7 @@ fn test_memory_fact_defaults_tier_and_scope() {
 fn test_memory_fact_with_persona() {
     let fact = MemoryFact::new(
         "User prefers dark mode".to_string(),
-        FactType::Preference,
+        NoteType::Preference,
         vec![],
     )
     .with_tier(MemoryTier::Core)

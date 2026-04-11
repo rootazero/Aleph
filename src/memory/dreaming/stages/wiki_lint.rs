@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::{DreamContext, DreamStage};
 use crate::error::AlephError;
-use crate::memory::context::{FactSource, FactType};
+use crate::memory::context::{FactSource, NoteType};
 use crate::memory::store::MemoryStore;
 use crate::wiki::wikilink::extract_wikilinks;
 
@@ -43,7 +43,7 @@ impl DreamStage for WikiLintStage {
         let all_facts = ctx.database.get_all_facts(false, None).await?;
         let wiki_facts: Vec<_> = all_facts
             .iter()
-            .filter(|f| f.fact_type == FactType::Wiki && f.is_valid)
+            .filter(|f| f.note_type == NoteType::Wiki && f.is_valid)
             .collect();
 
         if wiki_facts.is_empty() {

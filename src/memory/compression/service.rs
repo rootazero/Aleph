@@ -202,7 +202,7 @@ impl CompressionService {
         // they must not be re-compressed into structured facts.
         let raw_facts: Vec<_> = raw_facts
             .into_iter()
-            .filter(|f| f.fact_type != crate::memory::context::FactType::Transcript)
+            .filter(|f| f.note_type != crate::memory::context::NoteType::Transcript)
             .collect();
 
         let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts
@@ -267,7 +267,7 @@ impl CompressionService {
                 Ok(embedding) => {
                     let fact = crate::memory::context::MemoryFact::new(
                         extracted_fact.content.clone(),
-                        crate::memory::context::FactType::from_str_or_other(&extracted_fact.fact_type),
+                        crate::memory::context::NoteType::from_str_or_other(&extracted_fact.note_type),
                         extracted_fact.source_ids.clone(),
                     )
                     .with_embedding(embedding)
@@ -309,7 +309,7 @@ impl CompressionService {
                 handler
                     .create_fact(CreateFactCommand {
                         content: fact.content.clone(),
-                        fact_type: fact.fact_type.clone(),
+                        note_type: fact.note_type.clone(),
                         tier: fact.tier,
                         scope: fact.scope,
                         path: fact.path.clone(),
@@ -456,7 +456,7 @@ impl CompressionService {
 
         let raw_facts: Vec<_> = raw_facts
             .into_iter()
-            .filter(|f| f.fact_type != crate::memory::context::FactType::Transcript)
+            .filter(|f| f.note_type != crate::memory::context::NoteType::Transcript)
             .collect();
 
         let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts

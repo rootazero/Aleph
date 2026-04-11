@@ -132,14 +132,14 @@ impl Default for ScoringPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
     use crate::memory::context::MemoryFact;
     use crate::memory::store::types::ScoredFact;
 
     /// Helper: create a `ScoredFact` from a string and score.
     fn scored(content: &str, score: f32) -> ScoredFact {
         ScoredFact {
-            fact: MemoryFact::new(content.to_string(), FactType::Other, vec![]),
+            fact: MemoryFact::new(content.to_string(), NoteType::Other, vec![]),
             score,
         }
     }
@@ -187,10 +187,10 @@ mod tests {
         // the full pipeline (no query_embedding so cosine rerank is a no-op).
         let pipeline = ScoringPipeline::default();
 
-        let mut fact_a = MemoryFact::new("alpha".to_string(), FactType::Other, vec![]);
+        let mut fact_a = MemoryFact::new("alpha".to_string(), NoteType::Other, vec![]);
         fact_a.created_at = 1700000000; // same as ctx timestamp
         fact_a.confidence = 1.0;
-        let mut fact_b = MemoryFact::new("beta".to_string(), FactType::Other, vec![]);
+        let mut fact_b = MemoryFact::new("beta".to_string(), NoteType::Other, vec![]);
         fact_b.created_at = 1700000000;
         fact_b.confidence = 1.0;
 
@@ -247,7 +247,7 @@ mod tests {
         // Candidate 1: recent + important
         let mut fact1 = MemoryFact::new(
             "User prefers Rust.".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec![],
         );
         fact1.created_at = now; // brand new
@@ -256,14 +256,14 @@ mod tests {
         // Candidate 2: old + verbose
         let mut fact2 = MemoryFact::new(
             "x".repeat(2000), // very long content
-            FactType::Other,
+            NoteType::Other,
             vec![],
         );
         fact2.created_at = now - 365 * 86400; // 1 year old
         fact2.confidence = 0.5;
 
         // Candidate 3: low starting score — will be filtered
-        let mut fact3 = MemoryFact::new("marginal fact".to_string(), FactType::Other, vec![]);
+        let mut fact3 = MemoryFact::new("marginal fact".to_string(), NoteType::Other, vec![]);
         fact3.created_at = now - 180 * 86400;
         fact3.confidence = 0.3;
 

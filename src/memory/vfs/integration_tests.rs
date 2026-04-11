@@ -4,7 +4,7 @@
 mod tests {
     use crate::sync_primitives::Arc;
 
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::{MemoryBackend, MemoryStore};
@@ -23,13 +23,13 @@ mod tests {
         let (db, _temp_dir) = create_test_db().await;
 
         // 1. Insert facts with auto-assigned paths
-        let fact1 = MemoryFact::new("User prefers Rust".into(), FactType::Preference, vec![]);
+        let fact1 = MemoryFact::new("User prefers Rust".into(), NoteType::Preference, vec![]);
         let fact2 = MemoryFact::new(
             "User prefers dark theme".into(),
-            FactType::Preference,
+            NoteType::Preference,
             vec![],
         );
-        let fact3 = MemoryFact::new("Learning WebAssembly".into(), FactType::Learning, vec![]);
+        let fact3 = MemoryFact::new("Learning WebAssembly".into(), NoteType::Learning, vec![]);
 
         assert_eq!(fact1.path, "aleph://user/preferences/");
         assert_eq!(fact3.path, "aleph://knowledge/learning/");
@@ -55,7 +55,7 @@ mod tests {
         let hash = compute_directory_hash(&prefs_facts);
         assert_eq!(hash.len(), 16);
 
-        let mut l1 = MemoryFact::new("Overview of preferences".into(), FactType::Other, vec![])
+        let mut l1 = MemoryFact::new("Overview of preferences".into(), NoteType::Other, vec![])
             .with_path("aleph://user/preferences/".to_string())
             .with_fact_source(FactSource::Summary);
         l1.content_hash = hash;

@@ -31,7 +31,7 @@ impl MemoryIngestion {
         embedder: Arc<dyn EmbeddingProvider>,
         config: Arc<MemoryConfig>,
     ) -> Self {
-        ensure_dream_daemon(database.clone(), Arc::clone(&config), None);
+        ensure_dream_daemon(database.clone(), Arc::clone(&config), None, None);
         Self {
             _database: database,
             _embedder: embedder,

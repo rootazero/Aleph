@@ -51,7 +51,7 @@ mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
 
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::store::types::ScoredFact;
     use crate::thinker::memory_context::{MemoryContext, MemorySummary};
 
@@ -100,7 +100,7 @@ mod tests {
 
         let fact = MemoryFact::new(
             "User prefers dark mode".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec![],
         );
         let ctx = MemoryContext {

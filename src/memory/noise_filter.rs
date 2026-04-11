@@ -172,7 +172,7 @@ impl NoiseFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, FactType, MemoryFact};
+    use crate::memory::context::{FactSource, NoteType, MemoryFact};
 
     /// Helper to create a default filter for testing.
     fn test_filter() -> NoiseFilter {
@@ -181,7 +181,7 @@ mod tests {
 
     /// Helper to create a ScoredFact with the given content.
     fn scored_fact(content: &str) -> ScoredFact {
-        let mut fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
         fact.confidence = 0.9;
         fact.fact_source = FactSource::Extracted;
 

@@ -7,7 +7,7 @@
 
 use crate::error::AlephError;
 use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::context::{compute_parent_path, FactSpecificity, FactType, TemporalScope};
+use crate::memory::context::{compute_parent_path, FactSpecificity, NoteType, TemporalScope};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
@@ -88,7 +88,7 @@ impl L1Generator {
 
         // 6. Store as Summary fact
         let parent_path = compute_parent_path(path);
-        let mut l1_fact = MemoryFact::new(l1_content, FactType::Other, vec![])
+        let mut l1_fact = MemoryFact::new(l1_content, NoteType::Other, vec![])
             .with_path(path.to_string())
             .with_fact_source(FactSource::Summary)
             .with_embedding(embedding)
@@ -164,7 +164,7 @@ impl L1Generator {
         let facts_list: String = facts
             .iter()
             .enumerate()
-            .map(|(i, f)| format!("{}. [{}] {}", i + 1, f.fact_type, f.content))
+            .map(|(i, f)| format!("{}. [{}] {}", i + 1, f.note_type, f.content))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -236,20 +236,20 @@ mod tests {
                 .unwrap();
         let db: MemoryBackend = Arc::new(backend);
 
-        let mut target_l2 = MemoryFact::new("Target L2".into(), FactType::Preference, vec![])
+        let mut target_l2 = MemoryFact::new("Target L2".into(), NoteType::Preference, vec![])
             .with_path("aleph://user/preferences/coding/rust".to_string())
             .with_layer(MemoryLayer::L2Detail)
             .with_fact_source(FactSource::Extracted);
         target_l2.agent = "default".to_string();
 
         let mut target_non_l2 =
-            MemoryFact::new("Target non-L2".into(), FactType::Preference, vec![])
+            MemoryFact::new("Target non-L2".into(), NoteType::Preference, vec![])
                 .with_path("aleph://user/preferences/coding/overview".to_string())
                 .with_layer(MemoryLayer::L1Overview)
                 .with_fact_source(FactSource::Manual);
         target_non_l2.agent = "default".to_string();
 
-        let mut other_path_l2 = MemoryFact::new("Other path".into(), FactType::Preference, vec![])
+        let mut other_path_l2 = MemoryFact::new("Other path".into(), NoteType::Preference, vec![])
             .with_path("aleph://user/preferences/ui/theme".to_string())
             .with_layer(MemoryLayer::L2Detail)
             .with_fact_source(FactSource::Extracted);

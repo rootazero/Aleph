@@ -28,7 +28,7 @@ pub mod traveler;
 
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
+use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
 
 // ============================================================================
 // EventActor — who caused the event
@@ -140,7 +140,7 @@ pub enum MemoryEvent {
     FactCreated {
         fact_id: String,
         content: String,
-        fact_type: FactType,
+        note_type: NoteType,
         tier: MemoryTier,
         scope: MemoryScope,
         path: String,
@@ -440,7 +440,7 @@ mod tests {
             MemoryEvent::FactCreated {
                 fact_id: "a".into(),
                 content: "c".into(),
-                fact_type: FactType::Other,
+                note_type: NoteType::Other,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "p".into(),
@@ -520,7 +520,7 @@ mod tests {
                 MemoryEvent::FactCreated {
                     fact_id: "f".into(),
                     content: String::new(),
-                    fact_type: FactType::Other,
+                    note_type: NoteType::Other,
                     source: FactSource::Extracted,
                     tier: MemoryTier::ShortTerm,
                     scope: MemoryScope::Global,
@@ -649,7 +649,7 @@ mod tests {
         assert!(MemoryEvent::FactCreated {
             fact_id: "f".into(),
             content: "c".into(),
-            fact_type: FactType::Other,
+            note_type: NoteType::Other,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
             path: "p".into(),
@@ -679,7 +679,7 @@ mod tests {
         let event = MemoryEvent::FactCreated {
             fact_id: "fact-001".into(),
             content: "User prefers Rust".into(),
-            fact_type: FactType::Preference,
+            note_type: NoteType::Preference,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
             path: "aleph://user/preferences/language".into(),
@@ -748,7 +748,7 @@ mod tests {
             MemoryEvent::FactCreated {
                 fact_id: "f".into(),
                 content: "c".into(),
-                fact_type: FactType::Learning,
+                note_type: NoteType::Learning,
                 source: FactSource::Manual,
                 tier: MemoryTier::Core,
                 scope: MemoryScope::Agent,
@@ -829,7 +829,7 @@ mod tests {
         let event = MemoryEvent::FactCreated {
             fact_id: "fact-abc".into(),
             content: "Test fact".into(),
-            fact_type: FactType::Other,
+            note_type: NoteType::Other,
             source: FactSource::Extracted,
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,

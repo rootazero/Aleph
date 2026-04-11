@@ -294,7 +294,7 @@ impl ConflictDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
@@ -313,7 +313,7 @@ mod tests {
 
         let fact = MemoryFact::new(
             "The user likes Rust".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec!["mem-1".to_string()],
         )
         .with_embedding(vec![0.1; 1024]);
@@ -335,7 +335,7 @@ mod tests {
         // Insert an existing fact
         let old_fact = MemoryFact::new(
             "The user is learning Python".to_string(),
-            FactType::Learning,
+            NoteType::Learning,
             vec!["mem-old".to_string()],
         )
         .with_embedding(vec![0.5; 1024]);
@@ -354,7 +354,7 @@ mod tests {
         // Create a very similar new fact (same embedding = similarity 1.0)
         let new_fact = MemoryFact::new(
             "The user stopped learning Python".to_string(),
-            FactType::Learning,
+            NoteType::Learning,
             vec!["mem-new".to_string()],
         )
         .with_embedding(vec![0.5; 1024]); // Same embedding = conflict

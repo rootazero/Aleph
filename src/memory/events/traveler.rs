@@ -231,7 +231,7 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, FactType, MemoryScope, MemoryTier};
+    use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
     use crate::memory::events::*;
 
     /// Helper: create an in-memory StateDatabase wrapped in Arc.
@@ -247,7 +247,7 @@ mod tests {
             MemoryEvent::FactCreated {
                 fact_id: fact_id.into(),
                 content: "User prefers Rust".into(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "aleph://user/preferences/language".into(),

@@ -10,14 +10,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// FactType
+// NoteType
 // ============================================================================
 
 /// Type classification for memory facts
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
-pub enum FactType {
+pub enum NoteType {
     /// User preferences (likes, habits, style choices)
     Preference,
     /// User plans, goals, or intentions
@@ -52,96 +52,96 @@ pub enum FactType {
     SubagentTranscript,
 }
 
-impl FactType {
+impl NoteType {
     /// Convert to string representation
     pub fn as_str(&self) -> &str {
         match self {
-            FactType::Preference => "preference",
-            FactType::Plan => "plan",
-            FactType::Learning => "learning",
-            FactType::Project => "project",
-            FactType::Personal => "personal",
-            FactType::Tool => "tool",
-            FactType::Lesson => "lesson",
-            FactType::Skill => "skill",
-            FactType::Wiki => "wiki",
-            FactType::Transcript => "transcript",
-            FactType::Other => "other",
-            FactType::SubagentRun => "subagent_run",
-            FactType::SubagentSession => "subagent_session",
-            FactType::SubagentCheckpoint => "subagent_checkpoint",
-            FactType::SubagentTranscript => "subagent_transcript",
+            NoteType::Preference => "preference",
+            NoteType::Plan => "plan",
+            NoteType::Learning => "learning",
+            NoteType::Project => "project",
+            NoteType::Personal => "personal",
+            NoteType::Tool => "tool",
+            NoteType::Lesson => "lesson",
+            NoteType::Skill => "skill",
+            NoteType::Wiki => "wiki",
+            NoteType::Transcript => "transcript",
+            NoteType::Other => "other",
+            NoteType::SubagentRun => "subagent_run",
+            NoteType::SubagentSession => "subagent_session",
+            NoteType::SubagentCheckpoint => "subagent_checkpoint",
+            NoteType::SubagentTranscript => "subagent_transcript",
         }
     }
 
     /// Parse from string with fallback to Other
     pub fn from_str_or_other(s: &str) -> Self {
-        s.parse().unwrap_or(FactType::Other)
+        s.parse().unwrap_or(NoteType::Other)
     }
 
     /// Get default aleph:// path for this fact type
     pub fn default_path(&self) -> &str {
         match self {
-            FactType::Preference => "aleph://user/preferences/",
-            FactType::Personal => "aleph://user/personal/",
-            FactType::Plan => "aleph://user/plans/",
-            FactType::Learning => "aleph://knowledge/learning/",
-            FactType::Project => "aleph://knowledge/projects/",
-            FactType::Tool => "aleph://agent/tools/",
-            FactType::Lesson => "aleph://knowledge/lessons/",
-            FactType::Skill => "aleph://skills/",
-            FactType::Wiki => "aleph://wiki/",
-            FactType::Transcript => "aleph://transcript/",
-            FactType::Other => "aleph://knowledge/",
-            FactType::SubagentRun
-            | FactType::SubagentSession
-            | FactType::SubagentCheckpoint
-            | FactType::SubagentTranscript => "aleph://agent/experiences/",
+            NoteType::Preference => "aleph://user/preferences/",
+            NoteType::Personal => "aleph://user/personal/",
+            NoteType::Plan => "aleph://user/plans/",
+            NoteType::Learning => "aleph://knowledge/learning/",
+            NoteType::Project => "aleph://knowledge/projects/",
+            NoteType::Tool => "aleph://agent/tools/",
+            NoteType::Lesson => "aleph://knowledge/lessons/",
+            NoteType::Skill => "aleph://skills/",
+            NoteType::Wiki => "aleph://wiki/",
+            NoteType::Transcript => "aleph://transcript/",
+            NoteType::Other => "aleph://knowledge/",
+            NoteType::SubagentRun
+            | NoteType::SubagentSession
+            | NoteType::SubagentCheckpoint
+            | NoteType::SubagentTranscript => "aleph://agent/experiences/",
         }
     }
 
     /// Map fact type to standardized memory category.
     pub fn default_category(&self) -> MemoryCategory {
         match self {
-            FactType::Preference => MemoryCategory::Preferences,
-            FactType::Plan | FactType::Personal => MemoryCategory::Profile,
-            FactType::Learning | FactType::Project | FactType::Other => MemoryCategory::Entities,
-            FactType::Tool | FactType::Skill | FactType::Wiki => MemoryCategory::Patterns,
-            FactType::Lesson => MemoryCategory::Cases,
-            FactType::SubagentRun | FactType::SubagentSession | FactType::SubagentCheckpoint => {
+            NoteType::Preference => MemoryCategory::Preferences,
+            NoteType::Plan | NoteType::Personal => MemoryCategory::Profile,
+            NoteType::Learning | NoteType::Project | NoteType::Other => MemoryCategory::Entities,
+            NoteType::Tool | NoteType::Skill | NoteType::Wiki => MemoryCategory::Patterns,
+            NoteType::Lesson => MemoryCategory::Cases,
+            NoteType::SubagentRun | NoteType::SubagentSession | NoteType::SubagentCheckpoint => {
                 MemoryCategory::Cases
             }
-            FactType::SubagentTranscript | FactType::Transcript => MemoryCategory::Events,
+            NoteType::SubagentTranscript | NoteType::Transcript => MemoryCategory::Events,
         }
     }
 }
 
-impl std::str::FromStr for FactType {
+impl std::str::FromStr for NoteType {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "preference" => Ok(FactType::Preference),
-            "plan" => Ok(FactType::Plan),
-            "learning" => Ok(FactType::Learning),
-            "project" => Ok(FactType::Project),
-            "personal" => Ok(FactType::Personal),
-            "tool" => Ok(FactType::Tool),
-            "lesson" => Ok(FactType::Lesson),
-            "skill" => Ok(FactType::Skill),
-            "wiki" => Ok(FactType::Wiki),
-            "subagent_run" => Ok(FactType::SubagentRun),
-            "subagent_session" => Ok(FactType::SubagentSession),
-            "subagent_checkpoint" => Ok(FactType::SubagentCheckpoint),
-            "subagent_transcript" => Ok(FactType::SubagentTranscript),
-            "transcript" => Ok(FactType::Transcript),
-            "other" => Ok(FactType::Other),
+            "preference" => Ok(NoteType::Preference),
+            "plan" => Ok(NoteType::Plan),
+            "learning" => Ok(NoteType::Learning),
+            "project" => Ok(NoteType::Project),
+            "personal" => Ok(NoteType::Personal),
+            "tool" => Ok(NoteType::Tool),
+            "lesson" => Ok(NoteType::Lesson),
+            "skill" => Ok(NoteType::Skill),
+            "wiki" => Ok(NoteType::Wiki),
+            "subagent_run" => Ok(NoteType::SubagentRun),
+            "subagent_session" => Ok(NoteType::SubagentSession),
+            "subagent_checkpoint" => Ok(NoteType::SubagentCheckpoint),
+            "subagent_transcript" => Ok(NoteType::SubagentTranscript),
+            "transcript" => Ok(NoteType::Transcript),
+            "other" => Ok(NoteType::Other),
             _ => Err(format!("Unknown fact type: {}", s)),
         }
     }
 }
 
-impl std::fmt::Display for FactType {
+impl std::fmt::Display for NoteType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -549,21 +549,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wiki_fact_type_roundtrips() {
-        let ft = FactType::Wiki;
+    fn wiki_note_type_roundtrips() {
+        let ft = NoteType::Wiki;
         assert_eq!(ft.as_str(), "wiki");
         assert_eq!(ft.to_string(), "wiki");
-        let parsed: FactType = "wiki".parse().unwrap();
-        assert_eq!(parsed, FactType::Wiki);
+        let parsed: NoteType = "wiki".parse().unwrap();
+        assert_eq!(parsed, NoteType::Wiki);
     }
 
     #[test]
     fn wiki_default_path() {
-        assert_eq!(FactType::Wiki.default_path(), "aleph://wiki/");
+        assert_eq!(NoteType::Wiki.default_path(), "aleph://wiki/");
     }
 
     #[test]
     fn wiki_default_category() {
-        assert_eq!(FactType::Wiki.default_category(), MemoryCategory::Patterns);
+        assert_eq!(NoteType::Wiki.default_category(), MemoryCategory::Patterns);
     }
 }

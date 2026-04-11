@@ -67,7 +67,7 @@ impl EventProjector {
                 MemoryEvent::FactCreated {
                     fact_id,
                     content,
-                    fact_type,
+                    note_type,
                     tier,
                     scope,
                     path,
@@ -78,12 +78,12 @@ impl EventProjector {
                     source_memory_ids,
                 } => {
                     let parent_path = compute_parent_path(path);
-                    let category = fact_type.default_category();
+                    let category = note_type.default_category();
 
                     fact = Some(MemoryFact {
                         id: fact_id.clone(),
                         content: content.clone(),
-                        fact_type: fact_type.clone(),
+                        note_type: note_type.clone(),
                         embedding: None,
                         source_memory_ids: source_memory_ids.clone(),
                         created_at: envelope.timestamp,
@@ -266,7 +266,7 @@ mod tests {
             event: MemoryEvent::FactCreated {
                 fact_id: fact_id.to_string(),
                 content: "User prefers Rust".to_string(),
-                fact_type: FactType::Preference,
+                note_type: NoteType::Preference,
                 tier: MemoryTier::ShortTerm,
                 scope: MemoryScope::Global,
                 path: "aleph://user/preferences/".to_string(),
@@ -333,7 +333,7 @@ mod tests {
 
         assert_eq!(fact.id, "fact-001");
         assert_eq!(fact.content, "User prefers Rust");
-        assert_eq!(fact.fact_type, FactType::Preference);
+        assert_eq!(fact.note_type, NoteType::Preference);
         assert_eq!(fact.tier, MemoryTier::ShortTerm);
         assert_eq!(fact.scope, MemoryScope::Global);
         assert_eq!(fact.path, "aleph://user/preferences/");
@@ -651,7 +651,7 @@ mod tests {
 
         assert_eq!(fact.id, "migrated-001");
         assert_eq!(fact.content, "Migrated from legacy store");
-        assert_eq!(fact.fact_type, FactType::Learning);
+        assert_eq!(fact.note_type, NoteType::Learning);
         assert_eq!(fact.tier, MemoryTier::LongTerm);
         assert!((fact.strength - 0.8).abs() < f32::EPSILON);
         assert_eq!(fact.access_count, 5);

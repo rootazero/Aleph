@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // Re-export all public items so external code can use `crate::memory::context::*`
 pub use compression::{CompressionResult, CompressionSession, FactStats};
 pub use enums::{
-    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryLayer, MemoryScope, MemoryTier,
     TemporalScope,
 };
 pub use fact::MemoryFact;

@@ -672,7 +672,7 @@ fn format_fact_with_source(fact: &MemoryFact) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
@@ -712,12 +712,12 @@ mod tests {
         let facts = vec![
             MemoryFact::new(
                 "The user is learning Rust".to_string(),
-                FactType::Learning,
+                NoteType::Learning,
                 vec!["mem-1".to_string()],
             ),
             MemoryFact::new(
                 "The user prefers dark mode".to_string(),
-                FactType::Preference,
+                NoteType::Preference,
                 vec!["mem-2".to_string()],
             ),
         ];
@@ -731,7 +731,7 @@ mod tests {
         assert!(context.contains("Known User Information"));
         assert!(context.contains("learning Rust"));
         assert!(context.contains("dark mode"));
-        // Verify source metadata is present (MemoryFact::new sets path from FactType)
+        // Verify source metadata is present (MemoryFact::new sets path from NoteType)
         assert!(context.contains("[Source: aleph://knowledge/learning/"));
         assert!(context.contains("[Source: aleph://user/preferences/"));
     }
@@ -740,7 +740,7 @@ mod tests {
     async fn test_format_context_zh() {
         let facts = vec![MemoryFact::new(
             "用户正在学习 Rust".to_string(),
-            FactType::Learning,
+            NoteType::Learning,
             vec!["mem-1".to_string()],
         )];
 
@@ -760,7 +760,7 @@ mod tests {
     async fn test_format_context_includes_source_citation() {
         let mut fact = MemoryFact::new(
             "User prefers dark mode".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec!["mem-1".to_string()],
         );
         fact.path = "aleph://user/preferences/ui".to_string();
@@ -779,7 +779,7 @@ mod tests {
     async fn test_format_fact_with_empty_path_fallback() {
         let mut fact = MemoryFact::new(
             "Some fact without path".to_string(),
-            FactType::Other,
+            NoteType::Other,
             vec!["mem-1".to_string()],
         );
         fact.path = String::new(); // Force empty path
@@ -876,12 +876,12 @@ mod tests {
     fn memory_context_to_prompt_sections() {
         let bg_fact = MemoryFact::new(
             "User is a Rust developer".to_string(),
-            FactType::Personal,
+            NoteType::Personal,
             vec!["src-1".to_string()],
         );
         let rel_fact = MemoryFact::new(
             "User asked about async patterns".to_string(),
-            FactType::Learning,
+            NoteType::Learning,
             vec!["src-2".to_string()],
         );
 
@@ -903,7 +903,7 @@ mod tests {
     fn memory_context_background_only() {
         let fact = MemoryFact::new(
             "Background fact".to_string(),
-            FactType::Other,
+            NoteType::Other,
             vec!["src-1".to_string()],
         );
         let ctx = MemoryContext {
@@ -920,7 +920,7 @@ mod tests {
     fn memory_context_relevant_only() {
         let fact = MemoryFact::new(
             "Relevant fact".to_string(),
-            FactType::Other,
+            NoteType::Other,
             vec!["src-1".to_string()],
         );
         let ctx = MemoryContext {

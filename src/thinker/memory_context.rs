@@ -105,7 +105,7 @@ impl MemoryContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
 
     #[test]
     fn test_empty_context() {
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn test_mixed_context_format() {
         let fact = ScoredFact {
-            fact: MemoryFact::new("Rust is great".to_string(), FactType::Preference, vec![]),
+            fact: MemoryFact::new("Rust is great".to_string(), NoteType::Preference, vec![]),
             score: 0.9,
         };
         let ctx = MemoryContext {
@@ -135,7 +135,7 @@ mod tests {
         let fact = ScoredFact {
             fact: MemoryFact::new(
                 "User prefers dark mode".to_string(),
-                FactType::Preference,
+                NoteType::Preference,
                 vec![],
             ),
             score: 0.92,

@@ -8,7 +8,7 @@ mod tests {
     use crate::gateway::agent_env::{
         AgentEnvContext, AgentEnvFilter, AgentEnvStore, AgentEnvStoreConfig, DEFAULT_AGENT,
     };
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::types::SearchFilter;
@@ -16,7 +16,7 @@ mod tests {
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
-        let mut fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
         fact.embedding = Some(embedding);
         fact.embedding_model = "test-model".to_string();
         fact.content_hash = format!("hash-{}", uuid::Uuid::new_v4());

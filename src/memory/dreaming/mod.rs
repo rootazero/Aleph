@@ -12,7 +12,7 @@ use crate::config::{
     DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy,
 };
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
+use crate::memory::context::{NoteType, MemoryEntry, MemoryFact, MemoryTier};
 use crate::memory::decay::DecayConfig;
 use crate::memory::store::sqlite::dream_reports::PersistedDreamReport;
 use crate::memory::store::{DreamStore, MemoryBackend};
@@ -695,12 +695,12 @@ fn decay_config_from_policy(policy: &MemoryDecayPolicy) -> DecayConfig {
     };
 
     if policy.protected_types.is_empty() {
-        config.protected_types.push(FactType::Personal);
+        config.protected_types.push(NoteType::Personal);
     } else {
         for entry in &policy.protected_types {
-            let fact_type = FactType::from_str_or_other(entry);
-            if !config.protected_types.contains(&fact_type) {
-                config.protected_types.push(fact_type);
+            let note_type = NoteType::from_str_or_other(entry);
+            if !config.protected_types.contains(&note_type) {
+                config.protected_types.push(note_type);
             }
         }
     }
@@ -746,11 +746,11 @@ mod tests {
 #[cfg(test)]
 mod consolidation_tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact, MemoryTier};
+    use crate::memory::context::{NoteType, MemoryFact, MemoryTier};
 
     #[test]
     fn test_should_prune_low_strength() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         fact.tier = MemoryTier::ShortTerm;
         fact.strength = 0.05;
         assert!(should_prune(&fact, 0.1));
@@ -758,7 +758,7 @@ mod consolidation_tests {
 
     #[test]
     fn test_should_not_prune_core() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Personal, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Personal, vec![]);
         fact.tier = MemoryTier::Core;
         fact.strength = 0.01;
         assert!(!should_prune(&fact, 0.1));
@@ -766,7 +766,7 @@ mod consolidation_tests {
 
     #[test]
     fn test_should_not_prune_above_threshold() {
-        let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let mut fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         fact.tier = MemoryTier::ShortTerm;
         fact.strength = 0.5;
         assert!(!should_prune(&fact, 0.1));

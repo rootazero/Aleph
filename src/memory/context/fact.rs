@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{AggregateRoot, Entity};
 
 use super::enums::{
-    FactSource, FactSpecificity, FactType, MemoryCategory, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryLayer, MemoryScope, MemoryTier,
     TemporalScope,
 };
 use super::paths::compute_parent_path;
@@ -38,7 +38,7 @@ pub struct MemoryFact {
     /// Fact content (third-person statement)
     pub content: String,
     /// Type classification
-    pub fact_type: FactType,
+    pub note_type: NoteType,
     /// Vector embedding (dimension varies by provider: 768, 1024, 1536)
     pub embedding: Option<Vec<f32>>,
     /// Source memory IDs for traceability
@@ -121,20 +121,20 @@ impl AggregateRoot for MemoryFact {}
 
 impl MemoryFact {
     /// Create a new valid memory fact
-    pub fn new(content: String, fact_type: FactType, source_ids: Vec<String>) -> Self {
+    pub fn new(content: String, note_type: NoteType, source_ids: Vec<String>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let path = fact_type.default_path().to_string();
+        let path = note_type.default_path().to_string();
         let parent_path = compute_parent_path(&path);
-        let category = fact_type.default_category();
+        let category = note_type.default_category();
 
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content,
-            fact_type,
+            note_type,
             embedding: None,
             source_memory_ids: source_ids,
             created_at: now,
@@ -167,20 +167,20 @@ impl MemoryFact {
     }
 
     /// Create a new fact with specific ID (for database reconstruction)
-    pub fn with_id(id: String, content: String, fact_type: FactType) -> Self {
+    pub fn with_id(id: String, content: String, note_type: NoteType) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let path = fact_type.default_path().to_string();
+        let path = note_type.default_path().to_string();
         let parent_path = compute_parent_path(&path);
-        let category = fact_type.default_category();
+        let category = note_type.default_category();
 
         Self {
             id,
             content,
-            fact_type,
+            note_type,
             embedding: None,
             source_memory_ids: Vec::new(),
             created_at: now,
@@ -345,11 +345,11 @@ impl MemoryFact {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::FactType;
+    use crate::memory::context::NoteType;
 
     #[test]
     fn new_fact_has_no_validity_bounds() {
-        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
+        let fact = MemoryFact::new("test".into(), NoteType::Other, vec![]);
         assert!(fact.valid_from.is_none());
         assert!(fact.valid_to.is_none());
         assert!(fact.is_currently_valid());
@@ -357,21 +357,21 @@ mod tests {
 
     #[test]
     fn close_validity_sets_valid_to() {
-        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).close_validity();
+        let fact = MemoryFact::new("test".into(), NoteType::Other, vec![]).close_validity();
         assert!(fact.valid_to.is_some());
         assert!(!fact.is_currently_valid());
     }
 
     #[test]
     fn with_valid_from_sets_timestamp() {
-        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).with_valid_from(1000);
+        let fact = MemoryFact::new("test".into(), NoteType::Other, vec![]).with_valid_from(1000);
         assert_eq!(fact.valid_from, Some(1000));
         assert!(fact.is_currently_valid());
     }
 
     #[test]
     fn with_valid_to_sets_timestamp() {
-        let fact = MemoryFact::new("test".into(), FactType::Other, vec![]).with_valid_to(2000);
+        let fact = MemoryFact::new("test".into(), NoteType::Other, vec![]).with_valid_to(2000);
         assert_eq!(fact.valid_to, Some(2000));
         assert!(!fact.is_currently_valid());
     }

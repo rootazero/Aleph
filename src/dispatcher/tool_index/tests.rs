@@ -12,7 +12,7 @@ mod tests {
         HydratedTool, HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
         ToolRetrieval, ToolRetrievalConfig,
     };
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::MemoryBackend;
     use crate::sync_primitives::Arc;
@@ -64,7 +64,7 @@ mod tests {
             .expect("get_tool_facts should succeed");
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].id, "tool:read_file");
-        assert_eq!(facts[0].fact_type, FactType::Tool);
+        assert_eq!(facts[0].note_type, NoteType::Tool);
     }
 
     #[tokio::test]
@@ -438,21 +438,21 @@ mod tests {
         let mut fact_full = MemoryFact::with_id(
             "tool:high_confidence".to_string(),
             "High confidence tool".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_full.similarity_score = Some(0.85); // Above high_confidence_threshold
 
         let mut fact_summary = MemoryFact::with_id(
             "tool:medium_confidence".to_string(),
             "Medium confidence tool".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_summary.similarity_score = Some(0.65); // Between soft and high
 
         let mut fact_minimal = MemoryFact::with_id(
             "tool:low_confidence".to_string(),
             "Low confidence tool".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact_minimal.similarity_score = Some(0.45); // Between hard and soft
 
@@ -721,14 +721,14 @@ mod tests {
         let mut fact1 = MemoryFact::with_id(
             "tool:read_file".to_string(),
             "Read file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact1.similarity_score = Some(0.85);
 
         let mut fact2 = MemoryFact::with_id(
             "tool:write_file".to_string(),
             "Write file".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact2.similarity_score = Some(0.65);
 
@@ -754,7 +754,7 @@ mod tests {
         let mut fact = MemoryFact::with_id(
             "tool:test_tool".to_string(),
             "Test tool description".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact.similarity_score = Some(0.85);
 
@@ -808,7 +808,7 @@ mod tests {
         let mut fact = MemoryFact::with_id(
             "tool:read_file".to_string(),
             "Read file from disk".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact.similarity_score = Some(0.85);
 
@@ -844,7 +844,7 @@ mod tests {
         let mut fact = MemoryFact::with_id(
             "tool:search_code".to_string(),
             "Search for code patterns".to_string(),
-            FactType::Tool,
+            NoteType::Tool,
         );
         fact.similarity_score = Some(0.65); // Summary level
 

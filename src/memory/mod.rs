@@ -73,7 +73,7 @@ pub use compression::{
 };
 pub use context::{
     compute_parent_path, CompressionResult, CompressionSession, ContextAnchor, FactSource,
-    FactSpecificity, FactStats, FactType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
+    FactSpecificity, FactStats, NoteType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
     MemoryScope, MemoryTier, TemporalScope, PRESET_PATHS,
 };
 pub use context_comptroller::{

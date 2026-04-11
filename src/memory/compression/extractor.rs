@@ -4,7 +4,7 @@
 //! Facts are third-person statements about the user.
 
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryEntry, MemoryFact};
+use crate::memory::context::{NoteType, MemoryEntry, MemoryFact};
 use crate::memory::EmbeddingProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -20,7 +20,8 @@ pub struct ExtractedFact {
     /// Fact content (third-person statement)
     pub content: String,
     /// Type classification
-    pub fact_type: String,
+    #[serde(alias = "fact_type")]
+    pub note_type: String,
     /// Confidence score (0.0-1.0)
     pub confidence: f32,
     /// Source memory IDs
@@ -217,7 +218,7 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
 
             let fact = MemoryFact::new(
                 extracted_fact.content,
-                FactType::from_str_or_other(&extracted_fact.fact_type),
+                NoteType::from_str_or_other(&extracted_fact.note_type),
                 extracted_fact.source_ids,
             )
             .with_embedding(embedding)

@@ -594,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hybrid_search_with_facts() {
-        use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::context::{NoteType, MemoryFact};
         use crate::memory::store::MemoryStore as _;
 
         let db = create_test_db().await;
@@ -602,14 +602,14 @@ mod tests {
         // Insert test facts with embeddings
         let fact1 = MemoryFact::new(
             "The user prefers Rust for systems programming".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec!["mem-1".to_string()],
         )
         .with_embedding(vec![0.1f32; 1024]);
 
         let fact2 = MemoryFact::new(
             "The user is learning TypeScript".to_string(),
-            FactType::Learning,
+            NoteType::Learning,
             vec!["mem-2".to_string()],
         )
         .with_embedding(vec![0.2f32; 1024]);
@@ -635,13 +635,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_hybrid_search_vector_only_fallback() {
-        use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::context::{NoteType, MemoryFact};
         use crate::memory::store::MemoryStore as _;
 
         let db = create_test_db().await;
 
         // Insert fact with embedding
-        let fact = MemoryFact::new("Test fact content".to_string(), FactType::Other, vec![])
+        let fact = MemoryFact::new("Test fact content".to_string(), NoteType::Other, vec![])
             .with_embedding(vec![0.5f32; 1024]);
 
         db.insert_fact(&fact).await.unwrap();
@@ -658,7 +658,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hybrid_search_with_custom_limit() {
-        use crate::memory::context::{FactType, MemoryFact};
+        use crate::memory::context::{NoteType, MemoryFact};
         use crate::memory::store::MemoryStore as _;
 
         let db = create_test_db().await;
@@ -668,7 +668,7 @@ mod tests {
             let mut embedding = vec![0.0f32; 1024];
             embedding[0] = (i as f32) * 0.1;
 
-            let fact = MemoryFact::new(format!("Fact number {}", i), FactType::Other, vec![])
+            let fact = MemoryFact::new(format!("Fact number {}", i), NoteType::Other, vec![])
                 .with_embedding(embedding);
 
             db.insert_fact(&fact).await.unwrap();

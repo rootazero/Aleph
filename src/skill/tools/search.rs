@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::FactType;
+use crate::memory::context::NoteType;
 use crate::memory::store::types::SearchFilter;
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ pub struct SkillSearchResult {
 /// Build a [`SearchFilter`] that targets only valid skill facts.
 pub fn build_skill_filter() -> SearchFilter {
     SearchFilter::new()
-        .with_fact_type(FactType::Skill)
+        .with_note_type(NoteType::Skill)
         .with_valid_only()
 }
 
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn builds_filter_with_skill_type() {
         let filter = build_skill_filter();
-        assert_eq!(filter.fact_type, Some(FactType::Skill));
+        assert_eq!(filter.note_type, Some(NoteType::Skill));
         assert_eq!(filter.is_valid, Some(true));
     }
 }

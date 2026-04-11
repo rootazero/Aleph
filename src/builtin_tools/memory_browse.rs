@@ -79,7 +79,7 @@ pub struct MemoryBrowseOutput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadMetadata {
-    pub fact_type: String,
+    pub note_type: String,
     pub fact_source: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -224,7 +224,7 @@ impl MemoryBrowseTool {
                 entries: None,
                 content: Some(summary_fact.content.clone()),
                 metadata: Some(ReadMetadata {
-                    fact_type: summary_fact.fact_type.to_string(),
+                    note_type: summary_fact.note_type.to_string(),
                     fact_source: summary_fact.fact_source.to_string(),
                     created_at: summary_fact.created_at,
                     updated_at: summary_fact.updated_at,
@@ -256,7 +256,7 @@ impl MemoryBrowseTool {
 
         let combined_content = facts
             .iter()
-            .map(|f| format!("- [{}] {}", f.fact_type, f.content))
+            .map(|f| format!("- [{}] {}", f.note_type, f.content))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -264,7 +264,7 @@ impl MemoryBrowseTool {
         let metadata = if facts.len() == 1 {
             let f = &facts[0];
             ReadMetadata {
-                fact_type: f.fact_type.to_string(),
+                note_type: f.note_type.to_string(),
                 fact_source: f.fact_source.to_string(),
                 created_at: f.created_at,
                 updated_at: f.updated_at,
@@ -272,7 +272,7 @@ impl MemoryBrowseTool {
             }
         } else {
             ReadMetadata {
-                fact_type: "Mixed".to_string(),
+                note_type: "Mixed".to_string(),
                 fact_source: "Multiple".to_string(),
                 created_at: facts.iter().map(|f| f.created_at).min().unwrap_or(0),
                 updated_at: facts.iter().map(|f| f.updated_at).max().unwrap_or(0),
@@ -424,7 +424,7 @@ mod tests {
 
     use crate::memory::store::SqliteMemoryBackend;
     use crate::memory::store::MemoryBackend;
-    use crate::memory::{FactType, MemoryFact};
+    use crate::memory::{NoteType, MemoryFact};
 
     use super::*;
 
@@ -483,12 +483,12 @@ mod tests {
         let (db, _temp_dir) = create_test_db().await;
         let tool = MemoryBrowseTool::new(db.clone());
 
-        let detail_fact = MemoryFact::new("User likes Rust".into(), FactType::Preference, vec![])
+        let detail_fact = MemoryFact::new("User likes Rust".into(), NoteType::Preference, vec![])
             .with_path("aleph://user/preferences/coding/".to_string())
             .with_layer(MemoryLayer::L2Detail);
 
         let summary_fact =
-            MemoryFact::new("Coding overview\n- Rust".into(), FactType::Other, vec![])
+            MemoryFact::new("Coding overview\n- Rust".into(), NoteType::Other, vec![])
                 .with_path("aleph://user/preferences/coding/".to_string())
                 .with_fact_source(FactSource::Summary)
                 .with_layer(MemoryLayer::L1Overview);

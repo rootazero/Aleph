@@ -3,7 +3,7 @@
 //! Provides command implementations for listing, showing, adding, editing, and managing facts.
 
 use crate::error::AlephError;
-use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
+use crate::memory::context::{FactSpecificity, NoteType, MemoryFact, TemporalScope};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
@@ -12,7 +12,7 @@ use crate::sync_primitives::Arc;
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
     /// Filter by fact type
-    pub fact_type: Option<FactType>,
+    pub note_type: Option<NoteType>,
     /// Minimum strength threshold
     pub min_strength: Option<f32>,
     /// Include decayed/invalidated facts
@@ -30,8 +30,8 @@ impl ListFilter {
     }
 
     /// Set fact type filter
-    pub fn with_type(mut self, fact_type: FactType) -> Self {
-        self.fact_type = Some(fact_type);
+    pub fn with_type(mut self, note_type: NoteType) -> Self {
+        self.note_type = Some(note_type);
         self
     }
 
@@ -93,7 +93,7 @@ pub struct FactSummary {
     /// Full ID
     pub full_id: String,
     /// Fact type
-    pub fact_type: String,
+    pub note_type: String,
     /// Current strength (calculated)
     pub strength: f32,
     /// Truncated content
@@ -119,7 +119,7 @@ impl FactSummary {
         Self {
             id: fact.id[..8.min(fact.id.len())].to_string(),
             full_id: fact.id.clone(),
-            fact_type: format!("{:?}", fact.fact_type).to_lowercase(),
+            note_type: format!("{:?}", fact.note_type).to_lowercase(),
             strength,
             content_preview,
             content: fact.content.clone(),
@@ -132,7 +132,7 @@ impl FactSummary {
     pub fn to_table_row(&self) -> String {
         format!(
             "{:<10} {:<12} {:>6.2}  {}",
-            self.id, self.fact_type, self.strength, self.content_preview
+            self.id, self.note_type, self.strength, self.content_preview
         )
     }
 
@@ -141,7 +141,7 @@ impl FactSummary {
         format!(
             "{},{},{:.2},\"{}\"",
             self.full_id,
-            self.fact_type,
+            self.note_type,
             self.strength,
             self.content.replace('"', "\"\"")
         )
@@ -174,8 +174,8 @@ impl MemoryCommands {
             .iter()
             .filter(|f| {
                 // Type filter
-                if let Some(ref ft) = filter.fact_type {
-                    if &f.fact_type != ft {
+                if let Some(ref ft) = filter.note_type {
+                    if &f.note_type != ft {
                         return false;
                     }
                 }
@@ -313,7 +313,7 @@ impl MemoryCommands {
 +-------------------------------------------------------------+"#,
                     summary.full_id,
                     summary.content,
-                    summary.fact_type,
+                    summary.note_type,
                     summary.strength,
                     summary.is_valid,
                     summary.created_at
@@ -328,7 +328,7 @@ impl MemoryCommands {
     pub async fn add(
         &self,
         content: &str,
-        fact_type: FactType,
+        note_type: NoteType,
         embedder: Option<&Arc<dyn EmbeddingProvider>>,
     ) -> Result<String, AlephError> {
         // Generate embedding if embedder is available
@@ -339,7 +339,7 @@ impl MemoryCommands {
         };
 
         // Create fact
-        let mut fact = MemoryFact::new(content.to_string(), fact_type, vec![]);
+        let mut fact = MemoryFact::new(content.to_string(), note_type, vec![]);
         if let Some(emb) = embedding {
             fact = fact.with_embedding(emb);
         }
@@ -496,7 +496,7 @@ impl MemoryCommands {
             let mut fact = MemoryFact::with_id(
                 exported.id.clone(),
                 exported.content.clone(),
-                FactType::from_str_or_other(&exported.fact_type),
+                NoteType::from_str_or_other(&exported.note_type),
             );
             fact.created_at = exported.created_at;
             fact.updated_at = exported.updated_at;
@@ -602,7 +602,7 @@ impl std::fmt::Display for GcResult {
 pub struct ExportedFact {
     pub id: String,
     pub content: String,
-    pub fact_type: String,
+    pub note_type: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub confidence: f32,
@@ -617,7 +617,7 @@ impl From<MemoryFact> for ExportedFact {
         Self {
             id: fact.id,
             content: fact.content,
-            fact_type: fact.fact_type.as_str().to_string(),
+            note_type: fact.note_type.as_str().to_string(),
             created_at: fact.created_at,
             updated_at: fact.updated_at,
             confidence: fact.confidence,
@@ -675,11 +675,11 @@ mod tests {
     #[test]
     fn test_list_filter_builder() {
         let filter = ListFilter::new()
-            .with_type(FactType::Preference)
+            .with_type(NoteType::Preference)
             .with_min_strength(0.5)
             .with_limit(10);
 
-        assert_eq!(filter.fact_type, Some(FactType::Preference));
+        assert_eq!(filter.note_type, Some(NoteType::Preference));
         assert_eq!(filter.min_strength, Some(0.5));
         assert_eq!(filter.limit, Some(10));
     }
@@ -700,7 +700,7 @@ mod tests {
         let summary = FactSummary {
             id: "abc12345".to_string(),
             full_id: "abc12345-6789".to_string(),
-            fact_type: "preference".to_string(),
+            note_type: "preference".to_string(),
             strength: 0.85,
             content_preview: "User likes Rust".to_string(),
             content: "User likes Rust".to_string(),
@@ -719,7 +719,7 @@ mod tests {
         let summary = FactSummary {
             id: "abc12345".to_string(),
             full_id: "abc12345-6789".to_string(),
-            fact_type: "knowledge".to_string(),
+            note_type: "knowledge".to_string(),
             strength: 0.75,
             content_preview: "Test".to_string(),
             content: "Test with \"quotes\"".to_string(),
@@ -785,7 +785,7 @@ mod tests {
     fn test_exported_fact_from_memory_fact() {
         let fact = MemoryFact::new(
             "User prefers Rust".to_string(),
-            FactType::Preference,
+            NoteType::Preference,
             vec!["source-1".to_string()],
         );
 
@@ -793,7 +793,7 @@ mod tests {
 
         assert_eq!(exported.id, fact.id);
         assert_eq!(exported.content, "User prefers Rust");
-        assert_eq!(exported.fact_type, "preference");
+        assert_eq!(exported.note_type, "preference");
         assert!(exported.is_valid);
     }
 
@@ -805,7 +805,7 @@ mod tests {
             facts: vec![ExportedFact {
                 id: "test-123".to_string(),
                 content: "Test content".to_string(),
-                fact_type: "preference".to_string(),
+                note_type: "preference".to_string(),
                 created_at: 1234567890,
                 updated_at: 1234567890,
                 confidence: 0.9,

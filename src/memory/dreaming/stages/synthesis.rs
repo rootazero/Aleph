@@ -1,7 +1,7 @@
 //! DeepSynthesisStage: cross-cluster insight generation.
 //!
 //! Runs during both daily and weekly dream cycles. Fetches all valid LTM facts,
-//! groups by fact_type, runs DBSCAN on embeddings within each group,
+//! groups by note_type, runs DBSCAN on embeddings within each group,
 //! and creates synthesized Core facts from clusters with >= min_cluster_size members.
 //! Uses LLM-based synthesis when a provider is available, with dedup against
 //! existing synthesis facts.
@@ -13,7 +13,7 @@ use tracing::{debug, warn};
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    FactSource, FactSpecificity, FactType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, FactSpecificity, NoteType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
 };
 use crate::memory::dreaming::report::DreamRunType;
 use crate::memory::store::MemoryStore;
@@ -95,11 +95,11 @@ impl DreamStage for DeepSynthesisStage {
             "DeepSynthesisStage: starting synthesis"
         );
 
-        // 2. Group by fact_type
+        // 2. Group by note_type
         let mut groups: HashMap<String, Vec<&MemoryFact>> = HashMap::new();
         for fact in &ltm_facts {
             groups
-                .entry(fact.fact_type.as_str().to_string())
+                .entry(fact.note_type.as_str().to_string())
                 .or_default()
                 .push(fact);
         }
@@ -107,7 +107,7 @@ impl DreamStage for DeepSynthesisStage {
         // 3. Run DBSCAN within each group, collect insights
         let mut insights: Vec<PatternInsight> = Vec::new();
 
-        for (fact_type_str, group_facts) in &groups {
+        for (note_type_str, group_facts) in &groups {
             // Filter to facts with embeddings
             let with_emb: Vec<(usize, &Vec<f32>)> = group_facts
                 .iter()
@@ -160,7 +160,7 @@ impl DreamStage for DeepSynthesisStage {
                 let theme = if let Some(ref provider) = ctx.provider {
                     let facts_tuples: Vec<(&str, f32, &str)> = cluster_facts
                         .iter()
-                        .map(|f| (f.fact_type.as_str(), f.confidence, f.content.as_str()))
+                        .map(|f| (f.note_type.as_str(), f.confidence, f.content.as_str()))
                         .collect();
                     let prompt = build_synthesis_prompt(&facts_tuples);
                     let msgs = [UnifiedMessage::user(&prompt)];
@@ -170,15 +170,15 @@ impl DreamStage for DeepSynthesisStage {
                         Ok(response) => {
                             let text = response.text_content();
                             parse_synthesis_content(&text)
-                                .unwrap_or_else(|| format!("[{}] {}", fact_type_str, combined))
+                                .unwrap_or_else(|| format!("[{}] {}", note_type_str, combined))
                         }
                         Err(e) => {
                             warn!(error = %e, "LLM synthesis theme failed, using fallback");
-                            format!("[{}] {}", fact_type_str, combined)
+                            format!("[{}] {}", note_type_str, combined)
                         }
                     }
                 } else {
-                    format!("[{}] {}", fact_type_str, combined)
+                    format!("[{}] {}", note_type_str, combined)
                 };
 
                 insights.push(PatternInsight {
@@ -207,7 +207,7 @@ impl DreamStage for DeepSynthesisStage {
                     .source_fact_ids
                     .iter()
                     .filter_map(|id| ltm_facts.iter().find(|f| f.id == *id))
-                    .map(|f| (f.fact_type.as_str(), f.confidence, f.content.as_str()))
+                    .map(|f| (f.note_type.as_str(), f.confidence, f.content.as_str()))
                     .collect();
                 if facts_tuples.is_empty() {
                     format!("Pattern: {}", insight.theme)
@@ -232,15 +232,15 @@ impl DreamStage for DeepSynthesisStage {
                 format!("Pattern: {}", insight.theme)
             };
 
-            let fact_type = insight
+            let note_type = insight
                 .theme
                 .split(']')
                 .next()
                 .and_then(|s| s.strip_prefix('['))
-                .and_then(|s| s.parse::<FactType>().ok())
-                .unwrap_or(FactType::Other);
+                .and_then(|s| s.parse::<NoteType>().ok())
+                .unwrap_or(NoteType::Other);
 
-            let synthesized = MemoryFact::new(content, fact_type, insight.source_fact_ids.clone())
+            let synthesized = MemoryFact::new(content, note_type, insight.source_fact_ids.clone())
                 .with_fact_source(FactSource::Synthesis)
                 .with_tier(MemoryTier::Core)
                 .with_layer(MemoryLayer::L0Abstract)
@@ -299,7 +299,7 @@ impl DreamStage for DeepSynthesisStage {
 
 /// Build a prompt for LLM-based pattern synthesis.
 ///
-/// Each tuple is (fact_type, confidence, content).
+/// Each tuple is (note_type, confidence, content).
 /// Returns a system prompt requesting JSON output with theme, insight, and confidence.
 pub fn build_synthesis_prompt(facts: &[(&str, f32, &str)]) -> String {
     let mut prompt = String::from(
@@ -308,11 +308,11 @@ pub fn build_synthesis_prompt(facts: &[(&str, f32, &str)]) -> String {
          Facts:\n",
     );
 
-    for (i, (fact_type, confidence, content)) in facts.iter().enumerate() {
+    for (i, (note_type, confidence, content)) in facts.iter().enumerate() {
         prompt.push_str(&format!(
             "{}. [type={}, confidence={:.2}] {}\n",
             i + 1,
-            fact_type,
+            note_type,
             confidence,
             content,
         ));

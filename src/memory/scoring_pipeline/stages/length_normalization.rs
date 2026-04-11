@@ -41,12 +41,12 @@ impl ScoringStage for LengthNormalizationStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::context::{NoteType, MemoryFact};
     use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
     use crate::memory::scoring_pipeline::context::ScoringContext;
 
     fn scored_with_content(content: &str, score: f32) -> ScoredFact {
-        let fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
+        let fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
         ScoredFact { fact, score }
     }
 
