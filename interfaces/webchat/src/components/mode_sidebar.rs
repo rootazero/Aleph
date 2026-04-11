@@ -22,6 +22,7 @@ pub fn ModeSidebar() -> impl IntoView {
                 PanelMode::Chat => view! { <ChatSidebar /> }.into_any(),
                 PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                 PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
+                PanelMode::Canvas => view! { <DashboardSidebar /> }.into_any(),
                 PanelMode::Settings => view! { <SettingsSidebar /> }.into_any(),
             }}
         </aside>

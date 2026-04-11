@@ -6,6 +6,7 @@ use leptos_router::hooks::use_location;
 
 // Views
 use crate::views::agent_trace::AgentTrace;
+use crate::views::canvas::CanvasView;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::home::Home;
@@ -103,6 +104,9 @@ fn MainContent() -> impl IntoView {
         </div>
         <div style:display=move || if mode.get() == PanelMode::Dashboard { "contents" } else { "none" }>
             <DashboardRouter />
+        </div>
+        <div style:display=move || if mode.get() == PanelMode::Canvas { "contents" } else { "none" }>
+            <CanvasView />
         </div>
         <div style:display=move || if mode.get() == PanelMode::Agents { "contents" } else { "none" }>
             <AgentsRouter />

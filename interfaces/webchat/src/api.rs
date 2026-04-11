@@ -8,6 +8,9 @@ pub mod cron;
 pub mod heartbeat;
 pub mod tool_permissions;
 
+// Graph visualization
+pub mod graph;
+
 // Split submodules
 pub mod acp;
 pub mod agent_config;
@@ -32,6 +35,7 @@ pub mod trace;
 pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
+pub use graph::*;
 pub use acp::*;
 pub use agent_config::*;
 pub use agent_run::*;
