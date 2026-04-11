@@ -129,6 +129,30 @@ pub fn get_data_dir() -> Result<PathBuf> {
     Ok(data_dir)
 }
 
+/// Get the note memory directory for compiled knowledge notes.
+///
+/// Returns: `<config_dir>/memory/note/`
+///
+/// Creates the directory if it doesn't exist.
+pub fn get_note_memory_dir() -> Result<PathBuf> {
+    let dir = get_config_dir()?.join("memory").join("note");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AlephError::config(format!("Failed to create note memory directory: {}", e)))?;
+    Ok(dir)
+}
+
+/// Get the raw memory directory for original sources.
+///
+/// Returns: `<config_dir>/memory/raw/`
+///
+/// Creates the directory if it doesn't exist.
+pub fn get_raw_memory_dir() -> Result<PathBuf> {
+    let dir = get_config_dir()?.join("memory").join("raw");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AlephError::config(format!("Failed to create raw memory directory: {}", e)))?;
+    Ok(dir)
+}
+
 /// Get the path for the devices database
 ///
 /// Returns: `<data_dir>/devices.db`

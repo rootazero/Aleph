@@ -153,9 +153,8 @@ impl CompressionService {
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
-        let memory_dir = crate::utils::paths::get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-            .join("memory");
+        let memory_dir = crate::utils::paths::get_note_memory_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
 
         let indexer = crate::memory::notes::NoteIndexer::new(
             memory_dir,

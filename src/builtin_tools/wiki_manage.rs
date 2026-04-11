@@ -128,7 +128,9 @@ impl WikiManageTool {
             })
             .collect();
 
-        let wiki_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
+        let wiki_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| self.data_dir.join("memory").join("note"))
+                .join(agent_id).join("wiki");
         std::fs::create_dir_all(&wiki_dir)
             .map_err(|e| AlephError::tool(format!("Failed to create wiki dir: {}", e)))?;
 
@@ -162,7 +164,9 @@ impl WikiManageTool {
 
         // Ensure git repo and wiki directory under memory/{agent_id}/wiki/
         self.git.ensure_repo().map_err(AlephError::tool)?;
-        let wiki_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
+        let wiki_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| self.data_dir.join("memory").join("note"))
+                .join(agent_id).join("wiki");
         std::fs::create_dir_all(&wiki_dir)
             .map_err(|e| AlephError::tool(format!("Failed to create wiki dir: {}", e)))?;
 
@@ -459,7 +463,9 @@ impl WikiManageTool {
             .collect();
 
         // Also read index.md content if it exists
-        let agent_dir = self.data_dir.join("memory").join(agent_id).join("wiki");
+        let agent_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| self.data_dir.join("memory").join("note"))
+                .join(agent_id).join("wiki");
         let index_path = agent_dir.join("index.md");
         let index_content = std::fs::read_to_string(&index_path).ok();
 

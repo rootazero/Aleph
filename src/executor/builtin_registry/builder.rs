@@ -720,7 +720,8 @@ impl BuiltinToolRegistry {
                 .unwrap_or_default()
                 .join(".aleph")
                 .join("data");
-            let wiki_dir = data_dir.join("memory");
+            let wiki_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| data_dir.join("..").join("memory").join("note"));
             let git = crate::wiki::git::WikiGitManager::new(&wiki_dir);
             let tool = crate::builtin_tools::wiki_manage::WikiManageTool::new(
                 data_dir,

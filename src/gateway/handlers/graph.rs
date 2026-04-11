@@ -24,11 +24,10 @@ fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
     }
 }
 
-/// Resolve the notes directory path via the canonical data directory.
+/// Resolve the note memory directory: `~/.aleph/memory/note/`
 fn notes_dir() -> std::path::PathBuf {
-    crate::utils::paths::get_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-        .join("memory")
+    crate::utils::paths::get_note_memory_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"))
 }
 
 /// Handle graph.query — returns nodes and edges for visualization.

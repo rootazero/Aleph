@@ -3,6 +3,7 @@
     "chat": "Chat",
     "dashboard": "Dashboard",
     "agents": "Agents",
+    "memory": "Memory",
     "settings": "Settings"
   },
   "common": {

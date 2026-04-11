@@ -28,10 +28,16 @@ pub fn wiki_parent_path(agent_id: &str) -> String {
 
 /// Build the physical file path for a wiki page.
 ///
-/// New layout: `{data_dir}/memory/{agent_id}/wiki/{slug}.md`
-/// (previously `{data_dir}/wiki/{agent_id}/{slug}.md`).
+/// Layout: `{config_dir}/memory/note/{agent_id}/wiki/{slug}.md`
+///
+/// Note: `data_dir` is ignored — we derive the path from `get_note_memory_dir()`.
+/// The parameter is kept for backward compatibility with existing call sites.
 pub fn wiki_file_path(data_dir: &std::path::Path, agent_id: &str, slug: &str) -> std::path::PathBuf {
-    data_dir.join("memory").join(agent_id).join("wiki").join(format!("{}.md", slug))
+    crate::utils::paths::get_note_memory_dir()
+        .unwrap_or_else(|_| data_dir.join("memory").join("note"))
+        .join(agent_id)
+        .join("wiki")
+        .join(format!("{}.md", slug))
 }
 
 /// Build the old (pre-migration) physical directory for wiki pages.

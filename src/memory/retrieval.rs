@@ -12,7 +12,6 @@ use crate::memory::notes::{NoteContent, NoteRetrieval};
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
-use crate::utils::paths::get_data_dir;
 use tracing::debug;
 
 /// Memory retrieval service — delegates to `FactRetrieval`
@@ -106,7 +105,7 @@ impl MemoryRetrieval {
 
     /// Attempt note retrieval; returns `None` on any error (graceful fallback).
     async fn try_note_retrieval(&self, query: &str, limit: usize) -> Option<Vec<MemoryEntry>> {
-        let memory_dir = get_data_dir().ok()?.join("memory");
+        let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
         let note_retrieval = NoteRetrieval::new(
             memory_dir,
             self.database.clone(),

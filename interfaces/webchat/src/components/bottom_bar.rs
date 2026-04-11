@@ -76,7 +76,7 @@ pub fn BottomBar() -> impl IntoView {
             </BottomBarItem>
 
             <BottomBarItem
-                label=Signal::derive(move || "Canvas".to_string())
+                label=Signal::derive(move || t_string!(i18n, nav.memory).to_string())
                 mode=PanelMode::Canvas
                 active_mode=Signal::derive(active_mode)
                 on_click=go("/canvas")
