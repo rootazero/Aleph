@@ -5,38 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct GraphQueryParams {
     #[serde(default = "default_limit")]
     pub limit: usize,
-    #[serde(default)]
-    pub kind_filter: Vec<String>,
 }
 fn default_limit() -> usize {
     100
-}
-
-#[derive(Debug, Serialize)]
-pub struct GraphQueryResponse {
-    pub nodes: Vec<GraphNodeDto>,
-    pub edges: Vec<GraphEdgeDto>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GraphNodeDto {
-    pub id: String,
-    pub name: String,
-    pub kind: String,
-    pub aliases: Vec<String>,
-    pub decay_score: f32,
-    pub edge_count: usize,
-    pub has_wiki: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GraphEdgeDto {
-    pub id: String,
-    pub from_id: String,
-    pub to_id: String,
-    pub relation: String,
-    pub weight: f32,
-    pub confidence: f32,
 }
 
 // === graph.neighbors ===
@@ -52,36 +23,13 @@ fn default_depth() -> u8 {
     2
 }
 fn default_neighbor_limit() -> usize {
-    50
+    200
 }
 
 // === graph.node_detail ===
 #[derive(Debug, Deserialize)]
 pub struct GraphNodeDetailParams {
     pub node_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GraphNodeDetailResponse {
-    pub node: GraphNodeDto,
-    pub wiki: Option<WikiDto>,
-    pub facts: Vec<FactDto>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct WikiDto {
-    pub id: String,
-    pub content: String,
-    pub fact_source: String,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FactDto {
-    pub id: String,
-    pub content: String,
-    pub confidence: f32,
-    pub fact_type: String,
 }
 
 // === graph.search ===
@@ -92,18 +40,48 @@ pub struct GraphSearchParams {
     pub limit: usize,
 }
 fn default_search_limit() -> usize {
-    10
+    20
+}
+
+// === Response types ===
+
+#[derive(Debug, Serialize)]
+pub struct NoteNodeDto {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub link_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NoteLinkDto {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GraphQueryResponse {
+    pub nodes: Vec<NoteNodeDto>,
+    pub edges: Vec<NoteLinkDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NoteDetailResponse {
+    pub node: NoteNodeDto,
+    pub content: String,
+    pub backlinks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchResultDto {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub match_field: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct GraphSearchResponse {
-    pub results: Vec<GraphSearchResult>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GraphSearchResult {
-    pub id: String,
-    pub name: String,
-    pub kind: String,
-    pub match_field: String,
+    pub results: Vec<SearchResultDto>,
 }

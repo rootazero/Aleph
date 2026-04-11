@@ -1814,23 +1814,11 @@ pub(in crate::commands::start) fn register_graph_handlers(
 ) {
     use alephcore::gateway::handlers::graph;
 
-    // Extract agent_id from request params, fallback to "default" (the workspace
-    // used by the memory ingestion pipeline for graph nodes).
-    fn extract_agent_id(req: &alephcore::gateway::JsonRpcRequest) -> String {
-        req.params
-            .as_ref()
-            .and_then(|p| p.get("agent_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string()
-    }
-
     {
         let db = ::std::sync::Arc::clone(memory_db);
         server.handlers_mut().register("graph.query", move |req| {
             let db = ::std::sync::Arc::clone(&db);
-            let agent_id = extract_agent_id(&req);
-            async move { graph::handle_query_impl(req, db, agent_id).await }
+            async move { graph::handle_query_impl(req, db).await }
         });
     }
 
@@ -1840,8 +1828,7 @@ pub(in crate::commands::start) fn register_graph_handlers(
             .handlers_mut()
             .register("graph.neighbors", move |req| {
                 let db = ::std::sync::Arc::clone(&db);
-                let agent_id = extract_agent_id(&req);
-                async move { graph::handle_neighbors_impl(req, db, agent_id).await }
+                async move { graph::handle_neighbors_impl(req, db).await }
             });
     }
 
@@ -1851,8 +1838,7 @@ pub(in crate::commands::start) fn register_graph_handlers(
             .handlers_mut()
             .register("graph.node_detail", move |req| {
                 let db = ::std::sync::Arc::clone(&db);
-                let agent_id = extract_agent_id(&req);
-                async move { graph::handle_node_detail_impl(req, db, agent_id).await }
+                async move { graph::handle_node_detail_impl(req, db).await }
             });
     }
 
@@ -1862,8 +1848,7 @@ pub(in crate::commands::start) fn register_graph_handlers(
             .handlers_mut()
             .register("graph.search", move |req| {
                 let db = ::std::sync::Arc::clone(&db);
-                let agent_id = extract_agent_id(&req);
-                async move { graph::handle_search_impl(req, db, agent_id).await }
+                async move { graph::handle_search_impl(req, db).await }
             });
     }
 }
