@@ -17,12 +17,14 @@
 
 pub mod association;
 pub mod fusion;
+pub mod graph_expander;
 pub mod hybrid;
 pub mod progressive;
 pub mod strategy;
 
 pub use association::{AssociationCluster, AssociationConfig, AssociationRetriever};
 pub use fusion::{rrf_fuse, weighted_fuse, FusedScore, FusionStrategy};
+pub use graph_expander::{ExpandedFact, GraphExpander, GraphExpansionConfig};
 pub use hybrid::{HybridRetrieval, HybridSearchConfig};
 pub use progressive::{
     build_scope_sequence, infer_scope_from_facts, ProgressiveSearchConfig, SearchScope,
