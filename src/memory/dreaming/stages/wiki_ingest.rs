@@ -134,11 +134,11 @@ impl DreamStage for WikiIngestStage {
             return Ok(ctx);
         }
 
-        // 2. Collect existing wiki facts for staleness checks
+        // 2. Collect existing wiki facts (all sources — manual pages take priority)
         let all_facts = ctx.database.get_all_facts(false, None).await?;
         let wiki_facts: Vec<&MemoryFact> = all_facts
             .iter()
-            .filter(|f| f.fact_type == FactType::Wiki && f.fact_source == FactSource::Synthesis)
+            .filter(|f| f.fact_type == FactType::Wiki)
             .collect();
 
         let mut compiled_count: usize = 0;
