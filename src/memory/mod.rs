@@ -34,6 +34,7 @@ pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
 pub mod noise_filter;
+pub mod notes;
 pub mod query_expander;
 pub mod reembed;
 pub mod rerank;
