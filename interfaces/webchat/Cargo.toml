@@ -26,6 +26,8 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "HtmlElement", "Element", "Window", "Document", "Storage", "DomTokenList",
     "HtmlInputElement", "File", "FileList", "FileReader", "Blob",
+    "HtmlCanvasElement", "CanvasRenderingContext2d", "TextMetrics", "DomRect",
+    "MouseEvent", "WheelEvent", "TouchEvent", "TouchList", "Touch",
 ] }
 console_error_panic_hook = "0.1"
 
