@@ -52,7 +52,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
     /// Coord task store for team RPC handlers (unified task system)
     pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
-    /// Event-sourced memory command handler
+    /// Event-sourced memory command handler (used by Phase 2/3 consumers)
+    #[allow(dead_code)]
     pub command_handler:
         Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
 }
@@ -952,7 +953,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_compression_service(cs.clone());
         }
         compression_out = compression_svc;
-        command_handler_out = command_handler;
+        command_handler_out = command_handler.clone();
+
+        // Start DreamDaemon with command handler so decay mutations are event-sourced
+        alephcore::memory::ensure_dream_daemon(
+            memory_db.clone(),
+            std::sync::Arc::new(app_config.memory.clone()),
+            default_prov.clone(),
+            command_handler,
+        );
 
         // Create session compactor for intra-session context compression
         {

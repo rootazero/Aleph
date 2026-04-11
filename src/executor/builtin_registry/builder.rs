@@ -1085,6 +1085,7 @@ impl BuiltinToolRegistry {
     }
 
     /// Register metadata for optional tools (only when their dependencies are available)
+    #[allow(clippy::too_many_arguments)]
     fn register_optional_tools(
         tools: &mut HashMap<String, UnifiedTool>,
         memory_search_tool: &Option<MemorySearchTool>,
