@@ -5,6 +5,7 @@
 //! SQLite is a rebuildable index; the markdown files are the source of truth.
 
 mod note;
+pub mod store;
 mod wikilink;
 
 pub use note::KnowledgeNote;

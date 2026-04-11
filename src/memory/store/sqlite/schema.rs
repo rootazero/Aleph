@@ -341,6 +341,41 @@ pub fn migrate_tunnel_pending(conn: &Connection) -> Result<(), AlephError> {
 }
 
 // ---------------------------------------------------------------------------
+// Notes index + links + FTS
+// ---------------------------------------------------------------------------
+
+const NOTES_INDEX_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_index (
+    filename        TEXT PRIMARY KEY,
+    category        TEXT NOT NULL,
+    tags_json       TEXT NOT NULL DEFAULT '[]',
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    last_accessed_at INTEGER,
+    content_hash    TEXT NOT NULL
+);
+"#;
+
+const NOTES_LINKS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS notes_links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_note   TEXT NOT NULL,
+    to_note     TEXT NOT NULL,
+    UNIQUE(from_note, to_note)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(from_note);
+CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(to_note);
+"#;
+
+const NOTES_FTS_DDL: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+    filename,
+    content,
+    tokenize='unicode61'
+);
+"#;
+
+// ---------------------------------------------------------------------------
 // sqlite-vec virtual tables (one per embedding dimension)
 // ---------------------------------------------------------------------------
 
@@ -388,6 +423,15 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(COMPRESSION_METADATA_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create compression_metadata table: {e}")))?;
+
+    conn.execute_batch(NOTES_INDEX_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_index table: {e}")))?;
+
+    conn.execute_batch(NOTES_LINKS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_links table: {e}")))?;
+
+    conn.execute_batch(NOTES_FTS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
 
     migrate_palace_topology(conn)?;
     migrate_temporal_validity(conn)?;
