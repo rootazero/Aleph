@@ -83,6 +83,41 @@ pub trait NoteStore: Send + Sync {
 
     /// Search notes by embedding similarity.  Stub for now.
     async fn vector_search(&self, embedding: &[f32], dim: u32, agent_id: &str, limit: usize) -> Result<Vec<(String, f32)>, AlephError>;
+
+    /// Vector + FTS hybrid search with RRF fusion, returning full content.
+    async fn hybrid_search_notes(
+        &self,
+        embedding: &[f32],
+        query_text: &str,
+        agent_id: &str,
+        dim_hint: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError>;
+
+    /// Vector search returning full content (not just path+score).
+    async fn vector_search_notes_with_content(
+        &self,
+        embedding: &[f32],
+        agent_id: &str,
+        dim_hint: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError>;
+
+    /// Batch fetch note index metadata by category.
+    async fn get_notes_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<NoteIndexEntry>, AlephError>;
+
+    /// Get the stored embedding vector for a note path.
+    async fn get_embedding(
+        &self,
+        path: &str,
+        agent_id: &str,
+        dim_hint: u32,
+    ) -> Result<Option<Vec<f32>>, AlephError>;
 }
 
 #[cfg(test)]

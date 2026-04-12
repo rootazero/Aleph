@@ -438,6 +438,138 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    async fn hybrid_search_notes(
+        &self,
+        embedding: &[f32],
+        query_text: &str,
+        agent_id: &str,
+        dim_hint: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
+        use std::collections::HashMap;
+
+        let vec_results = self.vector_search(embedding, dim_hint, agent_id, limit * 2).await?;
+        let fts_entries = self.search_notes_fts(query_text, agent_id, limit * 2).await?;
+
+        // RRF fusion with k=60 (standard)
+        let k = 60.0_f32;
+        let mut scores: HashMap<String, f32> = HashMap::new();
+
+        for (rank, (path, _score)) in vec_results.iter().enumerate() {
+            let rrf = 1.0 / (k + (rank as f32) + 1.0);
+            *scores.entry(path.clone()).or_insert(0.0) += rrf;
+        }
+
+        for (rank, entry) in fts_entries.iter().enumerate() {
+            let rrf = 1.0 / (k + (rank as f32) + 1.0);
+            *scores.entry(entry.path.clone()).or_insert(0.0) += rrf;
+        }
+
+        let mut sorted: Vec<(String, f32)> = scores.into_iter().collect();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.truncate(limit);
+
+        let mut results = Vec::new();
+        for (path, score) in sorted {
+            if let Some(entry) = self.get_note_index(&path, agent_id).await? {
+                let content = load_note_content_from_disk(&entry, agent_id).await.unwrap_or_default();
+                results.push(crate::memory::notes::NoteSearchResult {
+                    path: entry.path.clone(),
+                    filename: entry.filename.clone(),
+                    category: entry.category.clone(),
+                    tags: entry.tags.clone(),
+                    content,
+                    score,
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    async fn vector_search_notes_with_content(
+        &self,
+        embedding: &[f32],
+        agent_id: &str,
+        dim_hint: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
+        let pairs = self.vector_search(embedding, dim_hint, agent_id, limit).await?;
+
+        let mut results = Vec::new();
+        for (path, score) in pairs {
+            if let Some(entry) = self.get_note_index(&path, agent_id).await? {
+                let content = load_note_content_from_disk(&entry, agent_id).await.unwrap_or_default();
+                results.push(crate::memory::notes::NoteSearchResult {
+                    path: entry.path.clone(),
+                    filename: entry.filename.clone(),
+                    category: entry.category.clone(),
+                    tags: entry.tags.clone(),
+                    content,
+                    score,
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    async fn get_notes_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<NoteIndexEntry>, AlephError> {
+        let all = self.list_notes(agent_id).await?;
+        Ok(all
+            .into_iter()
+            .filter(|n| n.category == category)
+            .take(limit)
+            .collect())
+    }
+
+    async fn get_embedding(
+        &self,
+        path: &str,
+        agent_id: &str,
+        dim_hint: u32,
+    ) -> Result<Option<Vec<f32>>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        // Look up rowid via notes_vec_map
+        let rowid: Option<i64> = conn
+            .query_row(
+                "SELECT rowid FROM notes_vec_map WHERE path = ?1 AND agent_id = ?2",
+                params![path, agent_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let Some(rowid) = rowid else {
+            return Ok(None);
+        };
+
+        let table = match dim_hint {
+            768 => "notes_vec_768",
+            1024 => "notes_vec_1024",
+            1536 => "notes_vec_1536",
+            _ => return Ok(None),
+        };
+
+        let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
+        let blob: Option<Vec<u8>> = conn
+            .query_row(&sql, params![rowid], |row| row.get(0))
+            .ok();
+
+        Ok(blob.map(|b| {
+            b.chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect()
+        }))
+    }
+
     async fn vector_search(&self, embedding: &[f32], dim: u32, agent_id: &str, limit: usize) -> Result<Vec<(String, f32)>, AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
         let conn = lock_conn!(self)?;
@@ -525,8 +657,18 @@ impl NoteStore for SqliteMemoryBackend {
 }
 
 // ---------------------------------------------------------------------------
-// Shared helper
+// Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Load note markdown content from disk given index metadata and agent_id.
+async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> Option<String> {
+    let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
+    let file_path = memory_dir
+        .join(agent_id)
+        .join(&entry.category)
+        .join(format!("{}.md", entry.filename));
+    tokio::fs::read_to_string(&file_path).await.ok()
+}
 
 /// Collect all edges where both endpoints are in `visible`, scoped by agent_id.
 fn collect_edges_between(
@@ -538,16 +680,19 @@ fn collect_edges_between(
         return Ok(Vec::new());
     }
 
-    // Build IN-clause dynamically
-    let placeholders: Vec<String> = (1..=visible.len()).map(|i| format!("?{}", i + 1)).collect();
-    let in_clause = placeholders.join(", ");
+    // Build two independent IN-clause placeholder sets for from_note and to_note
+    let n = visible.len();
+    let from_placeholders: Vec<String> = (1..=n).map(|i| format!("?{}", i + 1)).collect();
+    let to_placeholders: Vec<String> = (1..=n).map(|i| format!("?{}", i + 1 + n)).collect();
+    let from_clause = from_placeholders.join(", ");
+    let to_clause = to_placeholders.join(", ");
 
     let sql = format!(
         "SELECT from_note, to_note FROM notes_links \
-         WHERE agent_id = ?1 AND from_note IN ({in_clause}) AND to_note IN ({in_clause})"
+         WHERE agent_id = ?1 AND from_note IN ({from_clause}) AND to_note IN ({to_clause})"
     );
 
-    // Params: agent_id + visible paths repeated twice (for from_note IN + to_note IN)
+    // Params: agent_id + paths (for from IN) + paths again (for to IN)
     let paths: Vec<&str> = visible.iter().map(|s| s.as_str()).collect();
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     param_values.push(Box::new(agent_id.to_string()));
@@ -575,4 +720,107 @@ fn collect_edges_between(
         edges.push(row.map_err(|e| AlephError::config(format!("collect_edges row: {e}")))?);
     }
     Ok(edges)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::SqliteMemoryBackend;
+
+    fn make_backend() -> SqliteMemoryBackend {
+        let dir = tempfile::tempdir().unwrap();
+        // Keep the dir alive by leaking it for the test duration
+        let path = dir.into_path();
+        SqliteMemoryBackend::new(&path).unwrap()
+    }
+
+    fn make_note(title: &str, category: &str) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.to_string(),
+            category: category.to_string(),
+            tags: vec!["test".to_string()],
+            facts: vec![format!("{title} fact")],
+            links: vec![],
+            created_at: 1000,
+            updated_at: 1000,
+            content_hash: format!("hash_{title}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn hybrid_search_returns_results_from_both_sources() {
+        let backend = make_backend();
+
+        let note = make_note("rust-async", "learning");
+        backend.index_note(&note, "default", "learning").await.unwrap();
+
+        let embedding = vec![0.5_f32; 1024];
+        backend
+            .upsert_embedding("learning/rust-async", "default", &embedding, 1024)
+            .await
+            .unwrap();
+
+        let results = backend
+            .hybrid_search_notes(&embedding, "async", "default", 1024, 10)
+            .await
+            .unwrap();
+
+        // The markdown file won't exist on disk (only index), so content may be empty
+        assert!(!results.is_empty(), "expected at least one result");
+        assert_eq!(results[0].path, "learning/rust-async");
+    }
+
+    #[tokio::test]
+    async fn get_notes_by_category_filters() {
+        let backend = make_backend();
+
+        let wiki = make_note("rust", "wiki");
+        let pref = make_note("editor", "preference");
+        backend.index_note(&wiki, "default", "wiki").await.unwrap();
+        backend.index_note(&pref, "default", "preference").await.unwrap();
+
+        let wikis = backend.get_notes_by_category("default", "wiki", 10).await.unwrap();
+        assert_eq!(wikis.len(), 1);
+        assert_eq!(wikis[0].category, "wiki");
+
+        let prefs = backend.get_notes_by_category("default", "preference", 10).await.unwrap();
+        assert_eq!(prefs.len(), 1);
+        assert_eq!(prefs[0].category, "preference");
+    }
+
+    #[tokio::test]
+    async fn get_embedding_roundtrip() {
+        let backend = make_backend();
+
+        let note = make_note("x", "other");
+        backend.index_note(&note, "default", "other").await.unwrap();
+
+        let original = vec![0.1_f32, 0.2, 0.3, 0.4];
+        let mut padded = original.clone();
+        padded.resize(1024, 0.0);
+        backend
+            .upsert_embedding("other/x", "default", &padded, 1024)
+            .await
+            .unwrap();
+
+        let retrieved = backend.get_embedding("other/x", "default", 1024).await.unwrap();
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.len(), 1024);
+        for (a, b) in original.iter().zip(retrieved.iter().take(4)) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_embedding_returns_none_for_missing_note() {
+        let backend = make_backend();
+        let result = backend.get_embedding("missing/path", "default", 1024).await.unwrap();
+        assert!(result.is_none());
+    }
 }
