@@ -59,6 +59,26 @@ impl CompressionConfig {
     }
 }
 
+/// Parse raw memory content into user/assistant parts.
+/// Content may contain "User: ...\nAssistant: ..." format from SessionCompactor,
+/// or plain text summaries.
+fn parse_raw_content(content: &str) -> (String, String) {
+    // Try to split on "Assistant:" marker
+    if let Some(pos) = content.find("\nAssistant:") {
+        let user_part = content[..pos].to_string();
+        let user_part = user_part.strip_prefix("User:").unwrap_or(&user_part).trim().to_string();
+        let ai_part = content[pos..].trim_start_matches("\nAssistant:").trim().to_string();
+        (user_part, ai_part)
+    } else if let Some(pos) = content.find("Assistant:") {
+        let user_part = content[..pos].to_string();
+        let user_part = user_part.strip_prefix("User:").unwrap_or(&user_part).trim().to_string();
+        let ai_part = content[pos..].trim_start_matches("Assistant:").trim().to_string();
+        (user_part, ai_part)
+    } else {
+        (content.to_string(), String::new())
+    }
+}
+
 /// Main compression service
 pub struct CompressionService {
     database: MemoryBackend,
@@ -450,11 +470,20 @@ impl CompressionService {
         let memories: Vec<crate::memory::context::MemoryEntry> = raw_memories
             .iter()
             .map(|raw| {
+                let (user_input, ai_output) = parse_raw_content(&raw.content);
+                // Inject attachment text if present
+                let enriched_input = match &raw.attachment_text {
+                    Some(att) if !att.is_empty() => {
+                        let att_preview: String = att.chars().take(2000).collect();
+                        format!("{user_input}\n[Attachment]: {att_preview}")
+                    }
+                    _ => user_input,
+                };
                 crate::memory::context::MemoryEntry::new(
                     raw.id.clone(),
                     crate::memory::context::ContextAnchor::now("".to_string()),
-                    raw.content.clone(),
-                    String::new(),
+                    enriched_input,
+                    ai_output,
                 )
             })
             .collect();
@@ -469,15 +498,57 @@ impl CompressionService {
             "Starting note-based compression"
         );
 
-        // 3. Get existing note titles
+        // 3. Get existing note context (path + first 300 chars of body)
         let existing_notes = indexer.store().list_notes(workspace_id).await.unwrap_or_default();
-        let existing_titles: Vec<String> = existing_notes.iter().map(|n| n.path.clone()).collect();
+        let mut existing_note_summaries: Vec<String> = Vec::new();
+        for note_idx in &existing_notes {
+            let note_file = indexer
+                .memory_dir()
+                .join(workspace_id)
+                .join(&note_idx.category)
+                .join(format!("{}.md", note_idx.filename));
+            let summary = match tokio::fs::read_to_string(&note_file).await {
+                Ok(content) => {
+                    // Take first 300 chars of body as context
+                    let preview: String = content.chars().take(300).collect();
+                    format!("{}: {}", note_idx.path, preview)
+                }
+                Err(_) => note_idx.path.clone(),
+            };
+            existing_note_summaries.push(summary);
+        }
 
         // 4. Extract note updates via LLM
         let note_updates = self
             .extractor
-            .extract_note_updates(&memories, &existing_titles)
+            .extract_note_updates(&memories, &existing_note_summaries)
             .await?;
+
+        // Validate extraction quality
+        let valid_categories = [
+            "preference", "plan", "learning", "project", "personal",
+            "tool", "lesson", "skill", "wiki", "transcript", "other",
+            "subagent-run", "subagent-session", "subagent-checkpoint", "subagent-transcript",
+        ];
+
+        use crate::memory::notes::extractor::NoteExtractionResponse;
+        let note_updates = NoteExtractionResponse {
+            updates: note_updates.updates.into_iter().filter(|u| {
+                let has_slash = u.note_path.contains('/');
+                let has_content = !u.new_facts.is_empty()
+                    || u.action == crate::memory::notes::extractor::NoteAction::Update;
+                let category = u.note_path.split('/').next().unwrap_or("");
+                let valid_cat = valid_categories.contains(&category);
+
+                if !has_slash || !has_content || !valid_cat {
+                    tracing::warn!(
+                        note_path = %u.note_path,
+                        "Filtered out invalid note extraction: slash={has_slash} content={has_content} cat={valid_cat}"
+                    );
+                }
+                has_slash && has_content && valid_cat
+            }).collect(),
+        };
 
         // 5. Ensure directory structure exists
         let _ = indexer.ensure_dirs(workspace_id).await;

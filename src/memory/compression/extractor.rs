@@ -343,8 +343,8 @@ EXAMPLE OUTPUT:
 
             // Truncate long AI responses (use char count, not byte count for CJK safety)
             let char_count = memory.ai_output.chars().count();
-            let ai_output: String = memory.ai_output.chars().take(500).collect();
-            let truncated = if char_count > 500 {
+            let ai_output: String = memory.ai_output.chars().take(2000).collect();
+            let truncated = if char_count > 2000 {
                 format!("{}...", ai_output)
             } else {
                 ai_output
