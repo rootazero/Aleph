@@ -99,7 +99,6 @@ pub struct CrossWorkspaceFact {
 #[derive(Debug, Clone, Serialize)]
 pub struct PathCluster {
     pub path: String,
-    pub l1_overview: Option<String>,
     pub fact_count: usize,
     pub top_score: f32,
 }
@@ -141,7 +140,6 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
         .filter(|(_, (count, _))| *count >= threshold)
         .map(|(path, (count, top_score))| PathCluster {
             path: path.to_string(),
-            l1_overview: None,
             fact_count: count,
             top_score,
         })
@@ -631,13 +629,12 @@ mod tests {
     fn test_path_cluster_serialization() {
         let cluster = PathCluster {
             path: "aleph://user/preferences/coding/".to_string(),
-            l1_overview: Some("Overview text".to_string()),
             fact_count: 5,
             top_score: 0.85,
         };
         let json = serde_json::to_string(&cluster).unwrap();
         assert!(json.contains("aleph://user/preferences/coding/"));
-        assert!(json.contains("Overview text"));
+        assert!(json.contains("5"));
     }
 
     #[test]
