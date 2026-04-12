@@ -22,6 +22,7 @@ use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
 use crate::memory::context::{NoteType, MemoryFact, MemoryScope};
 use crate::memory::store::types::SearchFilter;
+use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -431,6 +432,16 @@ impl SessionCompactor {
                     "Failed to store d0 summary"
                 );
             } else {
+                // Dual-write to raw_memories (non-fatal).
+                {
+                    let raw = RawMemory::new(fact.content.clone(), RawMemorySource::SessionCompressed)
+                        .with_agent(&agent_id)
+                        .with_session(&session_id)
+                        .with_path(fact.path.clone());
+                    if let Err(e) = self.database.insert_raw_memory(&raw).await {
+                        warn!(error = %e, "Failed to dual-write d0 summary to raw_memories (non-fatal)");
+                    }
+                }
                 d0_created += 1;
                 self.metrics
                     .d0_summaries_created
@@ -657,6 +668,15 @@ impl SessionCompactor {
                 seq,
                 "Failed to store raw chunk"
             );
+        } else {
+            // Dual-write to raw_memories (non-fatal).
+            let raw = RawMemory::new(content.to_string(), RawMemorySource::SessionCompressed)
+                .with_agent("default")
+                .with_session(session_id)
+                .with_path(format!("aleph://session/{}/raw/{}", session_id, seq));
+            if let Err(e) = self.database.insert_raw_memory(&raw).await {
+                warn!(error = %e, "Failed to dual-write raw chunk to raw_memories (non-fatal)");
+            }
         }
         Ok(())
     }
@@ -736,6 +756,17 @@ impl SessionCompactor {
         );
 
         self.database.insert_fact(&fact).await?;
+
+        // Dual-write to raw_memories (non-fatal).
+        {
+            let raw = RawMemory::new(fact.content.clone(), RawMemorySource::SessionCompressed)
+                .with_agent(agent_id)
+                .with_session(session_id)
+                .with_path(fact.path.clone());
+            if let Err(e) = self.database.insert_raw_memory(&raw).await {
+                warn!(error = %e, "Failed to dual-write condensed fact to raw_memories (non-fatal)");
+            }
+        }
 
         // Invalidate source facts
         let reason = format!("condensed into d{target_depth}/{seq}");
