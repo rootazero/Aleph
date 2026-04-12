@@ -8,8 +8,11 @@
 //! - **`MemoryStore`** -- CRUD, vector/text/hybrid search, VFS path operations
 //!   for `MemoryFact` (Layer 2 compressed facts).
 
+pub mod raw_memory;
 pub mod sqlite;
 pub mod types;
+
+pub use raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 
 pub use sqlite::SqliteMemoryBackend;
 
