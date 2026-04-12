@@ -1,513 +1,260 @@
-//! Memory browse tool for hierarchical VFS navigation
+//! memory_browse — browse the knowledge notes filesystem.
 //!
-//! Provides ls/read/glob operations on the aleph:// VFS.
+//! Replaces the VFS-based browse model. Since notes are stored as real
+//! markdown files at `~/.aleph/memory/note/{agent}/{category}/{filename}.md`,
+//! browsing is done via filesystem operations directly.
 
-use crate::sync_primitives::Arc;
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 
-use super::error::ToolError;
-use crate::error::Result;
-use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
-use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_AGENT};
+use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
 /// Browse action type
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum BrowseAction {
-    /// List direct children of a path
-    Ls,
-    /// Read full content of a specific fact
+pub enum MemoryBrowseAction {
+    /// List categories (no path) or notes in a category (path is category name)
+    List,
+    /// Read a specific note's markdown content (path is "category/filename")
     Read,
-    /// Pattern-match search under a path
-    Glob,
 }
 
 /// Arguments for memory_browse tool
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryBrowseArgs {
-    /// The action to perform (ls, read, glob)
-    pub action: BrowseAction,
-    /// The aleph:// path to operate on
-    pub path: String,
-    /// Glob pattern (only used with glob action)
+    /// Action to perform: list (browse categories/files) or read (get note content).
+    pub action: MemoryBrowseAction,
+    /// For list: optional category name ("wiki", "preference", etc.) to list files within.
+    /// For read: full note path like "wiki/rust-ownership".
     #[serde(default)]
-    pub pattern: Option<String>,
-    /// Workspace to browse in. If omitted, uses the active workspace from execution context.
-    #[serde(default)]
-    pub workspace: Option<String>,
-}
-
-/// A single directory entry
-#[derive(Debug, Clone, Serialize)]
-pub struct BrowseLsEntry {
-    pub name: String,
-    pub path: String,
-    pub is_directory: bool,
-    pub fact_count: usize,
-    pub l1_available: bool,
-    pub abstract_line: String,
+    pub path: Option<String>,
 }
 
 /// Output from memory_browse tool
 #[derive(Debug, Clone, Serialize)]
 pub struct MemoryBrowseOutput {
-    /// The action that was performed
-    pub action: String,
-    /// The path that was browsed
-    pub path: String,
-    /// Directory listing (for ls action)
+    pub success: bool,
+    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub entries: Option<Vec<BrowseLsEntry>>,
-    /// Content (for read action)
+    pub entries: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    /// Metadata (for read action)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<ReadMetadata>,
-    /// Glob matches (for glob action)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matches: Option<Vec<GlobMatch>>,
-    /// Human-readable summary
-    pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ReadMetadata {
-    pub note_type: String,
-    pub fact_source: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub confidence: f32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GlobMatch {
-    pub path: String,
-    pub abstract_line: String,
-}
-
-/// Memory browse tool
+/// Memory browse tool — filesystem-based note browser.
+#[derive(Clone)]
 pub struct MemoryBrowseTool {
-    database: MemoryBackend,
-    /// Shared default workspace ID, set by the execution engine based on active workspace.
-    /// Falls back to DEFAULT_AGENT ("default") when not set.
-    default_workspace: Arc<RwLock<String>>,
+    memory_dir: PathBuf,
+    agent_id: String,
 }
 
 impl MemoryBrowseTool {
-    pub fn new(database: MemoryBackend) -> Self {
+    pub fn new(memory_dir: PathBuf, agent_id: String) -> Self {
         Self {
-            database,
-            default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
+            memory_dir,
+            agent_id,
         }
     }
 
-    /// Get a shared handle to the default workspace setting.
-    ///
-    /// The execution engine can update this value when the active workspace changes,
-    /// so that tool calls without an explicit `workspace` arg use the correct workspace.
-    pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
-        Arc::clone(&self.default_workspace)
-    }
-
-    /// Replace the workspace handle with an externally-shared one.
-    ///
-    /// Used by BuiltinToolRegistry to share a single workspace handle across
-    /// both memory_search and memory_browse tools.
-    pub fn set_workspace_handle(&mut self, handle: Arc<RwLock<String>>) {
-        self.default_workspace = handle;
-    }
-
-    async fn call_impl(
+    pub(crate) async fn handle_list(
         &self,
-        args: MemoryBrowseArgs,
-    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        use super::{notify_tool_result, notify_tool_start};
-
-        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_AGENT
-        let default_ws = self.default_workspace.read().await;
-        let workspace = args.workspace.as_deref().unwrap_or(&default_ws);
-
-        // Validate path
-        if !args.path.starts_with("aleph://") {
-            return Err(ToolError::Execution(format!(
-                "Invalid path: must start with aleph://, got: {}",
-                args.path
-            )));
-        }
-
-        let action_name = match args.action {
-            BrowseAction::Ls => "ls",
-            BrowseAction::Read => "read",
-            BrowseAction::Glob => "glob",
+        category: Option<&str>,
+    ) -> Result<MemoryBrowseOutput> {
+        let base = self.memory_dir.join(&self.agent_id);
+        let target = match category {
+            None => base,
+            Some(cat) => base.join(cat),
         };
 
-        notify_tool_start("memory_browse", &format!("{} {}", action_name, args.path));
-
-        let output = match args.action {
-            BrowseAction::Ls => self.handle_ls(&args.path, workspace).await?,
-            BrowseAction::Read => self.handle_read(&args.path, workspace).await?,
-            BrowseAction::Glob => {
-                let pattern = args.pattern.as_deref().unwrap_or("*");
-                self.handle_glob(&args.path, pattern, workspace).await?
-            }
-        };
-
-        notify_tool_result("memory_browse", &output.summary, true);
-        Ok(output)
-    }
-
-    async fn handle_ls(
-        &self,
-        path: &str,
-        workspace: &str,
-    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let children: Vec<StorePathEntry> = self
-            .database
-            .list_by_path(path, &NamespaceScope::Owner, workspace)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
-
-        let mut entries = Vec::with_capacity(children.len());
-        for child in children {
-            let summary = self.summary_fact_for_path(&child.path, workspace).await?;
-            let l1_available = summary
-                .as_ref()
-                .is_some_and(|f| f.layer == MemoryLayer::L1Overview);
-            let abstract_line = summary
-                .as_ref()
-                .map(|f| Self::extract_abstract_line(&f.content))
-                .unwrap_or_default();
-
-            entries.push(BrowseLsEntry {
-                name: child
-                    .path
-                    .strip_prefix(path)
-                    .unwrap_or(&child.path)
-                    .to_string(),
-                path: child.path.clone(),
-                is_directory: !child.is_leaf,
-                fact_count: child.child_count,
-                l1_available,
-                abstract_line,
+        if !target.exists() {
+            return Ok(MemoryBrowseOutput {
+                success: true,
+                message: format!("No entries at {}", category.unwrap_or("/")),
+                entries: Some(Vec::new()),
+                content: None,
             });
         }
 
-        let summary = format!("{} - {} entries", path, entries.len());
+        let mut entries = Vec::new();
+        let mut dir = tokio::fs::read_dir(&target)
+            .await
+            .map_err(|e| AlephError::tool(format!("Failed to read dir: {e}")))?;
+
+        while let Some(entry) = dir
+            .next_entry()
+            .await
+            .map_err(|e| AlephError::tool(format!("Read dir entry: {e}")))?
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // Skip hidden files and the archive directory
+            if name.starts_with('.') || name == "archive" {
+                continue;
+            }
+
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|e| AlephError::tool(format!("Read file type: {e}")))?;
+
+            if category.is_none() {
+                // Top-level: only list directories (categories)
+                if file_type.is_dir() {
+                    entries.push(name);
+                }
+            } else {
+                // Within a category: only list .md files, strip extension
+                if file_type.is_file() && name.ends_with(".md") {
+                    entries.push(name.trim_end_matches(".md").to_string());
+                }
+            }
+        }
+        entries.sort();
 
         Ok(MemoryBrowseOutput {
-            action: "ls".to_string(),
-            path: path.to_string(),
+            success: true,
+            message: format!(
+                "Listed {} entries under {}",
+                entries.len(),
+                category.unwrap_or("/")
+            ),
             entries: Some(entries),
             content: None,
-            metadata: None,
-            matches: None,
-            summary,
         })
     }
 
-    async fn handle_read(
-        &self,
-        path: &str,
-        workspace: &str,
-    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        if let Some(summary_fact) = self.summary_fact_for_path(path, workspace).await? {
-            return Ok(MemoryBrowseOutput {
-                action: "read".to_string(),
-                path: path.to_string(),
-                entries: None,
-                content: Some(summary_fact.content.clone()),
-                metadata: Some(ReadMetadata {
-                    note_type: summary_fact.note_type.to_string(),
-                    fact_source: summary_fact.fact_source.to_string(),
-                    created_at: summary_fact.created_at,
-                    updated_at: summary_fact.updated_at,
-                    confidence: summary_fact.confidence,
-                }),
-                matches: None,
-                summary: format!("{} - {} summary", path, summary_fact.layer),
-            });
-        }
+    pub(crate) async fn handle_read(&self, path: &str) -> Result<MemoryBrowseOutput> {
+        let (category, filename) = path
+            .split_once('/')
+            .ok_or_else(|| AlephError::tool("path must be 'category/filename' (e.g. 'wiki/rust-ownership')"))?;
 
-        // Otherwise return all L2 detail facts under this prefix.
-        let facts = self
-            .database
-            .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 500)
+        let file = self
+            .memory_dir
+            .join(&self.agent_id)
+            .join(category)
+            .join(format!("{filename}.md"));
+
+        let content = tokio::fs::read_to_string(&file)
             .await
-            .map_err(|e| ToolError::Execution(format!("Failed to read path: {}", e)))?;
-
-        if facts.is_empty() {
-            return Ok(MemoryBrowseOutput {
-                action: "read".to_string(),
-                path: path.to_string(),
-                entries: None,
-                content: Some("No content at this path.".to_string()),
-                metadata: None,
-                matches: None,
-                summary: format!("{} - empty", path),
-            });
-        }
-
-        let combined_content = facts
-            .iter()
-            .map(|f| format!("- [{}] {}", f.note_type, f.content))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // When multiple facts, aggregate metadata
-        let metadata = if facts.len() == 1 {
-            let f = &facts[0];
-            ReadMetadata {
-                note_type: f.note_type.to_string(),
-                fact_source: f.fact_source.to_string(),
-                created_at: f.created_at,
-                updated_at: f.updated_at,
-                confidence: f.confidence,
-            }
-        } else {
-            ReadMetadata {
-                note_type: "Mixed".to_string(),
-                fact_source: "Multiple".to_string(),
-                created_at: facts.iter().map(|f| f.created_at).min().unwrap_or(0),
-                updated_at: facts.iter().map(|f| f.updated_at).max().unwrap_or(0),
-                confidence: facts.iter().map(|f| f.confidence).sum::<f32>() / facts.len() as f32,
-            }
-        };
+            .map_err(|e| AlephError::tool(format!("Read note '{path}': {e}")))?;
 
         Ok(MemoryBrowseOutput {
-            action: "read".to_string(),
-            path: path.to_string(),
+            success: true,
+            message: format!("Read note {path}"),
             entries: None,
-            content: Some(combined_content),
-            metadata: Some(metadata),
-            matches: None,
-            summary: format!("{} - {} facts", path, facts.len()),
+            content: Some(content),
         })
-    }
-
-    async fn handle_glob(
-        &self,
-        path: &str,
-        pattern: &str,
-        workspace: &str,
-    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let path_facts = self
-            .database
-            .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 1000)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Failed to glob: {}", e)))?;
-
-        let matches: Vec<GlobMatch> = path_facts
-            .into_iter()
-            .filter(|f| {
-                let relative = f.path.strip_prefix(path).unwrap_or(&f.path);
-                if pattern == "*" {
-                    true
-                } else {
-                    relative.contains(pattern.trim_matches('*'))
-                }
-            })
-            .map(|f| GlobMatch {
-                path: f.path.clone(),
-                abstract_line: f.content.chars().take(100).collect(),
-            })
-            .collect();
-
-        let summary = format!("{} - {} matches for '{}'", path, matches.len(), pattern);
-
-        Ok(MemoryBrowseOutput {
-            action: "glob".to_string(),
-            path: path.to_string(),
-            entries: None,
-            content: None,
-            metadata: None,
-            matches: Some(matches),
-            summary,
-        })
-    }
-
-    fn detail_filter(&self, workspace: &str) -> SearchFilter {
-        SearchFilter::new()
-            .with_valid_only()
-            .with_agent_filter(AgentEnvFilter::Single(workspace.to_string()))
-            .with_layer(MemoryLayer::L2Detail)
-    }
-
-    async fn summary_fact_for_path(
-        &self,
-        path: &str,
-        workspace: &str,
-    ) -> std::result::Result<Option<MemoryFact>, ToolError> {
-        let filter = SearchFilter::new()
-            .with_valid_only()
-            .with_agent_filter(AgentEnvFilter::Single(workspace.to_string()));
-
-        let mut summaries: Vec<MemoryFact> = self
-            .database
-            .get_facts_by_path_prefix(path, &filter, 128)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Failed to read summaries: {}", e)))?
-            .into_iter()
-            .filter(|f| f.path == path && f.fact_source == FactSource::Summary)
-            .collect();
-
-        summaries.sort_by(|a, b| {
-            Self::summary_layer_rank(a.layer)
-                .cmp(&Self::summary_layer_rank(b.layer))
-                .then_with(|| b.updated_at.cmp(&a.updated_at))
-        });
-
-        Ok(summaries.into_iter().next())
-    }
-
-    fn summary_layer_rank(layer: MemoryLayer) -> u8 {
-        match layer {
-            MemoryLayer::L1Overview => 0,
-            MemoryLayer::L0Abstract => 1,
-            MemoryLayer::L2Detail => 2,
-        }
-    }
-
-    fn extract_abstract_line(content: &str) -> String {
-        content
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or_default()
-            .chars()
-            .take(120)
-            .collect()
-    }
-}
-
-impl Clone for MemoryBrowseTool {
-    fn clone(&self) -> Self {
-        Self {
-            database: self.database.clone(),
-            default_workspace: self.default_workspace.clone(),
-        }
     }
 }
 
 #[async_trait]
 impl AlephTool for MemoryBrowseTool {
     const NAME: &'static str = "memory_browse";
-    const DESCRIPTION: &'static str = "Browse hierarchical memory using aleph:// paths. \
-        Supports ls (list directory), read (get content), and glob (pattern search). \
-        Use after memory_search discovers relevant paths.";
+    const DESCRIPTION: &'static str =
+        "Browse the knowledge notes filesystem. \
+         Action 'list' with no path shows categories; with a category name shows files in it. \
+         Action 'read' with 'category/filename' returns the markdown content of that note.";
 
     type Args = MemoryBrowseArgs;
     type Output = MemoryBrowseOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "memory.browse(action='ls', path='aleph://user/preferences/')".to_string(),
-            "memory.browse(action='read', path='aleph://user/preferences/coding/')".to_string(),
-            "memory.browse(action='glob', path='aleph://knowledge/', pattern='*rust*')".to_string(),
+            "memory_browse(action='list')  // list all categories".to_string(),
+            "memory_browse(action='list', path='wiki')  // list notes in wiki category".to_string(),
+            "memory_browse(action='read', path='wiki/rust-ownership')  // read one note"
+                .to_string(),
         ])
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.call_impl(args).await.map_err(Into::into)
+        match args.action {
+            MemoryBrowseAction::List => self.handle_list(args.path.as_deref()).await,
+            MemoryBrowseAction::Read => {
+                let path = args
+                    .path
+                    .ok_or_else(|| AlephError::tool("'path' required for 'read' action"))?;
+                self.handle_read(&path).await
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::sync_primitives::Arc;
-
-    use crate::memory::store::SqliteMemoryBackend;
-    use crate::memory::store::MemoryBackend;
-    use crate::memory::{NoteType, MemoryFact};
-
     use super::*;
+    use tempfile::tempdir;
 
-    async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let backend = SqliteMemoryBackend::new(temp_dir.path())
-            .unwrap();
-        (Arc::new(backend), temp_dir)
-    }
-
-    #[test]
-    fn test_browse_args_serialization() {
-        let args = MemoryBrowseArgs {
-            action: BrowseAction::Ls,
-            path: "aleph://user/".to_string(),
-            pattern: None,
-            workspace: None,
-        };
-        let json = serde_json::to_string(&args).unwrap();
-        assert!(json.contains("aleph://user/"));
-        assert!(json.contains("ls"));
-    }
-
-    #[test]
-    fn test_invalid_path_detection() {
-        assert!(!"/invalid/path".starts_with("aleph://"));
-        assert!("aleph://user/".starts_with("aleph://"));
-    }
-
-    #[test]
-    fn test_browse_output_serialization() {
-        let output = MemoryBrowseOutput {
-            action: "ls".to_string(),
-            path: "aleph://user/".to_string(),
-            entries: Some(vec![BrowseLsEntry {
-                name: "preferences/".to_string(),
-                path: "aleph://user/preferences/".to_string(),
-                is_directory: true,
-                fact_count: 5,
-                l1_available: true,
-                abstract_line: "User coding preferences".to_string(),
-            }]),
-            content: None,
-            metadata: None,
-            matches: None,
-            summary: "aleph://user/ - 1 entries".to_string(),
-        };
-        let json = serde_json::to_string(&output).unwrap();
-        assert!(json.contains("preferences/"));
-        // content should be absent (skip_serializing_if = None)
-        assert!(!json.contains("\"content\""));
+    async fn setup() -> (MemoryBrowseTool, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let agent = dir.path().join("default");
+        tokio::fs::create_dir_all(&agent).await.unwrap();
+        let tool = MemoryBrowseTool::new(dir.path().to_path_buf(), "default".into());
+        (tool, dir)
     }
 
     #[tokio::test]
-    async fn test_memory_browse_ls_marks_l1_available() {
-        let (db, _temp_dir) = create_test_db().await;
-        let tool = MemoryBrowseTool::new(db.clone());
+    async fn list_empty_agent_returns_empty_entries() {
+        let (tool, _dir) = setup().await;
+        let result = tool.handle_list(None).await.unwrap();
+        assert_eq!(result.entries.unwrap(), Vec::<String>::new());
+    }
 
-        let detail_fact = MemoryFact::new("User likes Rust".into(), NoteType::Preference, vec![])
-            .with_path("aleph://user/preferences/coding/".to_string())
-            .with_layer(MemoryLayer::L2Detail);
+    #[tokio::test]
+    async fn list_top_level_returns_categories_only() {
+        let (tool, dir) = setup().await;
+        let agent_dir = dir.path().join("default");
+        tokio::fs::create_dir_all(agent_dir.join("wiki")).await.unwrap();
+        tokio::fs::create_dir_all(agent_dir.join("preference")).await.unwrap();
+        tokio::fs::create_dir_all(agent_dir.join("archive")).await.unwrap(); // should be skipped
+        tokio::fs::write(agent_dir.join("stray.txt"), "x").await.unwrap(); // file at top level, skipped
 
-        let summary_fact =
-            MemoryFact::new("Coding overview\n- Rust".into(), NoteType::Other, vec![])
-                .with_path("aleph://user/preferences/coding/".to_string())
-                .with_fact_source(FactSource::Summary)
-                .with_layer(MemoryLayer::L1Overview);
+        let result = tool.handle_list(None).await.unwrap();
+        let entries = result.entries.unwrap();
+        assert_eq!(entries, vec!["preference".to_string(), "wiki".to_string()]);
+    }
 
-        db.insert_fact(&detail_fact).await.unwrap();
-        db.insert_fact(&summary_fact).await.unwrap();
+    #[tokio::test]
+    async fn list_category_returns_markdown_filenames() {
+        let (tool, dir) = setup().await;
+        let wiki = dir.path().join("default/wiki");
+        tokio::fs::create_dir_all(&wiki).await.unwrap();
+        tokio::fs::write(wiki.join("rust.md"), "content").await.unwrap();
+        tokio::fs::write(wiki.join("go.md"), "content").await.unwrap();
+        tokio::fs::write(wiki.join("not-markdown.txt"), "x").await.unwrap();
 
-        let output = tool
-            .handle_ls("aleph://user/preferences/", "main")
+        let result = tool.handle_list(Some("wiki")).await.unwrap();
+        let entries = result.entries.unwrap();
+        assert_eq!(entries, vec!["go".to_string(), "rust".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn read_returns_markdown_content() {
+        let (tool, dir) = setup().await;
+        let wiki = dir.path().join("default/wiki");
+        tokio::fs::create_dir_all(&wiki).await.unwrap();
+        tokio::fs::write(wiki.join("rust.md"), "# Rust\n\nSystems language")
             .await
             .unwrap();
 
-        let entries = output.entries.unwrap();
-        let coding = entries
-            .iter()
-            .find(|entry| entry.path == "aleph://user/preferences/coding/")
-            .unwrap();
+        let result = tool.handle_read("wiki/rust").await.unwrap();
+        assert!(result.content.unwrap().contains("Systems language"));
+    }
 
-        assert!(coding.l1_available);
-        assert!(!coding.abstract_line.is_empty());
+    #[tokio::test]
+    async fn read_invalid_path_format_errors() {
+        let (tool, _dir) = setup().await;
+        let result = tool.handle_read("no-slash").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_missing_file_errors() {
+        let (tool, _dir) = setup().await;
+        let result = tool.handle_read("wiki/missing").await;
+        assert!(result.is_err());
     }
 }

@@ -177,8 +177,15 @@ impl BuiltinToolRegistry {
             );
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();
-            let mut browse_tool = MemoryBrowseTool::new(db.clone());
-            browse_tool.set_workspace_handle(Arc::clone(&ws_handle));
+            let note_memory_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".aleph")
+                        .join("memory")
+                        .join("note")
+                });
+            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             let explore_tool = MemoryExploreTool::new(db.clone(), Arc::clone(embedder));
             info!("Created memory_search, memory_browse, and memory_explore tools");
             (
@@ -188,11 +195,18 @@ impl BuiltinToolRegistry {
                 Some(ws_handle),
                 Some(sk_handle),
             )
-        } else if let Some(ref db) = config.memory_db {
-            let browse_tool = MemoryBrowseTool::new(db.clone());
-            let ws_handle = browse_tool.default_workspace_handle();
+        } else if config.memory_db.is_some() {
+            let note_memory_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".aleph")
+                        .join("memory")
+                        .join("note")
+                });
+            let browse_tool = MemoryBrowseTool::new(note_memory_dir, "default".to_string());
             info!("Created memory_browse tool (no embedder for memory_search)");
-            (None, Some(browse_tool), None, Some(ws_handle), None)
+            (None, Some(browse_tool), None, None, None)
         } else {
             (None, None, None, None, None)
         };
@@ -714,22 +728,23 @@ impl BuiltinToolRegistry {
         }
         info!("Registered skill management tools (skill_status, skill_install, skill_manage)");
 
-        // Wiki management tool — requires memory backend for fact storage
-        let wiki_manage_tool = if let Some(ref db) = config.memory_db {
-            let data_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".aleph")
-                .join("data");
-            let wiki_dir = crate::utils::paths::get_note_memory_dir()
-                .unwrap_or_else(|_| data_dir.join("..").join("memory").join("note"));
-            let git = crate::wiki::git::WikiGitManager::new(&wiki_dir);
-            let tool = crate::builtin_tools::wiki_manage::WikiManageTool::new(
-                data_dir,
+        // Note management tool — unified CRUD for all note categories
+        let note_manage_tool = if let Some(ref db) = config.memory_db {
+            let memory_dir = crate::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".aleph")
+                        .join("data")
+                        .join("memory")
+                        .join("note")
+                });
+            let tool = crate::builtin_tools::note_manage::NoteManageTool::new(
+                memory_dir,
                 db.clone(),
-                git,
             );
 
-            // Register wiki_manage tool schema
+            // Register note_manage tool schema
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
@@ -742,7 +757,7 @@ impl BuiltinToolRegistry {
                 ut = ut.with_parameters_schema(td.parameters.clone());
                 tools.insert(td.name.clone(), ut);
             }
-            info!("Registered wiki_manage tool");
+            info!("Registered note_manage tool");
             Some(tool)
         } else {
             None
@@ -883,7 +898,7 @@ impl BuiltinToolRegistry {
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
-            wiki_manage_tool,
+            note_manage_tool,
             tools,
         }
     }
