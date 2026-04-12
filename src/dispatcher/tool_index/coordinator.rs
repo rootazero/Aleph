@@ -1,10 +1,12 @@
 //! Tool Index Coordinator - synchronizes tools with Memory system
 //!
 //! The coordinator is responsible for:
-//! - Adding/updating tools as MemoryFacts with NoteType::Tool
-//! - Removing tools by invalidating their facts
+//! - Adding/updating tools as notes in the `tool/` category
+//! - Removing tools by deleting their note files and index entries
 //! - Bulk synchronization of tools
-//! - Retrieving all valid tool facts
+//! - Retrieving all valid tool notes
+
+use std::path::PathBuf;
 
 use super::inference::SemanticPurposeInferrer;
 use crate::error::AlephError;
@@ -12,6 +14,8 @@ use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{
     FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
+use crate::memory::notes::{KnowledgeNote, NoteIndexer};
+use crate::memory::notes::store::NoteStore;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::skill::{SkillSystem, SkillSystemEvent};
 use crate::sync_primitives::Arc;
@@ -69,40 +73,51 @@ impl ToolMeta {
     }
 }
 
+// Agent ID used for all tool notes — tools are system-level, owner-scoped.
+const TOOL_AGENT_ID: &str = "owner";
+
+// Note category under which tool descriptors are stored.
+const TOOL_CATEGORY: &str = "tool";
+
 /// Coordinates tool synchronization with Memory system
 ///
-/// Stores tools as MemoryFacts with NoteType::Tool for semantic retrieval.
+/// Stores tools as notes in the `tool/` category (markdown files + notes_index).
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
     db: MemoryBackend,
+    indexer: NoteIndexer<crate::memory::store::SqliteMemoryBackend>,
     inferrer: Arc<SemanticPurposeInferrer>,
 }
 
 impl ToolIndexCoordinator {
-    /// Create a new coordinator with a database reference
-    pub fn new(db: MemoryBackend) -> Self {
+    /// Create a new coordinator with a database reference and memory directory.
+    ///
+    /// `memory_dir` is the root notes directory (parent of all agent directories),
+    /// typically `~/.aleph/data/memory/note/`.
+    pub fn new(db: MemoryBackend, memory_dir: PathBuf) -> Self {
         Self {
-            db,
+            db: db.clone(),
+            indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::new()),
         }
     }
 
-    /// Create a new coordinator with LLM support for L2 optimization
+    /// Create a new coordinator with LLM support for L2 optimization.
     pub fn with_llm(
         db: MemoryBackend,
+        memory_dir: PathBuf,
         llm_provider: Arc<dyn crate::providers::AiProvider>,
     ) -> Self {
         Self {
-            db,
+            db: db.clone(),
+            indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
         }
     }
 
-    /// Generate a tool fact ID from tool name
-    ///
-    /// Uses "tool:" prefix for easy identification (e.g., "tool:read_file")
-    fn tool_fact_id(name: &str) -> String {
-        format!("tool:{}", name)
+    /// Generate a stable note path for a tool: `"tool/{tool_name}"`.
+    fn tool_note_path(name: &str) -> String {
+        format!("{TOOL_CATEGORY}/{name}")
     }
 
     /// Get current timestamp in Unix seconds
@@ -113,10 +128,51 @@ impl ToolIndexCoordinator {
             .as_secs() as i64
     }
 
-    /// Sync a single tool to Memory as a ToolFact
+    /// Reconstruct a `MemoryFact`-compatible struct from a note.
     ///
-    /// Creates or updates the tool fact with inferred semantic purpose.
-    /// Returns the fact ID on success.
+    /// Used to preserve the public API shape that callers (tests, ToolRetrieval) depend on.
+    fn note_to_fact(note: &KnowledgeNote, confidence: f32) -> MemoryFact {
+        let now = Self::now_timestamp();
+        let content = note.facts.join("\n");
+        MemoryFact {
+            id: format!("tool:{}", note.title),
+            content: content.clone(),
+            note_type: NoteType::Tool,
+            embedding: None,
+            source_memory_ids: vec![],
+            created_at: if note.created_at > 0 { note.created_at } else { now },
+            updated_at: if note.updated_at > 0 { note.updated_at } else { now },
+            confidence,
+            is_valid: true,
+            invalidation_reason: None,
+            decay_invalidated_at: None,
+            specificity: FactSpecificity::Principle,
+            temporal_scope: TemporalScope::Permanent,
+            similarity_score: None,
+            path: String::new(),
+            layer: MemoryLayer::L2Detail,
+            category: MemoryCategory::Patterns,
+            fact_source: FactSource::Extracted,
+            content_hash: note.content_hash.clone(),
+            parent_path: String::new(),
+            embedding_model: String::new(),
+            namespace: "owner".to_string(),
+            agent: TOOL_AGENT_ID.to_string(),
+            tier: crate::memory::context::MemoryTier::ShortTerm,
+            scope: crate::memory::context::MemoryScope::Global,
+            persona_id: None,
+            strength: 1.0,
+            access_count: 0,
+            last_accessed_at: None,
+            valid_from: None,
+            valid_to: None,
+        }
+    }
+
+    /// Sync a single tool to Memory as a note in `tool/` category.
+    ///
+    /// Creates or overwrites the tool note with inferred semantic purpose.
+    /// Returns the stable note path (`"tool:{name}"`) on success.
     ///
     /// # Arguments
     /// * `name` - Tool name
@@ -156,54 +212,41 @@ impl ToolIndexCoordinator {
             inferred.description.clone()
         };
 
-        let fact_id = Self::tool_fact_id(name);
         let now = Self::now_timestamp();
 
-        // Check if fact already exists
-        let existing: Option<MemoryFact> = self.db.get_fact(&fact_id).await?;
+        // Build the note (Option A: full content as single fact for clean roundtrip)
+        let note = KnowledgeNote {
+            title: name.to_string(),
+            category: TOOL_CATEGORY.to_string(),
+            tags: vec!["tool".to_string()],
+            facts: vec![content],
+            links: vec![],
+            created_at: now,
+            updated_at: now,
+            content_hash: String::new(), // will be computed on write
+        };
 
-        if existing.is_some() {
-            // Update existing fact
-            // TODO: Handle embedding update separately
-            let _ = &embedding;
-            self.db.update_fact_content(&fact_id, &content).await?;
-        } else {
-            // Create new fact
-            let fact = MemoryFact {
-                id: fact_id.clone(),
-                content,
-                note_type: NoteType::Tool,
-                embedding,
-                source_memory_ids: vec![], // Tools don't have source memories
-                created_at: now,
-                updated_at: now,
-                confidence: inferred.confidence,
-                is_valid: true,
-                invalidation_reason: None,
-                decay_invalidated_at: None,
-                specificity: FactSpecificity::Principle, // Tools are principle-level knowledge
-                temporal_scope: TemporalScope::Permanent, // Tools are always available
-                similarity_score: None,
-                path: String::new(),
-                layer: MemoryLayer::L2Detail,
-                category: MemoryCategory::Patterns,
-                fact_source: FactSource::Extracted,
-                content_hash: String::new(),
-                parent_path: String::new(),
-                embedding_model: String::new(),
-                namespace: "owner".to_string(),
-                agent: "default".to_string(),
-                tier: crate::memory::context::MemoryTier::ShortTerm,
-                scope: crate::memory::context::MemoryScope::Global,
-                persona_id: None,
-                strength: 1.0,
-                access_count: 0,
-                last_accessed_at: None,
-                valid_from: None,
-                valid_to: None,
-            };
+        // Write note file + update notes_index
+        self.indexer.write_note(TOOL_AGENT_ID, TOOL_CATEGORY, &note).await?;
 
-            self.db.insert_fact(&fact).await?;
+        // Re-index from disk so content_hash and index are consistent
+        let note_path = self
+            .indexer
+            .memory_dir()
+            .join(TOOL_AGENT_ID)
+            .join(TOOL_CATEGORY)
+            .join(format!("{name}.md"));
+        self.indexer.index_file(TOOL_AGENT_ID, TOOL_CATEGORY, &note_path).await?;
+
+        // Store embedding in notes vector table if provided.
+        // ToolRetrieval will be switched to query notes in Task 8.
+        if let Some(emb) = embedding {
+            let note_path = Self::tool_note_path(name);
+            let dim = emb.len() as u32;
+            self.indexer
+                .store()
+                .upsert_embedding(&note_path, TOOL_AGENT_ID, &emb, dim)
+                .await?;
         }
 
         // Schedule L2 optimization if needed (async, non-blocking)
@@ -213,18 +256,19 @@ impl ToolIndexCoordinator {
                 "Scheduling L2 async optimization"
             );
 
-            let db = Arc::clone(&self.db);
+            let indexer_store = Arc::clone(self.indexer.store());
+            let memory_dir = self.indexer.memory_dir().to_path_buf();
+            let db_clone = self.db.clone();
             let inferrer = Arc::clone(&self.inferrer);
             let tool_name = name.to_string();
             let tool_desc = description.map(|s| s.to_string());
             let tool_cat = category.map(|s| s.to_string());
-            let tool_id = fact_id.clone();
+            let note_id = format!("tool:{name}");
 
-            // Spawn background task for L2 optimization
             tokio::spawn(async move {
                 match inferrer
                     .enhance_with_llm(
-                        &tool_id,
+                        &note_id,
                         &tool_name,
                         tool_desc.as_deref(),
                         tool_cat.as_deref(),
@@ -239,17 +283,46 @@ impl ToolIndexCoordinator {
                             "L2 optimization completed"
                         );
 
-                        // Update fact with L2-enhanced content
-                        if let Err(e) = db
-                            .update_fact_content(&tool_id, &l2_result.description)
-                            .await
-                        {
-                            tracing::warn!(
-                                tool_name = %tool_name,
-                                error = %e,
-                                "Failed to update fact with L2 content"
-                            );
+                        // Update note on disk with L2-enhanced content
+                        let file_path = std::path::Path::new(&memory_dir)
+                            .join(TOOL_AGENT_ID)
+                            .join(TOOL_CATEGORY)
+                            .join(format!("{tool_name}.md"));
+
+                        // Read existing note, replace the facts content
+                        if let Ok(existing_md) = tokio::fs::read_to_string(&file_path).await {
+                            if let Ok(mut existing_note) =
+                                KnowledgeNote::from_markdown(&tool_name, &existing_md)
+                            {
+                                existing_note.facts = vec![l2_result.description.clone()];
+                                existing_note.updated_at = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64;
+
+                                let updated_md = existing_note.to_markdown();
+                                if let Err(e) = tokio::fs::write(&file_path, &updated_md).await {
+                                    tracing::warn!(
+                                        tool_name = %tool_name,
+                                        error = %e,
+                                        "Failed to write L2-updated note to disk"
+                                    );
+                                } else {
+                                    // Re-index the updated file
+                                    let indexer =
+                                        NoteIndexer::new(memory_dir, Arc::clone(&indexer_store));
+                                    let _ = indexer
+                                        .index_file(TOOL_AGENT_ID, TOOL_CATEGORY, &file_path)
+                                        .await;
+                                }
+                            }
                         }
+
+                        // Also keep legacy fact store in sync for ToolRetrieval
+                        // (ToolRetrieval still reads from facts via get_facts_by_type)
+                        let _ = db_clone
+                            .update_fact_content(&note_id, &l2_result.description)
+                            .await;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -262,27 +335,43 @@ impl ToolIndexCoordinator {
             });
         }
 
-        Ok(fact_id)
+        Ok(format!("tool:{name}"))
     }
 
-    /// Remove a tool from Memory by invalidating its fact
-    ///
-    /// Uses soft delete so the fact can be recovered if needed.
+    /// Remove a tool from Memory by deleting its note file and index entry.
     pub async fn remove_tool(&self, name: &str) -> Result<(), AlephError> {
-        let fact_id = Self::tool_fact_id(name);
-        self.db
-            .invalidate_fact(&fact_id, "Tool removed from registry")
-            .await
+        let note_path = Self::tool_note_path(name);
+
+        // Delete the markdown file
+        let file_path = self
+            .indexer
+            .memory_dir()
+            .join(TOOL_AGENT_ID)
+            .join(TOOL_CATEGORY)
+            .join(format!("{name}.md"));
+        tokio::fs::remove_file(&file_path).await.ok();
+
+        // Remove from notes index
+        self.indexer
+            .store()
+            .remove_note_index(&note_path, TOOL_AGENT_ID)
+            .await?;
+
+        // Backward-compat: also invalidate the legacy fact so ToolRetrieval doesn't find it
+        let fact_id = format!("tool:{name}");
+        let _ = self.db.invalidate_fact(&fact_id, "Tool removed from registry").await;
+
+        Ok(())
     }
 
-    /// Sync multiple tools in bulk
+    /// Sync multiple tools in bulk.
     ///
-    /// Returns the list of fact IDs that were created/updated.
+    /// Returns the list of note paths that were created/updated.
     pub async fn sync_all(&self, tools: Vec<ToolMeta>) -> Result<Vec<String>, AlephError> {
-        let mut fact_ids = Vec::with_capacity(tools.len());
+        let mut note_ids = Vec::with_capacity(tools.len());
 
         for tool in tools {
-            let fact_id = self
+            let note_id = self
                 .sync_tool(
                     &tool.name,
                     tool.description.as_deref(),
@@ -291,35 +380,133 @@ impl ToolIndexCoordinator {
                     tool.embedding,
                 )
                 .await?;
-            fact_ids.push(fact_id);
+            note_ids.push(note_id);
         }
 
-        Ok(fact_ids)
+        Ok(note_ids)
     }
 
-    /// Get all valid tool facts from Memory
+    /// Get all valid tool notes from Memory as `MemoryFact`s.
     ///
-    /// Returns facts ordered by updated_at descending.
-    /// Tool facts are system-level and use Owner namespace.
+    /// Returns entries ordered by updated_at descending.
     pub async fn get_tool_facts(&self) -> Result<Vec<MemoryFact>, AlephError> {
-        use crate::memory::NamespaceScope;
-        // Use a large limit to get all tools (typical systems have <100 tools)
-        // Tool facts are system-level, so use Owner namespace
-        self.db
-            .get_facts_by_type(NoteType::Tool, &NamespaceScope::Owner, "default", 1000)
-            .await
+
+        let entries = self
+            .indexer
+            .store()
+            .get_notes_by_category(TOOL_AGENT_ID, TOOL_CATEGORY, 1000)
+            .await?;
+
+        let mut facts = Vec::with_capacity(entries.len());
+        for entry in entries {
+            // Read the markdown file to reconstruct content
+            let file_path = self
+                .indexer
+                .memory_dir()
+                .join(TOOL_AGENT_ID)
+                .join(TOOL_CATEGORY)
+                .join(format!("{}.md", entry.filename));
+
+            let note = if let Ok(md) = tokio::fs::read_to_string(&file_path).await {
+                KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| {
+                    KnowledgeNote {
+                        title: entry.filename.clone(),
+                        category: TOOL_CATEGORY.to_string(),
+                        tags: vec![],
+                        facts: vec![],
+                        links: vec![],
+                        created_at: entry.created_at,
+                        updated_at: entry.updated_at,
+                        content_hash: entry.content_hash.clone(),
+                    }
+                })
+            } else {
+                KnowledgeNote {
+                    title: entry.filename.clone(),
+                    category: TOOL_CATEGORY.to_string(),
+                    tags: vec![],
+                    facts: vec![],
+                    links: vec![],
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                    content_hash: entry.content_hash.clone(),
+                }
+            };
+
+            // Default confidence: assume L1 (0.75) unless we can parse it from content
+            let fact = Self::note_to_fact(&note, 0.75);
+            facts.push(fact);
+        }
+
+        Ok(facts)
     }
 
-    /// Get a specific tool fact by name
+    /// Get a specific tool fact by name.
     pub async fn get_tool_fact(&self, name: &str) -> Result<Option<MemoryFact>, AlephError> {
-        let fact_id = Self::tool_fact_id(name);
-        self.db.get_fact(&fact_id).await
+
+        let note_path = Self::tool_note_path(name);
+        let entry = self
+            .indexer
+            .store()
+            .get_note_index(&note_path, TOOL_AGENT_ID)
+            .await?;
+
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+
+        let file_path = self
+            .indexer
+            .memory_dir()
+            .join(TOOL_AGENT_ID)
+            .join(TOOL_CATEGORY)
+            .join(format!("{}.md", entry.filename));
+
+        let note = if let Ok(md) = tokio::fs::read_to_string(&file_path).await {
+            KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| {
+                KnowledgeNote {
+                    title: entry.filename.clone(),
+                    category: TOOL_CATEGORY.to_string(),
+                    tags: vec![],
+                    facts: vec![],
+                    links: vec![],
+                    created_at: entry.created_at,
+                    updated_at: entry.updated_at,
+                    content_hash: entry.content_hash.clone(),
+                }
+            })
+        } else {
+            KnowledgeNote {
+                title: entry.filename.clone(),
+                category: TOOL_CATEGORY.to_string(),
+                tags: vec![],
+                facts: vec![],
+                links: vec![],
+                created_at: entry.created_at,
+                updated_at: entry.updated_at,
+                content_hash: entry.content_hash.clone(),
+            }
+        };
+
+        // Infer confidence from content: L0 content contains "sandboxed" style structured meta
+        // We use 0.95 as default for L0 (structured_meta), 0.75 for L1.
+        // Heuristic: if the note has substantial content (>80 chars), assume L0 confidence.
+        let content = note.facts.join("\n");
+        let confidence = if content.len() > 80 { 0.95 } else { 0.75 };
+
+        Ok(Some(Self::note_to_fact(&note, confidence)))
     }
 
-    /// Check if a tool fact exists and is valid
+    /// Check if a tool note exists.
     pub async fn tool_exists(&self, name: &str) -> Result<bool, AlephError> {
-        let fact = self.get_tool_fact(name).await?;
-        Ok(fact.map(|f| f.is_valid).unwrap_or(false))
+
+        let note_path = Self::tool_note_path(name);
+        let entry = self
+            .indexer
+            .store()
+            .get_note_index(&note_path, TOOL_AGENT_ID)
+            .await?;
+        Ok(entry.is_some())
     }
 
     // ========== Event Listeners ==========
@@ -327,12 +514,12 @@ impl ToolIndexCoordinator {
     /// Start listening to MCP Manager events
     ///
     /// This spawns a background task that listens for MCP events and
-    /// automatically re-syncs tool facts when tools change on MCP servers.
+    /// automatically re-syncs tool notes when tools change on MCP servers.
     ///
     /// Events handled:
     /// - `ServerStarted`: Re-sync tools for the started server
     /// - `ToolsChanged`: Re-sync tools for the affected server
-    /// - `ServerCrashed`: Invalidate tools for the crashed server
+    /// - `ServerCrashed`: Remove tools for the crashed server
     ///
     /// # Arguments
     /// * `mcp_handle` - Handle to the MCP Manager
@@ -404,7 +591,7 @@ impl ToolIndexCoordinator {
                                     error = %error,
                                     "MCP server crashed, invalidating tools"
                                 );
-                                // We could invalidate tools here, but for now just log
+                                // We could remove tools here, but for now just log
                                 // The tools will be re-synced when server restarts
                             }
                             McpManagerEvent::ServerRemoved { server_id, .. } => {
@@ -412,7 +599,7 @@ impl ToolIndexCoordinator {
                                     server_id = %server_id,
                                     "MCP server removed"
                                 );
-                                // Tools from this server should be invalidated
+                                // Tools from this server should be removed
                                 // but we need to know which tools belong to which server
                                 // This would require additional metadata tracking
                             }
@@ -440,12 +627,12 @@ impl ToolIndexCoordinator {
     /// Start listening to Skill Registry events
     ///
     /// This spawns a background task that listens for skill lifecycle events
-    /// and automatically re-syncs tool facts when skills are loaded/removed.
+    /// and automatically re-syncs tool notes when skills are loaded/removed.
     ///
     /// Events handled:
     /// - `AllReloaded`: Re-sync all skill tools
     /// - `SkillLoaded`: Sync the single skill as a tool
-    /// - `SkillRemoved`: Invalidate the skill's tool fact
+    /// - `SkillRemoved`: Remove the skill's tool note
     ///
     /// # Arguments
     /// * `registry` - The SkillsRegistry to listen to
@@ -513,7 +700,7 @@ impl ToolIndexCoordinator {
                             SkillSystemEvent::SkillRemoved { skill_id } => {
                                 tracing::info!(
                                     skill_id = %skill_id,
-                                    "Skill removed, invalidating tool fact"
+                                    "Skill removed, removing tool note"
                                 );
 
                                 // Skill tools use format "skill:{skill_id}" as tool name
@@ -522,7 +709,7 @@ impl ToolIndexCoordinator {
                                     tracing::error!(
                                         error = %e,
                                         skill_id = %skill_id,
-                                        "Failed to remove skill tool fact"
+                                        "Failed to remove skill tool note"
                                     );
                                 }
                             }
@@ -549,14 +736,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tool_fact_id() {
+    fn test_tool_note_path() {
         assert_eq!(
-            ToolIndexCoordinator::tool_fact_id("read_file"),
-            "tool:read_file"
+            ToolIndexCoordinator::tool_note_path("read_file"),
+            "tool/read_file"
         );
         assert_eq!(
-            ToolIndexCoordinator::tool_fact_id("search_code"),
-            "tool:search_code"
+            ToolIndexCoordinator::tool_note_path("search_code"),
+            "tool/search_code"
         );
     }
 
