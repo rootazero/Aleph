@@ -83,6 +83,7 @@
       "memory_vault": "Memory Vault",
       "scheduled_tasks": "Scheduled Tasks",
       "server_logs": "Server Logs",
+      "runtimes": "Runtimes",
       "teams": "Teams"
     }
   },

@@ -83,6 +83,7 @@
       "memory_vault": "记忆库",
       "scheduled_tasks": "定时任务",
       "server_logs": "服务器日志",
+      "runtimes": "运行时",
       "teams": "团队"
     }
   },

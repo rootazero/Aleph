@@ -8,5 +8,6 @@ pub mod home;
 pub mod logs;
 pub mod memory;
 pub mod settings;
+pub mod runtimes;
 pub mod tasks;
 pub mod teams;
