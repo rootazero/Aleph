@@ -12,6 +12,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::runtimes::{ensure_capability, ledger::CapabilityLedger};
 use crate::sync_primitives::RwLock;
 
 use super::error::BrowserError;
@@ -69,7 +70,18 @@ impl PlaywrightCliDriver {
             *self.binary_path.write().unwrap_or_else(|e| e.into_inner()) = Some(p.clone());
             return Ok(p);
         }
-        let resolved = resolve_via_fnm().await?;
+        // Slow path: ensure the full chain (fnm → node → playwright-cli + chromium + skills).
+        let runtimes_dir = crate::runtimes::get_runtimes_dir()
+            .map_err(|e| BrowserError::PlaywrightCliError(format!("runtimes dir: {e}")))?;
+        let ledger_path = runtimes_dir.join("ledger.json");
+        let ledger = Arc::new(tokio::sync::RwLock::new(
+            CapabilityLedger::load_or_create(ledger_path),
+        ));
+
+        let resolved = ensure_capability("playwright-cli", &ledger)
+            .await
+            .map_err(|e| BrowserError::PlaywrightCliError(format!("ensure playwright-cli: {e}")))?;
+
         *self.binary_path.write().unwrap_or_else(|e| e.into_inner()) = Some(resolved.clone());
         Ok(resolved)
     }
@@ -147,27 +159,6 @@ impl PlaywrightCliDriver {
     }
 }
 
-async fn resolve_via_fnm() -> Result<PathBuf, BrowserError> {
-    let output = Command::new("fnm")
-        .args(["exec", "--using", "lts", "--", "which", "playwright-cli"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,
-            _ => BrowserError::Io(e),
-        })?;
-    if !output.status.success() {
-        return Err(BrowserError::PlaywrightCliNotInstalled);
-    }
-    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path_str.is_empty() {
-        return Err(BrowserError::PlaywrightCliNotInstalled);
-    }
-    Ok(PathBuf::from(path_str))
-}
 
 fn classify_stderr(stderr: &str, exit_code: i32, session_key: &str) -> BrowserError {
     let s = stderr.to_lowercase();

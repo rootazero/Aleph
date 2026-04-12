@@ -1,5 +1,4 @@
 pub mod backend;
-pub mod bootstrap;
 pub mod chrome_mcp;
 pub mod chrome_mcp_backend;
 mod chrome_mcp_snapshot;
@@ -15,7 +14,6 @@ pub mod profile;
 pub mod types;
 
 pub use backend::BrowserBackend;
-pub use bootstrap::{BootstrapStatus, ComponentStatus};
 pub use chrome_mcp::ChromeMcpDriver;
 pub use chrome_mcp_backend::ChromeMcpBackend;
 pub use discovery::find_chromium;
