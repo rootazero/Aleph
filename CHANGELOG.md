@@ -12,23 +12,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BrowserBackend` trait reshaped to text-first (SnapshotOutput / ScreenshotOutput / String) for token-efficient LLM responses.
 - Gateway RPCs `browser.runtime_status`, `browser.install_runtime`, `browser.refresh_runtime` for UI-driven runtime management.
 - `BrowserInstallProgressEvent` streaming event for UI progress feedback.
+- Top-level Panel view "Runtimes" (sidebar entry) showing read-only runtime status for fnm, Node.js, uv, playwright-cli, and cargo placeholder.
+- Gateway RPCs `runtimes.list`, `runtimes.install`, `runtimes.refresh` for programmatic runtime management.
+- Windows install support via PowerShell (`winget install Schniz.fnm`, `irm astral.sh/uv/install.ps1 | iex`).
+- `cargo`/`rustup` placeholder spec entry (empty install array; reserves the name for future work).
+- `fnm alias <version> lts` post-install action (fixes the lts-alias bug from the prior playwright-cli migration).
 
 ### Changed
 - Managed browser automation now uses @playwright/cli instead of @playwright/mcp + chromiumoxide.
 - PDF generation (`pdf_generate` tool) migrated from chromiumoxide to `playwright-cli pdf`.
 - Browser configuration TOML key renamed from `[playwright_mcp]` to `[playwright_cli]` (serde alias kept for backward compat — old keys silently upgrade).
 - `ProfileConfig.headless` changed from `bool` to `Option<bool>` (None = follow global `playwright_cli.headless`).
+- `src/runtimes/` unified with `src/browser/bootstrap.rs` into one cross-OS runtime manager driven by a single `SPECS` table. Probe/install/LLM-hint now share one data source.
+- Runtime Status moved from Settings → Browser into a new top-level "Runtimes" Dashboard view (read-only informational).
+- Gateway event `BrowserInstallProgressEvent` renamed to `RuntimeInstallProgressEvent`; variant `GatewayEvent::BrowserInstallProgress` → `GatewayEvent::RuntimeInstallProgress`.
+- LLM runtime usage hints (injected into system prompt) now sourced from `SPECS[name].llm_hint` single field instead of a hardcoded match table.
+- Runtime install paths no longer use `~/.aleph/runtimes/` bespoke locations; defers to language-native tool defaults (`~/.local/share/fnm/`, `~/.local/bin/uv`, etc.).
 
 ### Removed
 - `chromiumoxide` dependency.
 - `@playwright/mcp` integration (`PlaywrightMcpDriver`, `PlaywrightMcpBackend`, `PlaywrightMcpConfig`).
 - `AriaSnapshot` / `AriaElement` / `ConsoleMessage` / `TabInfo` / `ScreenshotResult` structured types (replaced by text-first types).
 - Legacy `builtin_tools/browser/` folder (dead code, no external consumers).
+- `src/browser/bootstrap.rs` (merged into `src/runtimes/`, ~430 lines).
+- `src/gateway/handlers/browser_runtime.rs` (replaced by `handlers/runtimes.rs`).
+- `interfaces/webchat/src/views/settings/browser_runtime.rs` (replaced by `views/runtimes.rs` Dashboard view).
+- `BrowserRuntimeApi`, `RuntimeStatusResponse`, `ComponentStatus` from `interfaces/webchat/src/api/browser.rs` (moved/renamed to `api/runtimes.rs`).
+- Gateway RPCs `browser.runtime_status`, `browser.install_runtime`, `browser.refresh_runtime` (replaced by `runtimes.*`).
+- Legacy `aleph_paths` probe fields from `src/runtimes/probe.rs`. Old `~/.aleph/runtimes/python/default/` / `~/.aleph/runtimes/uv/uv` bundled directories are no longer detected.
+- Hardcoded `get_usage_hints()` function in `src/runtimes/capability.rs`.
+- `ffmpeg` and `yt-dlp` capability entries (scope now focuses on language-native runtime managers; these may return as separate SPECS entries in the future).
 
 ### Migration Notes
 - TOML `[playwright_mcp]` sections silently read as `[playwright_cli]`; old `command` / `args` fields are discarded. No action required.
 - First-run: open Panel → Settings → Browser, click "Install All" to bootstrap fnm + Node + @playwright/cli + Chromium.
 - Windows users: fnm auto-install is not supported v1; install manually via `winget install Schniz.fnm` before clicking "Install All".
+- If you previously had Aleph install Python/uv to `~/.aleph/runtimes/`, those bundled installs are now orphans. Probe will not find them. To clean up: `rm -rf ~/.aleph/runtimes/python ~/.aleph/runtimes/uv`; then open Panel → Runtimes → Install to reinstall into standard user paths.
+- Runtime status UI moved: Panel sidebar → Runtimes (new top-level entry). No longer under Settings → Browser.
+- The `runtimes.install` RPC currently returns an accepted-only placeholder pending event_bus wiring in Gateway startup; Install button in Panel triggers install but streaming progress logs will arrive in a follow-up.
 
 ## [2026.04.08]
 
