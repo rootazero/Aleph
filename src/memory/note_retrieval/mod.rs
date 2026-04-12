@@ -80,6 +80,87 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             scored_fact_from_index_entry(entry, agent_id, 1.0 - (i as f32 / total.max(1.0)))
         }).collect())
     }
+
+    /// Hybrid search across multiple agents. Results from each agent are
+    /// collected, merged, sorted by score, and truncated to `limit`.
+    ///
+    /// Used for "smart recall" — queries that should span multiple workspaces.
+    pub async fn retrieve_multi_agent(
+        &self,
+        query: &str,
+        agent_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
+        if agent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Embed once, reuse across agents
+        let embedding = self.embedder.embed(query).await?;
+        let dim = embedding.len() as u32;
+
+        let mut all_results: Vec<ScoredFact> = Vec::new();
+        // Over-fetch per agent so merged top-k is well-populated
+        let per_agent_limit = limit.max(10);
+
+        for agent_id in agent_ids {
+            let results = self
+                .indexer
+                .store()
+                .hybrid_search_notes(&embedding, query, agent_id, dim, per_agent_limit)
+                .await?;
+            for r in results {
+                all_results.push(r.to_scored_fact(agent_id));
+            }
+        }
+
+        // Sort by score DESC, take top-k
+        all_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        all_results.truncate(limit);
+        Ok(all_results)
+    }
+
+    /// Discover all agent IDs by listing subdirectories of the memory dir,
+    /// then retrieve across all of them.
+    ///
+    /// Returns empty if no agents or memory dir is unreadable.
+    pub async fn retrieve_all_agents(
+        &self,
+        query: &str,
+        memory_dir: &std::path::Path,
+        limit: usize,
+    ) -> Result<Vec<ScoredFact>, AlephError> {
+        let agent_ids = discover_agent_ids(memory_dir).await;
+        if agent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.retrieve_multi_agent(query, &agent_ids, limit).await
+    }
+}
+
+/// Discover agent IDs by reading directory names under memory_dir.
+async fn discover_agent_ids(memory_dir: &std::path::Path) -> Vec<String> {
+    let mut agents = Vec::new();
+    let mut dir = match tokio::fs::read_dir(memory_dir).await {
+        Ok(d) => d,
+        Err(_) => return agents,
+    };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if let Ok(ft) = entry.file_type().await {
+            if ft.is_dir() {
+                agents.push(name);
+            }
+        }
+    }
+    agents
 }
 
 /// Build a `ScoredFact` from a lightweight `NoteIndexEntry`.
@@ -148,6 +229,28 @@ mod tests {
     async fn text_retrieve_empty_returns_empty() {
         let (retrieval, _dir) = create_retrieval().await;
         let results = retrieval.text_retrieve("query", "default", 10).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retrieve_multi_agent_empty_agents_returns_empty() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let results = retrieval.retrieve_multi_agent("query", &[], 10).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retrieve_multi_agent_unknown_agents_returns_empty() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let agents = vec!["agent-a".to_string(), "agent-b".to_string()];
+        let results = retrieval.retrieve_multi_agent("query", &agents, 10).await.unwrap();
+        assert!(results.is_empty(), "No notes indexed yet → no results");
+    }
+
+    #[tokio::test]
+    async fn retrieve_all_agents_empty_dir_returns_empty() {
+        let (retrieval, dir) = create_retrieval().await;
+        let results = retrieval.retrieve_all_agents("query", dir.path(), 10).await.unwrap();
         assert!(results.is_empty());
     }
 }
