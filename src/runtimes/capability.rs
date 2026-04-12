@@ -51,42 +51,25 @@ impl RuntimeCapability {
                 output.push_str(&format!("- Executable: `{}`\n", path.display()));
             }
 
-            // Add usage hints based on runtime type
-            output.push_str(&Self::get_usage_hints(&cap.id));
+            // Add usage hint from SPECS
+            if let Some(hint) = get_hint_from_spec(&cap.id) {
+                output.push_str("- ");
+                output.push_str(hint);
+                output.push('\n');
+            }
             output.push('\n');
         }
 
         output
     }
-
-    /// Get usage hints for specific runtimes
-    fn get_usage_hints(runtime_id: &str) -> String {
-        get_usage_hints(runtime_id)
-    }
 }
 
-/// Get usage hints for a runtime by its identifier.
+/// Get the LLM usage hint for a runtime from its spec.
 ///
-/// Returns markdown-formatted hints describing how to use the runtime.
-/// Standalone function so it can be called from both `RuntimeCapability`
-/// methods and `format_entries_for_prompt`.
-fn get_usage_hints(runtime_id: &str) -> String {
-    match runtime_id {
-        "uv" => "- Use for Python script execution and package management\n\
-             - Install packages: `uv pip install <package>`\n"
-            .to_string(),
-        "fnm" | "node" => "- Use for Node.js/JavaScript execution\n\
-             - Run scripts with `node` command\n\
-             - Install packages with `npm install`\n"
-            .to_string(),
-        "ffmpeg" => "- Use for audio/video processing and conversion\n\
-             - Supports most media formats\n"
-            .to_string(),
-        "yt-dlp" => "- Use for downloading videos from YouTube and other sites\n\
-             - Can extract audio, subtitles, and metadata\n"
-            .to_string(),
-        _ => String::new(),
-    }
+/// Returns `None` when the capability has no hint (e.g. placeholder specs
+/// like `cargo` with `llm_hint: None`) or is not in `SPECS` at all.
+fn get_hint_from_spec(runtime_id: &str) -> Option<&'static str> {
+    crate::runtimes::specs::find_spec(runtime_id).and_then(|s| s.llm_hint)
 }
 
 /// Format capability entries for AI system prompt injection.
@@ -108,10 +91,11 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
         if !entry.bin_path.as_os_str().is_empty() {
             output.push_str(&format!("- Executable: {}\n", entry.bin_path.display()));
         }
-        // Reuse existing usage hints
-        let hints = get_usage_hints(&entry.name);
-        if !hints.is_empty() {
-            output.push_str(&hints);
+        // Reuse existing usage hints from SPECS
+        if let Some(hint) = get_hint_from_spec(&entry.name) {
+            output.push_str("- ");
+            output.push_str(hint);
+            output.push('\n');
         }
         output.push('\n');
     }
@@ -146,15 +130,14 @@ mod tests {
         assert!(result.contains("Python package manager"));
         assert!(result.contains("3.11.0"));
         assert!(result.contains("/path/to/python"));
-    }
-
-    #[test]
-    fn test_usage_hints() {
-        assert!(RuntimeCapability::get_usage_hints("uv").contains("Python"));
-        assert!(RuntimeCapability::get_usage_hints("node").contains("Node.js"));
-        assert!(RuntimeCapability::get_usage_hints("ffmpeg").contains("audio/video"));
-        assert!(RuntimeCapability::get_usage_hints("yt-dlp").contains("YouTube"));
-        assert!(RuntimeCapability::get_usage_hints("unknown").is_empty());
+        assert!(
+            result.contains("Python package manager (uv)"),
+            "should contain SPECS hint for uv"
+        );
+        assert!(
+            result.contains("uv pip install"),
+            "should contain uv pip install hint"
+        );
     }
 
     // -- format_entries_for_prompt tests -----------------------------------
@@ -186,32 +169,36 @@ mod tests {
             "should contain bin path"
         );
         assert!(
-            result.contains("Python"),
-            "should contain usage hints for uv"
+            result.contains("Python package manager (uv)"),
+            "should contain SPECS hint for uv"
+        );
+        assert!(
+            result.contains("uv pip install"),
+            "should contain uv pip install hint"
         );
     }
 
     #[test]
     fn test_format_entries_for_prompt_no_version() {
         let entry = CapabilityEntry {
-            name: "ffmpeg".to_string(),
-            bin_path: PathBuf::from("/usr/bin/ffmpeg"),
+            name: "uv".to_string(),
+            bin_path: PathBuf::from("/home/user/.aleph/runtimes/uv/bin/uv"),
             version: String::new(),
             status: super::super::ledger::CapabilityStatus::Ready,
-            source: super::super::ledger::CapabilitySource::System,
+            source: super::super::ledger::CapabilitySource::AlephManaged,
             last_probed: 0,
         };
         let entries: Vec<&CapabilityEntry> = vec![&entry];
         let result = format_entries_for_prompt(&entries);
 
-        assert!(result.contains("**ffmpeg**"));
+        assert!(result.contains("**uv**"));
         assert!(
             !result.contains("Version:"),
             "empty version should be omitted"
         );
         assert!(
-            result.contains("audio/video"),
-            "should contain usage hints for ffmpeg"
+            result.contains("Python package manager (uv)"),
+            "should contain SPECS hint for uv"
         );
     }
 
