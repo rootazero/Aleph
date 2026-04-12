@@ -121,11 +121,11 @@ impl CapabilityStrategy for MemoryStrategy {
     async fn health_check(&self) -> Result<bool> {
         // Check if database is accessible
         if let Some(db) = &self.memory_db {
-            // Try to get fact stats to verify db is healthy
-            match db.get_fact_stats().await {
-                Ok(stats) => {
+            use crate::memory::notes::store::NoteStore;
+            match db.count_all_notes().await {
+                Ok(total) => {
                     debug!(
-                        total_facts = stats.total_facts,
+                        total_notes = total,
                         "Memory database health check passed"
                     );
                 }
