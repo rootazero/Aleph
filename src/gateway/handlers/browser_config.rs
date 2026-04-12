@@ -18,7 +18,7 @@ pub(crate) struct BrowserConfigResponse {
     pub default_driver: String,
     /// Browser engine for managed mode: "chromium", "chrome", "brave", "edge"
     pub browser_engine: String,
-    /// Whether Playwright MCP runs in headless mode
+    /// Whether Playwright CLI runs in headless mode
     pub headless: bool,
     /// DevTools profile: "user" (user's Chrome) or "managed" (Aleph-managed instance)
     pub devtools_profile: String,
@@ -28,6 +28,12 @@ pub(crate) struct BrowserConfigResponse {
     pub blocked_domains: Vec<String>,
     /// SSRF: allowed domain patterns (whitelist mode)
     pub allowed_domains: Vec<String>,
+    /// Timeout (seconds) for navigate / wait_for_text
+    pub nav_timeout_secs: u64,
+    /// Timeout (seconds) for other actions (click/fill/type/etc)
+    pub action_timeout_secs: u64,
+    /// Persist session profile to disk (`--persistent` flag)
+    pub persistent_sessions: bool,
 }
 
 // =============================================================================
@@ -86,6 +92,9 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         block_private: browser.policy.block_private,
         blocked_domains: browser.policy.blocked_domains.clone(),
         allowed_domains: browser.policy.allowed_domains.clone(),
+        nav_timeout_secs: browser.playwright_cli.nav_timeout_secs,
+        action_timeout_secs: browser.playwright_cli.action_timeout_secs,
+        persistent_sessions: browser.playwright_cli.persistent_sessions,
     };
 
     match serde_json::to_value(&response) {
@@ -175,8 +184,11 @@ pub async fn handle_update(
             );
         }
 
-        // Update headless flag in playwright_cli
+        // Update playwright_cli fields
         browser.playwright_cli.headless = update.headless;
+        browser.playwright_cli.nav_timeout_secs = update.nav_timeout_secs;
+        browser.playwright_cli.action_timeout_secs = update.action_timeout_secs;
+        browser.playwright_cli.persistent_sessions = update.persistent_sessions;
 
         // Update SSRF policy
         browser.policy.block_private = update.block_private;
@@ -202,4 +214,26 @@ pub async fn handle_update(
     let _ = event_bus.publish_json(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_browser_config_exposes_timeouts() {
+        let cfg = Arc::new(RwLock::new(Config::default()));
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "browser.get".into(),
+            params: None,
+            id: Some(serde_json::json!(1)),
+        };
+        let resp = handle_get(req, cfg).await;
+        let v = resp.result.unwrap();
+        assert_eq!(v["nav_timeout_secs"], 30);
+        assert_eq!(v["action_timeout_secs"], 10);
+        assert_eq!(v["persistent_sessions"], false);
+    }
 }
