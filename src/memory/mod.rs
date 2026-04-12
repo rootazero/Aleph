@@ -33,6 +33,7 @@ pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
 pub mod noise_filter;
+pub mod note_retrieval;
 pub mod notes;
 pub mod query_expander;
 pub mod reembed;
@@ -50,7 +51,6 @@ pub mod store;
 pub mod transcript_indexer;
 pub mod value_estimator;
 pub mod vfs;
-pub mod wiki_sync;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
