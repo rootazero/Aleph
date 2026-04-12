@@ -52,6 +52,7 @@ pub mod auth;
 pub mod auth_tools;
 pub mod behavior_config;
 pub mod browser_config;
+pub mod browser_runtime;
 pub mod channel;
 pub mod chat;
 pub mod clawhub;
@@ -569,6 +570,25 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "agents.teams requires TeamStore — wire in Gateway startup".to_string(),
+            )
+        });
+
+        // Browser runtime handlers
+        // runtime_status and refresh_runtime are stateless (filesystem probe)
+        registry.register(
+            "browser.runtime_status",
+            browser_runtime::handle_runtime_status,
+        );
+        registry.register(
+            "browser.refresh_runtime",
+            browser_runtime::handle_refresh_runtime,
+        );
+        // install_runtime needs event_bus — placeholder wired in Gateway startup
+        registry.register("browser.install_runtime", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "browser.install_runtime requires event_bus — wire in Gateway startup".to_string(),
             )
         });
 

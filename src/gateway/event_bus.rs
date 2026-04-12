@@ -31,11 +31,30 @@ pub struct ConfigChangedEvent {
     pub timestamp: i64,
 }
 
+/// Browser runtime install progress event.
+///
+/// Published during `browser.install_runtime` to stream step-by-step progress
+/// to the Panel UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserInstallProgressEvent {
+    /// Install step: "fnm" | "node" | "playwright_cli" | "chromium" | "skills"
+    pub step: String,
+    /// Step status: "started" | "log" | "done" | "failed"
+    pub status: String,
+    /// Log line (present when status == "log")
+    pub log_line: Option<String>,
+    /// Error message (present when status == "failed")
+    pub error: Option<String>,
+    /// Milliseconds since Unix epoch
+    pub timestamp: i64,
+}
+
 /// Gateway Event types
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum GatewayEvent {
     ConfigChanged(ConfigChangedEvent),
+    BrowserInstallProgress(BrowserInstallProgressEvent),
 }
 
 /// A topic-aware event that can be filtered by subscribers
