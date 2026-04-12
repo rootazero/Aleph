@@ -925,14 +925,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             "skill_manage" => {
                 Box::pin(async move { self.skill_manage_tool.call_json(arguments).await })
             }
-            "wiki_manage" => {
-                // wiki_manage has been removed — redirect to note_manage
-                Box::pin(async move {
-                    Err(AlephError::tool(
-                        "wiki_manage has been removed. Use note_manage instead.",
-                    ))
-                })
-            }
             "note_manage" => {
                 if let Some(ref tool) = self.note_manage_tool {
                     let tool = tool.clone();
