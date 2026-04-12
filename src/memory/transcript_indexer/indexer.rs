@@ -1,6 +1,5 @@
 use crate::error::Result;
-use crate::memory::context::{FactSource, NoteType, MemoryFact, MemoryTier};
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 
@@ -73,67 +72,33 @@ impl TranscriptIndexer {
         let mut created_ids = Vec::with_capacity(chunks.len());
 
         for (i, chunk) in chunks.iter().enumerate() {
-            // Embed
-            let embedding = match self.embedder.embed(chunk).await {
-                Ok(emb) => emb,
-                Err(e) => {
-                    tracing::warn!(
-                        session_key,
-                        seq,
-                        chunk_idx = i,
-                        error = %e,
-                        "transcript indexer: embed failed, skipping chunk"
-                    );
-                    continue;
-                }
-            };
-
-            // Build fact
+            // Build path
             let path = if multi_chunk {
                 format!("aleph://transcript/{session_key}/{seq}_chunk{i}")
             } else {
                 format!("aleph://transcript/{session_key}/{seq}")
             };
-            let parent_path = format!("aleph://transcript/{session_key}");
 
-            let mut fact =
-                MemoryFact::new(chunk.clone(), NoteType::Transcript, vec![]);
-            fact.path = path;
-            fact.parent_path = parent_path;
-            fact.embedding = Some(embedding);
-            fact.embedding_model = self.embedder.model_name().to_string();
-            fact.fact_source = FactSource::Extracted;
-            fact.tier = MemoryTier::ShortTerm;
-            fact.namespace = namespace.to_string();
-            fact.agent = agent.to_string();
-
-            let fact_id = fact.id.clone();
-
-            // Insert
-            if let Err(e) = self.database.insert_fact(&fact).await {
-                tracing::warn!(
-                    session_key,
-                    seq,
-                    chunk_idx = i,
-                    error = %e,
-                    "transcript indexer: insert_fact failed, skipping chunk"
-                );
-                continue;
-            }
-
-            // Dual-write to raw_memories (non-fatal)
+            // Insert to raw_memories
             {
                 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-                let raw = RawMemory::new(fact.content.clone(), RawMemorySource::Transcript)
-                    .with_agent(&fact.agent)
+                let raw = RawMemory::new(chunk.clone(), RawMemorySource::Transcript)
+                    .with_agent(agent)
                     .with_session(session_key)
-                    .with_path(fact.path.clone());
+                    .with_path(path.clone());
+                let raw_id = raw.id.clone();
                 if let Err(e) = self.database.insert_raw_memory(&raw).await {
-                    tracing::warn!(error = %e, "Failed to dual-write transcript raw_memory (non-fatal)");
+                    tracing::warn!(
+                        session_key,
+                        seq,
+                        chunk_idx = i,
+                        error = %e,
+                        "transcript indexer: insert_raw_memory failed, skipping chunk"
+                    );
+                    continue;
                 }
+                created_ids.push(raw_id);
             }
-
-            created_ids.push(fact_id);
         }
 
         created_ids
