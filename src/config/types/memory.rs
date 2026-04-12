@@ -325,15 +325,6 @@ pub struct DreamingConfig {
     /// Days between weekly synthesis runs
     #[serde(default = "default_weekly_interval_days")]
     pub weekly_interval_days: u32,
-    /// DBSCAN epsilon (cosine distance threshold)
-    #[serde(default = "default_cluster_dbscan_eps")]
-    pub cluster_dbscan_eps: f32,
-    /// DBSCAN minimum samples per cluster
-    #[serde(default = "default_cluster_dbscan_min_samples")]
-    pub cluster_dbscan_min_samples: usize,
-    /// Drift detection similarity threshold
-    #[serde(default = "default_drift_similarity_threshold")]
-    pub drift_similarity_threshold: f32,
     /// Max drift pairs per dream run
     #[serde(default = "default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
@@ -355,9 +346,6 @@ impl Default for DreamingConfig {
             max_duration_seconds: default_dreaming_max_duration_seconds(),
             weekly_enabled: default_weekly_enabled(),
             weekly_interval_days: default_weekly_interval_days(),
-            cluster_dbscan_eps: default_cluster_dbscan_eps(),
-            cluster_dbscan_min_samples: default_cluster_dbscan_min_samples(),
-            drift_similarity_threshold: default_drift_similarity_threshold(),
             drift_max_pairs_per_run: default_drift_max_pairs_per_run(),
             synthesis_min_cluster_size: default_synthesis_min_cluster_size(),
             synthesis_max_insights: default_synthesis_max_insights(),
@@ -371,15 +359,6 @@ impl DreamingConfig {
     }
     pub fn weekly_interval_days(&self) -> u32 {
         self.weekly_interval_days
-    }
-    pub fn cluster_dbscan_eps(&self) -> f32 {
-        self.cluster_dbscan_eps
-    }
-    pub fn cluster_dbscan_min_samples(&self) -> usize {
-        self.cluster_dbscan_min_samples
-    }
-    pub fn drift_similarity_threshold(&self) -> f32 {
-        self.drift_similarity_threshold
     }
     pub fn drift_max_pairs_per_run(&self) -> usize {
         self.drift_max_pairs_per_run
@@ -535,17 +514,6 @@ pub fn default_weekly_interval_days() -> u32 {
     7
 }
 
-pub fn default_cluster_dbscan_eps() -> f32 {
-    0.3
-}
-
-pub fn default_cluster_dbscan_min_samples() -> usize {
-    2
-}
-
-pub fn default_drift_similarity_threshold() -> f32 {
-    0.85
-}
 
 pub fn default_drift_max_pairs_per_run() -> usize {
     20
@@ -701,9 +669,6 @@ mod tests {
         let config = DreamingConfig::default();
         assert!(config.weekly_enabled);
         assert_eq!(config.weekly_interval_days, 7);
-        assert!((config.cluster_dbscan_eps - 0.3).abs() < f32::EPSILON);
-        assert_eq!(config.cluster_dbscan_min_samples, 2);
-        assert!((config.drift_similarity_threshold - 0.85).abs() < f32::EPSILON);
         assert_eq!(config.drift_max_pairs_per_run, 20);
         assert_eq!(config.synthesis_min_cluster_size, 3);
         assert_eq!(config.synthesis_max_insights, 10);
@@ -714,15 +679,6 @@ mod tests {
         let config = DreamingConfig::default();
         assert_eq!(config.weekly_enabled(), config.weekly_enabled);
         assert_eq!(config.weekly_interval_days(), config.weekly_interval_days);
-        assert!((config.cluster_dbscan_eps() - config.cluster_dbscan_eps).abs() < f32::EPSILON);
-        assert_eq!(
-            config.cluster_dbscan_min_samples(),
-            config.cluster_dbscan_min_samples
-        );
-        assert!(
-            (config.drift_similarity_threshold() - config.drift_similarity_threshold).abs()
-                < f32::EPSILON
-        );
         assert_eq!(
             config.drift_max_pairs_per_run(),
             config.drift_max_pairs_per_run
