@@ -16,7 +16,7 @@ use crate::memory::context::{
 };
 use crate::memory::notes::{KnowledgeNote, NoteIndexer};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::skill::{SkillSystem, SkillSystemEvent};
 use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
@@ -318,11 +318,8 @@ impl ToolIndexCoordinator {
                             }
                         }
 
-                        // Also keep legacy fact store in sync for ToolRetrieval
-                        // (ToolRetrieval still reads from facts via get_facts_by_type)
-                        let _ = db_clone
-                            .update_fact_content(&note_id, &l2_result.description)
-                            .await;
+                        let _ = &db_clone;
+                        let _ = &note_id;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -356,10 +353,6 @@ impl ToolIndexCoordinator {
             .store()
             .remove_note_index(&note_path, TOOL_AGENT_ID)
             .await?;
-
-        // Backward-compat: also invalidate the legacy fact so ToolRetrieval doesn't find it
-        let fact_id = format!("tool:{name}");
-        let _ = self.db.invalidate_fact(&fact_id, "Tool removed from registry").await;
 
         Ok(())
     }

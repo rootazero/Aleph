@@ -290,58 +290,13 @@ impl MemorySearchTool {
 
         info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, scope = %scope, "Executing memory search");
 
-        // Step 1: Session-local search (when scope is "current_session" or "both")
-        let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
-            use crate::memory::context::MemoryScope;
-            use crate::memory::store::types::SearchFilter;
-            use crate::memory::store::MemoryStore;
-
-            let session_key = self.default_session_key.read().await.clone();
-            if session_key.is_empty() {
-                debug!("No active session key; skipping session-local search");
-                Vec::new()
-            } else {
-                let path_prefix = format!("aleph://session/{}/", session_key);
-                // Include both valid (active) and condensed (is_valid=false) summaries
-                let filter = SearchFilter::new()
-                    .with_scope(MemoryScope::SessionLocal)
-                    .with_path_prefix(&path_prefix);
-
-                debug!(session = %session_key, "Searching session-local summaries");
-                match MemoryStore::get_facts_by_path_prefix(
-                    &*self.database,
-                    &path_prefix,
-                    &filter,
-                    args.max_results * 2,
-                )
-                .await
-                {
-                    Ok(raw_facts) => {
-                        debug!(count = raw_facts.len(), "Session-local facts retrieved");
-                        raw_facts
-                            .into_iter()
-                            .map(|f| {
-                                let depth = extract_depth_from_path(&f.path);
-                                let status = if f.is_valid { "active" } else { "condensed" };
-                                FactResult {
-                                    content: f.content,
-                                    note_type: format!("SessionSummary(d{},{})", depth, status),
-                                    confidence: f.confidence,
-                                    similarity_score: 1.0, // path-matched, no vector score
-                                    path: f.path,
-                                }
-                            })
-                            .collect()
-                    }
-                    Err(e) => {
-                        debug!(error = %e, "Failed to fetch session-local facts, skipping");
-                        Vec::new()
-                    }
-                }
-            }
-        } else {
-            Vec::new()
-        };
+        // Step 1: Session-local search — DEPRECATED.
+        //
+        // Previously this queried the facts table for session summaries; after
+        // the notes migration, session summaries live in the raw_memories /
+        // notes pipeline and are surfaced through long-term retrieval.
+        let _ = scope;
+        let session_facts: Vec<FactResult> = Vec::new();
 
         // Step 2: Long-term memory retrieval (when scope is "all" or "both")
         let (
@@ -509,23 +464,10 @@ impl MemorySearchTool {
         facts.extend(long_term_facts);
         let transcripts = long_term_transcripts;
 
-        // Step 3: Compute path clusters
-        let mut path_clusters = cluster_facts_by_path(&facts, 3);
-        for cluster in &mut path_clusters {
-            // Try to load L1 overview from store via get_by_path
-            if let Ok(Some(l1)) = crate::memory::store::MemoryStore::get_by_path(
-                &*self.database,
-                &cluster.path,
-                &crate::memory::NamespaceScope::Owner,
-                &workspace_label,
-            )
-            .await
-            {
-                if l1.fact_source == crate::memory::FactSource::Summary {
-                    cluster.l1_overview = Some(l1.content);
-                }
-            }
-        }
+        // Step 3: Compute path clusters.
+        // L1 overview loading is DEPRECATED after the notes migration; the
+        // facts-table `get_by_path` lookup has been removed.
+        let path_clusters = cluster_facts_by_path(&facts, 3);
 
         // Notify success
         let cross_suffix = if !cross_workspace_results.is_empty() {

@@ -7,7 +7,7 @@
 use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
 use crate::error::{AlephError, Result};
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::{EmbeddingProvider, MemoryRetrieval};
 use crate::payload::{AgentPayload, Capability};

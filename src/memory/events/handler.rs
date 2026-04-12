@@ -3,8 +3,7 @@
 //! All fact mutations go through this handler:
 //! 1. Build MemoryEvent from command
 //! 2. Append to SQLite event store
-//! 3. Project to facts table via `project_to_store` (dual-write, legacy)
-//! 4. Project to notes store via `project_to_notes` (new primary write path)
+//! 3. Project to notes store via `project_to_notes` (primary write path)
 
 use crate::sync_primitives::Arc;
 use uuid::Uuid;
@@ -13,7 +12,7 @@ use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::resilience::database::StateDatabase;
 
@@ -21,8 +20,9 @@ use super::commands::*;
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
+    #[allow(dead_code)]
     memory_store: Option<MemoryBackend>,
-    /// NoteIndexer for the new notes-based dual-write path.
+    /// NoteIndexer for the notes write path.
     /// When present, every create/update/delete also writes to the notes filesystem layer.
     note_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
 }
@@ -32,47 +32,13 @@ impl MemoryCommandHandler {
         Self { db, memory_store, note_indexer: None }
     }
 
-    /// Attach a `NoteIndexer` to enable the notes dual-write path.
+    /// Attach a `NoteIndexer` to enable the notes write path.
     pub fn with_note_indexer(mut self, indexer: Arc<NoteIndexer<SqliteMemoryBackend>>) -> Self {
         self.note_indexer = Some(indexer);
         self
     }
 
-    /// Project the current event stream for a fact into the facts table.
-    ///
-    /// Called after appending an event to the event log. If `memory_store`
-    /// is None, this is a no-op (test mode).
-    async fn project_to_store(&self, fact_id: &str) -> Result<(), AlephError> {
-        let Some(ref store) = self.memory_store else {
-            return Ok(());
-        };
-
-        let events = self.db.get_memory_events_for_fact(fact_id).await?;
-        let projected = super::projector::EventProjector::fold_events_to_fact(&events)?;
-
-        match projected {
-            Some(fact) => {
-                // Try update first; if the fact doesn't exist yet, insert.
-                if store.get_fact(fact_id).await?.is_some() {
-                    if let Err(e) = store.update_fact(&fact).await {
-                        tracing::error!(fact_id, error = %e, "Dual-write: failed to update fact in store");
-                    }
-                } else if let Err(e) = store.insert_fact(&fact).await {
-                    tracing::error!(fact_id, error = %e, "Dual-write: failed to insert fact into store");
-                }
-            }
-            None => {
-                // Fact was deleted — remove from store
-                if let Err(e) = store.delete_fact(fact_id).await {
-                    tracing::error!(fact_id, error = %e, "Dual-write: failed to delete fact from store");
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Project a fact event into the notes layer (new primary write path).
+    /// Project a fact event into the notes layer (primary write path).
     ///
     /// Called after appending an event to the event log. When the projected
     /// fact is `Some`, writes/overwrites the corresponding markdown note. When
@@ -165,7 +131,6 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id).await?;
         self.project_to_notes(&fact_id).await?;
         Ok(fact_id)
     }
@@ -193,7 +158,6 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id_ref).await?;
         self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
@@ -214,7 +178,6 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id_ref).await?;
         self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
@@ -238,7 +201,6 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id_ref).await?;
         self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
@@ -270,7 +232,6 @@ impl MemoryCommandHandler {
         );
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id_ref).await?;
         self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
@@ -299,7 +260,6 @@ impl MemoryCommandHandler {
         let count = envelopes.len();
         self.db.append_memory_events(&envelopes).await?;
         for (fact_id, _, _) in &cmd.fact_ids_with_strength {
-            self.project_to_store(fact_id).await?;
             self.project_to_notes(fact_id).await?;
         }
         Ok(count)
@@ -320,7 +280,6 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id).await?;
         self.project_to_notes(&fact_id).await?;
         Ok(fact_id)
     }
@@ -339,7 +298,6 @@ impl MemoryCommandHandler {
             MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
-        self.project_to_store(&fact_id_ref).await?;
         self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
@@ -751,121 +709,6 @@ mod tests {
         } else {
             panic!("Expected FactConsolidated event");
         }
-    }
-
-    #[tokio::test]
-    async fn test_create_fact_dual_write() {
-        use crate::memory::store::MemoryStore;
-
-        let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
-        let store = crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap();
-        let store = Arc::new(store);
-        let handler = MemoryCommandHandler::new(db.clone(), Some(store.clone()));
-
-        let fact_id = handler
-            .create_fact(CreateFactCommand {
-                content: "Dual-write test".into(),
-                note_type: NoteType::Learning,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
-                path: "/test/dual".into(),
-                namespace: "owner".into(),
-                agent: "default".into(),
-                confidence: 0.9,
-                source: FactSource::Extracted,
-                source_memory_ids: vec![],
-                actor: EventActor::Agent,
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-
-        // Verify event log
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.event_type_tag(), "FactCreated");
-
-        // Verify facts table
-        let fact = store
-            .get_fact(&fact_id)
-            .await
-            .unwrap()
-            .expect("fact should exist in store");
-        assert_eq!(fact.content, "Dual-write test");
-        assert_eq!(fact.note_type, NoteType::Learning);
-    }
-
-    #[tokio::test]
-    async fn test_dual_write_lifecycle() {
-        use crate::memory::store::MemoryStore;
-
-        let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
-        let store = crate::memory::store::sqlite::SqliteMemoryBackend::in_memory().unwrap();
-        let store = Arc::new(store);
-        let handler = MemoryCommandHandler::new(db.clone(), Some(store.clone()));
-
-        // Create
-        let fact_id = handler
-            .create_fact(CreateFactCommand {
-                content: "Original".into(),
-                note_type: NoteType::Learning,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
-                path: "/test/lifecycle".into(),
-                namespace: "owner".into(),
-                agent: "default".into(),
-                confidence: 0.9,
-                source: FactSource::Extracted,
-                source_memory_ids: vec![],
-                actor: EventActor::Agent,
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-
-        // Update content
-        handler
-            .update_content(UpdateContentCommand {
-                fact_id: fact_id.clone(),
-                new_content: "Updated".into(),
-                reason: "test".into(),
-                actor: EventActor::User,
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-
-        let fact = store.get_fact(&fact_id).await.unwrap().unwrap();
-        assert_eq!(fact.content, "Updated");
-
-        // Invalidate
-        handler
-            .invalidate_fact(InvalidateFactCommand {
-                fact_id: fact_id.clone(),
-                reason: "outdated".into(),
-                actor: EventActor::System,
-                strength_at_invalidation: Some(0.5),
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-
-        let fact = store.get_fact(&fact_id).await.unwrap().unwrap();
-        assert!(!fact.is_valid);
-
-        // Delete
-        handler
-            .delete_fact(DeleteFactCommand {
-                fact_id: fact_id.clone(),
-                reason: "cleanup".into(),
-                actor: EventActor::User,
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-
-        let fact = store.get_fact(&fact_id).await.unwrap();
-        assert!(fact.is_none(), "Deleted fact should not exist in store");
     }
 
     #[tokio::test]

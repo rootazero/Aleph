@@ -106,18 +106,18 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db.get_raw_memories(params.agent_id.as_deref(), params.limit as usize) {
-        Ok(facts) => {
-            let entries: Vec<MemoryEntry> = facts
+    match db.get_raw_memories_dashboard(params.agent_id.as_deref(), params.limit as usize) {
+        Ok(memories) => {
+            let entries: Vec<MemoryEntry> = memories
                 .into_iter()
-                .map(|f| MemoryEntry {
-                    id: f.id,
-                    agent_id: f.agent,
+                .map(|m| MemoryEntry {
+                    id: m.id,
+                    agent_id: m.agent_id,
                     window_title: String::new(),
-                    user_input: f.content.clone(),
+                    user_input: m.content,
                     ai_output: String::new(),
-                    timestamp: f.created_at,
-                    similarity_score: f.similarity_score,
+                    timestamp: m.created_at,
+                    similarity_score: None,
                 })
                 .collect();
             JsonRpcResponse::success(request.id, json!({ "memories": entries }))

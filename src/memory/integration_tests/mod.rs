@@ -8,8 +8,6 @@
 //!
 //! Run with: cargo test --lib memory::integration_tests -- --ignored
 
-pub mod workspace_isolation;
-
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod integration_tests {

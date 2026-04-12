@@ -104,7 +104,6 @@ pub use reranker::{NoOpReranker, RerankResult, Reranker};
 pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{ScratchpadConfig, ScratchpadManager, SessionHistory};
-pub use store::PathEntry;
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
 };
