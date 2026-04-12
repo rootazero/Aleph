@@ -1,4 +1,3 @@
-mod actions;
 pub mod backend;
 pub mod bootstrap;
 pub mod chrome_mcp;
@@ -6,7 +5,6 @@ pub mod chrome_mcp_backend;
 mod chrome_mcp_snapshot;
 mod discovery;
 pub mod error;
-mod managed_backend;
 pub mod manager;
 pub mod network_policy;
 pub mod playwright_cli;
@@ -17,9 +15,6 @@ pub mod playwright_mcp;
 pub mod playwright_mcp_backend;
 
 pub mod profile;
-pub mod runtime;
-pub mod snapshot;
-pub mod snapshot_format;
 pub mod types;
 
 pub use backend::BrowserBackend;
@@ -28,10 +23,8 @@ pub use chrome_mcp::ChromeMcpDriver;
 pub use chrome_mcp_backend::ChromeMcpBackend;
 pub use discovery::find_chromium;
 pub use error::BrowserError;
-pub use managed_backend::ManagedBackend;
 pub use playwright_mcp::PlaywrightMcpDriver;
 pub use playwright_mcp_backend::PlaywrightMcpBackend;
-pub use runtime::BrowserRuntime;
 pub use types::{
     ActionTarget, BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
     SnapshotOutput, StorageKind, TabId,

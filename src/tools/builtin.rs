@@ -160,7 +160,9 @@ impl AlephToolServer {
     ///     .with_browser();
     /// ```
     pub fn with_browser(self) -> Self {
-        self.tool(BrowserTool::new())
+        // Legacy BrowserTool deleted during playwright-cli migration; Task 13 will
+        // recreate a new browser tool built on BrowserBackend + ProfileManager.
+        self
     }
 
     /// Register the platform-native desktop tool for the current OS build.

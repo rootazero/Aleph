@@ -5,7 +5,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
-use crate::browser::snapshot_format::{format_snapshot, SnapshotFormatOptions};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -61,22 +60,26 @@ impl AlephTool for BrowserSnapshotTool {
     type Output = BrowserSnapshotOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let opts = SnapshotFormatOptions {
-            interactive_only: args.interactive_only,
-            compact: args.compact,
-            max_chars: args.max_chars.or(Some(30_000)),
-            max_depth: None,
-        };
+        // Text-first: backend.snapshot() returns raw YAML/indented-tree text already.
+        // `interactive_only` / `compact` are no-ops now since the CLI controls snapshot shape.
+        let max_chars = args.max_chars.unwrap_or(30_000);
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
                 Ok(snap) => {
-                    let formatted = format_snapshot(&snap, &opts);
+                    let raw = snap.snapshot_text;
+                    let ref_count = raw.matches("[ref=").count();
+                    let (text, truncated) = if raw.chars().count() > max_chars {
+                        let truncated: String = raw.chars().take(max_chars).collect();
+                        (truncated, true)
+                    } else {
+                        (raw, false)
+                    };
                     Ok(BrowserSnapshotOutput {
                         success: true,
-                        snapshot: Some(formatted.text),
-                        truncated: formatted.truncated,
-                        ref_count: formatted.ref_count,
+                        snapshot: Some(text),
+                        truncated,
+                        ref_count,
                         message: Some(format!("Snapshot captured in profile '{}'", args.profile)),
                     })
                 }

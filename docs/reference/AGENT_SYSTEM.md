@@ -13,22 +13,21 @@ The Agent System implements the **Think → Act** loop, the heart of Aleph's int
 │                        Agent Loop                                │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   ┌──────────┐     ┌──────────┐     ┌──────────┐               │
-│   │ OBSERVE  │ ──▶ │  THINK   │ ──▶ │   ACT    │               │
-│   │          │     │          │     │          │               │
-│   │ • Input  │     │ • LLM    │     │ • Tools  │               │
-│   │ • Memory │     │ • Decide │     │ • Execute│               │
-│   │ • Context│     │ • Plan   │     │ • Output │               │
-│   └──────────┘     └──────────┘     └──────────┘               │
-│        ▲                                  │                     │
-│        │           ┌──────────┐           │                     │
-│        └────────── │ FEEDBACK │ ◀─────────┘                     │
-│                    │          │                                  │
-│                    │ • Eval   │                                  │
-│                    │ • Learn  │                                  │
-│                    │ • Compress│                                 │
-│                    └──────────┘                                  │
-│                                                                  │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│   │ PREPARE  │ ──▶ │  THINK   │ ──▶ │ RESOLVE  │ ──▶ │   ACT    │
+│   │          │     │          │     │          │     │          │
+│   │• Budget │     │ • LLM    │     │• Parse   │     │• Execute │
+│   │• Context│     │ • Decide │     │• Decision│     │• Tools  │
+│   │• Preflight│   │ • Plan   │     │          │     │          │
+│   └──────────┘     └──────────┘     └──────────┘     └──────────┘
+│                                                              │
+│                        ┌──────────┐                           │
+│                        │ FINALIZE│ ◀──────────────────────────┘
+│                        │          │
+│                        │• Eval   │
+│                        │• Compress│
+│                        │• Decision│
+│                        └──────────┘
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,55 +40,86 @@ The Agent System implements the **Think → Act** loop, the heart of Aleph's int
 ### Core Structure
 
 ```rust
-pub struct AgentLoop<T, E, C> {
-    thinker: Arc<T>,              // LLM decision maker
-    executor: Arc<E>,              // Tool executor
-    compressor: Arc<C>,            // Context compressor
-    pub config: LoopConfig,        // Loop configuration
-    overflow_detector: Option<Arc<OverflowDetector>>,
+pub struct AgentLoop {
+    provider: Arc<dyn AiProvider>,           // LLM provider
+    registry: Arc<LoopToolRegistry>,         // Tool definitions
+    safety: Arc<SafetyGuard>,              // Permission guard
+    stop_hook: Arc<StopHookHandler>,         // Stop hooks
+    compaction_pipeline: CompactionPipeline,  // Emergency compaction
+    preflight_pipeline: PreflightPipeline,  // Pre-flight context prep
+    config: LoopConfig,                      // Loop configuration
 }
 ```
 
 ### Key Components
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| `AgentLoop` | `agent_loop.rs` | Main loop controller |
-| `LoopConfig` | `config.rs` | Configuration options |
-| `LoopState` | `state.rs` | State machine |
-| `LoopGuards` | `guards.rs` | Pre-execution safety checks |
-| `OverflowDetector` | `overflow.rs` | Context window overflow detection |
-| `LoopCallback` | `callback.rs` | Event callbacks |
-| `MessageBuilder` | `message_builder/` | Prompt construction |
-| `SessionSync` | `session_sync.rs` | Session persistence |
+**Location**: `src/agent_loop/`
+
+| Component | File/Directory | Purpose |
+|-----------|----------------|---------|
+| `AgentLoop` | `loop_core.rs` | Main loop controller (4447 lines) |
+| `LoopConfig` | `loop_core.rs` | Configuration options |
+| `TurnState` | `loop_core.rs` | State machine enum |
+| `ToolPipeline` | `tool_pipeline.rs` | 7-stage tool execution pipeline |
+| `ToolOrchestrator` | `tool_orchestrator.rs` | Tool batch orchestration |
+| `ToolExecutionContext` | `tool_execution_context.rs` | Per-tool cancel/progress context |
+| `ContextBudget` | `context_budget/mod.rs` | Pressure sensing + directives |
+| `PreflightPipeline` | `context_budget/preflight.rs` | Pre-flight async context prep |
+| `CompactionPipeline` | `context_budget/pipeline.rs` | Emergency compaction stages |
+| `StreamingBridge` | `streaming_bridge.rs` | Streaming + delta management |
+| `SafetyGuard` | `safety.rs` | Permission enforcement |
+| `StopHookHandler` | `stop_hooks.rs` | Stop hook execution |
+| `TruncationRecovery` | `truncation_recovery.rs` | MaxTokens escalation recovery |
+| `LoopFactory` | `factory.rs` | Agent loop construction |
+| `AgentRuntime` | `agent_runtime.rs` | Runtime context + model resolution |
+| `ToolRegistry` | `tool.rs` | Tool definitions registry |
 
 ### State Machine
 
 ```
+TurnState enum (5 states):
+
 ┌─────────┐
-│  IDLE   │
+│ PREPARE │
 └────┬────┘
-     │ start()
+     │ budget computed
      ▼
 ┌─────────┐     ┌─────────┐     ┌─────────┐
-│OBSERVING│ ──▶ │THINKING │ ──▶ │ ACTING  │
+│  THINK  │ ──▶ │ RESOLVE │ ──▶ │   ACT   │
 └─────────┘     └────┬────┘     └────┬────┘
                      │               │
-                     │ no_action     │ tool_result
+                     │ EndTurn      │ tools complete
+                     │ no_action    │
                      ▼               ▼
                ┌─────────┐     ┌─────────┐
-               │RESPONDING│◀───│EVALUATING│
-               └────┬────┘     └─────────┘
-                    │
-                    ▼
-               ┌─────────┐
-               │COMPRESSING│
-               └────┬────┘
-                    │
-                    ▼
-               ┌─────────┐
-               │COMPLETED │
-               └─────────┘
+               │FINALIZE│     │FINALIZE│
+               └────┬────┘     └────┬────┘
+                    │               │
+                    ▼               ▼
+              ContinueLoop      ExitLoop
+
+TurnAdvance enum:
+  • Next(TurnState)    — advance to next state
+  • ContinueLoop       — restart with new turn
+  • ExitLoop(decision) — terminate loop
+  • Cancelled          — cancelled by token
+```
+
+### Turn Execution Flow
+
+```
+TurnExecution enum captures each state result:
+
+  Prepared(BudgetState)  ← TurnState::Prepare
+  Thought(ThinkTurnResult) ← TurnState::Think
+  Resolved(TurnResolve)    ← TurnState::Resolve
+    • Restart    — restart loop (error/nothing to do)
+    • Act(turn)  — proceed to tool execution
+    • Finalize(turn) — skip to finalize
+  Acted(TurnArtifacts) ← TurnState::Act
+  Finalized(LoopDecision) ← TurnState::Finalize
+    • Continue — loop again
+    • Exit(LoopExitDecision) — done
 ```
 
 ### Loop Events

@@ -37,7 +37,7 @@ pub mod arena;
 pub mod atomic_ops;
 pub mod automation_tool;
 pub mod bash_exec;
-pub mod browser;
+// pub mod browser; — deleted; Task 13 recreates with text-first design
 pub mod browser_tools;
 pub mod channel_manage;
 pub mod clawhub;
@@ -102,7 +102,7 @@ pub use arena::{
 pub use atomic_ops::{AtomicOpsArgs, AtomicOpsOutput, AtomicOpsTool};
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
 pub use bash_exec::{BashExecArgs, BashExecTool};
-pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};
+// pub use browser::*; — removed; Task 13 will re-export new types
 pub use channel_manage::{
     ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction,
 };

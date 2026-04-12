@@ -156,7 +156,6 @@ handlebars = "5.1"
 jsonpath-rust = "0.5"
 image = { workspace = true }
 base64 = { workspace = true }
-chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 async-trait = "0.1"
 anyhow = "1.0"
 futures = "0.3"
