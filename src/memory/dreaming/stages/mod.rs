@@ -1,6 +1,9 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
+pub mod daily_digest;
 pub mod types;
+
+pub use daily_digest::DailyDigestStage;
 
 // Old stages — temporarily disabled during migration to notes layer.
 // Task 8 will replace these with new note-based implementations.
