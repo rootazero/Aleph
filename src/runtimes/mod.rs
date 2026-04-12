@@ -21,11 +21,13 @@ mod capability;
 pub mod ensure;
 pub mod ledger;
 pub mod os;
+pub mod post_install;
 pub mod probe;
 pub mod specs;
 
 // Re-exports
 pub use capability::{format_entries_for_prompt, RuntimeCapability};
+pub use post_install::PostInstallError;
 pub use os::TargetOs;
 pub use specs::{
     find_spec, select_install, supported_on_current_os, InstallStrategy, OsInstall,
