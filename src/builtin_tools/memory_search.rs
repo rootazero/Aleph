@@ -14,6 +14,7 @@ use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
@@ -290,13 +291,46 @@ impl MemorySearchTool {
 
         info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, scope = %scope, "Executing memory search");
 
-        // Step 1: Session-local search — DEPRECATED.
+        // Step 1: Session-local search.
         //
-        // Previously this queried the facts table for session summaries; after
-        // the notes migration, session summaries live in the raw_memories /
-        // notes pipeline and are surfaced through long-term retrieval.
-        let _ = scope;
-        let session_facts: Vec<FactResult> = Vec::new();
+        // When scope is "current_session" or "both", query raw_memories for
+        // records stored under the active session's path prefix.
+        // This restores the search path that was gutted when the facts table
+        // was removed (Task 24); session data now lives in raw_memories.
+        let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
+            let session_key = self.default_session_key.read().await;
+            if session_key.is_empty() {
+                Vec::new()
+            } else {
+                // Resolve agent_id the same way long-term retrieval does below.
+                let agent_id = match &workspace_filter {
+                    crate::gateway::agent_env::AgentEnvFilter::Single(ws) => ws.clone(),
+                    _ => workspace_label.clone(),
+                };
+                let path_prefix = format!("aleph://session/{}/", *session_key);
+                let fetch_limit = args.max_results * 2;
+                let raws = self
+                    .database
+                    .get_raw_by_path_prefix(&path_prefix, &agent_id, fetch_limit)
+                    .await
+                    .unwrap_or_default();
+
+                let query_lower = args.query.to_lowercase();
+                raws.into_iter()
+                    .filter(|r| r.content.to_lowercase().contains(&query_lower))
+                    .take(args.max_results)
+                    .map(|raw| FactResult {
+                        content: raw.content,
+                        note_type: raw.source.as_str().to_string(),
+                        confidence: 1.0,
+                        similarity_score: 1.0,
+                        path: raw.path.unwrap_or_default(),
+                    })
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        };
 
         // Step 2: Long-term memory retrieval (when scope is "all" or "both")
         let (
