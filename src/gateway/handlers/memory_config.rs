@@ -117,13 +117,10 @@ pub async fn handle_retrieve_with_trace(request: JsonRpcRequest) -> JsonRpcRespo
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'query' parameter");
     }
 
-    let trace = crate::memory::retrieval_trace::RetrievalTrace::new(query, 0);
-
     JsonRpcResponse::success(
         request.id,
         json!({
             "query": query,
-            "trace": trace,
             "results": [],
             "status": "placeholder — full wiring pending",
         }),

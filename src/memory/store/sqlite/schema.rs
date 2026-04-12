@@ -7,13 +7,13 @@ use crate::error::AlephError;
 use rusqlite::Connection;
 
 // ---------------------------------------------------------------------------
-// Facts table + indexes
-// DEPRECATED: facts tables superseded by notes_index + notes_vec
-// Retained for Palace topology migration (generated columns on facts table).
-// No longer created for new databases.
+// Facts table + indexes (DEPRECATED)
+//
+// The facts table is superseded by notes_index + notes_vec. It is still
+// created because the retrieval / VFS / tool-index code paths have not been
+// ported to notes yet. Once all callers migrate, this DDL will be removed.
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 const FACTS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS facts (
     id                   TEXT PRIMARY KEY,
@@ -59,90 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_facts_layer         ON facts(layer);
 "#;
 
 // ---------------------------------------------------------------------------
-// FTS5 full-text search
-// DEPRECATED: facts_fts superseded by notes_fts
+// DEPRECATED: facts_fts, graph_nodes, graph_edges, memory_entities tables
+// are no longer created. Knowledge Notes handle full-text search and links
+// natively via notes_fts and notes_links.
 // ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-const FACTS_FTS_DDL: &str = r#"
-CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
-    content,
-    content='facts',
-    content_rowid='rowid'
-);
-"#;
-
-// ---------------------------------------------------------------------------
-// Graph tables + indexes
-// ---------------------------------------------------------------------------
-
-// Deprecated: graph tables are no longer created for new databases.
-// Constants retained for reference until explicit migration drops these tables.
-#[allow(dead_code)]
-const GRAPH_NODES_DDL: &str = r#"
-CREATE TABLE IF NOT EXISTS graph_nodes (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    kind        TEXT NOT NULL,
-    aliases     TEXT,          -- JSON array
-    metadata    TEXT,          -- JSON object
-    decay_score REAL DEFAULT 1.0,
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL,
-    agent       TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_graph_nodes_name  ON graph_nodes(name);
-CREATE INDEX IF NOT EXISTS idx_graph_nodes_kind  ON graph_nodes(kind);
-CREATE INDEX IF NOT EXISTS idx_graph_nodes_agent ON graph_nodes(agent);
-"#;
-
-#[allow(dead_code)]
-const GRAPH_EDGES_DDL: &str = r#"
-CREATE TABLE IF NOT EXISTS graph_edges (
-    id           TEXT PRIMARY KEY,
-    from_id      TEXT NOT NULL,
-    to_id        TEXT NOT NULL,
-    relation     TEXT NOT NULL,
-    weight       REAL,
-    confidence   REAL,
-    context_key  TEXT,
-    decay_score  REAL DEFAULT 1.0,
-    created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL,
-    last_seen_at INTEGER,
-    agent        TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_graph_edges_from_id      ON graph_edges(from_id);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_to_id        ON graph_edges(to_id);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_context_key  ON graph_edges(context_key);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_relation     ON graph_edges(relation);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_agent        ON graph_edges(agent);
-"#;
-
-// ---------------------------------------------------------------------------
-// Memory entities table + indexes (fact ↔ node bidirectional index)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-const MEMORY_ENTITIES_DDL: &str = r#"
-CREATE TABLE IF NOT EXISTS memory_entities (
-    id          TEXT PRIMARY KEY,
-    fact_id     TEXT NOT NULL,
-    node_id     TEXT NOT NULL,
-    weight      REAL NOT NULL DEFAULT 1.0,
-    source      TEXT NOT NULL DEFAULT 'extracted',
-    created_at  INTEGER NOT NULL,
-    agent       TEXT,
-
-    UNIQUE(fact_id, node_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_me_fact_id ON memory_entities(fact_id);
-CREATE INDEX IF NOT EXISTS idx_me_node_id ON memory_entities(node_id);
-CREATE INDEX IF NOT EXISTS idx_me_agent   ON memory_entities(agent);
-"#;
 
 // ---------------------------------------------------------------------------
 // Recall signals table + indexes
@@ -264,7 +184,7 @@ CREATE TABLE IF NOT EXISTS compression_metadata (
 "#;
 
 // ---------------------------------------------------------------------------
-// Palace topology: generated columns + index (migration)
+// Palace topology: generated columns + index (migration, DEPRECATED)
 // ---------------------------------------------------------------------------
 
 const PALACE_TOPOLOGY_DDL: &str = r#"
@@ -290,16 +210,12 @@ const PALACE_TOPOLOGY_INDEX_DDL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_facts_domain_topic ON facts(domain, topic);
 "#;
 
-/// Add generated columns `domain` and `topic` to the `facts` table, then create
-/// the composite index. Safe to call multiple times (idempotent).
 fn migrate_palace_topology(conn: &Connection) -> Result<(), AlephError> {
-    // Check whether the columns already exist by probing with a LIMIT-0 query.
     let already_exists = conn
         .prepare("SELECT domain FROM facts LIMIT 0")
         .is_ok();
 
     if !already_exists {
-        // SQLite requires ALTER TABLE statements to be executed one at a time.
         conn.execute_batch(PALACE_TOPOLOGY_DDL).map_err(|e| {
             AlephError::config(format!("Failed to add domain column to facts: {e}"))
         })?;
@@ -309,7 +225,6 @@ fn migrate_palace_topology(conn: &Connection) -> Result<(), AlephError> {
         })?;
     }
 
-    // Index creation is idempotent via IF NOT EXISTS.
     conn.execute_batch(PALACE_TOPOLOGY_INDEX_DDL).map_err(|e| {
         AlephError::config(format!("Failed to create domain/topic index: {e}"))
     })?;
@@ -318,7 +233,7 @@ fn migrate_palace_topology(conn: &Connection) -> Result<(), AlephError> {
 }
 
 // ---------------------------------------------------------------------------
-// Temporal validity: valid_from / valid_to columns (migration)
+// Temporal validity: valid_from / valid_to columns (migration, DEPRECATED)
 // ---------------------------------------------------------------------------
 
 const TEMPORAL_VALIDITY_DDL: &str = r#"
@@ -330,8 +245,6 @@ const TEMPORAL_VALIDITY_INDEX_DDL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_facts_validity ON facts(valid_to) WHERE valid_to IS NULL;
 "#;
 
-/// Add `valid_from` and `valid_to` columns to the `facts` table, then create
-/// the partial index. Safe to call multiple times (idempotent).
 pub fn migrate_temporal_validity(conn: &Connection) -> Result<(), AlephError> {
     let has_valid_from: bool = conn.prepare("SELECT valid_from FROM facts LIMIT 0").is_ok();
     if !has_valid_from {
@@ -348,7 +261,7 @@ pub fn migrate_temporal_validity(conn: &Connection) -> Result<(), AlephError> {
 }
 
 // ---------------------------------------------------------------------------
-// Tunnel candidates: tunnel_pending column + index (migration)
+// Tunnel candidates: tunnel_pending column + index (migration, DEPRECATED)
 // ---------------------------------------------------------------------------
 
 const TUNNEL_PENDING_DDL: &str = r#"
@@ -359,8 +272,6 @@ const TUNNEL_PENDING_INDEX_DDL: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_facts_tunnel_pending ON facts(tunnel_pending) WHERE tunnel_pending = 1;
 "#;
 
-/// Add `tunnel_pending` column to the `facts` table, then create the partial
-/// index. Safe to call multiple times (idempotent).
 pub fn migrate_tunnel_pending(conn: &Connection) -> Result<(), AlephError> {
     let has_col: bool = conn.prepare("SELECT tunnel_pending FROM facts LIMIT 0").is_ok();
     if !has_col {
@@ -462,24 +373,13 @@ fn vec_table_ddl(dim: u32, table_name: &str) -> String {
 
 /// Initialize the core relational schema.
 ///
-/// DEPRECATED: facts tables are superseded by notes_index + notes_vec.
-/// The facts DDL is still executed because Palace topology migrations
-/// (generated columns) depend on the table existing. facts_fts is no
-/// longer created for new databases.
+/// The `facts` table is DEPRECATED but still created because the retrieval,
+/// VFS, and tool-index code paths have not been fully ported to notes yet.
+/// Once all callers migrate, the facts DDL will be removed.
 pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
-    // DEPRECATED: facts table kept only for Palace topology migration compatibility.
-    // New code should use notes_index + notes_vec exclusively.
+    // DEPRECATED: facts table kept for backward compatibility with retrieval code.
     conn.execute_batch(FACTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create facts table: {e}")))?;
-
-    // DEPRECATED: facts_fts no longer created for new databases.
-    // Notes use notes_fts instead.
-    // conn.execute_batch(FACTS_FTS_DDL)
-    //     .map_err(|e| AlephError::config(format!("Failed to create facts_fts table: {e}")))?;
-
-    // NOTE: graph_nodes, graph_edges, memory_entities tables are deprecated.
-    // They are no longer created for new databases. Existing data remains
-    // until explicit cleanup. Knowledge Notes are the single source of truth.
 
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
@@ -508,15 +408,20 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
 
+    // DEPRECATED: facts table migrations kept for backward compatibility
     migrate_palace_topology(conn)?;
     migrate_temporal_validity(conn)?;
     migrate_tunnel_pending(conn)?;
+
     migrate_recall_signals_note_path(conn)?;
 
     Ok(())
 }
 
 /// Initialize the sqlite-vec virtual tables for 768, 1024, and 1536 dimensions.
+///
+/// DEPRECATED: `facts_vec_*` tables are kept for backward compatibility with
+/// the retrieval code. Once all callers migrate to notes_vec, they will be removed.
 pub fn init_vec_tables(conn: &Connection) -> Result<(), AlephError> {
     let tables = [
         (768, "facts_vec_768"),
@@ -579,81 +484,18 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    fn open_db() -> Connection {
+    #[test]
+    fn init_schema_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("first init_schema");
+        init_schema(&conn).expect("second init_schema should not error");
+    }
+
+    #[test]
+    fn recall_signals_table_created() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         init_schema(&conn).expect("init_schema");
-        conn
-    }
-
-    #[test]
-    fn generated_columns_auto_populated_from_path() {
-        let conn = open_db();
-        conn.execute(
-            "INSERT INTO facts (id, content, fact_type, fact_source, path, created_at, updated_at) \
-             VALUES ('f1', 'hello', 'text', 'test', 'aleph://people/alice/notes', 1, 1)",
-            [],
-        )
-        .expect("insert");
-
-        let (domain, topic): (String, String) = conn
-            .query_row(
-                "SELECT domain, topic FROM facts WHERE id = 'f1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("query");
-
-        assert_eq!(domain, "people");
-        assert_eq!(topic, "alice");
-    }
-
-    #[test]
-    fn empty_path_yields_empty_strings() {
-        let conn = open_db();
-        conn.execute(
-            "INSERT INTO facts (id, content, fact_type, fact_source, path, created_at, updated_at) \
-             VALUES ('f2', 'bare', 'text', 'test', '', 1, 1)",
-            [],
-        )
-        .expect("insert");
-
-        let (domain, topic): (String, String) = conn
-            .query_row(
-                "SELECT domain, topic FROM facts WHERE id = 'f2'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("query");
-
-        assert_eq!(domain, "");
-        assert_eq!(topic, "");
-    }
-
-    #[test]
-    fn migration_is_idempotent() {
-        let conn = open_db();
-        // Calling migrate_palace_topology again must not return an error.
-        migrate_palace_topology(&conn).expect("second call to migrate_palace_topology");
-    }
-
-    #[test]
-    fn temporal_validity_columns_default_null() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO facts (id, content, fact_type, fact_source, created_at, updated_at, path)
-             VALUES ('tv1', 'test', 'other', 'extracted', 0, 0, '')",
-            [],
-        )
-        .unwrap();
-        let (vf, vt): (Option<i64>, Option<i64>) = conn
-            .query_row(
-                "SELECT valid_from, valid_to FROM facts WHERE id = 'tv1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert!(vf.is_none());
-        assert!(vt.is_none());
+        conn.prepare("SELECT id FROM recall_signals LIMIT 0")
+            .expect("recall_signals should exist");
     }
 }

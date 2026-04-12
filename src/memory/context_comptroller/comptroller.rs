@@ -1,6 +1,11 @@
 use super::config::ComptrollerConfig;
 use super::types::{ArbitratedContext, TokenBudget};
-use crate::memory::fact_retrieval::RetrievalResult;
+use crate::memory::context::MemoryFact;
+
+/// Input to the comptroller: a list of retrieved facts to arbitrate.
+pub struct RetrievalResult {
+    pub facts: Vec<MemoryFact>,
+}
 
 pub struct ContextComptroller {
     config: ComptrollerConfig,

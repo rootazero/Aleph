@@ -43,7 +43,6 @@ pub mod scoring_pipeline;
 pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_resume;
-pub mod migration;
 pub mod store;
 pub mod transcript_indexer;
 pub mod value_estimator;

@@ -85,7 +85,6 @@ pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
 pub mod note_manage;
-pub mod wiki_manage;
 
 pub use acp_tools::{
     AcpDelegateArgs, AcpDelegateOutput, AcpDelegateTool, AcpSwitchArgs, AcpSwitchOutput,

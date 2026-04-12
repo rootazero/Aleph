@@ -15,24 +15,6 @@ pub use note_drift::NoteDriftStage;
 pub use note_lint::NoteLintStage;
 pub use note_synthesis::NoteSynthesisStage;
 
-// Old stages — temporarily disabled during migration to notes layer.
-// Task 8 will replace these with new note-based implementations.
-// #[cfg(never)]
-// pub mod consolidate;
-// #[cfg(never)]
-// pub mod decay;
-// #[cfg(never)]
-// pub mod drift;
-// #[cfg(never)]
-// pub mod summarize;
-// #[cfg(never)]
-// pub mod synthesis;
-// #[cfg(never)]
-// pub mod tunnel;
-// #[cfg(never)]
-// pub mod wiki_ingest;
-// #[cfg(never)]
-// pub mod wiki_lint;
 
 use async_trait::async_trait;
 

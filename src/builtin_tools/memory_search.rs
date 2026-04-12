@@ -16,9 +16,10 @@ use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
-    ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, RetrievalResult,
-    SqliteMemoryBackend, TokenBudget, TranscriptIndexer, DEFAULT_AGENT,
+    ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
+    TranscriptIndexer, DEFAULT_AGENT,
 };
+use crate::memory::context_comptroller::RetrievalResult;
 use crate::tools::AlephTool;
 
 /// Arguments for memory_search tool
@@ -83,6 +84,14 @@ pub struct MemorySearchOutput {
     /// Whether Smart Recall Phase 2 was triggered
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub smart_recall_triggered: bool,
+}
+
+/// A cross-workspace fact returned by Smart Recall Phase 2.
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossWorkspaceFact {
+    pub content: String,
+    pub source_workspace: String,
+    pub relevance_score: f32,
 }
 
 /// A cluster of facts under the same VFS path

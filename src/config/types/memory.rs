@@ -94,10 +94,6 @@ pub struct MemoryConfig {
     // ========================================
     // Hybrid Retrieval & Reranking
     // ========================================
-    /// Fusion strategy for hybrid retrieval (rrf or weighted).
-    #[serde(default)]
-    pub fusion_strategy: crate::memory::hybrid_retrieval::fusion::FusionStrategy,
-
     /// RRF constant k.
     #[serde(default = "default_rrf_k")]
     pub rrf_k: u32,
@@ -722,7 +718,6 @@ impl Default for MemoryConfig {
             graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
             // Hybrid retrieval & reranking
-            fusion_strategy: crate::memory::hybrid_retrieval::fusion::FusionStrategy::default(),
             rrf_k: default_rrf_k(),
             bm25_bonus_weight: default_bm25_bonus(),
             query_expansion_enabled: false,

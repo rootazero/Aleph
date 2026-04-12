@@ -450,8 +450,8 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "wiki_manage",
-        description: "Create, update, query, delete, and list wiki knowledge pages",
+        name: "note_manage",
+        description: "Create, update, append, query, list, or delete personal knowledge notes across all categories",
         requires_config: true,
     },
     // ACP delegate tool — unified delegation to any external CLI agent.
@@ -623,8 +623,8 @@ pub fn create_tool_boxed(
                 crate::skill::SkillSystem::new(),
             ),
         )),
-        // wiki_manage requires memory backend — cannot create standalone fallback
-        "wiki_manage" => None,
+        // note_manage requires memory backend — cannot create standalone fallback
+        "note_manage" => None,
         _ => None,
     }
 }

@@ -7,7 +7,7 @@ pub mod comptroller;
 pub mod config;
 pub mod types;
 
-pub use comptroller::ContextComptroller;
+pub use comptroller::{ContextComptroller, RetrievalResult};
 pub use config::ComptrollerConfig;
 pub use types::{ArbitratedContext, RetentionMode, TokenBudget};
 
@@ -15,7 +15,6 @@ pub use types::{ArbitratedContext, RetentionMode, TokenBudget};
 mod tests {
     use super::*;
     use crate::memory::context::{NoteType, MemoryFact};
-    use crate::memory::fact_retrieval::RetrievalResult;
 
     #[test]
     fn test_token_budget_enforcement() {

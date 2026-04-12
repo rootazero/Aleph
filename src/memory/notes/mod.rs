@@ -6,7 +6,6 @@
 
 pub mod extractor;
 pub mod indexer;
-pub mod migration;
 mod note;
 pub mod retrieval;
 pub mod search_result;
