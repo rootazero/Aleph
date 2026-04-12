@@ -204,6 +204,7 @@ pub struct FactEntry {
     pub id: String,
     pub agent_id: String,
     pub content: String,
+    #[serde(rename = "fact_type")]
     pub note_type: String,
     pub confidence: f32,
     pub is_valid: bool,
@@ -411,6 +412,7 @@ pub struct ReembedParams {
 pub async fn handle_reembed(
     request: JsonRpcRequest,
     db: MemoryBackend,
+    memory_dir: std::path::PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
     event_bus: Arc<GatewayEventBus>,
     reembed_state: Arc<ReembedState>,
@@ -477,6 +479,7 @@ pub async fn handle_reembed(
 
         let result = crate::memory::reembed::reembed_all(
             &db,
+            &memory_dir,
             &embedder,
             target_dim,
             32,

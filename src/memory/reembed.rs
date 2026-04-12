@@ -1,21 +1,22 @@
-//! Re-embedding migration for facts and raw memories.
+//! Re-embedding migration for notes.
 //!
 //! When the user switches embedding provider (different vector dimensions),
-//! this module re-embeds all existing data with the new provider. Designed
+//! this module re-embeds all existing note content with the new provider. Designed
 //! to be triggered manually via RPC, not at startup.
 
 use crate::error::AlephError;
-use crate::memory::context::MemoryFact;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::notes::store::NoteStore;
+use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
 
 /// Progress of a running re-embed operation.
 #[derive(Debug, Clone)]
 pub struct ReembedProgress {
-    /// Current phase: "facts" or "memories"
+    /// Current phase: "notes"
     pub phase: &'static str,
     /// Total items to process in this phase
     pub total: usize,
@@ -35,18 +36,17 @@ pub struct ReembedResult {
     pub errors: Vec<String>,
 }
 
-/// Re-embed all facts and raw memories to match the current provider's dimension.
+/// Re-embed all notes to match the current provider's dimension.
 ///
-/// Processes facts first, then memories. Each phase:
-/// 1. Loads all records
-/// 2. Filters those whose embedding dimension != target_dim
-/// 3. Serial batch embed (batch_size items per API call)
-/// 4. Updates via delete+insert (old vector columns cleared automatically)
+/// Discovers agent IDs by listing subdirectories of `memory_dir`, then
+/// loads each agent's note index entries, reads content from disk,
+/// and upserts embeddings.
 ///
 /// Cancellation: checked between batches via `cancel` flag.
-/// Idempotent: re-triggering only processes records still mismatched.
+/// Idempotent: safe to re-run; upsert_embedding overwrites existing vectors.
 pub async fn reembed_all(
     database: &MemoryBackend,
+    memory_dir: &Path,
     embedder: &Arc<dyn EmbeddingProvider>,
     target_dim: usize,
     batch_size: usize,
@@ -55,27 +55,49 @@ pub async fn reembed_all(
 ) -> Result<ReembedResult, AlephError> {
     let mut result = ReembedResult::default();
 
-    // Phase 1: Facts
-    info!(target_dim, batch_size, "[reembed] Starting facts phase");
-    reembed_facts(
-        database,
-        embedder,
-        target_dim,
-        batch_size,
-        &progress_tx,
-        &cancel,
-        &mut result,
-    )
-    .await?;
-
-    // Phase 2 (memories) removed — SessionStore no longer exists.
-    // Raw memories are stored in SessionManager's SQLite.
+    // Discover agent IDs from filesystem subdirectories of memory_dir
+    let agent_ids = discover_agent_ids(memory_dir).await;
 
     info!(
-        facts_updated = result.facts_updated,
-        facts_total = result.facts_total,
-        memories_updated = result.memories_updated,
-        memories_total = result.memories_total,
+        target_dim,
+        batch_size,
+        agents = agent_ids.len(),
+        "[reembed] Starting notes re-embed"
+    );
+
+    let mut total_notes = 0usize;
+    let mut total_updated = 0usize;
+    let mut total_errors: Vec<String> = Vec::new();
+
+    for agent_id in &agent_ids {
+        reembed_agent_notes(
+            database,
+            memory_dir,
+            embedder,
+            agent_id,
+            target_dim,
+            batch_size,
+            &progress_tx,
+            &cancel,
+            &mut total_notes,
+            &mut total_updated,
+            &mut total_errors,
+        )
+        .await?;
+
+        if cancel.load(Ordering::Relaxed) {
+            info!("[reembed] Cancelled");
+            break;
+        }
+    }
+
+    result.facts_total = total_notes;
+    result.facts_updated = total_updated;
+    result.errors = total_errors;
+
+    info!(
+        notes_updated = result.facts_updated,
+        notes_total = result.facts_total,
         errors = result.errors.len(),
         "[reembed] Migration complete"
     );
@@ -83,91 +105,137 @@ pub async fn reembed_all(
     Ok(result)
 }
 
-async fn reembed_facts(
+/// Discover agent IDs by listing immediate subdirectories of `memory_dir`.
+async fn discover_agent_ids(memory_dir: &Path) -> Vec<String> {
+    let mut agent_ids = Vec::new();
+    let mut read_dir = match tokio::fs::read_dir(memory_dir).await {
+        Ok(rd) => rd,
+        Err(_) => return agent_ids,
+    };
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        if let Ok(ft) = entry.file_type().await {
+            if ft.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    agent_ids.push(name.to_owned());
+                }
+            }
+        }
+    }
+    agent_ids
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reembed_agent_notes(
     database: &MemoryBackend,
+    memory_dir: &Path,
     embedder: &Arc<dyn EmbeddingProvider>,
+    agent_id: &str,
     target_dim: usize,
     batch_size: usize,
     progress_tx: &Option<tokio::sync::watch::Sender<ReembedProgress>>,
     cancel: &AtomicBool,
-    result: &mut ReembedResult,
+    total_notes: &mut usize,
+    total_updated: &mut usize,
+    errors: &mut Vec<String>,
 ) -> Result<(), AlephError> {
-    let all_facts = database.get_all_facts(true, None).await?;
+    let notes = database.list_notes(agent_id).await?;
+    *total_notes += notes.len();
 
-    let needs_reembed: Vec<&MemoryFact> = all_facts
-        .iter()
-        .filter(|f| {
-            f.embedding
-                .as_ref()
-                .map(|e| e.len() != target_dim)
-                .unwrap_or(true)
-        })
-        .collect();
-
-    result.facts_total = all_facts.len();
-
-    if needs_reembed.is_empty() {
-        info!("[reembed] All facts already have correct embeddings");
+    if notes.is_empty() {
         return Ok(());
     }
 
     info!(
-        needs_reembed = needs_reembed.len(),
-        "[reembed] Facts needing re-embedding"
+        agent = agent_id,
+        count = notes.len(),
+        "[reembed] Notes to re-embed for agent"
     );
 
     let mut completed = 0usize;
     let mut failed = 0usize;
 
-    for chunk in needs_reembed.chunks(batch_size) {
+    for chunk in notes.chunks(batch_size) {
         if cancel.load(Ordering::Relaxed) {
-            info!("[reembed] Cancelled during facts phase");
+            info!("[reembed] Cancelled during notes phase");
             break;
         }
 
-        let texts: Vec<&str> = chunk.iter().map(|f| f.content.as_str()).collect();
+        // Read file content for each note in the chunk
+        let mut texts: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut valid_notes = Vec::with_capacity(chunk.len());
 
-        match embedder.embed_batch(&texts).await {
+        for note in chunk {
+            let file_path = memory_dir
+                .join(agent_id)
+                .join(&note.category)
+                .join(format!("{}.md", note.filename));
+
+            match tokio::fs::read_to_string(&file_path).await {
+                Ok(content) => {
+                    texts.push(content);
+                    valid_notes.push(note);
+                }
+                Err(e) => {
+                    warn!(
+                        path = %file_path.display(),
+                        error = %e,
+                        "[reembed] Could not read note file, skipping"
+                    );
+                    failed += 1;
+                    errors.push(format!("note {}: read error: {}", note.path, e));
+                }
+            }
+        }
+
+        if texts.is_empty() {
+            continue;
+        }
+
+        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+
+        match embedder.embed_batch(&text_refs).await {
             Ok(embeddings) => {
-                for (fact, embedding) in chunk.iter().zip(embeddings.into_iter()) {
+                for (note, embedding) in valid_notes.iter().zip(embeddings.into_iter()) {
                     if embedding.len() != target_dim {
                         warn!(
-                            fact_id = %fact.id,
+                            path = %note.path,
                             got_dim = embedding.len(),
                             expected_dim = target_dim,
                             "[reembed] Dimension mismatch, skipping"
                         );
                         failed += 1;
-                        result.errors.push(format!(
-                            "fact {}: dimension mismatch (got {}, expected {})",
-                            fact.id,
+                        errors.push(format!(
+                            "note {}: dimension mismatch (got {}, expected {})",
+                            note.path,
                             embedding.len(),
                             target_dim
                         ));
                         continue;
                     }
-                    let mut updated_fact = (*fact).clone();
-                    updated_fact.embedding = Some(embedding);
-                    if let Err(e) = database.update_fact(&updated_fact).await {
-                        warn!(fact_id = %fact.id, error = %e, "[reembed] Failed to update fact");
+                    let dim = embedding.len() as u32;
+                    if let Err(e) = database
+                        .upsert_embedding(&note.path, agent_id, &embedding, dim)
+                        .await
+                    {
+                        warn!(path = %note.path, error = %e, "[reembed] Failed to upsert embedding");
                         failed += 1;
-                        result.errors.push(format!("fact {}: {}", fact.id, e));
+                        errors.push(format!("note {}: {}", note.path, e));
                     } else {
                         completed += 1;
                     }
                 }
             }
             Err(e) => {
-                warn!(batch_size = chunk.len(), error = %e, "[reembed] Batch embed failed");
-                failed += chunk.len();
-                result.errors.push(format!("facts batch: {}", e));
+                warn!(batch_size = text_refs.len(), error = %e, "[reembed] Batch embed failed");
+                failed += text_refs.len();
+                errors.push(format!("notes batch for agent {agent_id}: {}", e));
             }
         }
 
-        send_progress(progress_tx, "facts", result.facts_total, completed, failed);
+        send_progress(progress_tx, "notes", *total_notes, completed, failed);
     }
 
-    result.facts_updated = completed;
+    *total_updated += completed;
     Ok(())
 }
 
