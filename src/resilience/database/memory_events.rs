@@ -116,7 +116,9 @@ impl StateDatabase {
         let mut envelopes = Vec::new();
         for row in rows {
             let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            envelopes.push(row.into_envelope()?);
+            if let Some(envelope) = row.into_envelope()? {
+                envelopes.push(envelope);
+            }
         }
         Ok(envelopes)
     }
@@ -149,7 +151,9 @@ impl StateDatabase {
         let mut envelopes = Vec::new();
         for row in rows {
             let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            envelopes.push(row.into_envelope()?);
+            if let Some(envelope) = row.into_envelope()? {
+                envelopes.push(envelope);
+            }
         }
         Ok(envelopes)
     }
@@ -179,7 +183,9 @@ impl StateDatabase {
         let mut envelopes = Vec::new();
         for row in rows {
             let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            envelopes.push(row.into_envelope()?);
+            if let Some(envelope) = row.into_envelope()? {
+                envelopes.push(envelope);
+            }
         }
         Ok(envelopes)
     }
@@ -218,7 +224,9 @@ impl StateDatabase {
         let mut envelopes = Vec::new();
         for row in rows {
             let row = row.map_err(|e| AlephError::other(format!("Row error: {e}")))?;
-            envelopes.push(row.into_envelope()?);
+            if let Some(envelope) = row.into_envelope()? {
+                envelopes.push(envelope);
+            }
         }
         Ok(envelopes)
     }
@@ -300,14 +308,36 @@ impl MemoryEventRow {
 }
 
 impl MemoryEventRow {
-    fn into_envelope(self) -> Result<MemoryEventEnvelope, AlephError> {
-        let event: MemoryEvent = serde_json::from_str(&self.event_json)
-            .map_err(|e| AlephError::other(format!("Failed to deserialize event: {e}")))?;
+    /// Convert a DB row into an envelope.
+    ///
+    /// Forward-compat: when `event_json` fails to deserialize as a known
+    /// `MemoryEvent` variant (e.g. the variant has been removed in a later
+    /// schema), the row is **logged and skipped** rather than raising an
+    /// error. This keeps replay resilient to retired event variants.
+    ///
+    /// - `Ok(Some(envelope))` → row parsed successfully.
+    /// - `Ok(None)` → unknown/retired event variant; caller should skip.
+    /// - `Err(_)` → unrecoverable (malformed actor, etc.).
+    fn into_envelope(self) -> Result<Option<MemoryEventEnvelope>, AlephError> {
+        let event: MemoryEvent = match serde_json::from_str(&self.event_json) {
+            Ok(event) => event,
+            Err(e) => {
+                let row_snippet: String = self.event_json.chars().take(200).collect();
+                tracing::warn!(
+                    error = %e,
+                    fact_id = %self.fact_id,
+                    seq = self.seq,
+                    row_snippet = %row_snippet,
+                    "skipping unrecognized memory event during replay"
+                );
+                return Ok(None);
+            }
+        };
         let actor: EventActor = self
             .actor
             .parse()
             .map_err(|e: String| AlephError::other(e))?;
-        Ok(MemoryEventEnvelope {
+        Ok(Some(MemoryEventEnvelope {
             id: self.id,
             fact_id: self.fact_id,
             seq: self.seq,
@@ -315,7 +345,7 @@ impl MemoryEventRow {
             actor,
             timestamp: self.timestamp,
             correlation_id: self.correlation_id,
-        })
+        }))
     }
 }
 
@@ -527,6 +557,61 @@ mod tests {
             db.count_memory_events(Some("FactAccessed")).await.unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn replay_skips_unknown_event_variants() {
+        // Insert a raw row with an event_json that no MemoryEvent variant matches,
+        // simulating a retired variant written by an older schema version.
+        let db = make_test_db();
+
+        {
+            let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                r#"INSERT INTO memory_events
+                   (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+                params![
+                    "fact-orphan",
+                    1u64,
+                    "AbsolutelyNotAVariant",
+                    r#"{"AbsolutelyNotAVariant":{"foo":1}}"#,
+                    "agent",
+                    "pulse",
+                    1_700_000_000i64,
+                    Option::<String>::None,
+                ],
+            )
+            .unwrap();
+        }
+
+        // Replay must not error — unknown variant is logged and skipped.
+        let events = db
+            .get_memory_events_for_fact("fact-orphan")
+            .await
+            .expect("unknown variant must not error replay");
+        assert!(
+            events.is_empty(),
+            "unknown variant row must be skipped (got {} events)",
+            events.len()
+        );
+
+        // Also verify that known events still replay alongside skipped unknowns.
+        let known = MemoryEventEnvelope::new(
+            "fact-orphan".into(),
+            2,
+            make_created_event("fact-orphan"),
+            EventActor::Agent,
+            None,
+        );
+        db.append_memory_event(&known).await.unwrap();
+
+        let events = db
+            .get_memory_events_for_fact("fact-orphan")
+            .await
+            .expect("mixed replay must succeed");
+        assert_eq!(events.len(), 1, "only the known event should survive");
+        assert_eq!(events[0].seq, 2);
     }
 
     #[tokio::test]
