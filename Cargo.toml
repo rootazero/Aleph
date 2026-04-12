@@ -121,6 +121,8 @@ test-helpers = []
 control-plane = []
 # Disabled test modules awaiting rewrite
 disabled-tests = []
+# Native Rust Baileys WhatsApp implementation
+native-baileys = ["dep:baileys"]
 
 [dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
@@ -224,6 +226,7 @@ cron = "0.13"
 extism = "1.7"
 inquire = "0.7"
 loom = { version = "0.7", optional = true }
+baileys = { version = "0.20", optional = true }
 aleph-logging = { path = "shared/logging" }
 aleph-desktop = { path = "desktop/shared" }
 aleph-client = { path = "shared/client" }
