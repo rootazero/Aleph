@@ -33,6 +33,7 @@ pub use specs::{
     find_spec, select_install, supported_on_current_os, InstallStrategy, OsInstall,
     PostInstallAction, RuntimeSpec, SPECS,
 };
+pub use bootstrap::{dependencies, has_spec, install, BootstrapError, BootstrapResult};
 pub use ensure::ensure_capability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use probe::ProbeResult;

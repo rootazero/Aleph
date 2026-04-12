@@ -110,11 +110,9 @@ pub async fn ensure_capability(
         guard.update_status(capability, CapabilityStatus::Bootstrapping);
     }
 
-    // Run bootstrap (blocking shell in spawn_blocking)
-    let cap_owned = capability.to_string();
-    let bootstrap_result = tokio::task::spawn_blocking(move || bootstrap::bootstrap(&cap_owned))
+    // Run bootstrap (async dispatcher)
+    let bootstrap_result = bootstrap::install(capability)
         .await
-        .map_err(|e| AlephError::runtime(capability, format!("Bootstrap task panicked: {}", e)))?
         .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {}", e)))?;
 
     let now = SystemTime::now()
@@ -123,13 +121,7 @@ pub async fn ensure_capability(
         .as_secs();
 
     match bootstrap_result {
-        BootstrapResult::Success { bin_path } => {
-            // Re-probe to get version info
-            let version = {
-                let re_probe = probe::probe(capability);
-                re_probe.version.unwrap_or_default()
-            };
-
+        BootstrapResult::Success { bin_path, version } => {
             let mut guard = ledger.write().await;
             guard.update(CapabilityEntry {
                 name: capability.to_string(),
@@ -155,7 +147,7 @@ pub async fn ensure_capability(
                 capability,
                 format!(
                     "Bootstrap completed but binary not found at: {}",
-                    expected.display()
+                    expected
                 ),
             ))
         }
@@ -167,6 +159,25 @@ pub async fn ensure_capability(
                 format!(
                     "Failed to bootstrap {}. Error: {}. Please install manually.",
                     capability, stderr
+                ),
+            ))
+        }
+        BootstrapResult::Unsupported { capability: cap, reason } => {
+            let mut guard = ledger.write().await;
+            guard.update_status(capability, CapabilityStatus::Missing);
+            Err(AlephError::runtime(
+                capability,
+                format!("Capability '{}' is not supported: {}", cap, reason),
+            ))
+        }
+        BootstrapResult::UnknownCapability { capability: cap } => {
+            let mut guard = ledger.write().await;
+            guard.update_status(capability, CapabilityStatus::Missing);
+            Err(AlephError::runtime(
+                capability,
+                format!(
+                    "Capability '{}' not found and no bootstrap available",
+                    cap
                 ),
             ))
         }

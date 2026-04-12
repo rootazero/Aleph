@@ -1,124 +1,174 @@
-//! Shell-driven bootstrap for runtime installation
-//!
-//! Installation logic is embedded as shell scripts, not Rust code.
+//! Runtime install dispatcher driven by `super::specs::SPECS`.
 
-use crate::error::AlephError;
 use std::path::PathBuf;
-use std::process::Command;
 
-/// Result of a bootstrap attempt
+use tokio::process::Command;
+
+use super::os::TargetOs;
+use super::post_install;
+use super::probe;
+use super::specs::{find_spec, select_install, InstallStrategy};
+
+/// Result of a bootstrap attempt.
 #[derive(Debug)]
 pub enum BootstrapResult {
-    Success { bin_path: PathBuf },
-    PathNotFound { expected: PathBuf },
+    Success { bin_path: PathBuf, version: String },
+    PathNotFound { expected: String },
+    Failed { stderr: String },
+    Unsupported { capability: String, reason: String },
+    UnknownCapability { capability: String },
+}
+
+/// Errors raised by the dispatcher itself (not captured in BootstrapResult).
+#[derive(Debug, thiserror::Error)]
+pub enum BootstrapError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("post-install action failed: {0}")]
+    PostInstall(#[from] post_install::PostInstallError),
+    #[error("unknown capability: {0}")]
+    Unknown(String),
+}
+
+/// Install a capability according to its spec. Assumes `deps` are already Ready
+/// (caller handles dep resolution).
+pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
+    let spec = match find_spec(name) {
+        Some(s) => s,
+        None => {
+            return Ok(BootstrapResult::UnknownCapability {
+                capability: name.into(),
+            });
+        }
+    };
+
+    if spec.install.is_empty() {
+        return Ok(BootstrapResult::Unsupported {
+            capability: name.into(),
+            reason: "no install strategy defined for this capability".into(),
+        });
+    }
+
+    let current = TargetOs::current();
+    let os_install = match select_install(spec.install, current) {
+        Some(oi) => oi,
+        None => {
+            return Ok(BootstrapResult::Unsupported {
+                capability: name.into(),
+                reason: format!("no install strategy for {:?}", current),
+            });
+        }
+    };
+
+    // 1. Run the install command.
+    let cmd_result = match &os_install.strategy {
+        InstallStrategy::Shell(script) => run_shell(script).await?,
+        InstallStrategy::PowerShell(script) => run_powershell(script).await?,
+        InstallStrategy::Via { parent, subcommand } => run_via_parent(parent, subcommand).await?,
+        InstallStrategy::Unsupported { reason } => {
+            return Ok(BootstrapResult::Unsupported {
+                capability: name.into(),
+                reason: (*reason).into(),
+            });
+        }
+    };
+
+    if let CmdOutcome::Failed { stderr } = cmd_result {
+        return Ok(BootstrapResult::Failed { stderr });
+    }
+
+    // 2. Re-probe to get binary path + version.
+    let probe_result = probe::probe(name);
+    if !probe_result.found {
+        return Ok(BootstrapResult::PathNotFound {
+            expected: format!("binary '{}' on PATH after install", name),
+        });
+    }
+    let bin_path = probe_result.bin_path.clone().unwrap();
+
+    // 3. Run post-install actions.
+    for action in spec.post_install {
+        post_install::run(action, &bin_path).await?;
+    }
+
+    Ok(BootstrapResult::Success {
+        bin_path,
+        version: probe_result.version.unwrap_or_default(),
+    })
+}
+
+/// Whether a bootstrap spec exists for this capability.
+pub fn has_spec(capability: &str) -> bool {
+    find_spec(capability).is_some()
+}
+
+/// Dependencies that must be Ready before installing this capability.
+pub fn dependencies(capability: &str) -> &'static [&'static str] {
+    find_spec(capability).map(|s| s.deps).unwrap_or(&[])
+}
+
+enum CmdOutcome {
+    Success,
     Failed { stderr: String },
 }
 
-struct BootstrapSpec {
-    capability: &'static str,
-    script_macos: &'static str,
-    script_linux: &'static str,
-    expected_paths: &'static [&'static str],
-}
-
-const BOOTSTRAP_SPECS: &[BootstrapSpec] = &[
-    BootstrapSpec {
-        capability: "uv",
-        script_macos: "curl -LsSf https://astral.sh/uv/install.sh | sh",
-        script_linux: "curl -LsSf https://astral.sh/uv/install.sh | sh",
-        expected_paths: &["~/.local/bin/uv", "~/.cargo/bin/uv"],
-    },
-    BootstrapSpec {
-        capability: "python",
-        script_macos: "~/.local/bin/uv python install 3.12 && ~/.local/bin/uv venv ~/.aleph/runtimes/python/default --python 3.12",
-        script_linux: "~/.local/bin/uv python install 3.12 && ~/.local/bin/uv venv ~/.aleph/runtimes/python/default --python 3.12",
-        expected_paths: &["~/.aleph/runtimes/python/default/bin/python3"],
-    },
-    BootstrapSpec {
-        capability: "node",
-        script_macos: "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell && eval \"$(~/.local/share/fnm/fnm env)\" && ~/.local/share/fnm/fnm install --lts",
-        script_linux: "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell && eval \"$(~/.local/share/fnm/fnm env)\" && ~/.local/share/fnm/fnm install --lts",
-        expected_paths: &["~/.local/share/fnm/aliases/default/bin/node", "~/.fnm/aliases/default/bin/node"],
-    },
-    BootstrapSpec {
-        capability: "ffmpeg",
-        script_macos: "brew install ffmpeg 2>/dev/null || echo 'Please install ffmpeg manually: brew install ffmpeg'",
-        script_linux: "apt-get install -y ffmpeg 2>/dev/null || echo 'Please install ffmpeg manually: sudo apt-get install ffmpeg'",
-        expected_paths: &["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"],
-    },
-    BootstrapSpec {
-        capability: "yt-dlp",
-        script_macos: "~/.local/bin/uv tool install yt-dlp",
-        script_linux: "~/.local/bin/uv tool install yt-dlp",
-        expected_paths: &["~/.local/bin/yt-dlp"],
-    },
-];
-
-/// Dependencies that must be bootstrapped first
-pub fn dependencies(capability: &str) -> &'static [&'static str] {
-    match capability {
-        "python" => &["uv"],
-        "yt-dlp" => &["uv"],
-        _ => &[],
-    }
-}
-
-/// Execute bootstrap for a capability via shell
-pub fn bootstrap(capability: &str) -> Result<BootstrapResult, AlephError> {
-    let spec = BOOTSTRAP_SPECS
-        .iter()
-        .find(|s| s.capability == capability)
-        .ok_or_else(|| AlephError::runtime(capability, "No bootstrap spec found"))?;
-
-    let script = if cfg!(target_os = "macos") {
-        spec.script_macos
-    } else {
-        spec.script_linux
-    };
-
-    tracing::info!("Bootstrapping {} via shell...", capability);
-
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .output()
-        .map_err(|e| {
-            AlephError::runtime(capability, format!("Failed to execute bootstrap: {}", e))
-        })?;
-
+async fn run_shell(script: &str) -> Result<CmdOutcome, BootstrapError> {
+    let output = Command::new("sh").args(["-c", script]).output().await?;
     if output.status.success() {
-        for expected in spec.expected_paths {
-            let expanded = expand_tilde(expected);
-            if expanded.exists() {
-                tracing::info!("Bootstrap {} succeeded: {}", capability, expanded.display());
-                return Ok(BootstrapResult::Success { bin_path: expanded });
-            }
-        }
-        let expected = spec
-            .expected_paths
-            .first()
-            .map(|p| expand_tilde(p))
-            .unwrap_or_else(|| PathBuf::from(format!("<unknown path for {}>", capability)));
-        Ok(BootstrapResult::PathNotFound { expected })
+        Ok(CmdOutcome::Success)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        tracing::warn!("Bootstrap {} failed: {}", capability, stderr);
-        Ok(BootstrapResult::Failed { stderr })
+        Ok(CmdOutcome::Failed {
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        })
     }
 }
 
-/// Has a bootstrap spec for this capability
-pub fn has_spec(capability: &str) -> bool {
-    BOOTSTRAP_SPECS.iter().any(|s| s.capability == capability)
+async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
+    let output = Command::new("powershell")
+        .args(["-Command", script])
+        .output()
+        .await?;
+    if output.status.success() {
+        Ok(CmdOutcome::Success)
+    } else {
+        Ok(CmdOutcome::Failed {
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        })
+    }
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
+async fn run_via_parent(
+    parent: &str,
+    subcommand: &[&str],
+) -> Result<CmdOutcome, BootstrapError> {
+    let output = match parent {
+        "fnm" => {
+            Command::new("fnm")
+                .args(subcommand)
+                .output()
+                .await?
         }
+        "node" => {
+            // Wrap in `fnm exec --using lts --` to get a Node shell with PATH.
+            let mut args: Vec<&str> = vec!["exec", "--using", "lts", "--"];
+            args.extend(subcommand.iter().copied());
+            Command::new("fnm").args(&args).output().await?
+        }
+        "uv" => Command::new("uv").args(subcommand).output().await?,
+        "cargo" => Command::new("cargo").args(subcommand).output().await?,
+        _ => {
+            return Ok(CmdOutcome::Failed {
+                stderr: format!("unknown Via parent: {}", parent),
+            });
+        }
+    };
+    if output.status.success() {
+        Ok(CmdOutcome::Success)
+    } else {
+        Ok(CmdOutcome::Failed {
+            stderr: String::from_utf8_lossy(&output.stderr).into(),
+        })
     }
-    PathBuf::from(path)
 }
 
 #[cfg(test)]
@@ -126,33 +176,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dependencies() {
-        assert_eq!(dependencies("python"), &["uv"]);
-        assert_eq!(dependencies("yt-dlp"), &["uv"]);
-        assert!(dependencies("ffmpeg").is_empty());
-        assert!(dependencies("uv").is_empty());
+    fn test_has_spec_known() {
+        assert!(has_spec("fnm"));
+        assert!(has_spec("node"));
+        assert!(has_spec("playwright-cli"));
     }
 
     #[test]
-    fn test_has_spec() {
-        assert!(has_spec("uv"));
-        assert!(has_spec("python"));
-        assert!(has_spec("node"));
-        assert!(has_spec("ffmpeg"));
-        assert!(has_spec("yt-dlp"));
+    fn test_has_spec_unknown() {
         assert!(!has_spec("ruby"));
     }
 
     #[test]
-    fn test_expand_tilde() {
-        let expanded = expand_tilde("~/.local/bin/uv");
-        assert!(!expanded.to_string_lossy().contains('~'));
-        assert!(expanded.to_string_lossy().contains(".local/bin/uv"));
+    fn test_dependencies_from_specs() {
+        assert_eq!(dependencies("fnm"), &[] as &[&str]);
+        assert_eq!(dependencies("node"), &["fnm"]);
+        assert_eq!(dependencies("playwright-cli"), &["node"]);
     }
 
-    #[test]
-    fn test_expand_tilde_absolute() {
-        let expanded = expand_tilde("/usr/local/bin/ffmpeg");
-        assert_eq!(expanded, PathBuf::from("/usr/local/bin/ffmpeg"));
+    #[tokio::test]
+    async fn test_install_unknown_capability() {
+        let result = install("totally-unknown-capability").await.unwrap();
+        assert!(matches!(result, BootstrapResult::UnknownCapability { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_install_empty_install_array_returns_unsupported() {
+        let result = install("cargo").await.unwrap();
+        assert!(matches!(result, BootstrapResult::Unsupported { .. }));
     }
 }
