@@ -52,7 +52,7 @@ pub mod auth;
 pub mod auth_tools;
 pub mod behavior_config;
 pub mod browser_config;
-pub mod browser_runtime;
+pub mod runtimes;
 pub mod channel;
 pub mod chat;
 pub mod clawhub;
@@ -127,6 +127,18 @@ use std::pin::Pin;
 use super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
 };
+
+/// Create an ad-hoc `CapabilityLedger` for stateless runtime handlers.
+///
+/// Each call loads (or creates) the ledger from `~/.aleph/runtimes/ledger.json`.
+/// This avoids threading shared state through the registry while remaining correct —
+/// the ledger is persisted on disk, so concurrent callers see the same data.
+fn make_runtime_ledger() -> Result<std::sync::Arc<tokio::sync::RwLock<crate::runtimes::ledger::CapabilityLedger>>, String> {
+    let dir = crate::runtimes::get_runtimes_dir()
+        .map_err(|e| format!("runtimes dir: {e}"))?;
+    let ledger = crate::runtimes::ledger::CapabilityLedger::load_or_create(dir.join("ledger.json"));
+    Ok(std::sync::Arc::new(tokio::sync::RwLock::new(ledger)))
+}
 
 /// Resolve a secret from the vault by its full key. Returns `None` on missing or error.
 pub(crate) fn resolve_vault_secret(key: &str, vault: &SharedTokenManager) -> Option<String> {
@@ -573,22 +585,27 @@ impl HandlerRegistry {
             )
         });
 
-        // Browser runtime handlers
-        // runtime_status and refresh_runtime are stateless (filesystem probe)
-        registry.register(
-            "browser.runtime_status",
-            browser_runtime::handle_runtime_status,
-        );
-        registry.register(
-            "browser.refresh_runtime",
-            browser_runtime::handle_refresh_runtime,
-        );
-        // install_runtime needs event_bus — placeholder wired in Gateway startup
-        registry.register("browser.install_runtime", |req| async move {
+        // Runtime capability handlers (ad-hoc ledger per call — no shared state required)
+        registry.register("runtimes.list", |req| async move {
+            let ledger = match make_runtime_ledger() {
+                Ok(l) => l,
+                Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
+            };
+            runtimes::handle_list(req, ledger).await
+        });
+        registry.register("runtimes.refresh", |req| async move {
+            let ledger = match make_runtime_ledger() {
+                Ok(l) => l,
+                Err(e) => return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e),
+            };
+            runtimes::handle_refresh(req, ledger).await
+        });
+        // runtimes.install needs event_bus — placeholder wired in Gateway startup
+        registry.register("runtimes.install", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "browser.install_runtime requires event_bus — wire in Gateway startup".to_string(),
+                "runtimes.install requires event_bus — wire in Gateway startup".to_string(),
             )
         });
 
