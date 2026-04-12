@@ -108,4 +108,13 @@ pub trait RawMemoryStore: Send + Sync {
 
     /// Count unprocessed raw memories for an agent.
     async fn count_unprocessed(&self, agent_id: &str) -> Result<usize, AlephError>;
+
+    /// Get raw memories whose `path` starts with the given prefix, scoped to an agent.
+    /// Used for session data retrieval (e.g. "aleph://session/{id}/").
+    async fn get_raw_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError>;
 }

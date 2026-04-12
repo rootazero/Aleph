@@ -142,6 +142,39 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         Ok(count.max(0) as usize)
     }
+
+    async fn get_raw_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let pattern = format!("{path_prefix}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, agent_id, session_id, path, layer, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE path LIKE ?1 AND agent_id = ?2 \
+                 ORDER BY created_at ASC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| AlephError::config(format!("get_raw_by_path_prefix prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![pattern, agent_id, limit as i64], row_to_raw_memory)
+            .map_err(|e| AlephError::config(format!("get_raw_by_path_prefix query: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(
+                row.map_err(|e| AlephError::config(format!("get_raw_by_path_prefix row: {e}")))?,
+            );
+        }
+        Ok(results)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,5 +261,70 @@ mod tests {
             results[0].attachment_text.as_deref(),
             Some("attachment content here")
         );
+    }
+
+    #[tokio::test]
+    async fn get_raw_by_path_prefix_filters_by_prefix_and_agent() {
+        let backend = make_backend();
+
+        let r1 = RawMemory::new("session a msg1".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://session/sess-a/d0/1")
+            .with_agent("default");
+        let r2 = RawMemory::new("session b msg1".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://session/sess-b/d0/1")
+            .with_agent("default");
+        let r3 = RawMemory::new("other agent".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://session/sess-a/d0/2")
+            .with_agent("other");
+
+        backend.insert_raw_memory(&r1).await.unwrap();
+        backend.insert_raw_memory(&r2).await.unwrap();
+        backend.insert_raw_memory(&r3).await.unwrap();
+
+        let results = backend
+            .get_raw_by_path_prefix("aleph://session/sess-a/", "default", 10)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1, "Should only find sess-a for default agent");
+        assert_eq!(results[0].content, "session a msg1");
+    }
+
+    #[tokio::test]
+    async fn get_raw_by_path_prefix_empty_result() {
+        let backend = make_backend();
+
+        let results = backend
+            .get_raw_by_path_prefix("aleph://session/nonexistent/", "default", 10)
+            .await
+            .unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_raw_by_path_prefix_ordered_by_created_at() {
+        let backend = make_backend();
+
+        let mut r1 = RawMemory::new("second".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://session/s/1")
+            .with_agent("default");
+        r1.created_at = 2000;
+
+        let mut r2 = RawMemory::new("first".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://session/s/2")
+            .with_agent("default");
+        r2.created_at = 1000;
+
+        backend.insert_raw_memory(&r1).await.unwrap();
+        backend.insert_raw_memory(&r2).await.unwrap();
+
+        let results = backend
+            .get_raw_by_path_prefix("aleph://session/s/", "default", 10)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].content, "first", "Earlier created_at should come first");
+        assert_eq!(results[1].content, "second");
     }
 }
