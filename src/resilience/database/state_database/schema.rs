@@ -34,87 +34,6 @@ impl StateDatabase {
             -- Index for topic-based queries (multi-turn conversation deletion)
             CREATE INDEX IF NOT EXISTS idx_session_id ON memories(session_id);
 
-            -- ================================================================
-            -- Memory Compression: Fact Storage Tables
-            -- ================================================================
-
-            -- Compressed memory facts table
-            -- NAMESPACE COLUMN DESIGN (Personal AI Hub - Phase 4):
-            --
-            -- The `namespace` column enables multi-user data isolation by controlling
-            -- which user (owner or guest) can access each fact. This is the foundation
-            -- of the Personal AI Hub's Owner+Guest user model.
-            --
-            -- NAMESPACE VALUES:
-            -- - "owner": Facts owned by the system owner (private)
-            -- - "guest:<guest_id>": Facts owned by a specific guest (private to that guest)
-            -- - "shared": Facts visible to multiple users based on sharing rules (future)
-            --
-            -- ISOLATION SEMANTICS:
-            -- - Owner can access all facts (owner + any guest facts)
-            -- - Guest can access only facts in their namespace (guest:<their_id>)
-            -- - Shared facts are visible to owners/guests based on ACLs (Phase 4.2+)
-            --
-            -- QUERIES FILTERED BY NAMESPACE:
-            -- - For owner: SELECT * FROM memory_facts WHERE namespace IN ('owner', 'guest:*', 'shared')
-            -- - For guest: SELECT * FROM memory_facts WHERE namespace = 'guest:<guest_id>' OR namespace = 'shared'
-            -- - Compression only processes facts within current user's namespace
-            -- - Retention cleanup respects namespace boundaries
-            --
-            -- DEFAULT VALUE:
-            -- - All new facts default to 'owner' namespace (current behavior)
-            -- - Migration scripts will set existing facts to 'owner' for backward compatibility
-            --
-            CREATE TABLE IF NOT EXISTS memory_facts (
-                id TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                fact_type TEXT NOT NULL DEFAULT 'other',
-                embedding BLOB,
-                source_memory_ids TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                confidence REAL NOT NULL DEFAULT 1.0,
-                is_valid INTEGER NOT NULL DEFAULT 1,
-                invalidation_reason TEXT,
-                specificity TEXT NOT NULL DEFAULT 'pattern',
-                temporal_scope TEXT NOT NULL DEFAULT 'contextual',
-                decay_invalidated_at INTEGER,
-                namespace TEXT NOT NULL DEFAULT 'owner',
-                path TEXT NOT NULL DEFAULT '',
-                fact_source TEXT NOT NULL DEFAULT 'extracted',
-                content_hash TEXT NOT NULL DEFAULT '',
-                parent_path TEXT NOT NULL DEFAULT '',
-                embedding_model TEXT NOT NULL DEFAULT ''
-            );
-
-            -- Index for fact type queries
-            CREATE INDEX IF NOT EXISTS idx_facts_type ON memory_facts(fact_type);
-
-            -- Index for valid facts queries
-            CREATE INDEX IF NOT EXISTS idx_facts_valid ON memory_facts(is_valid);
-
-            -- Index for timestamp-based queries
-            CREATE INDEX IF NOT EXISTS idx_facts_updated ON memory_facts(updated_at);
-
-            -- Index for decay invalidation queries (recycle bin)
-            CREATE INDEX IF NOT EXISTS idx_facts_decay_invalidated
-                ON memory_facts(decay_invalidated_at)
-                WHERE decay_invalidated_at IS NOT NULL;
-
-            -- Index for namespace filtering (critical for multi-user queries)
-            -- Used for: listing facts by user, isolation enforcement, sharing queries
-            CREATE INDEX IF NOT EXISTS idx_facts_namespace ON memory_facts(namespace);
-
-            -- Index for combined namespace + validity queries (common operation)
-            -- Used for: retrieving user's valid facts only
-            CREATE INDEX IF NOT EXISTS idx_facts_namespace_valid
-                ON memory_facts(namespace, is_valid);
-
-
-            -- VFS path indexes for hierarchical memory navigation
-            CREATE INDEX IF NOT EXISTS idx_facts_path ON memory_facts(path);
-            CREATE INDEX IF NOT EXISTS idx_facts_parent_path ON memory_facts(parent_path);
-            CREATE INDEX IF NOT EXISTS idx_facts_source ON memory_facts(fact_source);
             -- Compression session audit table
             CREATE TABLE IF NOT EXISTS compression_sessions (
                 id TEXT PRIMARY KEY,
@@ -323,15 +242,6 @@ impl StateDatabase {
                 content_rowid='rowid'
             );
 
-            -- Full-text index for facts
-            CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
-                content,
-                fact_type UNINDEXED,
-                id UNINDEXED,
-                content='memory_facts',
-                content_rowid='rowid'
-            );
-
             -- Sync trigger: memories insert
             CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories BEGIN
                 INSERT INTO memories_fts(rowid, user_input, ai_output, id)
@@ -342,18 +252,6 @@ impl StateDatabase {
             CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
                 INSERT INTO memories_fts(memories_fts, rowid, user_input, ai_output, id)
                 VALUES ('delete', old.rowid, old.user_input, old.ai_output, old.id);
-            END;
-
-            -- Sync trigger: facts insert
-            CREATE TRIGGER IF NOT EXISTS facts_fts_insert AFTER INSERT ON memory_facts BEGIN
-                INSERT INTO facts_fts(rowid, content, fact_type, id)
-                VALUES (new.rowid, new.content, new.fact_type, new.id);
-            END;
-
-            -- Sync trigger: facts delete
-            CREATE TRIGGER IF NOT EXISTS facts_fts_delete AFTER DELETE ON memory_facts BEGIN
-                INSERT INTO facts_fts(facts_fts, rowid, content, fact_type, id)
-                VALUES ('delete', old.rowid, old.content, old.fact_type, old.id);
             END;
 
             -- ================================================================
@@ -504,11 +402,25 @@ impl StateDatabase {
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
                 embedding float[{dim}]
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(
-                embedding float[{dim}]
-            );
             "#,
             dim = dim
+        )
+    }
+
+    /// One-time migration: drop obsolete memory_facts / facts_fts / facts_vec
+    /// tables from existing state_database files. Safe to re-run (uses IF EXISTS).
+    ///
+    /// These were a planned CQRS read model for memory_events but were never wired
+    /// up. After the facts→notes migration the notes layer is the actual materialized
+    /// view. The DROP order matters: virtual tables that reference memory_facts must
+    /// be dropped before the base table.
+    pub(super) fn drop_obsolete_state_facts_tables(
+        conn: &rusqlite::Connection,
+    ) -> rusqlite::Result<()> {
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS facts_vec;
+             DROP TABLE IF EXISTS facts_fts;
+             DROP TABLE IF EXISTS memory_facts;",
         )
     }
 }

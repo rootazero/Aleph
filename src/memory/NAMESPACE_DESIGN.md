@@ -1,3 +1,7 @@
+> **OBSOLETE (2026-04-12):** This design was written for the facts-table era.
+> After the facts→notes migration, multi-user namespace isolation should be
+> redesigned on top of the notes layer. Retained for historical context only.
+
 # Memory Namespace Design (Personal AI Hub - Phase 4)
 
 ## Overview

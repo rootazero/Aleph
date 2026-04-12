@@ -38,7 +38,7 @@ fn test_vec0_tables_created() {
         .unwrap();
     assert!(memories_vec_exists, "memories_vec table should exist");
 
-    // Check facts_vec table exists
+    // facts_vec is dropped as part of the facts→notes migration — it should NOT exist
     let facts_vec_exists: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='facts_vec'",
@@ -46,7 +46,7 @@ fn test_vec0_tables_created() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(facts_vec_exists, "facts_vec table should exist");
+    assert!(!facts_vec_exists, "facts_vec table should have been dropped");
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn test_fts5_tables_created() {
         .unwrap();
     assert!(memories_fts_exists, "memories_fts table should exist");
 
-    // Check facts_fts table exists
+    // facts_fts is dropped as part of the facts→notes migration — it should NOT exist
     let facts_fts_exists: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='facts_fts'",
@@ -98,7 +98,7 @@ fn test_fts5_tables_created() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(facts_fts_exists, "facts_fts table should exist");
+    assert!(!facts_fts_exists, "facts_fts table should have been dropped");
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn test_fts5_sync_triggers_exist() {
         .unwrap();
     assert!(memories_trigger, "memories_fts_insert trigger should exist");
 
-    // Check insert trigger exists for facts
+    // facts_fts_insert trigger is dropped as part of the facts→notes migration
     let facts_trigger: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='trigger' AND name='facts_fts_insert'",
@@ -127,7 +127,7 @@ fn test_fts5_sync_triggers_exist() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(facts_trigger, "facts_fts_insert trigger should exist");
+    assert!(!facts_trigger, "facts_fts_insert trigger should have been dropped");
 }
 
 #[test]
@@ -169,16 +169,6 @@ fn test_in_memory_database() {
         )
         .unwrap();
     assert!(vec_exists, "memories_vec table should exist in-memory");
-
-    // Verify memory_facts table exists
-    let facts_exists: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memory_facts'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(facts_exists, "memory_facts table should exist in-memory");
 
     // Verify schema_info has embedding_dimension
     let dim: String = conn

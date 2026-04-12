@@ -117,17 +117,12 @@ impl StateDatabase {
         // Create schema with version metadata
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
-        // Migrate existing databases to add namespace support (idempotent)
-        migration::migrate_add_namespace(&conn)?;
+        // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
+        Self::drop_obsolete_state_facts_tables(&conn)
+            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {}", e)))?;
 
         // Migrate to add experience_replays table for Cortex evolution system (idempotent)
         migration::migrate_add_experience_replays(&conn)?;
-
-        // Migrate to add VFS path columns for hierarchical memory (idempotent)
-        migration::migrate_add_vfs_paths(&conn)?;
-
-        // Migrate to add embedding_model column for model tracking (idempotent)
-        migration::migrate_add_embedding_model(&conn)?;
 
         // Migrate task traces to structured AgentTraceEvent storage (idempotent)
         migration::migrate_task_traces_to_agent_trace(&conn)?;
@@ -181,11 +176,8 @@ impl StateDatabase {
         let dim_changed = Self::check_dimension_change(&conn, embedding_dim)?;
 
         if dim_changed {
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS memories_vec;
-                 DROP TABLE IF EXISTS facts_vec;",
-            )
-            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
+            conn.execute_batch("DROP TABLE IF EXISTS memories_vec;")
+                .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
 
             tracing::info!(
                 new_dim = embedding_dim,
@@ -195,11 +187,12 @@ impl StateDatabase {
 
         Self::create_schema(&conn, embedding_dim)?;
 
+        // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
+        Self::drop_obsolete_state_facts_tables(&conn)
+            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {}", e)))?;
+
         // Run migrations
-        migration::migrate_add_namespace(&conn)?;
         migration::migrate_add_experience_replays(&conn)?;
-        migration::migrate_add_vfs_paths(&conn)?;
-        migration::migrate_add_embedding_model(&conn)?;
         migration::migrate_task_traces_to_agent_trace(&conn)?;
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
@@ -288,37 +281,6 @@ impl StateDatabase {
             })?;
 
             tracing::info!("Memories migration complete");
-        }
-
-        // Migrate facts
-        let facts_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM memory_facts WHERE embedding IS NOT NULL",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        let facts_vec_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM facts_vec", [], |row| row.get(0))
-            .unwrap_or(0);
-
-        if facts_count > 0 && facts_vec_count == 0 {
-            tracing::info!(
-                facts_count = facts_count,
-                "Migrating existing facts to vec0 table"
-            );
-
-            conn.execute(
-                r#"
-                INSERT INTO facts_vec (rowid, embedding)
-                SELECT rowid, embedding FROM memory_facts WHERE embedding IS NOT NULL
-                "#,
-                [],
-            )
-            .map_err(|e| AlephError::config(format!("Failed to migrate facts to vec0: {}", e)))?;
-
-            tracing::info!("Facts migration complete");
         }
 
         Ok(())
