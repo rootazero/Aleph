@@ -198,7 +198,7 @@ impl BrowserBackend for ChromeMcpBackend {
                     let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
                     let png_bytes = base64::engine::general_purpose::STANDARD
                         .decode(data)
-                        .unwrap_or_default();
+                        .map_err(|e| BrowserError::ScreenshotFailed(format!("base64 decode: {e}")))?;
                     return Ok(ScreenshotOutput { png_bytes });
                 }
             }
@@ -207,7 +207,7 @@ impl BrowserBackend for ChromeMcpBackend {
         let text = Self::extract_text(&result);
         let png_bytes = base64::engine::general_purpose::STANDARD
             .decode(&text)
-            .unwrap_or_default();
+            .map_err(|e| BrowserError::ScreenshotFailed(format!("base64 decode: {e}")))?;
         Ok(ScreenshotOutput { png_bytes })
     }
 
@@ -215,10 +215,12 @@ impl BrowserBackend for ChromeMcpBackend {
         self.select_page(tab_id).await?;
         let result = self.call("take_snapshot", json!({})).await?;
         let snapshot_text = Self::extract_text(&result);
+        // Best-effort: parse page URL and title from snapshot header lines
+        let (page_url, page_title) = parse_snapshot_header(&snapshot_text);
         Ok(SnapshotOutput {
             snapshot_text,
-            page_url: String::new(),
-            page_title: String::new(),
+            page_url,
+            page_title,
         })
     }
 
@@ -287,5 +289,46 @@ impl BrowserBackend for ChromeMcpBackend {
         self.call("fill_form", json!({ "fields": form_fields }))
             .await?;
         Ok(form_fields.len())
+    }
+}
+
+/// Best-effort extraction of page URL and title from the first few lines of a snapshot.
+/// Chrome DevTools MCP snapshot text begins with header lines like:
+///   - Page URL: https://example.com/
+///   - Page Title: Hello
+/// Returns empty strings when the fields are absent (graceful degradation).
+fn parse_snapshot_header(text: &str) -> (String, String) {
+    let mut url = String::new();
+    let mut title = String::new();
+    for line in text.lines().take(10) {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("- Page URL:") {
+            url = rest.trim().to_string();
+        } else if let Some(rest) = t.strip_prefix("- Page Title:") {
+            title = rest.trim().to_string();
+        }
+    }
+    (url, title)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_snapshot_header_extracts_url_and_title() {
+        let text =
+            "- Page URL: https://example.com/\n- Page Title: Hello\n- button \"OK\" [ref=e1]";
+        let (url, title) = parse_snapshot_header(text);
+        assert_eq!(url, "https://example.com/");
+        assert_eq!(title, "Hello");
+    }
+
+    #[test]
+    fn test_parse_snapshot_header_returns_empty_when_missing() {
+        let text = "- button \"OK\" [ref=e1]";
+        let (url, title) = parse_snapshot_header(text);
+        assert_eq!(url, "");
+        assert_eq!(title, "");
     }
 }
