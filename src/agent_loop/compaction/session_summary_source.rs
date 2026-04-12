@@ -5,9 +5,8 @@
 //! already written hierarchical summaries (d0/d1/d2) to SQLite. If so, those
 //! are assembled within a token budget and used directly — zero API cost.
 
-use crate::memory::context::MemoryScope;
-use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::raw_memory::RawMemoryStore;
+use crate::memory::store::MemoryBackend;
 use crate::providers::message::UnifiedMessage;
 
 use super::super::context_compactor::{CompactResult, CompactStrategy};
@@ -44,26 +43,23 @@ impl SessionSummarySource {
     ) -> Option<CompactResult> {
         let path_prefix = format!("aleph://session/{}/", self.session_id);
 
-        let filter = SearchFilter::new()
-            .with_valid_only()
-            .with_scope(MemoryScope::SessionLocal)
-            .with_path_prefix(&path_prefix);
-
-        let mut facts = self
+        let mut raws = self
             .database
-            .get_facts_by_path_prefix(&path_prefix, &filter, 50)
+            .get_raw_by_path_prefix(&path_prefix, "default", 50)
             .await
             .ok()?;
 
-        if facts.is_empty() {
+        if raws.is_empty() {
             return None;
         }
 
         // Sort highest-depth-first (d2 > d1 > d0) so the most condensed
         // summaries are preferred when the token budget is tight.
-        facts.sort_by(|a, b| {
-            extract_depth(&b.path)
-                .cmp(&extract_depth(&a.path))
+        raws.sort_by(|a, b| {
+            let path_a = a.path.as_deref().unwrap_or("");
+            let path_b = b.path.as_deref().unwrap_or("");
+            extract_depth(path_b)
+                .cmp(&extract_depth(path_a))
                 // Secondary sort: newest first within the same depth.
                 .then(b.created_at.cmp(&a.created_at))
         });
@@ -87,15 +83,15 @@ impl SessionSummarySource {
         let mut assembled = String::new();
         let mut used_tokens: usize = 0;
 
-        for fact in &facts {
-            let fact_tokens = estimate_tokens(&fact.content);
+        for raw in &raws {
+            let fact_tokens = estimate_tokens(&raw.content);
             if used_tokens + fact_tokens > budget && !assembled.is_empty() {
                 break;
             }
             if !assembled.is_empty() {
                 assembled.push_str("\n\n");
             }
-            assembled.push_str(&fact.content);
+            assembled.push_str(&raw.content);
             used_tokens += fact_tokens;
         }
 
