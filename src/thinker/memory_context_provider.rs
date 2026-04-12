@@ -4,10 +4,11 @@
 //! and store them in MemoryContext for the layer to format.
 
 use super::memory_context::MemoryContext;
-use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::store::types::{ScoredFact, SearchFilter};
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::EmbeddingProvider;
+use crate::memory::note_retrieval::NoteFactRetrieval;
+use crate::memory::notes::NoteIndexer;
+use crate::memory::store::types::ScoredFact;
+use crate::memory::store::MemoryBackend;
+use crate::memory::{EmbeddingProvider, SqliteMemoryBackend};
 use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
 
@@ -33,19 +34,14 @@ impl Default for MemoryContextConfig {
 
 /// Provides pre-fetched memory context for prompt injection.
 pub struct MemoryContextProvider {
-    memory_db: MemoryBackend,
-    embedder: Arc<dyn EmbeddingProvider>,
+    note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     config: MemoryContextConfig,
 }
 
 impl MemoryContextProvider {
     /// Create a new provider.
     pub fn new(memory_db: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
-        Self {
-            memory_db,
-            embedder,
-            config: MemoryContextConfig::default(),
-        }
+        Self::with_config(memory_db, embedder, MemoryContextConfig::default())
     }
 
     /// Create with custom config.
@@ -54,9 +50,13 @@ impl MemoryContextProvider {
         embedder: Arc<dyn EmbeddingProvider>,
         config: MemoryContextConfig,
     ) -> Self {
+        let memory_dir = crate::utils::paths::get_note_memory_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        // MemoryBackend is Arc<SqliteMemoryBackend>, so we can pass it directly.
+        let indexer = Arc::new(NoteIndexer::new(memory_dir, memory_db));
+        let note_retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
         Self {
-            memory_db,
-            embedder,
+            note_retrieval,
             config,
         }
     }
@@ -75,30 +75,19 @@ impl MemoryContextProvider {
             return MemoryContext::default();
         }
 
-        // 1. Generate query embedding
-        let embedding = match self.embedder.embed(query).await {
-            Ok(emb) => emb,
-            Err(e) => {
-                warn!(error = %e, "Memory augmentation: embedding failed, skipping");
-                return MemoryContext::default();
-            }
-        };
-
-        let dim = embedding.len() as u32;
-
         let _ = session_id; // no longer used — raw memory search removed
 
-        // 2. Search facts (scoped to agent workspace)
-        let facts = self.search_facts(&embedding, dim, agent_id).await;
+        // Search facts via NoteFactRetrieval (scoped to agent workspace)
+        let facts = self.search_facts(query, agent_id).await;
 
-        // 3. Build context (raw memory search removed)
+        // Build context (raw memory search removed)
         let mut ctx = MemoryContext {
             facts: facts.unwrap_or_default(),
             memory_summaries: Vec::new(),
             structured_index: None,
         };
 
-        // 4. Truncate to character budget
+        // Truncate to character budget
         self.truncate_to_budget(&mut ctx);
 
         debug!(
@@ -113,14 +102,11 @@ impl MemoryContextProvider {
 
     async fn search_facts(
         &self,
-        embedding: &[f32],
-        dim: u32,
+        query: &str,
         agent_id: &str,
     ) -> Result<Vec<ScoredFact>, ()> {
-        let filter =
-            SearchFilter::new().with_agent_filter(AgentEnvFilter::Single(agent_id.to_string()));
-        self.memory_db
-            .vector_search(embedding, dim, &filter, self.config.max_facts)
+        self.note_retrieval
+            .vector_retrieve(query, agent_id, self.config.max_facts)
             .await
             .map(|mut results| {
                 results.retain(|sf| sf.score >= self.config.similarity_threshold);
