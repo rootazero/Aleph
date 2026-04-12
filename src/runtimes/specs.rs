@@ -154,6 +154,22 @@ pub const SPECS: &[RuntimeSpec] = &[
         post_install: &[],
         llm_hint: None,
     },
+    // Detection-only: git has no language-native manager; users install via
+    // OS-standard channels (Xcode CLT, apt/dnf, winget). If missing, Aleph
+    // surfaces an actionable error; it does not auto-install.
+    RuntimeSpec {
+        name: "git",
+        binaries: &["git"],
+        version_flag: "--version",
+        version_regex: r"git version (\d+\.\d+\.\d+)",
+        min_version: None,
+        deps: &[],
+        install: &[],
+        post_install: &[],
+        llm_hint: Some(
+            "Git — version control. Use `git <subcommand>` (clone, status, diff, commit, log). Available as a system binary; Aleph does not manage its version.",
+        ),
+    },
 ];
 
 pub fn find_spec(name: &str) -> Option<&'static RuntimeSpec> {
@@ -192,6 +208,16 @@ mod tests {
         assert!(find_spec("uv").is_some());
         assert!(find_spec("playwright-cli").is_some());
         assert!(find_spec("cargo").is_some());
+        assert!(find_spec("git").is_some());
+    }
+
+    #[test]
+    fn test_git_is_detection_only() {
+        // git has no install strategy — users install it through OS channels.
+        let spec = find_spec("git").unwrap();
+        assert!(spec.install.is_empty());
+        assert!(!supported_on_current_os("git"));
+        assert!(spec.llm_hint.is_some());
     }
 
     #[test]
