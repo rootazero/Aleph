@@ -1,6 +1,6 @@
-//! RecallSignalStore — tracks which facts get retrieved during conversations.
+//! RecallSignalStore — tracks which notes get retrieved during conversations.
 //!
-//! Each retrieval hit is recorded as a signal keyed by (fact_id, query_hash,
+//! Each retrieval hit is recorded as a signal keyed by (note_path, query_hash,
 //! day_bucket, channel) for natural deduplication.  Aggregated signals later
 //! feed the 8-dimensional promotion scorer that decides which short-term
 //! memories should be promoted to long-term.
@@ -17,10 +17,10 @@ use super::SqliteMemoryBackend;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Aggregated recall signals for a single fact.
+/// Aggregated recall signals for a single note.
 #[derive(Debug, Clone)]
 pub struct RecallAggregate {
-    pub fact_id: String,
+    pub note_path: String,
     pub signal_count: i64,
     pub total_score: f64,
     pub unique_queries: i64,
@@ -33,7 +33,7 @@ pub struct RecallAggregate {
 /// A single retrieval hit produced by the search pipeline.
 #[derive(Debug, Clone)]
 pub struct RecallHit {
-    pub fact_id: String,
+    pub note_path: String,
     pub score: f64,
 }
 
@@ -86,7 +86,7 @@ impl SqliteMemoryBackend {
         let now = Utc::now().timestamp();
 
         let sql = "INSERT OR IGNORE INTO recall_signals \
-                   (id, fact_id, query_hash, query_text, channel, score, session_id, namespace, created_at, day_bucket) \
+                   (id, note_path, query_hash, query_text, channel, score, session_id, namespace, created_at, day_bucket) \
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
         let mut stmt = conn
@@ -99,7 +99,7 @@ impl SqliteMemoryBackend {
             let rows = stmt
                 .execute(params![
                     id,
-                    hit.fact_id,
+                    hit.note_path,
                     qhash,
                     query,
                     channel,
@@ -124,9 +124,9 @@ impl SqliteMemoryBackend {
 
     pub fn aggregate_for_facts(
         &self,
-        fact_ids: &[String],
+        note_paths: &[String],
     ) -> Result<Vec<RecallAggregate>, AlephError> {
-        if fact_ids.is_empty() {
+        if note_paths.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -138,12 +138,12 @@ impl SqliteMemoryBackend {
         let mut results = Vec::new();
 
         // Chunk to stay under SQLite's 999-variable limit
-        for chunk in fact_ids.chunks(Self::SQLITE_MAX_VARS) {
+        for chunk in note_paths.chunks(Self::SQLITE_MAX_VARS) {
             let placeholders: Vec<String> =
                 (1..=chunk.len()).map(|i| format!("?{i}")).collect();
             let sql = format!(
                 "SELECT \
-                     fact_id, \
+                     note_path, \
                      COUNT(*)                    AS signal_count, \
                      SUM(score)                  AS total_score, \
                      COUNT(DISTINCT query_hash)  AS unique_queries, \
@@ -152,8 +152,8 @@ impl SqliteMemoryBackend {
                      MIN(created_at)             AS first_recall, \
                      MAX(created_at)             AS last_recall \
                  FROM recall_signals \
-                 WHERE fact_id IN ({}) \
-                 GROUP BY fact_id",
+                 WHERE note_path IN ({}) \
+                 GROUP BY note_path",
                 placeholders.join(", ")
             );
 
@@ -171,7 +171,7 @@ impl SqliteMemoryBackend {
             let rows = stmt
                 .query_map(param_refs.as_slice(), |row| {
                     Ok(RecallAggregate {
-                        fact_id: row.get("fact_id")?,
+                        note_path: row.get("note_path")?,
                         signal_count: row.get("signal_count")?,
                         total_score: row.get("total_score")?,
                         unique_queries: row.get("unique_queries")?,
@@ -235,8 +235,8 @@ mod tests {
     fn record_and_aggregate_signals() {
         let store = setup();
         let hits = vec![
-            RecallHit { fact_id: "f1".into(), score: 0.9 },
-            RecallHit { fact_id: "f2".into(), score: 0.7 },
+            RecallHit { note_path: "f1".into(), score: 0.9 },
+            RecallHit { note_path: "f2".into(), score: 0.7 },
         ];
 
         let inserted = store
@@ -249,7 +249,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.len(), 2);
 
-        let f1 = agg.iter().find(|a| a.fact_id == "f1").unwrap();
+        let f1 = agg.iter().find(|a| a.note_path == "f1").unwrap();
         assert_eq!(f1.signal_count, 1);
         assert!((f1.total_score - 0.9).abs() < f64::EPSILON);
         assert_eq!(f1.unique_queries, 1);
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn dedup_same_query_same_day_same_channel() {
         let store = setup();
-        let hits = vec![RecallHit { fact_id: "f1".into(), score: 0.8 }];
+        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.8 }];
 
         let first = store
             .record_signals("test query", "slack", &hits, None, "owner")
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn different_channels_count_separately() {
         let store = setup();
-        let hits = vec![RecallHit { fact_id: "f1".into(), score: 0.5 }];
+        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.5 }];
 
         store.record_signals("q", "slack", &hits, None, "owner").unwrap();
         store.record_signals("q", "web", &hits, None, "owner").unwrap();
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn cleanup_removes_old_signals() {
         let store = setup();
-        let hits = vec![RecallHit { fact_id: "f1".into(), score: 0.6 }];
+        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.6 }];
 
         store.record_signals("q", "slack", &hits, None, "owner").unwrap();
 
@@ -313,7 +313,7 @@ mod tests {
         {
             let conn = store.conn.lock().unwrap();
             conn.execute(
-                "INSERT INTO recall_signals (id, fact_id, query_hash, query_text, channel, score, namespace, created_at, day_bucket) \
+                "INSERT INTO recall_signals (id, note_path, query_hash, query_text, channel, score, namespace, created_at, day_bucket) \
                  VALUES ('old1', 'f2', 'hash', 'old', 'slack', 0.5, 'owner', 1000, '2020-01-01')",
                 [],
             ).unwrap();

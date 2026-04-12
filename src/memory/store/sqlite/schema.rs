@@ -151,7 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_me_agent   ON memory_entities(agent);
 const RECALL_SIGNALS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS recall_signals (
     id          TEXT PRIMARY KEY,
-    fact_id     TEXT NOT NULL,
+    note_path   TEXT NOT NULL,
     query_hash  TEXT NOT NULL,
     query_text  TEXT NOT NULL,
     channel     TEXT NOT NULL DEFAULT 'unknown',
@@ -163,12 +163,37 @@ CREATE TABLE IF NOT EXISTS recall_signals (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recall_dedup
-    ON recall_signals(fact_id, query_hash, day_bucket, channel);
-CREATE INDEX IF NOT EXISTS idx_recall_fact_id
-    ON recall_signals(fact_id);
+    ON recall_signals(note_path, query_hash, day_bucket, channel);
+CREATE INDEX IF NOT EXISTS idx_recall_note_path
+    ON recall_signals(note_path);
 CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
     ON recall_signals(day_bucket);
 "#;
+
+/// Rename `fact_id` to `note_path` in the `recall_signals` table.
+/// Safe to call multiple times (checks column existence first).
+fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephError> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(recall_signals)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info recall_signals: {e}")))?;
+    let has_fact_id = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
+        .any(|name| name.map(|n| n == "fact_id").unwrap_or(false));
+
+    if has_fact_id {
+        conn.execute_batch(
+            "ALTER TABLE recall_signals RENAME COLUMN fact_id TO note_path",
+        )
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to rename recall_signals.fact_id to note_path: {e}"
+            ))
+        })?;
+    }
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Dream reports table + indexes
@@ -486,6 +511,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     migrate_palace_topology(conn)?;
     migrate_temporal_validity(conn)?;
     migrate_tunnel_pending(conn)?;
+    migrate_recall_signals_note_path(conn)?;
 
     Ok(())
 }

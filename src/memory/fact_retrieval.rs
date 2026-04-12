@@ -519,7 +519,7 @@ impl FactRetrieval {
                 .facts
                 .iter()
                 .map(|f| RecallHit {
-                    fact_id: f.id.clone(),
+                    note_path: f.path.clone(),
                     score: f.similarity_score.unwrap_or(f.confidence) as f64,
                 })
                 .collect();
