@@ -21,7 +21,6 @@ pub trait ScoringStage: Send + Sync {
 
 pub mod cosine_rerank;
 pub mod hard_min_score;
-pub mod importance_weight;
 pub mod length_normalization;
 pub mod mmr_diversity;
 pub mod recency_boost;

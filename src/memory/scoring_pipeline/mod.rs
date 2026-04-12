@@ -22,7 +22,6 @@ pub use stages::ScoringStage;
 use crate::memory::store::types::ScoredFact;
 use stages::cosine_rerank::CosineRerankStage;
 use stages::hard_min_score::HardMinScoreStage;
-use stages::importance_weight::ImportanceWeightStage;
 use stages::length_normalization::LengthNormalizationStage;
 use stages::mmr_diversity::MmrDiversityStage;
 use stages::recency_boost::RecencyBoostStage;
@@ -32,7 +31,7 @@ use tracing::debug;
 /// A configurable pipeline of scoring stages.
 ///
 /// Stages are applied in insertion order. Use [`ScoringPipeline::from_config`]
-/// to get the default seven-stage pipeline, or build a custom one with
+/// to get the default six-stage pipeline, or build a custom one with
 /// [`ScoringPipeline::add_stage`].
 pub struct ScoringPipeline {
     stages: Vec<Box<dyn ScoringStage>>,
@@ -44,21 +43,19 @@ impl ScoringPipeline {
         Self { stages: Vec::new() }
     }
 
-    /// Build the default seven-stage pipeline from configuration.
+    /// Build the default six-stage pipeline from configuration.
     ///
     /// Stage order:
     /// 1. Cosine-rerank blending
     /// 2. Recency boost
-    /// 3. Importance weighting
-    /// 4. Length normalization
-    /// 5. Time decay
-    /// 6. Hard minimum score gate
-    /// 7. MMR diversity
+    /// 3. Length normalization
+    /// 4. Time decay
+    /// 5. Hard minimum score gate
+    /// 6. MMR diversity
     pub fn from_config(_config: &ScoringPipelineConfig) -> Self {
         let stages: Vec<Box<dyn ScoringStage>> = vec![
             Box::new(CosineRerankStage),
             Box::new(RecencyBoostStage),
-            Box::new(ImportanceWeightStage),
             Box::new(LengthNormalizationStage),
             Box::new(TimeDecayStage),
             Box::new(HardMinScoreStage),
@@ -146,16 +143,16 @@ mod tests {
     }
 
     #[test]
-    fn default_pipeline_creates_seven_stages() {
+    fn default_pipeline_creates_six_stages() {
         let pipeline = ScoringPipeline::default();
-        assert_eq!(pipeline.stage_count(), 7);
+        assert_eq!(pipeline.stage_count(), 6);
     }
 
     #[test]
-    fn from_config_creates_seven_stages() {
+    fn from_config_creates_six_stages() {
         let cfg = ScoringPipelineConfig::default();
         let pipeline = ScoringPipeline::from_config(&cfg);
-        assert_eq!(pipeline.stage_count(), 7);
+        assert_eq!(pipeline.stage_count(), 6);
     }
 
     #[test]
@@ -270,8 +267,7 @@ mod tests {
         let result = pipeline.run(candidates, &ctx);
 
         // low-score candidate should be filtered out
-        // (starts at 0.30, then gets multiplied by importance weight ≈ 0.79,
-        //  then time decay ≈ 0.68 → ~0.16 < 0.35 threshold)
+        // (starts at 0.30, then time decay ≈ 0.525 → ~0.158 < 0.35 threshold)
         assert!(
             result.iter().all(|r| r.fact.content != "marginal fact"),
             "low-score candidate should have been filtered out"
