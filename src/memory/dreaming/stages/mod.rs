@@ -5,6 +5,7 @@ pub mod note_consolidate;
 pub mod note_decay;
 pub mod note_drift;
 pub mod note_lint;
+pub mod note_synthesis;
 pub mod types;
 
 pub use daily_digest::DailyDigestStage;
@@ -12,6 +13,7 @@ pub use note_consolidate::NoteConsolidateStage;
 pub use note_decay::NoteDecayStage;
 pub use note_drift::NoteDriftStage;
 pub use note_lint::NoteLintStage;
+pub use note_synthesis::NoteSynthesisStage;
 
 // Old stages — temporarily disabled during migration to notes layer.
 // Task 8 will replace these with new note-based implementations.
