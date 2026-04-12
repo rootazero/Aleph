@@ -9,6 +9,8 @@ pub mod error;
 mod managed_backend;
 pub mod manager;
 pub mod network_policy;
+pub mod playwright_cli;
+pub use playwright_cli::{CliOutput, PageMeta, PlaywrightCliDriver};
 pub mod playwright_mcp;
 pub mod playwright_mcp_backend;
 
