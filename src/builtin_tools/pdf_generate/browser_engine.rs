@@ -1,14 +1,20 @@
-//! Browser-based PDF rendering engine — MIGRATION IN PROGRESS.
+//! Browser-based PDF rendering via playwright-cli.
 //!
-//! chromiumoxide was removed in the Playwright CLI migration.
-//! Task 12 will rewrite this module to use PlaywrightCliDriver.
+//! Converts Markdown to HTML, writes to a temp file, then uses
+//! `playwright-cli -s=aleph-pdf-gen goto file://<tmp>` followed by
+//! `playwright-cli -s=aleph-pdf-gen pdf --filename=<output>`.
 
 use std::path::Path;
+use std::time::Duration;
 
 use pulldown_cmark::{html, Options, Parser};
+use tempfile::NamedTempFile;
+use tracing::{debug, info};
 
-use super::args::{PdfGenerateArgs, PdfGenerateOutput};
+use super::args::{ContentFormat, PdfGenerateArgs, PdfGenerateOutput};
 use super::styles;
+use crate::browser::playwright_cli::PlaywrightCliDriver;
+use crate::browser::profile::PlaywrightCliConfig;
 use crate::builtin_tools::error::ToolError;
 
 /// Convert Markdown source to HTML fragment using pulldown-cmark.
@@ -30,25 +36,76 @@ pub fn build_html_document(markdown: &str, title: Option<&str>) -> String {
     styles::wrap_html_with_styles(&html_body, title)
 }
 
-/// Check whether a Chromium-based browser is available on the system.
-pub fn is_chrome_available() -> bool {
-    // Temporarily always false until Task 12 migrates this to playwright-cli.
-    false
-}
-
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
+/// Cheap synchronous check: is the playwright-cli toolchain (via fnm) likely
+/// available on this system? Callers use this to short-circuit before invoking
+/// the async `generate()` path.
+pub fn is_chrome_available() -> bool {
+    which::which("fnm").is_ok()
+}
+
+/// Generate a PDF using playwright-cli.
+///
+/// Flow:
+/// 1. Build HTML document (Markdown or plain text wrapped in `<pre>`)
+/// 2. Write HTML to a temp file
+/// 3. `playwright-cli -s=aleph-pdf-gen goto file://<tmp>`
+/// 4. `playwright-cli -s=aleph-pdf-gen pdf --filename=<output>`
+/// 5. Temp file auto-cleaned when `NamedTempFile` drops
 pub async fn generate(
-    _args: &PdfGenerateArgs,
-    _output_path: &Path,
+    args: &PdfGenerateArgs,
+    output_path: &Path,
 ) -> Result<PdfGenerateOutput, ToolError> {
-    let _ = html_escape; // keep helper for Task 12
-    Err(ToolError::Execution(
-        "PDF generation temporarily unavailable during playwright-cli migration (Task 12 pending)"
-            .into(),
-    ))
+    let html_doc = match args.format {
+        ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
+        ContentFormat::Text => {
+            let escaped = html_escape(&args.content);
+            styles::wrap_html_with_styles(
+                &format!("<pre>{escaped}</pre>"),
+                args.title.as_deref(),
+            )
+        }
+    };
+
+    let tmp = NamedTempFile::with_suffix(".html")
+        .map_err(|e| ToolError::Execution(format!("tempfile: {e}")))?;
+    tokio::fs::write(tmp.path(), html_doc.as_bytes())
+        .await
+        .map_err(|e| ToolError::Execution(format!("write html: {e}")))?;
+    let file_url = format!("file://{}", tmp.path().display());
+    debug!("pdf_generate wrote HTML to {}", tmp.path().display());
+
+    let driver = PlaywrightCliDriver::new(PlaywrightCliConfig::default());
+    let session = "aleph-pdf-gen";
+    driver
+        .run(session, &["goto", &file_url], Duration::from_secs(30))
+        .await
+        .map_err(|e| ToolError::Execution(format!("goto: {e}")))?;
+
+    let out_str = output_path.to_string_lossy().to_string();
+    driver
+        .run(
+            session,
+            &["pdf", "--filename", &out_str],
+            Duration::from_secs(60),
+        )
+        .await
+        .map_err(|e| ToolError::Execution(format!("pdf: {e}")))?;
+
+    info!(path = %output_path.display(), "PDF generated via playwright-cli");
+
+    Ok(PdfGenerateOutput {
+        success: true,
+        output_path: output_path.to_string_lossy().to_string(),
+        pages: 0, // playwright-cli does not report page count
+        message: format!(
+            "PDF generated via playwright-cli: {}",
+            output_path.display()
+        ),
+    })
 }
