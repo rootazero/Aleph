@@ -17,6 +17,7 @@ pub mod agent_config;
 pub mod agent_run;
 pub mod browser;
 pub mod config;
+pub mod runtimes;
 pub mod discord;
 pub mod embedding;
 pub mod generation_providers;

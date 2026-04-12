@@ -7,7 +7,6 @@ use crate::api::{BrowserConfig, BrowserConfigApi};
 use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use super::browser_runtime::BrowserRuntimeCard;
 
 // ============================================================================
 // Macro for per-section save logic (avoids Box<dyn Fn()> Send+Sync issues)
@@ -101,7 +100,6 @@ pub fn BrowserView() -> impl IntoView {
                 } else {
                     view! {
                         <div class="space-y-6">
-                            <BrowserRuntimeCard />
                             {move || {
                                 match error.get() {
                                     Some(e) if e.contains("Send failed") || e.contains("Failed to load") => {

@@ -2,7 +2,6 @@ pub mod acp_harnesses;
 pub mod auth;
 pub mod behavior;
 pub mod browser;
-pub mod browser_runtime;
 pub mod channels;
 pub mod clawhub;
 pub mod embedding_providers;
