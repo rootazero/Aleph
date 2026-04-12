@@ -10,7 +10,8 @@ use super::chrome_mcp::ChromeMcpDriver;
 use super::network_policy::{BrowserSsrfGuard, PolicyViolation};
 use super::playwright_mcp::PlaywrightMcpDriver;
 use super::profile::{
-    BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
+    BrowserDriver, BrowserSystemConfig, BrowserType, PlaywrightMcpConfig, ProfileConfig,
+    ProfileState,
 };
 
 /// Manages the lifecycle of browser profiles.
@@ -34,7 +35,7 @@ impl ProfileManager {
         let ssrf_policy = BrowserSsrfGuard::new(config.policy.clone());
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
         let playwright_mcp_driver =
-            Arc::new(PlaywrightMcpDriver::new(config.playwright_mcp.clone()));
+            Arc::new(PlaywrightMcpDriver::new(PlaywrightMcpConfig::default()));
 
         let mut profiles = HashMap::new();
 

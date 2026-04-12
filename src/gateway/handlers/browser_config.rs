@@ -63,13 +63,8 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         .unwrap_or("chromium")
         .to_string();
 
-    // Headless detection: ON unless explicitly opted out with --headed or --no-headless
-    let has_headed = browser
-        .playwright_mcp
-        .args
-        .iter()
-        .any(|a| a == "--headed" || a == "--no-headless");
-    let headless = !has_headed;
+    // Headless detection: read from playwright_cli.headless
+    let headless = browser.playwright_cli.headless;
 
     // DevTools profile: "user" (Your Chrome) unless explicitly set to Managed
     let devtools_profile = if browser
@@ -180,16 +175,8 @@ pub async fn handle_update(
             );
         }
 
-        // Update headless flag in playwright_mcp args
-        browser
-            .playwright_mcp
-            .args
-            .retain(|a| a != "--headless" && a != "--headed" && a != "--no-headless");
-        if update.headless {
-            browser.playwright_mcp.args.push("--headless".to_string());
-        } else {
-            browser.playwright_mcp.args.push("--headed".to_string());
-        }
+        // Update headless flag in playwright_cli
+        browser.playwright_cli.headless = update.headless;
 
         // Update SSRF policy
         browser.policy.block_private = update.block_private;

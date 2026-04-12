@@ -40,9 +40,9 @@ pub struct ProfileConfig {
     #[serde(default = "default_cdp_port")]
     pub cdp_port: u16,
 
-    /// Run browser in headless mode.
+    /// Profile-level override for headless (None = follow global `playwright_cli.headless`).
     #[serde(default)]
-    pub headless: bool,
+    pub headless: Option<bool>,
 
     /// UI indicator color for this profile.
     #[serde(default)]
@@ -82,7 +82,7 @@ impl Default for ProfileConfig {
         Self {
             browser: BrowserType::default(),
             cdp_port: default_cdp_port(),
-            headless: false,
+            headless: None,
             color: None,
             proxy: None,
             user_data_dir: None,
@@ -118,7 +118,7 @@ impl ProfileState {
     }
 }
 
-/// Configuration for the Playwright MCP integration.
+/// Configuration for the Playwright MCP integration (legacy — kept for PlaywrightMcpDriver compat).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PlaywrightMcpConfig {
     /// Whether Playwright MCP is enabled.
@@ -155,6 +155,55 @@ impl Default for PlaywrightMcpConfig {
             enabled: true,
             command: default_mcp_command(),
             args: default_mcp_args(),
+        }
+    }
+}
+
+/// Configuration for the Playwright CLI integration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PlaywrightCliConfig {
+    /// Whether Playwright CLI is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Optional override: absolute path to `playwright-cli` binary.
+    /// When `None`, resolved via `fnm exec --using lts which playwright-cli`.
+    #[serde(default)]
+    pub binary_path: Option<String>,
+
+    /// Global default: run headless (profile-level `headless: Option<bool>` overrides).
+    #[serde(default = "default_true")]
+    pub headless: bool,
+
+    /// Timeout (seconds) for navigate / wait_for_text.
+    #[serde(default = "default_nav_timeout")]
+    pub nav_timeout_secs: u64,
+
+    /// Timeout (seconds) for other actions (click/fill/type/etc).
+    #[serde(default = "default_action_timeout")]
+    pub action_timeout_secs: u64,
+
+    /// Persist session profile to disk (`--persistent` flag).
+    #[serde(default)]
+    pub persistent_sessions: bool,
+}
+
+fn default_nav_timeout() -> u64 {
+    30
+}
+fn default_action_timeout() -> u64 {
+    10
+}
+
+impl Default for PlaywrightCliConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            binary_path: None,
+            headless: true,
+            nav_timeout_secs: 30,
+            action_timeout_secs: 10,
+            persistent_sessions: false,
         }
     }
 }
@@ -204,9 +253,9 @@ pub struct BrowserSystemConfig {
     #[serde(default)]
     pub policy: SsrfConfig,
 
-    /// Playwright MCP integration settings.
-    #[serde(default)]
-    pub playwright_mcp: PlaywrightMcpConfig,
+    /// Reads both `[playwright_cli]` and legacy `[playwright_mcp]` (unknown fields dropped).
+    #[serde(default, alias = "playwright_mcp")]
+    pub playwright_cli: PlaywrightCliConfig,
 
     /// Chrome DevTools MCP integration settings.
     #[serde(default)]
@@ -222,7 +271,7 @@ mod tests {
         let config = ProfileConfig::default();
         assert_eq!(config.browser, BrowserType::Chromium);
         assert_eq!(config.cdp_port, 18800);
-        assert!(!config.headless);
+        assert_eq!(config.headless, None);
         assert!(config.color.is_none());
         assert!(config.proxy.is_none());
         assert!(config.user_data_dir.is_none());
@@ -282,7 +331,7 @@ args = ["./mcp-server.js"]
         let work = config.profiles.get("work").unwrap();
         assert_eq!(work.browser, BrowserType::Chrome);
         assert_eq!(work.cdp_port, 19000);
-        assert!(work.headless);
+        assert_eq!(work.headless, Some(true));
         assert_eq!(work.color.as_deref(), Some("#ff0000"));
         assert_eq!(work.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
         assert_eq!(work.extra_args, vec!["--disable-gpu"]);
@@ -292,17 +341,15 @@ args = ["./mcp-server.js"]
         let personal = config.profiles.get("personal").unwrap();
         assert_eq!(personal.browser, BrowserType::Brave);
         assert_eq!(personal.cdp_port, 19001);
-        assert!(!personal.headless); // default
+        assert_eq!(personal.headless, None); // default
         assert_eq!(personal.idle_timeout_secs, 1800); // default
 
         // Policy
         assert!(config.policy.block_private);
         assert_eq!(config.policy.blocked_domains, vec!["*.malware.com"]);
 
-        // Playwright MCP
-        assert!(!config.playwright_mcp.enabled);
-        assert_eq!(config.playwright_mcp.command, "node");
-        assert_eq!(config.playwright_mcp.args, vec!["./mcp-server.js"]);
+        // Playwright CLI (deserialized from legacy [playwright_mcp] section)
+        assert!(!config.playwright_cli.enabled);
     }
 
     #[test]
@@ -340,19 +387,11 @@ args = ["./mcp-server.js"]
     }
 
     #[test]
-    fn test_playwright_mcp_config_defaults() {
-        let config = PlaywrightMcpConfig::default();
-        assert!(config.enabled);
-        assert_eq!(config.command, "npx");
-        assert_eq!(config.args, vec!["@playwright/mcp@latest", "--headless"]);
-    }
-
-    #[test]
     fn test_browser_system_config_defaults() {
         let config = BrowserSystemConfig::default();
         assert!(config.profiles.is_empty());
         assert!(config.policy.block_private);
-        assert!(config.playwright_mcp.enabled);
+        assert!(config.playwright_cli.enabled);
     }
 
     #[test]
@@ -383,6 +422,43 @@ args = ["./mcp-server.js"]
     fn test_profile_config_driver_defaults_to_managed() {
         let config = ProfileConfig::default();
         assert_eq!(config.driver, BrowserDriver::Managed);
+    }
+
+    #[test]
+    fn test_old_playwright_mcp_toml_deserializes_to_playwright_cli() {
+        let toml_str = r##"
+[playwright_mcp]
+enabled = true
+command = "npx"
+args = ["@playwright/mcp@latest", "--headless"]
+"##;
+        let config: BrowserSystemConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.playwright_cli.enabled);
+        assert!(config.playwright_cli.headless);
+        assert_eq!(config.playwright_cli.nav_timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_playwright_cli_defaults() {
+        let config = PlaywrightCliConfig::default();
+        assert!(config.enabled);
+        assert!(config.binary_path.is_none());
+        assert!(config.headless);
+        assert_eq!(config.nav_timeout_secs, 30);
+        assert_eq!(config.action_timeout_secs, 10);
+        assert!(!config.persistent_sessions);
+    }
+
+    #[test]
+    fn test_profile_config_headless_option_compat() {
+        let toml_str = r##"
+[profiles.default]
+browser = "chromium"
+headless = true
+"##;
+        let config: BrowserSystemConfig = toml::from_str(toml_str).unwrap();
+        let p = config.profiles.get("default").unwrap();
+        assert_eq!(p.headless, Some(true));
     }
 
     #[test]

@@ -120,7 +120,7 @@ mod tests {
         let config: GeneralConfig = toml::from_str(toml_str).unwrap();
         assert!(config.browser.policy.block_private);
         assert_eq!(config.browser.profiles.len(), 1);
-        assert!(config.browser.playwright_mcp.enabled);
+        assert!(config.browser.playwright_cli.enabled);
     }
 
     #[test]
