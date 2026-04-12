@@ -82,15 +82,45 @@ impl AlephTool for BrowserTabsTool {
 
         match args.action {
             TabAction::List => match backend.list_tabs().await {
-                Ok(tabs) => {
-                    let tab_infos: Vec<TabInfo> = tabs
-                        .into_iter()
+                Ok(tabs_text) => {
+                    // Parse "N: URL [selected]" or "Tab N: URL" lines into TabInfo structs.
+                    let tab_infos: Vec<TabInfo> = tabs_text
+                        .lines()
                         .enumerate()
-                        .map(|(i, t)| TabInfo {
-                            id: t.id,
-                            title: t.title,
-                            url: t.url,
-                            active: i == 0,
+                        .filter_map(|(i, line)| {
+                            let line = line.trim();
+                            // Chrome DevTools MCP: "N: URL [selected]"
+                            if let Some(colon_pos) = line.find(": ") {
+                                let id_str = line.get(..colon_pos)?.trim();
+                                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                                    let rest = line.get(colon_pos + 2..)?;
+                                    let url = if let Some(bracket) = rest.rfind(" [") {
+                                        rest.get(..bracket).unwrap_or(rest)
+                                    } else {
+                                        rest
+                                    };
+                                    return Some(TabInfo {
+                                        id: id_str.to_string(),
+                                        title: String::new(),
+                                        url: url.to_string(),
+                                        active: i == 0,
+                                    });
+                                }
+                            }
+                            // Playwright MCP: "Tab N: URL"
+                            if let Some(rest) = line.strip_prefix("Tab ") {
+                                if let Some(colon_pos) = rest.find(": ") {
+                                    let id_str = rest.get(..colon_pos)?.trim();
+                                    let url = rest.get(colon_pos + 2..)?;
+                                    return Some(TabInfo {
+                                        id: id_str.to_string(),
+                                        title: String::new(),
+                                        url: url.to_string(),
+                                        active: i == 0,
+                                    });
+                                }
+                            }
+                            None
                         })
                         .collect();
                     Ok(BrowserTabsOutput {

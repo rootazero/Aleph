@@ -5,13 +5,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 
+use base64::Engine as _;
+
 use super::backend::BrowserBackend;
 use super::chrome_mcp::ChromeMcpDriver;
-use super::chrome_mcp_snapshot::convert_chrome_mcp_snapshot;
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, AriaSnapshot, ConsoleMessage, ScreenshotOpts, ScreenshotResult, ScrollDirection,
-    TabId, TabInfo,
+    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
 
 pub struct ChromeMcpBackend {
@@ -30,11 +30,6 @@ impl ChromeMcpBackend {
     fn extract_element_ref(target: &ActionTarget) -> Result<String, BrowserError> {
         match target {
             ActionTarget::Ref { ref_id } => Ok(ref_id.clone()),
-            ActionTarget::Selector { .. } => Err(BrowserError::ActionFailed(
-                "CSS selectors are not supported in existing-session mode. \
-                 Use ref_id from browser_snapshot instead."
-                    .into(),
-            )),
             ActionTarget::Coordinates { .. } => Err(BrowserError::ActionFailed(
                 "Coordinate targeting is not supported in existing-session mode. \
                  Use ref_id from browser_snapshot instead."
@@ -80,45 +75,30 @@ impl ChromeMcpBackend {
         // Fallback to JSON serialization
         result.to_string()
     }
-
-    /// Parse "N: URL [selected]" lines from list_pages text output.
-    fn parse_pages_text(text: &str) -> Vec<TabInfo> {
-        let mut tabs = Vec::new();
-        for line in text.lines() {
-            let line = line.trim();
-            // Match lines like "1: https://example.com [selected]" or "2: https://example.com"
-            if let Some(colon_pos) = line.find(": ") {
-                let id_str = line.get(..colon_pos).unwrap_or("").trim();
-                // Verify it starts with a number
-                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
-                    let rest = line.get(colon_pos + 2..).unwrap_or("");
-                    let (url, _selected) = if let Some(bracket_pos) = rest.rfind(" [") {
-                        (rest.get(..bracket_pos).unwrap_or(rest), true)
-                    } else {
-                        (rest, false)
-                    };
-                    tabs.push(TabInfo {
-                        id: id_str.to_string(),
-                        url: url.to_string(),
-                        title: String::new(),
-                    });
-                }
-            }
-        }
-        tabs
-    }
 }
 
 #[async_trait]
 impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         let result = self.call("new_page", json!({ "url": url })).await?;
-        // After opening, list pages to find the new page's index
         let text = Self::extract_text(&result);
-        // The response usually confirms the new page — re-list to get its ID
-        let tabs = self.list_tabs().await?;
-        Ok(tabs.last().map(|t| t.id.clone()).unwrap_or_else(|| {
-            // Fallback: try to extract from response text
+        // Re-list to find the new page's ID
+        let tabs_text = self.list_tabs().await?;
+        // Parse last numeric id from "N: URL" lines
+        let last_id = tabs_text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let colon_pos = line.find(": ")?;
+                let id_str = line.get(..colon_pos)?.trim();
+                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                    Some(id_str.to_string())
+                } else {
+                    None
+                }
+            })
+            .last();
+        Ok(last_id.unwrap_or_else(|| {
             text.lines()
                 .filter(|l| l.contains(url))
                 .filter_map(|l| l.split(':').next())
@@ -136,41 +116,9 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(())
     }
 
-    async fn list_tabs(&self) -> Result<Vec<TabInfo>, BrowserError> {
+    async fn list_tabs(&self) -> Result<String, BrowserError> {
         let result = self.call("list_pages", json!({})).await?;
-        // Chrome DevTools MCP returns text format: "## Pages\n1: URL [selected]\n2: URL\n..."
-        let text = Self::extract_text(&result);
-        let tabs = Self::parse_pages_text(&text);
-        if tabs.is_empty() {
-            // Fallback: try JSON parsing for future structured content support
-            if let Some(pages) = result
-                .as_array()
-                .or_else(|| result.get("pages").and_then(|v| v.as_array()))
-            {
-                return Ok(pages
-                    .iter()
-                    .map(|page| TabInfo {
-                        id: page
-                            .get("pageId")
-                            .or_else(|| page.get("id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
-                        url: page
-                            .get("url")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        title: page
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    })
-                    .collect());
-            }
-        }
-        Ok(tabs)
+        Ok(Self::extract_text(&result))
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
@@ -240,60 +188,46 @@ impl BrowserBackend for ChromeMcpBackend {
         &self,
         tab_id: &str,
         _opts: ScreenshotOpts,
-    ) -> Result<ScreenshotResult, BrowserError> {
+    ) -> Result<ScreenshotOutput, BrowserError> {
         self.select_page(tab_id).await?;
         let result = self.call("take_screenshot", json!({})).await?;
-        // Screenshot response may have base64 in content[0].data or content[0].text
-        let text = Self::extract_text(&result);
-        // Check if result has image content type
+        // Check if result has image content type with base64 data
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
                 if item.get("type").and_then(|v| v.as_str()) == Some("image") {
                     let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                    return Ok(ScreenshotResult {
-                        data_base64: data.to_string(),
-                        width: 0,
-                        height: 0,
-                        format: "png".to_string(),
-                    });
+                    let png_bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .unwrap_or_default();
+                    return Ok(ScreenshotOutput { png_bytes });
                 }
             }
         }
-        Ok(ScreenshotResult {
-            data_base64: text,
-            width: 0,
-            height: 0,
-            format: "png".to_string(),
+        // Fallback: treat text as base64
+        let text = Self::extract_text(&result);
+        let png_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&text)
+            .unwrap_or_default();
+        Ok(ScreenshotOutput { png_bytes })
+    }
+
+    async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
+        self.select_page(tab_id).await?;
+        let result = self.call("take_snapshot", json!({})).await?;
+        let snapshot_text = Self::extract_text(&result);
+        Ok(SnapshotOutput {
+            snapshot_text,
+            page_url: String::new(),
+            page_title: String::new(),
         })
     }
 
-    async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
+    async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError> {
         self.select_page(tab_id).await?;
-        let result = self.call("take_snapshot", json!({})).await?;
-
-        // MCP responses wrap content as: {"content": [{"type": "text", "text": "..."}]}
-        // The snapshot tree may be a JSON string inside the text field.
-        // Try multiple extraction strategies:
-
-        // 1. Direct "snapshot" key (future structured format)
-        if let Some(snapshot_data) = result.get("snapshot") {
-            return convert_chrome_mcp_snapshot(snapshot_data);
-        }
-
-        // 2. Extract text from MCP wrapper and parse as JSON
-        let text = Self::extract_text(&result);
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-            return convert_chrome_mcp_snapshot(&parsed);
-        }
-
-        // 3. Fallback: try the raw result
-        convert_chrome_mcp_snapshot(&result)
-    }
-
-    async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
-        self.select_page(tab_id).await?;
-        self.call("evaluate_script", json!({ "function": js }))
-            .await
+        let result = self
+            .call("evaluate_script", json!({ "function": js }))
+            .await?;
+        Ok(Self::extract_text(&result))
     }
 
     async fn select(
@@ -323,11 +257,10 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(true)
     }
 
-    async fn console_messages(&self, tab_id: &str) -> Result<Vec<ConsoleMessage>, BrowserError> {
+    async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
         self.select_page(tab_id).await?;
         let result = self.call("list_console_messages", json!({})).await?;
-        let text = Self::extract_text(&result);
-        Ok(parse_console_messages(&text))
+        Ok(Self::extract_text(&result))
     }
 
     async fn fill_form(
@@ -355,30 +288,4 @@ impl BrowserBackend for ChromeMcpBackend {
             .await?;
         Ok(form_fields.len())
     }
-}
-
-/// Parse console messages from Chrome DevTools MCP text output.
-/// Console output format: "[level] message" per line.
-fn parse_console_messages(text: &str) -> Vec<ConsoleMessage> {
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            // Try to extract [level] prefix
-            if line.starts_with('[') {
-                if let Some(end) = line.find(']') {
-                    let level = line.get(1..end).unwrap_or("log").to_lowercase();
-                    let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
-                    return Some(ConsoleMessage { level, text: msg });
-                }
-            }
-            // Fallback: treat as log
-            Some(ConsoleMessage {
-                level: "log".to_string(),
-                text: line.to_string(),
-            })
-        })
-        .collect()
 }

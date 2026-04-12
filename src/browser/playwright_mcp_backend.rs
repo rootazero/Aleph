@@ -1,4 +1,6 @@
 //! PlaywrightMcpBackend — BrowserBackend implementation routing through Playwright MCP.
+//! NOTE: This backend is pending deletion in Task 11. Methods are stubbed to satisfy the
+//! new BrowserBackend trait where the old return types no longer exist.
 
 use std::sync::Arc;
 
@@ -9,8 +11,7 @@ use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::playwright_mcp::PlaywrightMcpDriver;
 use super::types::{
-    ActionTarget, AriaElement, AriaSnapshot, ConsoleMessage, ScreenshotOpts, ScreenshotResult,
-    ScrollDirection, TabId, TabInfo,
+    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
 
 pub struct PlaywrightMcpBackend {
@@ -55,83 +56,14 @@ impl PlaywrightMcpBackend {
         result.to_string()
     }
 
-    /// Parse Playwright's indented ARIA snapshot format into flat elements.
-    ///
-    /// Input format example:
-    /// ```text
-    /// - heading "Title" [level=1]
-    /// - navigation "Main"
-    ///   - link "Home" [ref=s1e3]
-    /// ```
-    fn parse_snapshot_text(text: &str) -> Vec<AriaElement> {
-        let mut elements = Vec::new();
-
-        for line in text.lines() {
-            let trimmed = line.trim();
-            // Lines start with "- " followed by role and optional quoted name
-            let content = if let Some(stripped) = trimmed.strip_prefix("- ") {
-                stripped
-            } else {
-                continue;
-            };
-
-            // Parse: role "name" [ref=xxx] or role "name" [attr=val]
-            let (role, rest) = match content.find(' ') {
-                Some(pos) => (
-                    content.get(..pos).unwrap_or(content),
-                    content.get(pos + 1..).unwrap_or(""),
-                ),
-                None => (content, ""),
-            };
-
-            // Extract quoted name
-            let name = if rest.starts_with('"') {
-                // Find closing quote
-                rest.get(1..)
-                    .and_then(|s| s.find('"').map(|end| &s[..end]))
-                    .map(|s| s.to_string())
-            } else {
-                None
-            };
-
-            // Extract ref from [ref=xxx]
-            let ref_id = extract_bracket_value(rest, "ref");
-
-            elements.push(AriaElement {
-                ref_id: ref_id.unwrap_or_default(),
-                role: role.to_string(),
-                name,
-                value: None,
-                state: Vec::new(),
-                bounds: None,
-                children: Vec::new(),
-            });
-        }
-
-        elements
-    }
-
     /// Map an ActionTarget to Playwright MCP args (element description + ref).
     fn target_to_args(target: &ActionTarget) -> Result<(String, String), BrowserError> {
         match target {
             ActionTarget::Ref { ref_id } => Ok(("element".to_string(), ref_id.clone())),
-            ActionTarget::Selector { css } => Ok((css.clone(), String::new())),
             ActionTarget::Coordinates { x, y } => {
                 Ok((format!("coordinates ({x}, {y})"), String::new()))
             }
         }
-    }
-}
-
-/// Extract a value from bracket attributes like [ref=s1e3] or [level=1].
-fn extract_bracket_value(text: &str, key: &str) -> Option<String> {
-    let pattern = format!("[{key}=");
-    if let Some(start) = text.find(&pattern) {
-        let after = text.get(start + pattern.len()..)?;
-        let end = after.find(']')?;
-        Some(after.get(..end)?.to_string())
-    } else {
-        None
     }
 }
 
@@ -141,11 +73,18 @@ impl BrowserBackend for PlaywrightMcpBackend {
         let result = self.call("browser_tab_new", json!({ "url": url })).await?;
         let text = Self::extract_text(&result);
         // Return the tab index from response, or fallback to listing tabs
-        let tabs = self.list_tabs().await?;
-        Ok(tabs
-            .last()
-            .map(|t| t.id.clone())
-            .unwrap_or_else(|| text.trim().to_string()))
+        let tabs_text = self.list_tabs().await?;
+        // Parse the first tab id from the text list
+        let first_id = tabs_text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("Tab ")
+                    .and_then(|rest| rest.split(':').next())
+                    .map(|s| s.trim().to_string())
+            })
+            .last();
+        Ok(first_id.unwrap_or_else(|| text.trim().to_string()))
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
@@ -155,26 +94,9 @@ impl BrowserBackend for PlaywrightMcpBackend {
         Ok(())
     }
 
-    async fn list_tabs(&self) -> Result<Vec<TabInfo>, BrowserError> {
+    async fn list_tabs(&self) -> Result<String, BrowserError> {
         let result = self.call("browser_tab_list", json!({})).await?;
-        let text = Self::extract_text(&result);
-        // Parse "Tab N: URL" lines
-        let mut tabs = Vec::new();
-        for line in text.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("Tab ") {
-                if let Some(colon_pos) = rest.find(": ") {
-                    let id_str = rest.get(..colon_pos).unwrap_or("").trim();
-                    let url = rest.get(colon_pos + 2..).unwrap_or("").trim();
-                    tabs.push(TabInfo {
-                        id: id_str.to_string(),
-                        url: url.to_string(),
-                        title: String::new(),
-                    });
-                }
-            }
-        }
-        Ok(tabs)
+        Ok(Self::extract_text(&result))
     }
 
     async fn navigate(&self, _tab_id: &str, url: &str) -> Result<(), BrowserError> {
@@ -247,48 +169,25 @@ impl BrowserBackend for PlaywrightMcpBackend {
         &self,
         _tab_id: &str,
         _opts: ScreenshotOpts,
-    ) -> Result<ScreenshotResult, BrowserError> {
-        let result = self
-            .call("browser_screenshot", json!({ "raw": true }))
-            .await?;
-        // Check if result has image content type
-        if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
-            for item in content {
-                if item.get("type").and_then(|v| v.as_str()) == Some("image") {
-                    let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                    return Ok(ScreenshotResult {
-                        data_base64: data.to_string(),
-                        width: 0,
-                        height: 0,
-                        format: "png".to_string(),
-                    });
-                }
-            }
-        }
-        let text = Self::extract_text(&result);
-        Ok(ScreenshotResult {
-            data_base64: text,
-            width: 0,
-            height: 0,
-            format: "png".to_string(),
-        })
+    ) -> Result<ScreenshotOutput, BrowserError> {
+        Err(BrowserError::ActionFailed("pending migration".into()))
     }
 
-    async fn snapshot(&self, _tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
+    async fn snapshot(&self, _tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         let result = self.call("browser_snapshot", json!({})).await?;
         let text = Self::extract_text(&result);
-        let elements = Self::parse_snapshot_text(&text);
-        Ok(AriaSnapshot {
-            elements,
-            page_title: None,
-            page_url: None,
-            focused_ref: None,
+        Ok(SnapshotOutput {
+            snapshot_text: text,
+            page_url: String::new(),
+            page_title: String::new(),
         })
     }
 
-    async fn evaluate(&self, _tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
-        self.call("browser_evaluate", json!({ "expression": js }))
-            .await
+    async fn evaluate(&self, _tab_id: &str, js: &str) -> Result<String, BrowserError> {
+        let result = self
+            .call("browser_evaluate", json!({ "expression": js }))
+            .await?;
+        Ok(Self::extract_text(&result))
     }
 
     async fn select(
@@ -326,76 +225,15 @@ impl BrowserBackend for PlaywrightMcpBackend {
         Ok(true)
     }
 
-    async fn console_messages(&self, _tab_id: &str) -> Result<Vec<ConsoleMessage>, BrowserError> {
+    async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
         let result = self.call("browser_console_messages", json!({})).await?;
-        let text = Self::extract_text(&result);
-        // Parse "[level] message" lines
-        Ok(text
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() {
-                    return None;
-                }
-                if line.starts_with('[') {
-                    if let Some(end) = line.find(']') {
-                        let level = line.get(1..end).unwrap_or("log").to_lowercase();
-                        let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
-                        return Some(ConsoleMessage { level, text: msg });
-                    }
-                }
-                Some(ConsoleMessage {
-                    level: "log".to_string(),
-                    text: line.to_string(),
-                })
-            })
-            .collect())
+        Ok(Self::extract_text(&result))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_snapshot_text_basic() {
-        let text = r#"- heading "Title" [level=1]
-- navigation "Main"
-  - link "Home" [ref=s1e3]
-  - link "About" [ref=s1e4]
-- textbox "Search" [ref=s1e5]"#;
-
-        let elements = PlaywrightMcpBackend::parse_snapshot_text(text);
-        assert_eq!(elements.len(), 5);
-
-        assert_eq!(elements[0].role, "heading");
-        assert_eq!(elements[0].name.as_deref(), Some("Title"));
-        assert!(elements[0].ref_id.is_empty()); // no ref attribute
-
-        assert_eq!(elements[1].role, "navigation");
-        assert_eq!(elements[1].name.as_deref(), Some("Main"));
-
-        assert_eq!(elements[2].role, "link");
-        assert_eq!(elements[2].name.as_deref(), Some("Home"));
-        assert_eq!(elements[2].ref_id, "s1e3");
-
-        assert_eq!(elements[3].role, "link");
-        assert_eq!(elements[3].name.as_deref(), Some("About"));
-        assert_eq!(elements[3].ref_id, "s1e4");
-
-        assert_eq!(elements[4].role, "textbox");
-        assert_eq!(elements[4].name.as_deref(), Some("Search"));
-        assert_eq!(elements[4].ref_id, "s1e5");
-    }
-
-    #[test]
-    fn test_parse_snapshot_text_empty() {
-        let elements = PlaywrightMcpBackend::parse_snapshot_text("");
-        assert!(elements.is_empty());
-
-        let elements = PlaywrightMcpBackend::parse_snapshot_text("no elements here");
-        assert!(elements.is_empty());
-    }
 
     #[test]
     fn test_extract_text_mcp_format() {

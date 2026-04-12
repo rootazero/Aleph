@@ -1,19 +1,8 @@
-use std::collections::HashSet;
-use std::sync::OnceLock;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for a browser tab.
 pub type TabId = String;
-
-/// Information about an open browser tab.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TabInfo {
-    pub id: TabId,
-    pub url: String,
-    pub title: String,
-}
 
 /// Configuration for launching or connecting to a browser instance.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -73,69 +62,13 @@ pub enum LaunchMode {
     },
 }
 
-/// Snapshot of the page's accessibility (ARIA) tree.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AriaSnapshot {
-    /// Flat list of accessible elements.
-    pub elements: Vec<AriaElement>,
-
-    /// Title of the page.
-    pub page_title: Option<String>,
-
-    /// URL of the page.
-    pub page_url: Option<String>,
-
-    /// Reference ID of the currently focused element, if any.
-    pub focused_ref: Option<String>,
-}
-
-/// A single element in the ARIA snapshot tree.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AriaElement {
-    /// Unique reference ID for targeting this element.
-    pub ref_id: String,
-
-    /// ARIA role (e.g. "button", "textbox", "link").
-    pub role: String,
-
-    /// Accessible name.
-    pub name: Option<String>,
-
-    /// Current value (for inputs, sliders, etc.).
-    pub value: Option<String>,
-
-    /// ARIA states (e.g. "expanded", "checked", "disabled").
-    #[serde(default)]
-    pub state: Vec<String>,
-
-    /// Bounding rectangle in viewport coordinates.
-    pub bounds: Option<ElementRect>,
-
-    /// Child elements.
-    #[serde(default)]
-    pub children: Vec<AriaElement>,
-}
-
-/// Bounding rectangle of an element (viewport pixels).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ElementRect {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
 /// Target for a browser action (click, hover, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionTarget {
-    /// Target an element by its ARIA snapshot ref ID.
+    /// Target an element by its snapshot ref ID (e.g. "e42").
     Ref { ref_id: String },
-
-    /// Target an element by a CSS selector.
-    Selector { css: String },
-
-    /// Target a specific viewport coordinate.
+    /// Target a viewport coordinate.
     Coordinates { x: f64, y: f64 },
 }
 
@@ -183,22 +116,6 @@ impl Default for ScreenshotOpts {
     }
 }
 
-/// Result of a screenshot capture.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ScreenshotResult {
-    /// Base64-encoded image data.
-    pub data_base64: String,
-
-    /// Width of the captured image in pixels.
-    pub width: u32,
-
-    /// Height of the captured image in pixels.
-    pub height: u32,
-
-    /// Image format (e.g. "png", "jpeg").
-    pub format: String,
-}
-
 /// Kind of web storage.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -207,90 +124,105 @@ pub enum StorageKind {
     Session,
 }
 
-/// A browser console message.
+/// Browser snapshot (text-first).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ConsoleMessage {
-    /// Message level: "log", "warn", "error", "debug", "info".
-    pub level: String,
-    /// Message text.
-    pub text: String,
+pub struct SnapshotOutput {
+    /// Raw snapshot text — YAML from playwright-cli, indented-tree from chrome-devtools-mcp.
+    pub snapshot_text: String,
+    /// Page URL at snapshot time.
+    pub page_url: String,
+    /// Page title at snapshot time.
+    pub page_title: String,
 }
 
-/// Roles representing user-interactive elements (always get a ref in snapshots).
-pub fn interactive_roles() -> &'static HashSet<&'static str> {
-    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
-    ROLES.get_or_init(|| {
-        [
-            "button",
-            "checkbox",
-            "combobox",
-            "link",
-            "listbox",
-            "menuitem",
-            "menuitemcheckbox",
-            "menuitemradio",
-            "option",
-            "radio",
-            "searchbox",
-            "slider",
-            "spinbutton",
-            "switch",
-            "tab",
-            "textbox",
-            "treeitem",
-        ]
-        .into_iter()
-        .collect()
-    })
+/// Screenshot output (raw PNG bytes).
+#[derive(Debug, Clone)]
+pub struct ScreenshotOutput {
+    pub png_bytes: Vec<u8>,
 }
 
-/// Roles carrying meaningful content (get a ref when named).
-pub fn content_roles() -> &'static HashSet<&'static str> {
-    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
-    ROLES.get_or_init(|| {
-        [
-            "article",
-            "cell",
-            "columnheader",
-            "gridcell",
-            "heading",
-            "listitem",
-            "main",
-            "navigation",
-            "region",
-            "rowheader",
-        ]
-        .into_iter()
-        .collect()
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Structural/container roles — typically skipped in compact mode.
-pub fn structural_roles() -> &'static HashSet<&'static str> {
-    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
-    ROLES.get_or_init(|| {
-        [
-            "application",
-            "directory",
-            "document",
-            "generic",
-            "grid",
-            "group",
-            "ignored",
-            "list",
-            "menu",
-            "menubar",
-            "none",
-            "presentation",
-            "row",
-            "rowgroup",
-            "table",
-            "tablist",
-            "toolbar",
-            "tree",
-            "treegrid",
-        ]
-        .into_iter()
-        .collect()
-    })
+    #[test]
+    fn test_browser_config_defaults() {
+        let config = BrowserConfig::default();
+        assert_eq!(config.cdp_port, 9222);
+        assert!(!config.headless);
+        assert!(config.extra_args.is_empty());
+        assert!(config.user_data_dir.is_none());
+        assert!(matches!(config.mode, LaunchMode::Auto));
+    }
+
+    #[test]
+    fn test_action_target_serialization() {
+        // Ref variant
+        let target = ActionTarget::Ref {
+            ref_id: "e42".to_string(),
+        };
+        let json = serde_json::to_value(&target).unwrap();
+        assert_eq!(json["type"], "ref");
+        assert_eq!(json["ref_id"], "e42");
+
+        // Coordinates variant
+        let target = ActionTarget::Coordinates { x: 100.0, y: 200.0 };
+        let json = serde_json::to_value(&target).unwrap();
+        assert_eq!(json["type"], "coordinates");
+        assert_eq!(json["x"], 100.0);
+        assert_eq!(json["y"], 200.0);
+
+        // Round-trip deserialization
+        let round_trip: ActionTarget = serde_json::from_value(json).unwrap();
+        assert!(
+            matches!(round_trip, ActionTarget::Coordinates { x, y } if x == 100.0 && y == 200.0)
+        );
+    }
+
+    #[test]
+    fn test_launch_mode_tagged_enum_serialization() {
+        // Auto
+        let mode = LaunchMode::Auto;
+        let json = serde_json::to_value(&mode).unwrap();
+        assert_eq!(json["type"], "auto");
+
+        // Connect
+        let mode = LaunchMode::Connect {
+            endpoint: "ws://127.0.0.1:9222".to_string(),
+        };
+        let json = serde_json::to_value(&mode).unwrap();
+        assert_eq!(json["type"], "connect");
+        assert_eq!(json["endpoint"], "ws://127.0.0.1:9222");
+
+        // Binary
+        let mode = LaunchMode::Binary {
+            path: "/usr/bin/chromium".to_string(),
+        };
+        let json = serde_json::to_value(&mode).unwrap();
+        assert_eq!(json["type"], "binary");
+        assert_eq!(json["path"], "/usr/bin/chromium");
+
+        // Round-trip deserialization
+        let round_trip: LaunchMode = serde_json::from_value(json).unwrap();
+        assert!(matches!(round_trip, LaunchMode::Binary { path } if path == "/usr/bin/chromium"));
+    }
+
+    #[test]
+    fn test_snapshot_output_serde_roundtrip() {
+        let snap = SnapshotOutput {
+            snapshot_text: "- button \"OK\" [ref=e1]".into(),
+            page_url: "https://example.com/".into(),
+            page_title: "Example".into(),
+        };
+        let json = serde_json::to_value(&snap).unwrap();
+        let back: SnapshotOutput = serde_json::from_value(json).unwrap();
+        assert_eq!(back.page_url, "https://example.com/");
+    }
+
+    #[test]
+    fn test_action_target_no_selector_variant() {
+        let json = serde_json::json!({"type": "selector", "css": ".foo"});
+        let parsed: Result<ActionTarget, _> = serde_json::from_value(json);
+        assert!(parsed.is_err());
+    }
 }

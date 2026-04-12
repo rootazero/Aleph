@@ -8,64 +8,22 @@
 use chromiumoxide::Page;
 
 use super::error::BrowserError;
-use super::snapshot::{resolve_ref_to_point, take_aria_snapshot};
-use super::types::{ActionTarget, AriaSnapshot, ScrollDirection};
+use super::types::{ActionTarget, ScrollDirection};
 
 /// Resolve an [`ActionTarget`] to viewport `(x, y)` coordinates.
 ///
 /// | Variant       | Strategy                                                  |
 /// |---------------|-----------------------------------------------------------|
 /// | `Coordinates` | Returned as-is.                                           |
-/// | `Ref`         | Take an ARIA snapshot, find the element, return its centre.|
-/// | `Selector`    | Evaluate JS `querySelector` + `getBoundingClientRect`.    |
-async fn resolve_target(page: &Page, target: &ActionTarget) -> Result<(f64, f64), BrowserError> {
+/// | `Ref`         | Pending migration in Task 10 — returns error.             |
+async fn resolve_target(_page: &Page, target: &ActionTarget) -> Result<(f64, f64), BrowserError> {
     match target {
         ActionTarget::Coordinates { x, y } => Ok((*x, *y)),
 
-        ActionTarget::Ref { ref_id } => {
-            let snapshot: AriaSnapshot = take_aria_snapshot(page).await?;
-            resolve_ref_to_point(&snapshot, ref_id).ok_or_else(|| {
-                BrowserError::ActionFailed(format!("ARIA ref '{}' not found in snapshot", ref_id))
-            })
-        }
-
-        ActionTarget::Selector { css } => {
-            let escaped = serde_json::to_string(css).map_err(|e| {
-                BrowserError::ActionFailed(format!("Failed to escape CSS selector: {e}"))
-            })?;
-
-            let js = format!(
-                r#"(() => {{
-                    const el = document.querySelector({escaped});
-                    if (!el) return null;
-                    const r = el.getBoundingClientRect();
-                    return {{ x: r.x + r.width / 2, y: r.y + r.height / 2 }};
-                }})()"#
-            );
-
-            let result = page
-                .evaluate(js)
-                .await
-                .map_err(|e| BrowserError::EvalError(e.to_string()))?;
-
-            let value: serde_json::Value = result.into_value().unwrap_or(serde_json::Value::Null);
-
-            if value.is_null() {
-                return Err(BrowserError::ActionFailed(format!(
-                    "CSS selector '{}' matched no element",
-                    css
-                )));
-            }
-
-            let x = value["x"]
-                .as_f64()
-                .ok_or_else(|| BrowserError::ActionFailed("Missing x coordinate".to_string()))?;
-            let y = value["y"]
-                .as_f64()
-                .ok_or_else(|| BrowserError::ActionFailed("Missing y coordinate".to_string()))?;
-
-            Ok((x, y))
-        }
+        ActionTarget::Ref { ref_id } => Err(BrowserError::ActionFailed(format!(
+            "Ref targeting via ARIA snapshot pending migration (ref_id: {})",
+            ref_id
+        ))),
     }
 }
 
@@ -290,25 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn test_action_target_selector_variant() {
-        let target = ActionTarget::Selector {
-            css: "#login-form > input[type=\"email\"]".to_string(),
-        };
-
-        match &target {
-            ActionTarget::Selector { css } => {
-                assert_eq!(css, "#login-form > input[type=\"email\"]");
-                // Verify the selector can be safely JSON-escaped for JS injection
-                let escaped = serde_json::to_string(css).unwrap();
-                assert!(escaped.starts_with('"'));
-                assert!(escaped.ends_with('"'));
-                assert!(escaped.contains("\\\"email\\\""));
-            }
-            _ => panic!("Expected Selector variant"),
-        }
-    }
-
-    #[test]
     fn test_scroll_direction_deltas() {
         // Verify the delta mapping logic used inside scroll().
         let cases = vec![
@@ -329,15 +268,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_resolve_ref_to_point_returns_none_for_missing() {
-        let snapshot = AriaSnapshot {
-            elements: vec![],
-            page_title: None,
-            page_url: None,
-            focused_ref: None,
-        };
-
-        assert!(resolve_ref_to_point(&snapshot, "nonexistent[0]").is_none());
-    }
 }

@@ -1,4 +1,6 @@
 //! ManagedBackend — BrowserBackend implementation wrapping BrowserRuntime (chromiumoxide).
+//! NOTE: This backend is pending deletion in Task 10. Methods are stubbed to satisfy the
+//! new BrowserBackend trait; they return errors rather than real implementations.
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -9,7 +11,7 @@ use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::runtime::BrowserRuntime;
 use super::types::{
-    ActionTarget, AriaSnapshot, ScreenshotOpts, ScreenshotResult, ScrollDirection, TabId, TabInfo,
+    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
 
 /// BrowserBackend backed by a managed chromiumoxide BrowserRuntime.
@@ -33,8 +35,8 @@ impl BrowserBackend for ManagedBackend {
         self.runtime.lock().await.close_tab(tab_id).await
     }
 
-    async fn list_tabs(&self) -> Result<Vec<TabInfo>, BrowserError> {
-        Ok(self.runtime.lock().await.list_tabs().await)
+    async fn list_tabs(&self) -> Result<String, BrowserError> {
+        Err(BrowserError::ActionFailed("pending migration".into()))
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
@@ -86,18 +88,19 @@ impl BrowserBackend for ManagedBackend {
 
     async fn screenshot(
         &self,
-        tab_id: &str,
-        opts: ScreenshotOpts,
-    ) -> Result<ScreenshotResult, BrowserError> {
-        self.runtime.lock().await.screenshot(tab_id, opts).await
+        _tab_id: &str,
+        _opts: ScreenshotOpts,
+    ) -> Result<ScreenshotOutput, BrowserError> {
+        Err(BrowserError::ActionFailed("pending migration".into()))
     }
 
-    async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
-        self.runtime.lock().await.snapshot(tab_id).await
+    async fn snapshot(&self, _tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
+        Err(BrowserError::ActionFailed("pending migration".into()))
     }
 
-    async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
-        self.runtime.lock().await.evaluate(tab_id, js).await
+    async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError> {
+        let val = self.runtime.lock().await.evaluate(tab_id, js).await?;
+        Ok(val.to_string())
     }
 
     async fn select(
@@ -106,8 +109,6 @@ impl BrowserBackend for ManagedBackend {
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        // BrowserRuntime doesn't have a select method yet.
-        // Implement via JS evaluation as a reasonable fallback.
         let escaped_value = serde_json::to_string(value).map_err(|e| {
             BrowserError::ActionFailed(format!("Failed to escape select value: {e}"))
         })?;
@@ -118,14 +119,6 @@ impl BrowserBackend for ManagedBackend {
                 })?;
                 format!(
                     r#"(() => {{ const el = document.querySelector('[data-ref=' + {escaped_ref} + ']'); if (el) {{ el.value = {escaped_value}; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#
-                )
-            }
-            ActionTarget::Selector { css } => {
-                let escaped_css = serde_json::to_string(css).map_err(|e| {
-                    BrowserError::ActionFailed(format!("Failed to escape CSS selector: {e}"))
-                })?;
-                format!(
-                    r#"(() => {{ const el = document.querySelector({escaped_css}); if (el) {{ el.value = {escaped_value}; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#
                 )
             }
             ActionTarget::Coordinates { .. } => {

@@ -48,17 +48,19 @@ impl BrowserClickTool {
 }
 
 fn resolve_target(args: &BrowserClickArgs) -> std::result::Result<ActionTarget, AlephError> {
-    if let Some(ref sel) = args.selector {
-        Ok(ActionTarget::Selector { css: sel.clone() })
-    } else if let Some(ref rid) = args.ref_id {
+    if let Some(ref rid) = args.ref_id {
         Ok(ActionTarget::Ref {
             ref_id: rid.clone(),
         })
     } else if let (Some(x), Some(y)) = (args.x, args.y) {
         Ok(ActionTarget::Coordinates { x, y })
+    } else if args.selector.is_some() {
+        Err(AlephError::invalid_input(
+            "CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.",
+        ))
     } else {
         Err(AlephError::invalid_input(
-            "browser_click requires at least one targeting method: selector, ref_id, or x/y coordinates",
+            "browser_click requires at least one targeting method: ref_id or x/y coordinates",
         ))
     }
 }
@@ -98,7 +100,8 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_click_with_selector() {
+    async fn test_click_with_selector_returns_error() {
+        // CSS selector targeting is no longer supported — must use ref_id.
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserClickTool::new(manager);
@@ -111,12 +114,9 @@ mod tests {
                 x: None,
                 y: None,
             })
-            .await
-            .unwrap();
+            .await;
 
-        // Without a running browser, tools degrade gracefully
-        assert!(!result.success);
-        assert!(result.message.is_some());
+        assert!(result.is_err(), "selector-only click should return Err");
     }
 
     #[tokio::test]

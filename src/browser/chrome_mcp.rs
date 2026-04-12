@@ -311,12 +311,9 @@ mod integration_tests {
 
         println!("Calling list_tabs...");
         match backend.list_tabs().await {
-            Ok(tabs) => {
-                println!("Open tabs ({}):", tabs.len());
-                for t in &tabs {
-                    println!("  [{}] {}", t.id, t.url);
-                }
-                assert!(!tabs.is_empty(), "Should have at least one tab open");
+            Ok(tabs_text) => {
+                println!("Open tabs:\n{tabs_text}");
+                assert!(!tabs_text.is_empty(), "Should have at least one tab open");
             }
             Err(e) => {
                 panic!("list_tabs failed: {e}");
@@ -331,15 +328,35 @@ mod integration_tests {
         let driver = Arc::new(ChromeMcpDriver::new(config));
         let backend = ChromeMcpBackend::new(driver, "user".to_string());
 
-        let tabs = backend.list_tabs().await.expect("list_tabs");
-        println!("Tabs for snapshot: {tabs:?}");
-        // Use second tab (skip chrome://inspect which may not have useful content)
-        let tab_id = tabs
-            .get(1)
-            .or(tabs.first())
-            .expect("need at least one tab")
-            .id
-            .clone();
+        let tabs_text = backend.list_tabs().await.expect("list_tabs");
+        println!("Tabs for snapshot:\n{tabs_text}");
+        // Parse first numeric tab id from text
+        let tab_id = tabs_text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let colon_pos = line.find(": ")?;
+                let id_str = line.get(..colon_pos)?.trim();
+                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                    Some(id_str.to_string())
+                } else {
+                    None
+                }
+            })
+            .nth(1)
+            .or_else(|| {
+                tabs_text.lines().find_map(|line| {
+                    let line = line.trim();
+                    let colon_pos = line.find(": ")?;
+                    let id_str = line.get(..colon_pos)?.trim();
+                    if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                        Some(id_str.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("need at least one tab");
         let tab_id = &tab_id;
 
         let snapshot = backend
@@ -347,9 +364,9 @@ mod integration_tests {
             .await
             .expect("snapshot should succeed");
         assert!(
-            !snapshot.elements.is_empty(),
-            "Snapshot should have elements"
+            !snapshot.snapshot_text.is_empty(),
+            "Snapshot should have content"
         );
-        println!("Snapshot elements: {}", snapshot.elements.len());
+        println!("Snapshot text length: {}", snapshot.snapshot_text.len());
     }
 }

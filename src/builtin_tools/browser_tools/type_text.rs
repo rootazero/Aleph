@@ -54,12 +54,17 @@ impl AlephTool for BrowserTypeTool {
     type Output = BrowserTypeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let target = if let Some(ref sel) = args.selector {
-            ActionTarget::Selector { css: sel.clone() }
-        } else if let Some(ref rid) = args.ref_id {
+        let target = if let Some(ref rid) = args.ref_id {
             ActionTarget::Ref {
                 ref_id: rid.clone(),
             }
+        } else if args.selector.is_some() {
+            return Ok(BrowserTypeOutput {
+                success: false,
+                message: Some(
+                    "CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.".into(),
+                ),
+            });
         } else {
             ActionTarget::Ref {
                 ref_id: "focused".into(),

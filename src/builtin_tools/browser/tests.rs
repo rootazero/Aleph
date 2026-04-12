@@ -30,10 +30,11 @@ fn test_resolve_action_target_ref() {
 
 #[test]
 fn test_resolve_action_target_selector() {
+    // CSS selectors are no longer supported — resolve_action_target should return Err.
     let mut args = make_args(BrowserAction::Click);
     args.selector = Some("button.submit".to_string());
-    let target = resolve_action_target(&args).unwrap();
-    assert!(matches!(target, ActionTarget::Selector { css } if css == "button.submit"));
+    let result = resolve_action_target(&args);
+    assert!(result.is_err(), "selector-only target should now return Err");
 }
 
 #[test]

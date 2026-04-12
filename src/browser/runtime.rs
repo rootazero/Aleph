@@ -16,9 +16,25 @@ use futures::StreamExt;
 use super::discovery::find_chromium;
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, AriaSnapshot, BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotResult,
-    ScrollDirection, TabId, TabInfo,
+    ActionTarget, BrowserConfig, LaunchMode, ScreenshotOpts, ScrollDirection, TabId,
 };
+
+/// Tab information returned by BrowserRuntime (internal use only; runtime.rs pending deletion in Task 10).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TabInfo {
+    pub id: TabId,
+    pub url: String,
+    pub title: String,
+}
+
+/// Screenshot result from BrowserRuntime (internal use only; runtime.rs pending deletion in Task 10).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScreenshotResult {
+    pub data_base64: String,
+    pub width: u32,
+    pub height: u32,
+    pub format: String,
+}
 
 /// A running browser instance managed through CDP.
 ///
@@ -268,9 +284,9 @@ impl BrowserRuntime {
     }
 
     /// Take an ARIA accessibility snapshot of the given tab.
-    pub async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
-        let page = self.find_page(tab_id)?;
-        super::snapshot::take_aria_snapshot(page).await
+    /// NOTE: Pending migration in Task 10 — returns error stub.
+    pub async fn snapshot(&self, _tab_id: &str) -> Result<String, BrowserError> {
+        Err(BrowserError::ActionFailed("pending migration".into()))
     }
 
     /// Shut down the browser and abort the CDP handler task.

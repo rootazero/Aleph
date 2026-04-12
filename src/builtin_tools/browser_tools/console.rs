@@ -5,7 +5,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
-use crate::browser::types::ConsoleMessage;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -20,7 +19,7 @@ pub struct BrowserConsoleArgs {
 #[derive(Debug, Serialize)]
 pub struct BrowserConsoleOutput {
     pub success: bool,
-    pub messages: Vec<ConsoleMessage>,
+    pub messages: String,
     pub message: Option<String>,
 }
 
@@ -47,22 +46,22 @@ impl AlephTool for BrowserConsoleTool {
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.console_messages(&tab_id).await {
                 Ok(messages) => {
-                    let count = messages.len();
+                    let line_count = messages.lines().count();
                     Ok(BrowserConsoleOutput {
                         success: true,
                         messages,
-                        message: Some(format!("{count} console message(s)")),
+                        message: Some(format!("{line_count} console message(s)")),
                     })
                 }
                 Err(e) => Ok(BrowserConsoleOutput {
                     success: false,
-                    messages: vec![],
+                    messages: String::new(),
                     message: Some(format!("Console read failed: {e}")),
                 }),
             },
             Err(e) => Ok(BrowserConsoleOutput {
                 success: false,
-                messages: vec![],
+                messages: String::new(),
                 message: Some(format!("{e}")),
             }),
         }

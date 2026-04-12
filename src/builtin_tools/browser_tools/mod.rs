@@ -27,10 +27,27 @@ use crate::browser::profile::BrowserDriver;
 /// Get the active (most recent) tab from the backend, or return an error if none open.
 /// Uses last() because newly opened tabs appear at the end of the list.
 async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserError> {
-    let tabs = backend.list_tabs().await?;
-    tabs.last()
-        .map(|t| t.id.clone())
-        .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
+    let tabs_text = backend.list_tabs().await?;
+    // Parse the last numeric id from text lines like "1: URL [selected]" or "Tab 1: URL"
+    let last_id = tabs_text.lines().filter_map(|line| {
+        let line = line.trim();
+        // Chrome DevTools MCP format: "N: URL"
+        if let Some(colon_pos) = line.find(": ") {
+            let id_str = line.get(..colon_pos)?.trim();
+            if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                return Some(id_str.to_string());
+            }
+        }
+        // Playwright MCP format: "Tab N: URL"
+        if let Some(rest) = line.strip_prefix("Tab ") {
+            if let Some(colon_pos) = rest.find(": ") {
+                let id_str = rest.get(..colon_pos)?.trim();
+                return Some(id_str.to_string());
+            }
+        }
+        None
+    }).last();
+    last_id.ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }
 
 /// Create the appropriate backend for the given profile.

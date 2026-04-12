@@ -14,8 +14,9 @@ pub(super) fn resolve_action_target(
         Ok(ActionTarget::Ref {
             ref_id: ref_id.clone(),
         })
-    } else if let Some(ref css) = args.selector {
-        Ok(ActionTarget::Selector { css: css.clone() })
+    } else if let Some(ref _css) = args.selector {
+        // CSS selectors are no longer supported — callers should use ref_id from a snapshot.
+        Err("CSS selector targeting is no longer supported. Use 'ref_id' from a browser_snapshot.".to_string())
     } else {
         Err(
             "This action requires a target element. Provide 'ref_id' (from a snapshot) \

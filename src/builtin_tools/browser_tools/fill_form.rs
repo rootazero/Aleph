@@ -80,8 +80,12 @@ impl AlephTool for BrowserFillFormTool {
                 ActionTarget::Ref {
                     ref_id: ref_id.clone(),
                 }
-            } else if let Some(ref css) = field.selector {
-                ActionTarget::Selector { css: css.clone() }
+            } else if field.selector.is_some() {
+                return Ok(BrowserFillFormOutput {
+                    success: false,
+                    filled_count: 0,
+                    message: Some("CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.".into()),
+                });
             } else {
                 return Ok(BrowserFillFormOutput {
                     success: false,

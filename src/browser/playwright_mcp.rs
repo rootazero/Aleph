@@ -42,7 +42,7 @@ impl PlaywrightMcpDriver {
 
         let sessions = self.sessions.read().await;
         let session = sessions.get(session_key).ok_or_else(|| {
-            BrowserError::PlaywrightError("Session not found after creation".into())
+            BrowserError::PlaywrightCliError("Session not found after creation".into())
         })?;
 
         // MCP tools are namespaced with server prefix: "playwright-{session_key}:{tool}"
@@ -64,12 +64,12 @@ impl PlaywrightMcpDriver {
                     drop(sessions);
                     self.destroy_session(session_key).await;
                 }
-                return Err(BrowserError::PlaywrightError(err_str));
+                return Err(BrowserError::PlaywrightCliError(err_str));
             }
         };
 
         if !result.success {
-            return Err(BrowserError::PlaywrightError(
+            return Err(BrowserError::PlaywrightCliError(
                 result
                     .error
                     .unwrap_or_else(|| "Unknown Playwright MCP error".into()),
@@ -119,7 +119,7 @@ impl PlaywrightMcpDriver {
 
         let client = McpClient::new();
         client.start_external_server(config).await.map_err(|e| {
-            BrowserError::PlaywrightError(format!("Failed to start Playwright MCP: {e}"))
+            BrowserError::PlaywrightCliError(format!("Failed to start Playwright MCP: {e}"))
         })?;
 
         tracing::info!("Playwright MCP session started for key '{session_key}'");

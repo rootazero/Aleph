@@ -56,11 +56,16 @@ impl AlephTool for BrowserScreenshotTool {
                     ..Default::default()
                 };
                 match backend.screenshot(&tab_id, opts).await {
-                    Ok(result) => Ok(BrowserScreenshotOutput {
-                        success: true,
-                        image_base64: Some(result.data_base64),
-                        message: Some(format!("Screenshot captured in profile '{}'", args.profile)),
-                    }),
+                    Ok(result) => {
+                        use base64::Engine as _;
+                        let image_base64 = base64::engine::general_purpose::STANDARD
+                            .encode(&result.png_bytes);
+                        Ok(BrowserScreenshotOutput {
+                            success: true,
+                            image_base64: Some(image_base64),
+                            message: Some(format!("Screenshot captured in profile '{}'", args.profile)),
+                        })
+                    },
                     Err(e) => Ok(BrowserScreenshotOutput {
                         success: false,
                         image_base64: None,

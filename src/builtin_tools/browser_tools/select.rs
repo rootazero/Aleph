@@ -56,11 +56,13 @@ impl AlephTool for BrowserSelectTool {
             ActionTarget::Ref {
                 ref_id: rid.clone(),
             }
-        } else if let Some(ref css) = args.selector {
-            ActionTarget::Selector { css: css.clone() }
+        } else if args.selector.is_some() {
+            return Err(AlephError::invalid_input(
+                "CSS selector targeting is no longer supported. Use 'ref_id' from browser_snapshot.",
+            ));
         } else {
             return Err(AlephError::invalid_input(
-                "browser_select requires either 'selector' or 'ref_id'",
+                "browser_select requires 'ref_id'",
             ));
         };
 
@@ -89,7 +91,8 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_select_with_selector() {
+    async fn test_select_with_selector_returns_error() {
+        // CSS selector targeting is no longer supported — must use ref_id.
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserSelectTool::new(manager);
@@ -101,10 +104,9 @@ mod tests {
                 ref_id: None,
                 value: "us".into(),
             })
-            .await
-            .unwrap();
+            .await;
 
-        assert!(!result.success); // No browser running
+        assert!(result.is_err(), "selector-only select should return Err");
     }
 
     #[tokio::test]

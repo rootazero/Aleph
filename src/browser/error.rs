@@ -41,8 +41,17 @@ pub enum BrowserError {
     #[error("Chrome DevTools MCP error: {0}")]
     ChromeMcpError(String),
 
-    #[error("Playwright MCP error: {0}")]
-    PlaywrightError(String),
+    #[error("Playwright CLI error: {0}")]
+    PlaywrightCliError(String),
+
+    #[error("Playwright CLI not installed. Open Settings → Browser → Install All.")]
+    PlaywrightCliNotInstalled,
+
+    #[error("No active browser session for '{0}'. Call open/goto first.")]
+    NoSession(String),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 
     #[error("Browser profile not found: {0}")]
     ProfileNotFound(String),

@@ -49,15 +49,20 @@ impl AlephTool for BrowserEvaluateTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
-                Ok(value) => Ok(BrowserEvaluateOutput {
-                    success: true,
-                    result: Some(value),
-                    message: Some(format!(
-                        "Evaluated {} chars of JS in profile '{}'",
-                        args.script.chars().count(),
-                        args.profile
-                    )),
-                }),
+                Ok(value) => {
+                    // evaluate() returns String; try to parse as JSON, else wrap as JSON string.
+                    let json_value: serde_json::Value = serde_json::from_str(&value)
+                        .unwrap_or(serde_json::Value::String(value));
+                    Ok(BrowserEvaluateOutput {
+                        success: true,
+                        result: Some(json_value),
+                        message: Some(format!(
+                            "Evaluated {} chars of JS in profile '{}'",
+                            args.script.chars().count(),
+                            args.profile
+                        )),
+                    })
+                }
                 Err(e) => Ok(BrowserEvaluateOutput {
                     success: false,
                     result: None,
