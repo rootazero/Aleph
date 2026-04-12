@@ -3,12 +3,14 @@
 pub mod daily_digest;
 pub mod note_consolidate;
 pub mod note_decay;
+pub mod note_drift;
 pub mod note_lint;
 pub mod types;
 
 pub use daily_digest::DailyDigestStage;
 pub use note_consolidate::NoteConsolidateStage;
 pub use note_decay::NoteDecayStage;
+pub use note_drift::NoteDriftStage;
 pub use note_lint::NoteLintStage;
 
 // Old stages — temporarily disabled during migration to notes layer.
