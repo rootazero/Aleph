@@ -118,45 +118,8 @@ impl ProfileState {
     }
 }
 
-/// Configuration for the Playwright MCP integration (legacy — kept for PlaywrightMcpDriver compat).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PlaywrightMcpConfig {
-    /// Whether Playwright MCP is enabled.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Command to launch the MCP server.
-    #[serde(default = "default_mcp_command")]
-    pub command: String,
-
-    /// Arguments for the MCP command.
-    #[serde(default = "default_mcp_args")]
-    pub args: Vec<String>,
-}
-
 fn default_true() -> bool {
     true
-}
-
-fn default_mcp_command() -> String {
-    "npx".to_string()
-}
-
-fn default_mcp_args() -> Vec<String> {
-    vec![
-        "@playwright/mcp@latest".to_string(),
-        "--headless".to_string(),
-    ]
-}
-
-impl Default for PlaywrightMcpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            command: default_mcp_command(),
-            args: default_mcp_args(),
-        }
-    }
 }
 
 /// Configuration for the Playwright CLI integration.
