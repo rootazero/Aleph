@@ -559,7 +559,7 @@ pub fn default_memory_decay_protected_types() -> Vec<String> {
 /// Controls how `ContextComposer` assembles the always-loaded core set.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContextComposerConfig {
-    /// Maximum bytes of `persona/` + `preference/` notes to inject into
+    /// Maximum tokens of `persona/` + `preference/` notes to inject into
     /// the system prompt per composition. Notes that don't fit remain
     /// reachable via query-time retrieval.
     #[serde(default = "default_core_budget_tokens")]
