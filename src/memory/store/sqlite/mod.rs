@@ -10,6 +10,7 @@ pub mod vec;
 mod facts;
 pub mod dream_reports;
 pub mod notes;
+pub mod raw_memories;
 pub mod recall_signals;
 mod sessions;
 
