@@ -7,8 +7,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::raw_memory::RawMemoryStore;
+use crate::memory::store::MemoryBackend;
 
 fn default_max_results() -> usize {
     3
@@ -80,20 +80,18 @@ impl RecallContextTool {
     pub async fn call_impl(&self, args: RecallContextArgs) -> anyhow::Result<RecallContextResult> {
         let path_prefix = format!("aleph://session/{}/raw/", self.session_id);
 
-        let filter = SearchFilter::new().with_path_prefix(&path_prefix);
-
-        let facts = self
+        let raws = self
             .database
-            .get_facts_by_path_prefix(&path_prefix, &filter, args.max_results)
+            .get_raw_by_path_prefix(&path_prefix, "default", args.max_results)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to retrieve raw context chunks: {}", e))?;
 
-        let fragments = facts
+        let fragments = raws
             .into_iter()
-            .map(|f| RecalledFragment {
-                content: f.content,
-                relevance_score: f.confidence,
-                source_path: f.path,
+            .map(|r| RecalledFragment {
+                content: r.content,
+                relevance_score: 1.0,
+                source_path: r.path.unwrap_or_default(),
             })
             .collect();
 
