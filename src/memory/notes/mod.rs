@@ -9,10 +9,12 @@ pub mod indexer;
 pub mod migration;
 mod note;
 pub mod retrieval;
+pub mod search_result;
 pub mod store;
 mod wikilink;
 
 pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{sanitize_title, KnowledgeNote};
 pub use retrieval::{NoteContent, NoteRetrieval};
+pub use search_result::NoteSearchResult;
 pub use wikilink::{extract_wikilinks, resolve_wikilink, rewrite_wikilinks};
