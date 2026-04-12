@@ -44,7 +44,6 @@ pub mod session_compactor;
 pub mod session_resume;
 pub mod store;
 pub mod transcript_indexer;
-pub mod value_estimator;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
@@ -104,9 +103,6 @@ pub use ripple::{RippleConfig, RippleResult, RippleTask};
 pub use scratchpad::{ScratchpadConfig, ScratchpadManager, SessionHistory};
 pub use transcript_indexer::{
     SemanticChunkConfig, SemanticChunker, TranscriptIndexer, TranscriptIndexerConfig,
-};
-pub use value_estimator::{
-    CortexValueEstimator, ExperienceScore, LlmScorer, LlmScorerConfig, ValueEstimator,
 };
 // SQLite store types (Phase 3)
 pub use store::sqlite::SqliteMemoryBackend;

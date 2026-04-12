@@ -8,7 +8,6 @@ use crate::memory::cortex::{
     DistillationMode, DistillationPriority, DistillationService, DistillationTask,
 };
 use crate::memory::store::MemoryBackend;
-use crate::memory::value_estimator::cortex::CortexValueEstimator;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use chrono::{Datelike, Timelike};
@@ -95,7 +94,6 @@ impl DreamingMetrics {
 pub struct CortexDreamingService {
     db: MemoryBackend,
     distillation_service: Arc<RwLock<DistillationService>>,
-    value_estimator: Arc<CortexValueEstimator>,
     config: CortexDreamingConfig,
     metrics: Arc<DreamingMetrics>,
     running: Arc<AtomicBool>,
@@ -107,13 +105,11 @@ impl CortexDreamingService {
     pub fn new(
         db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
-        value_estimator: Arc<CortexValueEstimator>,
         config: CortexDreamingConfig,
     ) -> Self {
         Self {
             db,
             distillation_service,
-            value_estimator,
             config,
             metrics: Arc::new(DreamingMetrics::default()),
             running: Arc::new(AtomicBool::new(false)),
@@ -133,21 +129,12 @@ impl CortexDreamingService {
 
         let db = self.db.clone();
         let distillation_service = self.distillation_service.clone();
-        let value_estimator = self.value_estimator.clone();
         let config = self.config.clone();
         let metrics = self.metrics.clone();
         let running = self.running.clone();
 
         let handle = tokio::spawn(async move {
-            Self::worker_loop(
-                db,
-                distillation_service,
-                value_estimator,
-                config,
-                metrics,
-                running,
-            )
-            .await;
+            Self::worker_loop(db, distillation_service, config, metrics, running).await;
         });
 
         self.worker_handle = Some(handle);
@@ -180,7 +167,6 @@ impl CortexDreamingService {
     async fn worker_loop(
         db: MemoryBackend,
         distillation_service: Arc<RwLock<DistillationService>>,
-        value_estimator: Arc<CortexValueEstimator>,
         config: CortexDreamingConfig,
         metrics: Arc<DreamingMetrics>,
         running: Arc<AtomicBool>,
@@ -202,14 +188,8 @@ impl CortexDreamingService {
                     info!("Starting scheduled batch processing");
                     last_scheduled_day = current_day;
 
-                    if let Err(e) = Self::process_batch(
-                        &db,
-                        &distillation_service,
-                        &value_estimator,
-                        &config,
-                        &metrics,
-                    )
-                    .await
+                    if let Err(e) =
+                        Self::process_batch(&db, &distillation_service, &config, &metrics).await
                     {
                         error!("Scheduled batch processing failed: {}", e);
                     }
@@ -221,14 +201,8 @@ impl CortexDreamingService {
             if idle_secs >= config.min_idle_seconds {
                 debug!("System idle for {}s, starting batch processing", idle_secs);
 
-                if let Err(e) = Self::process_batch(
-                    &db,
-                    &distillation_service,
-                    &value_estimator,
-                    &config,
-                    &metrics,
-                )
-                .await
+                if let Err(e) =
+                    Self::process_batch(&db, &distillation_service, &config, &metrics).await
                 {
                     error!("Idle batch processing failed: {}", e);
                 }
@@ -239,11 +213,15 @@ impl CortexDreamingService {
     }
 
     /// Process a batch of candidate experiences
+    ///
+    /// NOTE: value-estimator scoring has been removed — this cortex module is
+    /// slated for removal in a separate spec. The batch path is currently a
+    /// no-op because the candidate query is not yet wired; keeping the shell
+    /// so the service lifecycle remains intact.
     async fn process_batch(
         _db: &crate::memory::store::sqlite::SqliteMemoryBackend,
-        distillation_service: &Arc<RwLock<DistillationService>>,
-        value_estimator: &CortexValueEstimator,
-        config: &CortexDreamingConfig,
+        _distillation_service: &Arc<RwLock<DistillationService>>,
+        _config: &CortexDreamingConfig,
         metrics: &DreamingMetrics,
     ) -> Result<()> {
         info!("Starting batch processing");
@@ -260,59 +238,6 @@ impl CortexDreamingService {
 
         info!("Found {} candidate experiences", candidates.len());
 
-        // Score and filter candidates
-        let mut scored_candidates = Vec::new();
-        for exp in candidates {
-            let score = value_estimator.estimate(&exp).await?;
-            if score.final_score >= config.min_value_score {
-                scored_candidates.push((exp, score.final_score));
-            }
-        }
-
-        // Sort by score (highest first)
-        scored_candidates
-            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        info!(
-            "Filtered to {} high-value experiences",
-            scored_candidates.len()
-        );
-
-        // Enqueue distillation tasks with rate limiting
-        let max_per_batch = config.max_distillations_per_minute;
-        let to_process = scored_candidates
-            .into_iter()
-            .take(max_per_batch)
-            .collect::<Vec<_>>();
-
-        let service = distillation_service.read().await;
-        for (exp, score) in to_process {
-            let task = DistillationTask {
-                trace_id: exp.id.clone(),
-                mode: DistillationMode::Batch,
-            };
-
-            // Higher score = higher priority
-            let priority = if score >= 0.9 {
-                DistillationPriority::High
-            } else if score >= 0.75 {
-                DistillationPriority::Normal
-            } else {
-                DistillationPriority::Low
-            };
-
-            match service.enqueue_task(task, priority).await {
-                Ok(_) => {
-                    metrics.increment_processed();
-                    debug!("Enqueued distillation for experience: {}", exp.id);
-                }
-                Err(e) => {
-                    metrics.increment_errors();
-                    error!("Failed to enqueue distillation: {}", e);
-                }
-            }
-        }
-
         metrics.update_last_processing(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -320,7 +245,7 @@ impl CortexDreamingService {
                 .as_secs(),
         );
 
-        info!("Batch processing completed");
+        info!("Batch processing completed (no-op: value estimator removed)");
         Ok(())
     }
 
@@ -358,11 +283,9 @@ mod tests {
         let (distillation_service, _rx) = DistillationService::new(db.clone(), distillation_config);
         let distillation_service = Arc::new(RwLock::new(distillation_service));
 
-        let value_estimator = Arc::new(CortexValueEstimator::default());
         let config = CortexDreamingConfig::default();
 
-        let mut service =
-            CortexDreamingService::new(db, distillation_service, value_estimator, config);
+        let mut service = CortexDreamingService::new(db, distillation_service, config);
 
         // Start service
         service.start().await.unwrap();
@@ -381,10 +304,9 @@ mod tests {
         let (distillation_service, _rx) = DistillationService::new(db.clone(), distillation_config);
         let distillation_service = Arc::new(RwLock::new(distillation_service));
 
-        let value_estimator = Arc::new(CortexValueEstimator::default());
         let config = CortexDreamingConfig::default();
 
-        let service = CortexDreamingService::new(db, distillation_service, value_estimator, config);
+        let service = CortexDreamingService::new(db, distillation_service, config);
 
         // Check initial metrics
         let (processed, extracted, errors, _) = service.metrics();

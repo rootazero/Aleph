@@ -9,7 +9,6 @@ use crate::memory::cortex::{
     DistillationConfig, DistillationService, PatternExtractor, PatternExtractorConfig,
 };
 use crate::memory::store::MemoryBackend;
-use crate::memory::value_estimator::cortex::CortexValueEstimator;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
@@ -51,7 +50,6 @@ pub struct CortexIntegration {
     pattern_extractor: Arc<PatternExtractor>,
     dreaming_service: Option<CortexDreamingService>,
     clustering_service: Arc<ClusteringService>,
-    value_estimator: Arc<CortexValueEstimator>,
 }
 
 impl CortexIntegration {
@@ -71,15 +69,11 @@ impl CortexIntegration {
         // Create pattern extractor
         let pattern_extractor = Arc::new(PatternExtractor::new(config.pattern_extraction.clone()));
 
-        // Create value estimator
-        let value_estimator = Arc::new(CortexValueEstimator::default());
-
         // Create dreaming service
         let dreaming_service = if config.enabled {
             Some(CortexDreamingService::new(
                 db.clone(),
                 distillation_service.clone(),
-                value_estimator.clone(),
                 config.dreaming.clone(),
             ))
         } else {
@@ -100,7 +94,6 @@ impl CortexIntegration {
             pattern_extractor,
             dreaming_service,
             clustering_service,
-            value_estimator,
         }
     }
 
@@ -148,11 +141,6 @@ impl CortexIntegration {
     /// Get reference to clustering service
     pub fn clustering_service(&self) -> Arc<ClusteringService> {
         self.clustering_service.clone()
-    }
-
-    /// Get reference to value estimator
-    pub fn value_estimator(&self) -> Arc<CortexValueEstimator> {
-        self.value_estimator.clone()
     }
 
     /// Get reference to embedder
