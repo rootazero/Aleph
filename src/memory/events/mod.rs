@@ -10,7 +10,7 @@
 //!   (FactCreated, FactContentUpdated, FactMetadataUpdated, TierTransitioned,
 //!   FactInvalidated, FactRestored, FactDeleted, FactConsolidated, FactMigrated)
 //! - **Pulse** — high-frequency observations that may be buffered before persist
-//!   (FactAccessed, StrengthDecayed)
+//!   (FactAccessed)
 //!
 //! ## Submodules
 //!
@@ -187,14 +187,6 @@ pub enum MemoryEvent {
         new_access_count: u32,
     },
 
-    /// The fact's strength decayed
-    StrengthDecayed {
-        fact_id: String,
-        old_strength: f32,
-        new_strength: f32,
-        decay_factor: f32,
-    },
-
     // ------------------------------------------------------------------
     // Skeleton events (continued)
     // ------------------------------------------------------------------
@@ -235,7 +227,6 @@ impl MemoryEvent {
             | MemoryEvent::FactMetadataUpdated { fact_id, .. }
             | MemoryEvent::TierTransitioned { fact_id, .. }
             | MemoryEvent::FactAccessed { fact_id, .. }
-            | MemoryEvent::StrengthDecayed { fact_id, .. }
             | MemoryEvent::FactInvalidated { fact_id, .. }
             | MemoryEvent::FactRestored { fact_id, .. }
             | MemoryEvent::FactDeleted { fact_id, .. }
@@ -255,7 +246,6 @@ impl MemoryEvent {
             MemoryEvent::FactMetadataUpdated { .. } => "FactMetadataUpdated",
             MemoryEvent::TierTransitioned { .. } => "TierTransitioned",
             MemoryEvent::FactAccessed { .. } => "FactAccessed",
-            MemoryEvent::StrengthDecayed { .. } => "StrengthDecayed",
             MemoryEvent::FactInvalidated { .. } => "FactInvalidated",
             MemoryEvent::FactRestored { .. } => "FactRestored",
             MemoryEvent::FactDeleted { .. } => "FactDeleted",
@@ -266,13 +256,10 @@ impl MemoryEvent {
 
     /// Whether this event is a Skeleton event (must be persisted immediately).
     ///
-    /// Only `FactAccessed` and `StrengthDecayed` are Pulse (buffered).
+    /// Only `FactAccessed` is Pulse (buffered).
     /// All other variants are Skeleton.
     pub fn is_skeleton(&self) -> bool {
-        !matches!(
-            self,
-            MemoryEvent::FactAccessed { .. } | MemoryEvent::StrengthDecayed { .. }
-        )
+        !matches!(self, MemoryEvent::FactAccessed { .. })
     }
 }
 
@@ -475,12 +462,6 @@ mod tests {
                 used_in_response: false,
                 new_access_count: 0,
             },
-            MemoryEvent::StrengthDecayed {
-                fact_id: "f".into(),
-                old_strength: 1.0,
-                new_strength: 0.5,
-                decay_factor: 0.5,
-            },
             MemoryEvent::FactInvalidated {
                 fact_id: "g".into(),
                 reason: "r".into(),
@@ -505,7 +486,7 @@ mod tests {
                 snapshot: serde_json::json!({}),
             },
         ];
-        let expected = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"];
+        let expected = ["a", "b", "c", "d", "e", "g", "h", "i", "j", "k"];
         for (evt, exp) in events.iter().zip(expected.iter()) {
             assert_eq!(evt.fact_id(), *exp);
         }
@@ -570,15 +551,6 @@ mod tests {
                 "FactAccessed",
             ),
             (
-                MemoryEvent::StrengthDecayed {
-                    fact_id: "f".into(),
-                    old_strength: 1.0,
-                    new_strength: 0.9,
-                    decay_factor: 0.95,
-                },
-                "StrengthDecayed",
-            ),
-            (
                 MemoryEvent::FactInvalidated {
                     fact_id: "f".into(),
                     reason: String::new(),
@@ -621,7 +593,7 @@ mod tests {
         for (event, expected_tag) in &cases {
             assert_eq!(event.event_type_tag(), *expected_tag);
         }
-        assert_eq!(cases.len(), 11);
+        assert_eq!(cases.len(), 10);
     }
 
     // --- MemoryEvent: is_skeleton -------------------------------------------
@@ -637,14 +609,6 @@ mod tests {
             new_access_count: 0,
         }
         .is_skeleton());
-        assert!(!MemoryEvent::StrengthDecayed {
-            fact_id: "f".into(),
-            old_strength: 1.0,
-            new_strength: 0.9,
-            decay_factor: 0.95,
-        }
-        .is_skeleton());
-
         // Skeleton events
         assert!(MemoryEvent::FactCreated {
             fact_id: "f".into(),
@@ -783,12 +747,6 @@ mod tests {
                 used_in_response: true,
                 new_access_count: 3,
             },
-            MemoryEvent::StrengthDecayed {
-                fact_id: "f".into(),
-                old_strength: 0.9,
-                new_strength: 0.8,
-                decay_factor: 0.95,
-            },
             MemoryEvent::FactInvalidated {
                 fact_id: "f".into(),
                 reason: "outdated".into(),
@@ -863,11 +821,12 @@ mod tests {
         let envelope = MemoryEventEnvelope::new(
             "fact-xyz".into(),
             5,
-            MemoryEvent::StrengthDecayed {
+            MemoryEvent::FactAccessed {
                 fact_id: "fact-xyz".into(),
-                old_strength: 0.5,
-                new_strength: 0.4,
-                decay_factor: 0.95,
+                query: None,
+                relevance_score: None,
+                used_in_response: false,
+                new_access_count: 1,
             },
             EventActor::System,
             None,

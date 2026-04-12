@@ -184,12 +184,6 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::StrengthDecayed { new_strength, .. } => {
-                    if let Some(ref mut f) = fact {
-                        f.strength = *new_strength;
-                    }
-                }
-
                 MemoryEvent::FactInvalidated { reason, actor, .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = false;
@@ -508,32 +502,6 @@ mod tests {
         assert_eq!(fact.last_accessed_at, Some(6000));
     }
 
-    // --- fold: FactCreated + StrengthDecayed ---------------------------------
-
-    #[test]
-    fn test_fold_created_then_strength_decayed() {
-        let events = vec![
-            make_created_envelope("fact-006", 1, 1000),
-            wrap(
-                "fact-006",
-                2,
-                7000,
-                MemoryEvent::StrengthDecayed {
-                    fact_id: "fact-006".to_string(),
-                    old_strength: 1.0,
-                    new_strength: 0.85,
-                    decay_factor: 0.95,
-                },
-            ),
-        ];
-
-        let fact = EventProjector::fold_events_to_fact(&events)
-            .unwrap()
-            .expect("should produce a fact");
-
-        assert!((fact.strength - 0.85).abs() < f32::EPSILON);
-    }
-
     // --- fold: FactCreated + Invalidated + Restored --------------------------
 
     #[test]
@@ -807,17 +775,6 @@ mod tests {
             ),
             wrap(
                 "fact-complex",
-                3,
-                3000,
-                MemoryEvent::StrengthDecayed {
-                    fact_id: "fact-complex".to_string(),
-                    old_strength: 1.0,
-                    new_strength: 0.9,
-                    decay_factor: 0.95,
-                },
-            ),
-            wrap(
-                "fact-complex",
                 4,
                 4000,
                 MemoryEvent::TierTransitioned {
@@ -850,7 +807,7 @@ mod tests {
             "User strongly prefers Rust for systems programming"
         );
         assert_eq!(fact.tier, MemoryTier::LongTerm);
-        assert!((fact.strength - 0.9).abs() < f32::EPSILON);
+        assert!((fact.strength - 1.0).abs() < f32::EPSILON);
         assert_eq!(fact.access_count, 1);
         assert_eq!(fact.last_accessed_at, Some(2000));
         assert_eq!(fact.created_at, 1000);

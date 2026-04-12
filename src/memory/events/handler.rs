@@ -236,35 +236,6 @@ impl MemoryCommandHandler {
         Ok(())
     }
 
-    /// Apply strength decay to multiple facts (bulk Pulse events).
-    pub async fn apply_decay(&self, cmd: ApplyDecayCommand) -> Result<usize, AlephError> {
-        let mut envelopes = Vec::with_capacity(cmd.fact_ids_with_strength.len());
-
-        for (fact_id, old_strength, new_strength) in &cmd.fact_ids_with_strength {
-            let seq = self.db.get_memory_event_latest_seq(fact_id).await? + 1;
-            let event = MemoryEvent::StrengthDecayed {
-                fact_id: fact_id.clone(),
-                old_strength: *old_strength,
-                new_strength: *new_strength,
-                decay_factor: cmd.decay_factor,
-            };
-            envelopes.push(MemoryEventEnvelope::new(
-                fact_id.clone(),
-                seq,
-                event,
-                EventActor::Decay,
-                cmd.correlation_id.clone(),
-            ));
-        }
-
-        let count = envelopes.len();
-        self.db.append_memory_events(&envelopes).await?;
-        for (fact_id, _, _) in &cmd.fact_ids_with_strength {
-            self.project_to_notes(fact_id).await?;
-        }
-        Ok(count)
-    }
-
     /// Consolidate multiple facts into one new fact.
     pub async fn consolidate_facts(&self, cmd: ConsolidateCommand) -> Result<String, AlephError> {
         let fact_id = Uuid::new_v4().to_string();
@@ -539,66 +510,6 @@ mod tests {
             .expect("should produce a fact");
         assert_eq!(fact.access_count, 2);
         assert!(fact.last_accessed_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_apply_decay_bulk() {
-        let handler = make_handler();
-
-        // Create 3 facts
-        let mut fact_ids = Vec::new();
-        for i in 0..3 {
-            let fid = handler
-                .create_fact(CreateFactCommand {
-                    content: format!("Fact {i}"),
-                    note_type: NoteType::Learning,
-                    tier: MemoryTier::ShortTerm,
-                    scope: MemoryScope::Global,
-                    path: format!("/test/fact{i}"),
-                    namespace: "owner".into(),
-                    agent: "default".into(),
-                    confidence: 0.8,
-                    source: FactSource::Extracted,
-                    source_memory_ids: vec![],
-                    actor: EventActor::Agent,
-                    correlation_id: None,
-                })
-                .await
-                .unwrap();
-            fact_ids.push(fid);
-        }
-
-        // Apply decay to all 3
-        let decay_data: Vec<(String, f32, f32)> =
-            fact_ids.iter().map(|id| (id.clone(), 1.0, 0.95)).collect();
-
-        let count = handler
-            .apply_decay(ApplyDecayCommand {
-                fact_ids_with_strength: decay_data,
-                decay_factor: 0.95,
-                correlation_id: Some("decay-batch-1".into()),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(count, 3);
-
-        // Verify each fact has a decay event
-        for fact_id in &fact_ids {
-            let events = handler
-                .db
-                .get_memory_events_for_fact(fact_id)
-                .await
-                .unwrap();
-            assert_eq!(events.len(), 2); // Created + StrengthDecayed
-            assert_eq!(events[1].event.event_type_tag(), "StrengthDecayed");
-            assert_eq!(events[1].actor, EventActor::Decay);
-
-            let fact = EventProjector::fold_events_to_fact(&events)
-                .unwrap()
-                .expect("should produce a fact");
-            assert!((fact.strength - 0.95).abs() < f32::EPSILON);
-        }
     }
 
     #[tokio::test]

@@ -56,14 +56,6 @@ pub struct RecordAccessCommand {
     pub correlation_id: Option<String>,
 }
 
-/// Apply strength decay to multiple facts (Pulse event, bulk).
-pub struct ApplyDecayCommand {
-    /// (fact_id, old_strength, new_strength) tuples
-    pub fact_ids_with_strength: Vec<(String, f32, f32)>,
-    pub decay_factor: f32,
-    pub correlation_id: Option<String>,
-}
-
 /// Consolidate multiple facts into one.
 pub struct ConsolidateCommand {
     pub source_fact_ids: Vec<String>,

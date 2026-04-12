@@ -186,16 +186,6 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
                 new_access_count, used_in_response, query
             )
         }
-        MemoryEvent::StrengthDecayed {
-            old_strength,
-            new_strength,
-            ..
-        } => {
-            format!(
-                "Strength decayed from {:.2} to {:.2}",
-                old_strength, new_strength
-            )
-        }
         MemoryEvent::FactInvalidated { reason, actor, .. } => {
             format!("Invalidated by {}: {}", actor, reason)
         }

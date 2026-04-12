@@ -216,25 +216,7 @@ mod event_sourcing {
         // First event should describe creation
         assert!(explanation.events[0].action.contains("FactCreated"));
 
-        // 9. Test decay
-        let decay_count = handler
-            .apply_decay(ApplyDecayCommand {
-                fact_ids_with_strength: vec![(fact_id.clone(), 0.7, 0.65)],
-                decay_factor: 0.95,
-                correlation_id: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(decay_count, 1);
-
-        let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
-        assert_eq!(events.len(), 6);
-        let final_fact = EventProjector::fold_events_to_fact(&events)
-            .unwrap()
-            .unwrap();
-        assert_eq!(final_fact.strength, 0.65);
-
-        // 10. Delete
+        // 9. Delete
         handler
             .delete_fact(DeleteFactCommand {
                 fact_id: fact_id.clone(),
@@ -246,7 +228,7 @@ mod event_sourcing {
             .unwrap();
 
         let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 6);
         let deleted = EventProjector::fold_events_to_fact(&events).unwrap();
         assert!(deleted.is_none()); // Fact deleted
     }
