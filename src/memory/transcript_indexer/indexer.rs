@@ -121,6 +121,18 @@ impl TranscriptIndexer {
                 continue;
             }
 
+            // Dual-write to raw_memories (non-fatal)
+            {
+                use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+                let raw = RawMemory::new(fact.content.clone(), RawMemorySource::Transcript)
+                    .with_agent(&fact.agent)
+                    .with_session(session_key)
+                    .with_path(fact.path.clone());
+                if let Err(e) = self.database.insert_raw_memory(&raw).await {
+                    tracing::warn!(error = %e, "Failed to dual-write transcript raw_memory (non-fatal)");
+                }
+            }
+
             created_ids.push(fact_id);
         }
 
