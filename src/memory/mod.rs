@@ -84,9 +84,7 @@ pub use cortex::{
     ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
 pub use decay::{DecayConfig, MemoryStrength};
-pub use dreaming::{
-    ensure_dream_daemon, record_activity, DailyInsight, DreamStatus, MemoryDecayReport,
-};
+pub use dreaming::{ensure_dream_daemon, record_activity, DailyInsight, DreamStatus};
 pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{
     create_provider as create_embedding_provider, truncate_and_normalize, EmbeddingProvider,

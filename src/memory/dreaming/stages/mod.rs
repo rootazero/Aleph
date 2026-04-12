@@ -1,14 +1,25 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
-pub mod consolidate;
-pub mod decay;
-pub mod drift;
-pub mod summarize;
-pub mod synthesis;
-pub mod tunnel;
 pub mod types;
-pub mod wiki_ingest;
-pub mod wiki_lint;
+
+// Old stages — temporarily disabled during migration to notes layer.
+// Task 8 will replace these with new note-based implementations.
+// #[cfg(never)]
+// pub mod consolidate;
+// #[cfg(never)]
+// pub mod decay;
+// #[cfg(never)]
+// pub mod drift;
+// #[cfg(never)]
+// pub mod summarize;
+// #[cfg(never)]
+// pub mod synthesis;
+// #[cfg(never)]
+// pub mod tunnel;
+// #[cfg(never)]
+// pub mod wiki_ingest;
+// #[cfg(never)]
+// pub mod wiki_lint;
 
 use async_trait::async_trait;
 
@@ -34,13 +45,5 @@ pub trait DreamStage: Send + Sync {
     async fn execute(&self, ctx: DreamContext) -> Result<DreamContext, AlephError>;
 }
 
-// Re-export all stages
-pub use consolidate::ConsolidateStage;
-pub use decay::{DecayStage, MemoryDecayReport};
-pub use drift::{DriftAction, DriftCandidate, DriftDetectStage};
-pub use summarize::SummarizeStage;
-pub use synthesis::{DeepSynthesisStage, PatternInsight};
-pub use tunnel::TunnelDiscoveryStage;
+// Re-export types still needed by other modules
 pub use types::{MemoryCluster, MetadataGroupKey};
-pub use wiki_ingest::WikiIngestStage;
-pub use wiki_lint::WikiLintStage;
