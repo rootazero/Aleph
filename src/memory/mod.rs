@@ -28,8 +28,6 @@ pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
 pub mod events;
-pub mod fact_retrieval;
-pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
 pub mod noise_filter;
@@ -40,7 +38,6 @@ pub mod reembed;
 pub mod rerank;
 pub mod reranker;
 pub mod retrieval;
-pub mod retrieval_trace;
 pub mod ripple;
 pub mod scoring_pipeline;
 pub mod scratchpad;
@@ -101,10 +98,6 @@ pub use events::{
     traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope, TierTransitionTrigger,
 };
-pub use fact_retrieval::{
-    CrossWorkspaceFact, FactRetrieval, FactRetrievalConfig, RetrievalResult, SmartRetrievalResult,
-};
-pub use hybrid_retrieval::{HybridRetrieval, HybridSearchConfig, RetrievalStrategy};
 pub use ingestion::MemoryIngestion;
 pub use namespace::NamespaceScope;
 pub use noise_filter::{NoiseFilter, NoiseFilterConfig};
