@@ -14,7 +14,6 @@ use crate::error::AlephError;
 use crate::memory::context::CompressionResult;
 use crate::memory::events::handler::MemoryCommandHandler;
 use crate::memory::store::{CompressionStore, MemoryBackend};
-use crate::memory::vfs::L1Generator;
 use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -87,7 +86,6 @@ pub struct CompressionService {
     config: CompressionConfig,
     provider_name: String,
     signal_detector: SignalDetector,
-    l1_generator: Option<Arc<L1Generator>>,
     command_handler: Option<Arc<MemoryCommandHandler>>,
 }
 
@@ -105,24 +103,15 @@ impl CompressionService {
         Self::new_with_backend(database, provider, embedder, config, None)
     }
 
-    /// Create a new compression service with an optional MemoryBackend for L1 generation
+    /// Create a new compression service with an optional MemoryBackend (kept for API compatibility)
     pub fn new_with_backend(
         database: MemoryBackend,
         provider: Arc<dyn AiProvider>,
         embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
-        memory_backend: Option<MemoryBackend>,
+        _memory_backend: Option<MemoryBackend>,
     ) -> Self {
         let provider_name = provider.name().to_string();
-
-        // L1Generator uses MemoryBackend; only create if backend is provided
-        let l1_generator = memory_backend.map(|backend| {
-            Arc::new(L1Generator::new(
-                backend,
-                Arc::clone(&provider),
-                Arc::clone(&embedder),
-            ))
-        });
 
         let conflict_detector = Arc::new(
             ConflictDetector::new(database.clone(), config.conflict.clone())
@@ -141,7 +130,6 @@ impl CompressionService {
             config,
             provider_name,
             signal_detector: SignalDetector::new(),
-            l1_generator,
             command_handler: None,
         }
     }

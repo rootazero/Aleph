@@ -50,7 +50,6 @@ pub mod migration;
 pub mod store;
 pub mod transcript_indexer;
 pub mod value_estimator;
-pub mod vfs;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
@@ -120,10 +119,6 @@ pub use transcript_indexer::{
 pub use value_estimator::{
     CortexValueEstimator, ExperienceScore, LlmScorer, LlmScorerConfig, ValueEstimator,
 };
-pub use vfs::{
-    bootstrap_agent_context, compute_directory_hash, L1Generator,
-};
-
 // SQLite store types (Phase 3)
 pub use store::sqlite::SqliteMemoryBackend;
 pub use store::types::{MemoryFilter, ScoredFact, SearchFilter};
