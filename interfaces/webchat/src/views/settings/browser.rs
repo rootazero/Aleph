@@ -61,6 +61,9 @@ pub fn BrowserView() -> impl IntoView {
         block_private: true,
         blocked_domains: Vec::new(),
         allowed_domains: Vec::new(),
+        nav_timeout_secs: 30,
+        action_timeout_secs: 10,
+        persistent_sessions: false,
     });
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -168,8 +171,8 @@ fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Playwright (Headless)"</div>
-                        <div class="text-sm text-text-tertiary">"Fast, invisible managed browser. Best for automated tasks like web scraping and screenshots."</div>
+                        <div class="font-medium text-text-primary">"Playwright CLI (Headless)"</div>
+                        <div class="text-sm text-text-tertiary">"Fast, invisible browser powered by @playwright/cli. Best for automated tasks like web scraping and screenshots."</div>
                     </div>
                 </label>
 
@@ -213,9 +216,9 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-1">"Playwright Settings"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-1">"Playwright CLI Settings"</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure the managed browser used in Playwright mode."
+                "Configure playwright-cli behavior (headless, timeouts, session persistence)."
             </p>
 
             <div class="space-y-5">
@@ -267,6 +270,67 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                                 }
                             }
                         />
+                    </button>
+                </div>
+
+                // Navigation timeout
+                <div>
+                    <label class="block text-sm font-medium text-text-primary mb-2">"Navigation Timeout (seconds)"</label>
+                    <input
+                        type="number"
+                        min="5" max="300"
+                        prop:value=move || config.get().nav_timeout_secs as i64
+                        on:change=move |ev| {
+                            let val = event_target_value(&ev).parse::<u64>().unwrap_or(30);
+                            config.update(|c| c.nav_timeout_secs = val);
+                            save_fn.with_value(|f| f());
+                        }
+                        class="block w-32 px-3 py-2 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                    />
+                </div>
+
+                // Action timeout
+                <div>
+                    <label class="block text-sm font-medium text-text-primary mb-2">"Action Timeout (seconds)"</label>
+                    <input
+                        type="number"
+                        min="1" max="60"
+                        prop:value=move || config.get().action_timeout_secs as i64
+                        on:change=move |ev| {
+                            let val = event_target_value(&ev).parse::<u64>().unwrap_or(10);
+                            config.update(|c| c.action_timeout_secs = val);
+                            save_fn.with_value(|f| f());
+                        }
+                        class="block w-32 px-3 py-2 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                    />
+                </div>
+
+                // Persistent sessions toggle
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="font-medium text-text-primary">"Persistent Sessions"</div>
+                        <div class="text-sm text-text-tertiary">"Save browser session state to disk (--persistent flag). Preserves cookies and storage across browser restarts."</div>
+                    </div>
+                    <button
+                        on:click=move |_| {
+                            config.update(|c| c.persistent_sessions = !c.persistent_sessions);
+                            save_fn.with_value(|f| f());
+                        }
+                        class=move || {
+                            if config.get().persistent_sessions {
+                                "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-primary transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            } else {
+                                "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-surface-sunken transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            }
+                        }
+                    >
+                        <span class=move || {
+                            if config.get().persistent_sessions {
+                                "pointer-events-none inline-block h-5 w-5 translate-x-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                            } else {
+                                "pointer-events-none inline-block h-5 w-5 translate-x-0 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                            }
+                        } />
                     </button>
                 </div>
 
