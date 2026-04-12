@@ -63,30 +63,73 @@ fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephError>
 
 const DREAM_REPORTS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS dream_reports (
-    id                    TEXT PRIMARY KEY,
-    pipeline_type         TEXT NOT NULL,
-    started_at            INTEGER NOT NULL,
-    finished_at           INTEGER NOT NULL,
-    duration_ms           INTEGER NOT NULL,
-    facts_collected       INTEGER NOT NULL DEFAULT 0,
-    clusters_found        INTEGER NOT NULL DEFAULT 0,
-    drift_detected        INTEGER NOT NULL DEFAULT 0,
-    drift_summary         TEXT,
-    candidates_evaluated  INTEGER NOT NULL DEFAULT 0,
-    facts_promoted        INTEGER NOT NULL DEFAULT 0,
-    promotion_details     TEXT,
-    facts_decayed         INTEGER NOT NULL DEFAULT 0,
-    facts_pruned          INTEGER NOT NULL DEFAULT 0,
-    nodes_decayed         INTEGER NOT NULL DEFAULT 0,
-    edges_decayed         INTEGER NOT NULL DEFAULT 0,
-    synthesis_count       INTEGER NOT NULL DEFAULT 0,
-    errors                TEXT,
-    namespace             TEXT NOT NULL DEFAULT 'owner'
+    id              TEXT PRIMARY KEY,
+    pipeline_type   TEXT NOT NULL,
+    started_at      INTEGER NOT NULL,
+    finished_at     INTEGER NOT NULL,
+    duration_ms     INTEGER NOT NULL,
+    synthesis_count INTEGER NOT NULL DEFAULT 0,
+    errors          TEXT,
+    namespace       TEXT NOT NULL DEFAULT 'owner'
 );
 
 CREATE INDEX IF NOT EXISTS idx_dream_reports_started
     ON dream_reports(started_at);
 "#;
+
+/// Rebuild `dream_reports` without the legacy fact/graph counters.
+///
+/// The presence of the `facts_collected` column signals the legacy
+/// 19-column schema. When seen, rebuild the table in a transaction,
+/// preserving the 8 retained columns for every row.
+///
+/// Safe to call on fresh or already-migrated databases.
+fn migrate_dream_reports_drop_legacy_fields(conn: &Connection) -> Result<(), AlephError> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(dream_reports)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info dream_reports: {e}")))?;
+    let has_legacy = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("table_info query: {e}")))?
+        .any(|name| name.map(|n| n == "facts_collected").unwrap_or(false));
+    drop(stmt);
+
+    if !has_legacy {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+        BEGIN;
+        CREATE TABLE dream_reports_new (
+            id              TEXT PRIMARY KEY,
+            pipeline_type   TEXT NOT NULL,
+            started_at      INTEGER NOT NULL,
+            finished_at     INTEGER NOT NULL,
+            duration_ms     INTEGER NOT NULL,
+            synthesis_count INTEGER NOT NULL DEFAULT 0,
+            errors          TEXT,
+            namespace       TEXT NOT NULL DEFAULT 'owner'
+        );
+        INSERT INTO dream_reports_new
+            (id, pipeline_type, started_at, finished_at,
+             duration_ms, synthesis_count, errors, namespace)
+        SELECT id, pipeline_type, started_at, finished_at,
+               duration_ms, synthesis_count, errors, namespace
+          FROM dream_reports;
+        DROP TABLE dream_reports;
+        ALTER TABLE dream_reports_new RENAME TO dream_reports;
+        CREATE INDEX IF NOT EXISTS idx_dream_reports_started
+            ON dream_reports(started_at);
+        COMMIT;
+        "#,
+    )
+    .map_err(|e| AlephError::config(format!(
+        "Failed to migrate dream_reports to new schema: {e}"
+    )))?;
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Dream status table (singleton row)
@@ -236,6 +279,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
 
+    // Migrate legacy 19-column dream_reports to the new 8-column layout
+    // before CREATE TABLE IF NOT EXISTS no-ops on the rebuilt table.
+    migrate_dream_reports_drop_legacy_fields(conn)?;
+
     conn.execute_batch(DREAM_REPORTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
 
@@ -352,5 +399,123 @@ mod tests {
         // After drop, querying them should fail.
         assert!(conn.prepare("SELECT id FROM facts LIMIT 0").is_err());
         assert!(conn.prepare("SELECT id FROM graph_nodes LIMIT 0").is_err());
+    }
+
+    #[test]
+    fn dream_reports_legacy_schema_migrates_to_new_layout() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+
+        // Build the 19-column legacy schema by hand.
+        conn.execute_batch(
+            r#"CREATE TABLE dream_reports (
+                id                    TEXT PRIMARY KEY,
+                pipeline_type         TEXT NOT NULL,
+                started_at            INTEGER NOT NULL,
+                finished_at           INTEGER NOT NULL,
+                duration_ms           INTEGER NOT NULL,
+                facts_collected       INTEGER NOT NULL DEFAULT 0,
+                clusters_found        INTEGER NOT NULL DEFAULT 0,
+                drift_detected        INTEGER NOT NULL DEFAULT 0,
+                drift_summary         TEXT,
+                candidates_evaluated  INTEGER NOT NULL DEFAULT 0,
+                facts_promoted        INTEGER NOT NULL DEFAULT 0,
+                promotion_details     TEXT,
+                facts_decayed         INTEGER NOT NULL DEFAULT 0,
+                facts_pruned          INTEGER NOT NULL DEFAULT 0,
+                nodes_decayed         INTEGER NOT NULL DEFAULT 0,
+                edges_decayed         INTEGER NOT NULL DEFAULT 0,
+                synthesis_count       INTEGER NOT NULL DEFAULT 0,
+                errors                TEXT,
+                namespace             TEXT NOT NULL DEFAULT 'owner'
+            );"#,
+        )
+        .expect("create legacy dream_reports");
+
+        conn.execute_batch(
+            "INSERT INTO dream_reports
+               (id, pipeline_type, started_at, finished_at, duration_ms,
+                facts_collected, clusters_found, drift_detected, drift_summary,
+                candidates_evaluated, facts_promoted, promotion_details,
+                facts_decayed, facts_pruned, nodes_decayed, edges_decayed,
+                synthesis_count, errors, namespace)
+             VALUES
+               ('r1', 'full', 1000, 2000, 1000,
+                42, 3, 1, 'topic shift',
+                10, 2, 'promoted f1',
+                5, 1, 3, 2,
+                1, NULL, 'owner'),
+               ('r2', 'weekly', 3000, 5000, 2000,
+                7, 0, 0, NULL,
+                0, 0, NULL,
+                0, 0, 0, 0,
+                4, 'retry', 'owner');",
+        )
+        .expect("insert legacy rows");
+
+        init_schema(&conn).expect("init_schema");
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .expect("prepare pragma");
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("pragma query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("pragma collect");
+
+        let mut sorted = cols.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![
+                "duration_ms",
+                "errors",
+                "finished_at",
+                "id",
+                "namespace",
+                "pipeline_type",
+                "started_at",
+                "synthesis_count",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>(),
+            "dream_reports must have exactly the 8 retained columns"
+        );
+
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dream_reports", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(row_count, 2);
+
+        let r1: (String, String, i64, i64, i64, u32, Option<String>, String) = conn
+            .query_row(
+                "SELECT id, pipeline_type, started_at, finished_at,
+                        duration_ms, synthesis_count, errors, namespace
+                   FROM dream_reports WHERE id = 'r1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                        row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(r1.0, "r1");
+        assert_eq!(r1.1, "full");
+        assert_eq!(r1.2, 1000);
+        assert_eq!(r1.3, 2000);
+        assert_eq!(r1.4, 1000);
+        assert_eq!(r1.5, 1);
+        assert_eq!(r1.6, None);
+        assert_eq!(r1.7, "owner");
+
+        init_schema(&conn).expect("second init_schema should be idempotent");
+
+        let row_count_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dream_reports", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(row_count_after, 2);
     }
 }
