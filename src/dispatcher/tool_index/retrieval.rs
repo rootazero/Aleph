@@ -8,7 +8,12 @@
 use super::config::ToolRetrievalConfig;
 use crate::error::AlephError;
 use crate::memory::context::{NoteType, MemoryFact};
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::notes::store::NoteStore;
+use crate::memory::store::MemoryBackend;
+
+// Agent and category constants — must match ToolIndexCoordinator
+const TOOL_AGENT_ID: &str = "owner";
+const TOOL_CATEGORY: &str = "tool";
 
 /// Hydration level for a retrieved tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,36 +115,37 @@ impl ToolRetrieval {
     /// Returns tools above the hard threshold, classified by hydration level.
     /// Results are sorted by score descending.
     pub async fn retrieve(&self, query_embedding: &[f32]) -> Result<Vec<HydratedTool>, AlephError> {
-        // Search for facts using vector similarity
-        // We fetch more than max_tools to allow for filtering by type
+        // Search for tool notes using vector similarity over the notes index.
+        // We fetch more than max_tools to allow for filtering by category.
         let candidate_limit = self.config.max_tools * 3;
-        let filter = crate::memory::store::types::SearchFilter::valid_only(Some(
-            crate::memory::NamespaceScope::Owner,
-        ));
-        let scored = self
-            .db
-            .vector_search(
-                query_embedding,
-                query_embedding.len() as u32,
-                &filter,
-                candidate_limit,
-            )
-            .await?;
-        let facts: Vec<MemoryFact> = scored
-            .into_iter()
-            .map(|sf| {
-                let mut fact = sf.fact;
-                fact.similarity_score = Some(sf.score);
-                fact
-            })
-            .collect();
+        let dim = query_embedding.len() as u32;
 
-        // Filter to only tool facts and apply hard threshold
-        let mut tools: Vec<HydratedTool> = facts
+        let results = self
+            .db
+            .vector_search_notes_with_content(query_embedding, TOOL_AGENT_ID, dim, candidate_limit)
+            .await?;
+
+        let mut tools: Vec<HydratedTool> = results
             .into_iter()
-            .filter(|f| f.note_type == NoteType::Tool)
-            .filter(|f| f.similarity_score.unwrap_or(0.0) >= self.config.hard_threshold)
-            .map(|f| HydratedTool::from_fact(f, &self.config))
+            // Only keep notes in the "tool" category
+            .filter(|r| r.category == TOOL_CATEGORY)
+            .map(|r| {
+                // The notes vector_search returns raw L2 distance (lower = more similar).
+                // Convert to a similarity score in [0, 1] to match the threshold semantics
+                // used by the old facts-based retrieval: similarity = 1 / (1 + distance).
+                let similarity = 1.0 / (1.0 + r.score);
+                let mut nsr = r;
+                nsr.score = similarity;
+                let scored = nsr.to_scored_fact(TOOL_AGENT_ID);
+                let mut fact = scored.fact;
+                fact.similarity_score = Some(scored.score);
+                fact.note_type = NoteType::Tool;
+                // Normalise the fact id to match the legacy "tool:{name}" convention
+                // path is e.g. "tool/read_file"; turn it into "tool:read_file"
+                fact.id = format!("tool:{}", fact.id.trim_start_matches("tool/"));
+                HydratedTool::from_fact(fact, &self.config)
+            })
+            .filter(|t| t.score >= self.config.hard_threshold)
             .collect();
 
         // Sort by score descending (highest confidence first)
@@ -163,35 +169,35 @@ impl ToolRetrieval {
         query_embedding: &[f32],
         query_text: &str,
     ) -> Result<Vec<HydratedTool>, AlephError> {
-        // Use hybrid search from StateDatabase
-        let filter = crate::memory::store::types::SearchFilter::valid_only(Some(
-            crate::memory::NamespaceScope::Owner,
-        ));
-        let scored = self
-            .db
-            .hybrid_search(&crate::memory::store::HybridSearchParams {
-                embedding: query_embedding,
-                dim_hint: query_embedding.len() as u32,
-                query_text,
-                vector_weight: 0.7,
-                text_weight: 0.3,
-                filter: &filter,
-                limit: self.config.max_tools * 3,
-            })
-            .await?;
-        let facts: Vec<MemoryFact> = scored
-            .into_iter()
-            .map(|sf| {
-                let mut fact = sf.fact;
-                fact.similarity_score = Some(sf.score);
-                fact
-            })
-            .collect();
+        let dim = query_embedding.len() as u32;
 
-        let mut tools: Vec<HydratedTool> = facts
+        let results = self
+            .db
+            .hybrid_search_notes(
+                query_embedding,
+                query_text,
+                TOOL_AGENT_ID,
+                dim,
+                self.config.max_tools * 3,
+            )
+            .await?;
+
+        let mut tools: Vec<HydratedTool> = results
             .into_iter()
-            .filter(|f| f.note_type == NoteType::Tool)
-            .map(|f| HydratedTool::from_fact(f, &self.config))
+            .filter(|r| r.category == TOOL_CATEGORY)
+            .map(|r| {
+                // RRF scores from hybrid_search_notes are already small positive values.
+                // Convert with the same formula for consistency with threshold comparisons.
+                let similarity = 1.0 / (1.0 + r.score);
+                let mut nsr = r;
+                nsr.score = similarity;
+                let scored = nsr.to_scored_fact(TOOL_AGENT_ID);
+                let mut fact = scored.fact;
+                fact.similarity_score = Some(scored.score);
+                fact.note_type = NoteType::Tool;
+                fact.id = format!("tool:{}", fact.id.trim_start_matches("tool/"));
+                HydratedTool::from_fact(fact, &self.config)
+            })
             .collect();
 
         tools.sort_by(|a, b| {
