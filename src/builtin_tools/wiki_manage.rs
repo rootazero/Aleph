@@ -21,6 +21,7 @@ use crate::wiki::wikilink::parse_frontmatter;
 use crate::wiki::{wiki_file_path, wiki_path};
 
 /// Tool for managing wiki knowledge pages.
+#[deprecated(note = "Use note_manage instead — it covers all note categories including wiki")]
 #[derive(Clone)]
 pub struct WikiManageTool {
     data_dir: PathBuf,
