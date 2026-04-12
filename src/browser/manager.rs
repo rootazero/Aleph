@@ -6,22 +6,26 @@ use std::sync::Arc;
 
 use crate::sync_primitives::RwLock;
 
+use super::backend::BrowserBackend;
 use super::chrome_mcp::ChromeMcpDriver;
+use super::chrome_mcp_backend::ChromeMcpBackend;
+use super::error::BrowserError;
 use super::network_policy::{BrowserSsrfGuard, PolicyViolation};
-use super::playwright_mcp::PlaywrightMcpDriver;
+use super::playwright_cli::PlaywrightCliDriver;
+use super::playwright_cli_backend::PlaywrightCliBackend;
 use super::profile::{
-    BrowserDriver, BrowserSystemConfig, BrowserType, PlaywrightMcpConfig, ProfileConfig,
-    ProfileState,
+    BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
 };
 
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
     ssrf_policy: BrowserSsrfGuard,
+    ssrf_guard: Arc<BrowserSsrfGuard>,
     #[allow(dead_code)]
     config: BrowserSystemConfig,
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
-    playwright_mcp_driver: Arc<PlaywrightMcpDriver>,
+    playwright_cli_driver: Arc<PlaywrightCliDriver>,
 }
 
 struct ManagedProfile {
@@ -33,9 +37,10 @@ struct ManagedProfile {
 impl ProfileManager {
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_policy = BrowserSsrfGuard::new(config.policy.clone());
+        let ssrf_guard = Arc::new(BrowserSsrfGuard::new(config.policy.clone()));
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
-        let playwright_mcp_driver =
-            Arc::new(PlaywrightMcpDriver::new(PlaywrightMcpConfig::default()));
+        let playwright_cli_driver =
+            Arc::new(PlaywrightCliDriver::new(config.playwright_cli.clone()));
 
         let mut profiles = HashMap::new();
 
@@ -98,9 +103,10 @@ impl ProfileManager {
         Self {
             profiles: RwLock::new(profiles),
             ssrf_policy,
+            ssrf_guard,
             config,
             chrome_mcp_driver,
-            playwright_mcp_driver,
+            playwright_cli_driver,
         }
     }
 
@@ -109,9 +115,44 @@ impl ProfileManager {
         self.chrome_mcp_driver.clone()
     }
 
-    /// Get the shared Playwright MCP driver instance.
-    pub fn get_playwright_mcp_driver(&self) -> Arc<PlaywrightMcpDriver> {
-        self.playwright_mcp_driver.clone()
+    /// Get the shared Playwright CLI driver instance.
+    pub fn get_playwright_cli_driver(&self) -> Arc<PlaywrightCliDriver> {
+        self.playwright_cli_driver.clone()
+    }
+
+    /// Get the shared SSRF guard (Arc-wrapped for cheap cloning).
+    pub fn get_ssrf_guard(&self) -> Arc<BrowserSsrfGuard> {
+        self.ssrf_guard.clone()
+    }
+
+    /// Route a profile to its appropriate `BrowserBackend` instance.
+    ///
+    /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
+    /// - `BrowserDriver::ExistingSession` → `ChromeMcpBackend`
+    pub fn get_backend(
+        &self,
+        profile_name: &str,
+    ) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
+        let cfg = self
+            .get_config(profile_name)
+            .ok_or_else(|| BrowserError::ProfileNotFound(profile_name.into()))?;
+        match cfg.driver {
+            BrowserDriver::Managed => {
+                let headless = cfg
+                    .headless
+                    .unwrap_or(self.config.playwright_cli.headless);
+                Ok(Arc::new(PlaywrightCliBackend::new(
+                    self.playwright_cli_driver.clone(),
+                    profile_name.to_string(),
+                    self.ssrf_guard.clone(),
+                    headless,
+                )))
+            }
+            BrowserDriver::ExistingSession => Ok(Arc::new(ChromeMcpBackend::new(
+                self.chrome_mcp_driver.clone(),
+                profile_name.to_string(),
+            ))),
+        }
     }
 
     /// Get the driver mode for a named profile.
@@ -310,5 +351,36 @@ mod tests {
             Some(BrowserDriver::ExistingSession)
         );
         assert_eq!(manager.get_driver("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_get_backend_routes_managed_to_playwright_cli() {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        let backend = manager.get_backend("default");
+        assert!(backend.is_ok());
+    }
+
+    #[test]
+    fn test_get_backend_routes_user_to_chrome_mcp() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        let backend = manager.get_backend("user");
+        assert!(backend.is_ok());
+    }
+
+    #[test]
+    fn test_get_backend_nonexistent_profile() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        let backend = manager.get_backend("nonexistent");
+        assert!(matches!(backend, Err(BrowserError::ProfileNotFound(_))));
     }
 }

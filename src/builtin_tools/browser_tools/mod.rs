@@ -21,7 +21,7 @@ use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
+use crate::browser::playwright_cli_backend::PlaywrightCliBackend;
 use crate::browser::profile::BrowserDriver;
 
 /// Get the active (most recent) tab from the backend, or return an error if none open.
@@ -58,9 +58,11 @@ pub(crate) fn make_backend(manager: &ProfileManager, profile: &str) -> Box<dyn B
             manager.get_chrome_mcp_driver(),
             profile.to_string(),
         )),
-        Some(BrowserDriver::Managed) | None => Box::new(PlaywrightMcpBackend::new(
-            manager.get_playwright_mcp_driver(),
+        Some(BrowserDriver::Managed) | None => Box::new(PlaywrightCliBackend::new(
+            manager.get_playwright_cli_driver(),
             profile.to_string(),
+            manager.get_ssrf_guard(),
+            true, // headless default; profile-level override applied via get_backend()
         )),
     }
 }
