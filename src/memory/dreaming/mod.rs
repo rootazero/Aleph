@@ -107,15 +107,26 @@ impl DreamPipeline {
     }
 
     /// Build the standard daily pipeline.
-    /// TODO: Task 8 will add new note-based stages.
     pub fn daily() -> Self {
-        Self::new(vec![])
+        Self::new(vec![
+            Box::new(stages::NoteConsolidateStage), // merge first to reduce volume
+            Box::new(stages::NoteDriftStage),        // detect contradictions
+            Box::new(stages::NoteLintStage),         // format fixes
+            Box::new(stages::NoteDecayStage),        // cleanup low-value
+            Box::new(stages::DailyDigestStage),      // generate daily report
+        ])
     }
 
     /// Build the weekly pipeline (daily + deep synthesis).
-    /// TODO: Task 8 will add new note-based stages.
     pub fn weekly() -> Self {
-        Self::new(vec![])
+        Self::new(vec![
+            Box::new(stages::NoteConsolidateStage),
+            Box::new(stages::NoteDriftStage),
+            Box::new(stages::NoteSynthesisStage), // weekly-only: deep synthesis
+            Box::new(stages::NoteLintStage),
+            Box::new(stages::NoteDecayStage),
+            Box::new(stages::DailyDigestStage),
+        ])
     }
 
     /// Run the pipeline, returning the final `DreamReport`.
@@ -566,14 +577,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_builder_daily_empty() {
+    fn test_pipeline_builder_daily() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 0);
+        assert_eq!(pipeline.stages.len(), 5);
     }
 
     #[test]
-    fn test_pipeline_builder_weekly_empty() {
+    fn test_pipeline_builder_weekly() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 0);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 }
