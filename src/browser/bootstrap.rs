@@ -275,6 +275,61 @@ async fn install_node(on_progress: ProgressFn) -> Result<(), String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
+
+    // fnm install --lts does NOT create an 'lts' alias automatically.
+    // Parse the just-installed version from `fnm list` and create the alias.
+    // Best-effort: log on failure, don't fail the whole install step.
+    let list = tokio::process::Command::new("fnm")
+        .args(["list"])
+        .output()
+        .await
+        .map_err(|e| format!("fnm list: {e}"))?;
+    if list.status.success() {
+        let text = String::from_utf8_lossy(&list.stdout);
+        // Pick the last `vX.Y.Z` token — the LTS we just installed is the
+        // most recently added entry and appears last in the list.
+        let installed = text
+            .lines()
+            .filter_map(|line| {
+                line.split_whitespace()
+                    .find(|token| token.starts_with('v'))
+                    .map(|s| s.to_string())
+            })
+            .last();
+        if let Some(version) = installed {
+            let alias_out = tokio::process::Command::new("fnm")
+                .args(["alias", &version, "lts"])
+                .output()
+                .await;
+            match alias_out {
+                Ok(o) if o.status.success() => {
+                    on_progress(
+                        InstallStep::Node,
+                        "log",
+                        Some(format!("aliased {version} → lts")),
+                    );
+                }
+                Ok(o) => {
+                    on_progress(
+                        InstallStep::Node,
+                        "log",
+                        Some(format!(
+                            "fnm alias {version} lts failed (non-fatal): {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        )),
+                    );
+                }
+                Err(e) => {
+                    on_progress(
+                        InstallStep::Node,
+                        "log",
+                        Some(format!("fnm alias spawn failed (non-fatal): {e}")),
+                    );
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
