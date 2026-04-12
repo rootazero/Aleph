@@ -433,39 +433,27 @@ impl CompressionService {
     ) -> Result<CompressionResult, AlephError> {
         let start = Instant::now();
 
-        // 1. Get last compression timestamp
-        let last_timestamp = self
-            .database
-            .get_last_compression_timestamp()
-            .await?
-            .unwrap_or(0);
+        // 2. Fetch unprocessed raw memories
+        use crate::memory::store::raw_memory::RawMemoryStore;
 
-        // 2. Fetch raw session chunks (same as compress_in_workspace)
-        let raw_facts = self
+        let raw_memories = self
             .database
-            .get_uncompressed_session_facts(
-                last_timestamp,
-                if workspace_id == crate::memory::DEFAULT_AGENT {
-                    None
-                } else {
-                    Some(workspace_id)
-                },
-                self.config.batch_size as usize,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to fetch session facts: {e}")))?;
+            .get_unprocessed_raw_memories(workspace_id, self.config.batch_size as usize)
+            .await
+            .map_err(|e| AlephError::other(format!("Failed to fetch raw memories: {e}")))?;
 
-        let raw_facts: Vec<_> = raw_facts
+        let raw_memories: Vec<_> = raw_memories
             .into_iter()
-            .filter(|f| f.note_type != crate::memory::context::NoteType::Transcript)
+            .filter(|r| r.source != crate::memory::store::raw_memory::RawMemorySource::Transcript)
             .collect();
 
-        let memories: Vec<crate::memory::context::MemoryEntry> = raw_facts
+        let memories: Vec<crate::memory::context::MemoryEntry> = raw_memories
             .iter()
-            .map(|fact| {
+            .map(|raw| {
                 crate::memory::context::MemoryEntry::new(
-                    fact.id.clone(),
+                    raw.id.clone(),
                     crate::memory::context::ContextAnchor::now("".to_string()),
-                    fact.content.clone(),
+                    raw.content.clone(),
                     String::new(),
                 )
             })
@@ -573,15 +561,15 @@ impl CompressionService {
             }
         }
 
-        // 7. Invalidate consumed raw chunks
-        let consumed_ids: Vec<String> = raw_facts.iter().map(|f| f.id.clone()).collect();
-        match self.database.invalidate_consumed_chunks(&consumed_ids) {
-            Ok(n) => tracing::info!(invalidated = n, "Invalidated consumed raw chunks (notes)"),
-            Err(e) => tracing::warn!(error = %e, "Failed to invalidate consumed raw chunks"),
+        // 7. Mark raw memories as processed
+        let consumed_ids: Vec<String> = raw_memories.iter().map(|r| r.id.clone()).collect();
+        match self.database.mark_raw_as_processed(&consumed_ids).await {
+            Ok(n) => tracing::info!(marked = n, "Marked raw memories as processed"),
+            Err(e) => tracing::warn!(error = %e, "Failed to mark raw memories as processed"),
         }
 
         // 8. Update compression timestamp
-        let latest_timestamp = raw_facts.iter().map(|f| f.created_at).max().unwrap_or(0);
+        let latest_timestamp = raw_memories.iter().map(|r| r.created_at).max().unwrap_or(0);
         self.database
             .set_last_compression_timestamp(latest_timestamp)
             .await?;
