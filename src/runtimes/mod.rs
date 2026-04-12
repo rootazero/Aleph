@@ -20,11 +20,13 @@ pub mod bootstrap;
 mod capability;
 pub mod ensure;
 pub mod ledger;
+pub mod os;
 
 pub mod probe;
 
 // Re-exports
 pub use capability::{format_entries_for_prompt, RuntimeCapability};
+pub use os::TargetOs;
 pub use ensure::ensure_capability;
 pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use probe::ProbeResult;
