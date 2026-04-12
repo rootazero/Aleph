@@ -20,10 +20,8 @@ use tracing::{debug, info, warn};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
-use crate::memory::context::{MemoryFact, MemoryScope};
-use crate::memory::store::types::SearchFilter;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -214,20 +212,16 @@ impl SessionCompactor {
         }
 
         let session_id = session_key.to_key_string();
+        let agent_id = agent.id().to_string();
         let path_prefix = format!("aleph://session/{}/", session_id);
 
-        // Step 1: fetch existing summaries from LanceDB
-        let filter = SearchFilter::new()
-            .with_valid_only()
-            .with_scope(MemoryScope::SessionLocal)
-            .with_path_prefix(&path_prefix);
-
+        // Step 1: fetch existing summaries from raw_memories
         let mut summaries = match self
             .database
-            .get_facts_by_path_prefix(&path_prefix, &filter, 200)
+            .get_raw_by_path_prefix(&path_prefix, &agent_id, 200)
             .await
         {
-            Ok(facts) => facts,
+            Ok(raws) => raws,
             Err(e) => {
                 warn!(
                     error = %e,
@@ -245,9 +239,11 @@ impl SessionCompactor {
         // Sort summaries: highest depth first (d2 before d1 before d0),
         // then by path (which includes sequence number) for deterministic ordering.
         summaries.sort_by(|a, b| {
-            let da = extract_depth(&a.path);
-            let db = extract_depth(&b.path);
-            db.cmp(&da).then_with(|| a.path.cmp(&b.path))
+            let pa = a.path.as_deref().unwrap_or("");
+            let pb = b.path.as_deref().unwrap_or("");
+            let da = extract_depth(pa);
+            let db = extract_depth(pb);
+            db.cmp(&da).then_with(|| pa.cmp(pb))
         });
 
         // Step 2: fetch fresh tail from in-memory session store
@@ -277,7 +273,8 @@ impl SessionCompactor {
 
         // Inject summaries as user-role <session_context> messages
         for fact in &summaries {
-            let depth = extract_depth(&fact.path);
+            let path = fact.path.as_deref().unwrap_or("");
+            let depth = extract_depth(path);
             let summary_tokens = estimate_tokens(&fact.content, ratio);
 
             if used_tokens + summary_tokens > summary_budget {
@@ -623,18 +620,18 @@ impl SessionCompactor {
         Ok(response.text_content())
     }
 
-    /// Count valid facts at a given depth for a session.
+    /// Count raw memories at a given depth for a session.
     async fn count_valid_facts_at_depth(
         &self,
         session_id: &str,
         depth: u32,
     ) -> Result<usize, AlephError> {
         let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
-        let filter = SearchFilter::new()
-            .with_valid_only()
-            .with_scope(MemoryScope::SessionLocal)
-            .with_path_prefix(&path_prefix);
-        self.database.count_facts(&filter).await
+        let raws = self
+            .database
+            .get_raw_by_path_prefix(&path_prefix, "default", 500)
+            .await?;
+        Ok(raws.len())
     }
 
     /// Store raw conversation chunk for post-compression semantic recovery.
@@ -665,19 +662,15 @@ impl SessionCompactor {
         Ok(())
     }
 
-    /// Fetch all valid facts at a given depth for a session.
+    /// Fetch all raw memories at a given depth for a session.
     async fn fetch_valid_facts_at_depth(
         &self,
         session_id: &str,
         depth: u32,
-    ) -> Result<Vec<MemoryFact>, AlephError> {
+    ) -> Result<Vec<RawMemory>, AlephError> {
         let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
-        let filter = SearchFilter::new()
-            .with_valid_only()
-            .with_scope(MemoryScope::SessionLocal)
-            .with_path_prefix(&path_prefix);
         self.database
-            .get_facts_by_path_prefix(&path_prefix, &filter, 500)
+            .get_raw_by_path_prefix(&path_prefix, "default", 500)
             .await
     }
 
@@ -707,10 +700,10 @@ impl SessionCompactor {
             return Ok(0);
         }
 
-        // Build messages from source fact content
+        // Build messages from source raw memory content
         let messages: Vec<(String, String)> = source_facts
             .iter()
-            .map(|f| ("assistant".to_string(), f.content.clone()))
+            .map(|r| ("assistant".to_string(), r.content.clone()))
             .collect();
 
         // Generate condensed summary — for condensation (d0→d1, d1→d2) we can
@@ -745,16 +738,14 @@ impl SessionCompactor {
             .with_path(fact.path.clone());
         self.database.insert_raw_memory(&raw).await?;
 
-        // Invalidate source facts
-        let reason = format!("condensed into d{target_depth}/{seq}");
-        for source in &source_facts {
-            if let Err(e) = self.database.invalidate_fact(&source.id, &reason).await {
-                warn!(
-                    error = %e,
-                    fact_id = %source.id,
-                    "Failed to invalidate source fact during condensation"
-                );
-            }
+        // Mark source raw memories as processed (consumed by condensation)
+        let source_ids: Vec<String> = source_facts.iter().map(|r| r.id.clone()).collect();
+        if let Err(e) = self.database.mark_raw_as_processed(&source_ids).await {
+            warn!(
+                error = %e,
+                source_count = source_ids.len(),
+                "Failed to mark source raw memories as processed during condensation"
+            );
         }
 
         info!(
