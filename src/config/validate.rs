@@ -315,39 +315,6 @@ impl Config {
             }
         }
 
-        if !(0.0..=1.0).contains(&self.memory.graph_decay.node_decay_per_day) {
-            error!(
-                value = self.memory.graph_decay.node_decay_per_day,
-                "Invalid graph node_decay_per_day"
-            );
-            return Err(AlephError::invalid_config(format!(
-                "memory.graph_decay.node_decay_per_day must be between 0.0 and 1.0, got {}",
-                self.memory.graph_decay.node_decay_per_day
-            )));
-        }
-
-        if !(0.0..=1.0).contains(&self.memory.graph_decay.edge_decay_per_day) {
-            error!(
-                value = self.memory.graph_decay.edge_decay_per_day,
-                "Invalid graph edge_decay_per_day"
-            );
-            return Err(AlephError::invalid_config(format!(
-                "memory.graph_decay.edge_decay_per_day must be between 0.0 and 1.0, got {}",
-                self.memory.graph_decay.edge_decay_per_day
-            )));
-        }
-
-        if !(0.0..=1.0).contains(&self.memory.graph_decay.min_score) {
-            error!(
-                value = self.memory.graph_decay.min_score,
-                "Invalid graph min_score"
-            );
-            return Err(AlephError::invalid_config(format!(
-                "memory.graph_decay.min_score must be between 0.0 and 1.0, got {}",
-                self.memory.graph_decay.min_score
-            )));
-        }
-
         if self.memory.memory_decay.half_life_days <= 0.0 {
             error!(
                 value = self.memory.memory_decay.half_life_days,

@@ -84,9 +84,6 @@ pub struct MemoryConfig {
     /// DreamDaemon scheduling configuration
     #[serde(default)]
     pub dreaming: DreamingConfig,
-    /// Graph decay policy for entity/relationship pruning
-    #[serde(default)]
-    pub graph_decay: GraphDecayPolicy,
     /// Memory fact decay policy
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
@@ -396,34 +393,6 @@ impl DreamingConfig {
 }
 
 // =============================================================================
-// GraphDecayPolicy
-// =============================================================================
-
-/// Decay policy for graph nodes/edges
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct GraphDecayPolicy {
-    /// Per-day decay multiplier for nodes (0.0-1.0)
-    #[serde(default = "default_graph_node_decay_per_day")]
-    pub node_decay_per_day: f32,
-    /// Per-day decay multiplier for edges (0.0-1.0)
-    #[serde(default = "default_graph_edge_decay_per_day")]
-    pub edge_decay_per_day: f32,
-    /// Minimum score before pruning
-    #[serde(default = "default_graph_min_score")]
-    pub min_score: f32,
-}
-
-impl Default for GraphDecayPolicy {
-    fn default() -> Self {
-        Self {
-            node_decay_per_day: default_graph_node_decay_per_day(),
-            edge_decay_per_day: default_graph_edge_decay_per_day(),
-            min_score: default_graph_min_score(),
-        }
-    }
-}
-
-// =============================================================================
 // MemoryDecayPolicy
 // =============================================================================
 
@@ -590,19 +559,6 @@ pub fn default_synthesis_max_insights() -> usize {
     10
 }
 
-// Graph decay defaults
-pub fn default_graph_node_decay_per_day() -> f32 {
-    0.02
-}
-
-pub fn default_graph_edge_decay_per_day() -> f32 {
-    0.03
-}
-
-pub fn default_graph_min_score() -> f32 {
-    0.1
-}
-
 // Memory decay defaults
 pub fn default_memory_decay_half_life_days() -> f32 {
     30.0
@@ -715,7 +671,6 @@ impl Default for MemoryConfig {
             // Embedding settings
             embedding: EmbeddingSettings::default(),
             dreaming: DreamingConfig::default(),
-            graph_decay: GraphDecayPolicy::default(),
             memory_decay: MemoryDecayPolicy::default(),
             // Hybrid retrieval & reranking
             rrf_k: default_rrf_k(),

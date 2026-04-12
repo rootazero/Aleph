@@ -194,24 +194,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             order: 9,
             advanced: true,
         },
-        "memory.graph_decay.node_decay_per_day" => {
-            label: "Graph Node Decay/Day",
-            help: "Daily decay multiplier for graph nodes",
-            group: "memory",
-            advanced: true,
-        },
-        "memory.graph_decay.edge_decay_per_day" => {
-            label: "Graph Edge Decay/Day",
-            help: "Daily decay multiplier for graph edges",
-            group: "memory",
-            advanced: true,
-        },
-        "memory.graph_decay.min_score" => {
-            label: "Graph Min Score",
-            help: "Minimum graph score before pruning",
-            group: "memory",
-            advanced: true,
-        },
         "memory.memory_decay.half_life_days" => {
             label: "Fact Half-Life (Days)",
             help: "Half-life for memory fact decay",

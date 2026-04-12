@@ -46,11 +46,6 @@ fn test_memory_config_deserialization() {
             "window_end_local": "03:00",
             "max_duration_seconds": 300
         },
-        "graph_decay": {
-            "node_decay_per_day": 0.05,
-            "edge_decay_per_day": 0.06,
-            "min_score": 0.2
-        },
         "memory_decay": {
             "half_life_days": 20.0,
             "access_boost": 0.1,
@@ -67,7 +62,6 @@ fn test_memory_config_deserialization() {
     assert_eq!(config.similarity_threshold, 0.8);
     assert!(!config.dreaming.enabled);
     assert_eq!(config.dreaming.window_start_local, "01:00");
-    assert_eq!(config.graph_decay.min_score, 0.2);
     assert_eq!(config.memory_decay.protected_types.len(), 2);
 }
 
