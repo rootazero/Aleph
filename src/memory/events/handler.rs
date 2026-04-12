@@ -3,14 +3,18 @@
 //! All fact mutations go through this handler:
 //! 1. Build MemoryEvent from command
 //! 2. Append to SQLite event store
-//! 3. Project to facts table via `project_to_store` (dual-write)
+//! 3. Project to facts table via `project_to_store` (dual-write, legacy)
+//! 4. Project to notes store via `project_to_notes` (new primary write path)
 
 use crate::sync_primitives::Arc;
 use uuid::Uuid;
 
 use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
+use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
+use crate::memory::notes::store::NoteStore;
 use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::resilience::database::StateDatabase;
 
 use super::commands::*;
@@ -18,11 +22,20 @@ use super::commands::*;
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
     memory_store: Option<MemoryBackend>,
+    /// NoteIndexer for the new notes-based dual-write path.
+    /// When present, every create/update/delete also writes to the notes filesystem layer.
+    note_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
 }
 
 impl MemoryCommandHandler {
     pub fn new(db: Arc<StateDatabase>, memory_store: Option<MemoryBackend>) -> Self {
-        Self { db, memory_store }
+        Self { db, memory_store, note_indexer: None }
+    }
+
+    /// Attach a `NoteIndexer` to enable the notes dual-write path.
+    pub fn with_note_indexer(mut self, indexer: Arc<NoteIndexer<SqliteMemoryBackend>>) -> Self {
+        self.note_indexer = Some(indexer);
+        self
     }
 
     /// Project the current event stream for a fact into the facts table.
@@ -59,6 +72,76 @@ impl MemoryCommandHandler {
         Ok(())
     }
 
+    /// Project a fact event into the notes layer (new primary write path).
+    ///
+    /// Called after appending an event to the event log. When the projected
+    /// fact is `Some`, writes/overwrites the corresponding markdown note. When
+    /// `None` (fact deleted), removes the note file and index entry.
+    /// If `note_indexer` is None, this is a no-op.
+    async fn project_to_notes(&self, fact_id: &str) -> Result<(), AlephError> {
+        let Some(ref indexer) = self.note_indexer else {
+            return Ok(());
+        };
+
+        let events = self.db.get_memory_events_for_fact(fact_id).await?;
+        let projected = super::projector::EventProjector::fold_events_to_fact(&events)?;
+
+        match projected {
+            Some(fact) => {
+                let category = fact.note_type.to_category_dir();
+                let title = sanitize_title(&fact.id); // use fact_id as stable filename
+                let now = chrono::Utc::now().timestamp();
+                let note = KnowledgeNote {
+                    title: title.clone(),
+                    category: category.to_string(),
+                    tags: vec![],
+                    facts: vec![fact.content.clone()],
+                    links: vec![],
+                    created_at: now,
+                    updated_at: now,
+                    content_hash: String::new(),
+                };
+                let path = indexer.write_note(&fact.agent, category, &note).await;
+                match path {
+                    Ok(_) => {
+                        if let Err(e) = indexer.store().index_note(&note, &fact.agent, category).await {
+                            tracing::error!(fact_id, error = %e, "Notes dual-write: failed to index note");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(fact_id, error = %e, "Notes dual-write: failed to write note file");
+                    }
+                }
+            }
+            None => {
+                // Fact deleted — find and remove the note file
+                let title = sanitize_title(fact_id);
+                // We don't know the agent or category at delete time without re-reading the
+                // first event. Search the index by filename as a best-effort cleanup.
+                // This is intentionally fire-and-forget (errors are logged, not propagated).
+                let agents_to_try = ["default", "owner"]; // common agent IDs
+                for agent_id in &agents_to_try {
+                    for cat in crate::memory::notes::CATEGORY_DIRS {
+                        let file = indexer
+                            .memory_dir()
+                            .join(agent_id)
+                            .join(cat)
+                            .join(format!("{title}.md"));
+                        if file.exists() {
+                            tokio::fs::remove_file(&file).await.ok();
+                            let note_path = format!("{cat}/{title}");
+                            if let Err(e) = indexer.store().remove_note_index(&note_path, agent_id).await {
+                                tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a new fact. Returns the generated fact_id.
     pub async fn create_fact(&self, cmd: CreateFactCommand) -> Result<String, AlephError> {
         let fact_id = Uuid::new_v4().to_string();
@@ -83,6 +166,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id).await?;
+        self.project_to_notes(&fact_id).await?;
         Ok(fact_id)
     }
 
@@ -110,6 +194,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id_ref).await?;
+        self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -130,6 +215,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id_ref).await?;
+        self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -153,6 +239,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id_ref).await?;
+        self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -184,6 +271,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id_ref).await?;
+        self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
 
@@ -212,6 +300,7 @@ impl MemoryCommandHandler {
         self.db.append_memory_events(&envelopes).await?;
         for (fact_id, _, _) in &cmd.fact_ids_with_strength {
             self.project_to_store(fact_id).await?;
+            self.project_to_notes(fact_id).await?;
         }
         Ok(count)
     }
@@ -232,6 +321,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id).await?;
+        self.project_to_notes(&fact_id).await?;
         Ok(fact_id)
     }
 
@@ -250,6 +340,7 @@ impl MemoryCommandHandler {
 
         self.db.append_memory_event(&envelope).await?;
         self.project_to_store(&fact_id_ref).await?;
+        self.project_to_notes(&fact_id_ref).await?;
         Ok(())
     }
 }

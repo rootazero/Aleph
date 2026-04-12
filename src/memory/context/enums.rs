@@ -74,6 +74,30 @@ impl NoteType {
         }
     }
 
+    /// Return the filesystem category directory name for this note type.
+    ///
+    /// Matches the names in `CATEGORY_DIRS` (uses hyphens for subagent variants,
+    /// not underscores as `as_str()` does).
+    pub fn to_category_dir(&self) -> &'static str {
+        match self {
+            NoteType::Preference => "preference",
+            NoteType::Plan => "plan",
+            NoteType::Learning => "learning",
+            NoteType::Project => "project",
+            NoteType::Personal => "personal",
+            NoteType::Tool => "tool",
+            NoteType::Lesson => "lesson",
+            NoteType::Skill => "skill",
+            NoteType::Wiki => "wiki",
+            NoteType::Transcript => "transcript",
+            NoteType::Other => "other",
+            NoteType::SubagentRun => "subagent-run",
+            NoteType::SubagentSession => "subagent-session",
+            NoteType::SubagentCheckpoint => "subagent-checkpoint",
+            NoteType::SubagentTranscript => "subagent-transcript",
+        }
+    }
+
     /// Parse from string with fallback to Other
     pub fn from_str_or_other(s: &str) -> Self {
         s.parse().unwrap_or(NoteType::Other)
