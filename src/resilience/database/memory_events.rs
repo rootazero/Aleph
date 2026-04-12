@@ -281,7 +281,7 @@ struct MemoryEventRow {
     id: i64,
     fact_id: String,
     seq: u64,
-    _event_type: String,
+    event_type: String,
     event_json: String,
     actor: String,
     _tier: String,
@@ -297,7 +297,7 @@ impl MemoryEventRow {
             id: row.get(0)?,
             fact_id: row.get(1)?,
             seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
-            _event_type: row.get::<_, String>(3)?,
+            event_type: row.get::<_, String>(3)?,
             event_json: row.get(4)?,
             actor: row.get(5)?,
             _tier: row.get::<_, String>(6)?,
@@ -322,12 +322,11 @@ impl MemoryEventRow {
         let event: MemoryEvent = match serde_json::from_str(&self.event_json) {
             Ok(event) => event,
             Err(e) => {
-                let row_snippet: String = self.event_json.chars().take(200).collect();
                 tracing::warn!(
                     error = %e,
                     fact_id = %self.fact_id,
                     seq = self.seq,
-                    row_snippet = %row_snippet,
+                    event_type = %self.event_type,
                     "skipping unrecognized memory event during replay"
                 );
                 return Ok(None);
