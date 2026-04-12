@@ -3,9 +3,8 @@
 use std::collections::HashSet;
 
 use crate::memory::context::MemoryFact;
-use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::notes::store::NoteStore;
+use crate::memory::store::MemoryBackend;
 use crate::Result;
 
 use super::config::{RippleConfig, RippleResult};
@@ -14,12 +13,17 @@ use super::config::{RippleConfig, RippleResult};
 pub struct RippleTask {
     database: MemoryBackend,
     config: RippleConfig,
+    agent_id: String,
 }
 
 impl RippleTask {
     /// Create a new RippleTask
-    pub fn new(database: MemoryBackend, config: RippleConfig) -> Self {
-        Self { database, config }
+    pub fn new(database: MemoryBackend, config: RippleConfig, agent_id: impl Into<String>) -> Self {
+        Self {
+            database,
+            config,
+            agent_id: agent_id.into(),
+        }
     }
 
     /// Explore related facts starting from seed facts
@@ -46,20 +50,24 @@ impl RippleTask {
                     continue;
                 };
 
-                // Search for similar facts using vector_search
-                let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner)); // TODO: Pass from context
+                // Search for similar notes using NoteStore
                 let dim_hint = embedding.len() as u32;
-                let scored_facts = self
+                let note_results = self
                     .database
-                    .vector_search(embedding, dim_hint, &filter, self.config.max_facts_per_hop)
+                    .vector_search_notes_with_content(
+                        embedding,
+                        &self.agent_id,
+                        dim_hint,
+                        self.config.max_facts_per_hop,
+                    )
                     .await?;
 
-                // Convert ScoredFact to MemoryFact, attaching similarity_score
-                let similar_facts: Vec<MemoryFact> = scored_facts
+                // Convert NoteSearchResult to MemoryFact, attaching similarity_score
+                let similar_facts: Vec<MemoryFact> = note_results
                     .into_iter()
-                    .map(|sf| {
-                        let mut f = sf.fact;
-                        f.similarity_score = Some(sf.score);
+                    .map(|r| {
+                        let mut f = r.to_memory_fact(&self.agent_id);
+                        f.similarity_score = Some(r.score);
                         f
                     })
                     .collect();

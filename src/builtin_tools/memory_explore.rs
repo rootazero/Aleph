@@ -12,10 +12,9 @@ use tracing::{debug, info, warn};
 
 use super::error::ToolError;
 use crate::error::Result;
-use crate::memory::namespace::NamespaceScope;
+use crate::memory::notes::store::NoteStore;
 use crate::memory::ripple::{RippleConfig, RippleTask};
-use crate::memory::store::types::SearchFilter;
-use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::tools::AlephTool;
 
@@ -78,12 +77,30 @@ pub struct MemoryExploreOutput {
 pub struct MemoryExploreTool {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
+    agent_id: String,
 }
 
 impl MemoryExploreTool {
     /// Create a new MemoryExploreTool
     pub fn new(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
-        Self { database, embedder }
+        Self {
+            database,
+            embedder,
+            agent_id: "default".to_string(),
+        }
+    }
+
+    /// Create a new MemoryExploreTool with an explicit agent ID
+    pub fn with_agent_id(
+        database: MemoryBackend,
+        embedder: Arc<dyn EmbeddingProvider>,
+        agent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            database,
+            embedder,
+            agent_id: agent_id.into(),
+        }
     }
 
     /// Internal implementation
@@ -117,30 +134,37 @@ impl MemoryExploreTool {
 
         let dim_hint = embedding.len() as u32;
 
-        // Step 2: Vector search for seed facts
-        let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
-        let scored_seeds = self
+        // Step 2: Vector search for seed notes via NoteStore
+        let seed_results = self
             .database
-            .vector_search(&embedding, dim_hint, &filter, 3)
+            .vector_search_notes_with_content(&embedding, &self.agent_id, dim_hint, 3)
             .await
             .map_err(|e| ToolError::Execution(format!("Seed search failed: {}", e)))?;
 
-        debug!(seed_count = scored_seeds.len(), "Seed facts retrieved");
+        debug!(seed_count = seed_results.len(), "Seed notes retrieved");
 
-        // Convert to MemoryFact with similarity_score attached
-        let mut seed_facts: Vec<_> = scored_seeds
-            .into_iter()
-            .map(|sf| {
-                let mut f = sf.fact;
-                f.similarity_score = Some(sf.score);
+        // Convert NoteSearchResult to MemoryFact with embedding attached for BFS
+        let mut seed_facts: Vec<_> = seed_results
+            .iter()
+            .map(|r| {
+                let mut f = r.to_memory_fact(&self.agent_id);
+                f.similarity_score = Some(r.score);
                 f
             })
             .collect();
 
-        // Step 3: Load embeddings for each seed (RippleTask needs them)
+        // Step 3: Load embeddings for each seed so RippleTask can expand them
         for fact in &mut seed_facts {
-            if let Err(e) = MemoryStore::load_embedding_for_fact(&*self.database, fact).await {
-                warn!(fact_id = %fact.id, error = %e, "Failed to load embedding for seed fact, skipping");
+            match self
+                .database
+                .get_embedding(&fact.id, &self.agent_id, dim_hint)
+                .await
+            {
+                Ok(Some(emb)) => fact.embedding = Some(emb),
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(fact_id = %fact.id, error = %e, "Failed to load embedding for seed note, skipping");
+                }
             }
         }
 
@@ -162,7 +186,7 @@ impl MemoryExploreTool {
             similarity_threshold: 0.7,
             ..Default::default()
         };
-        let ripple = RippleTask::new(self.database.clone(), config);
+        let ripple = RippleTask::new(self.database.clone(), config, &self.agent_id);
 
         let result = ripple
             .explore(seed_facts)
@@ -212,6 +236,7 @@ impl Clone for MemoryExploreTool {
         Self {
             database: self.database.clone(),
             embedder: self.embedder.clone(),
+            agent_id: self.agent_id.clone(),
         }
     }
 }
