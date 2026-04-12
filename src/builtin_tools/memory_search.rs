@@ -12,10 +12,13 @@ use tracing::{debug, info};
 use super::error::ToolError;
 use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
+use crate::memory::note_retrieval::NoteFactRetrieval;
+use crate::memory::notes::NoteIndexer;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, FactRetrieval,
-    FactRetrievalConfig, TokenBudget, TranscriptIndexer, DEFAULT_AGENT,
+    FactRetrievalConfig, RetrievalResult, SqliteMemoryBackend, TokenBudget, TranscriptIndexer,
+    DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -140,6 +143,7 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
 pub struct MemorySearchTool {
     database: MemoryBackend,
     fact_retrieval: Arc<FactRetrieval>,
+    note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
     /// Shared default workspace ID, set by the execution engine based on active workspace.
@@ -202,6 +206,12 @@ impl MemorySearchTool {
             fact_config,
         ));
 
+        // NoteFactRetrieval: used for the primary long-term recall path.
+        let memory_dir = crate::utils::paths::get_note_memory_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
+        let note_retrieval = Arc::new(NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder)));
+
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
@@ -210,6 +220,7 @@ impl MemorySearchTool {
         Self {
             database,
             fact_retrieval,
+            note_retrieval,
             comptroller,
             _indexer: indexer,
             default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
@@ -380,12 +391,28 @@ impl MemorySearchTool {
                     smart_result.recall_triggered,
                 )
             } else {
-                debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
-                let result = self
-                    .fact_retrieval
-                    .retrieve_with_filter(&args.query, workspace_filter)
+                // Use NoteFactRetrieval for primary long-term recall.
+                // Resolve agent_id from workspace_filter for note scoping.
+                let agent_id = match &workspace_filter {
+                    crate::gateway::agent_env::AgentEnvFilter::Single(ws) => ws.clone(),
+                    _ => workspace_label.clone(),
+                };
+                debug!(workspace = %workspace_label, "Performing note-based retrieval");
+                let scored = self
+                    .note_retrieval
+                    .retrieve(&args.query, &agent_id, 10)
                     .await
-                    .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
+                    .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {}", e)))?;
+                // Convert Vec<ScoredFact> → RetrievalResult for the comptroller pipeline.
+                let facts = scored
+                    .into_iter()
+                    .map(|sf| {
+                        let mut fact = sf.fact;
+                        fact.similarity_score = Some(sf.score);
+                        fact
+                    })
+                    .collect();
+                let result = RetrievalResult { facts };
                 (result, Vec::new(), false)
             };
             drop(smart_recall_cfg);
@@ -487,6 +514,7 @@ impl Clone for MemorySearchTool {
         Self {
             database: self.database.clone(),
             fact_retrieval: self.fact_retrieval.clone(),
+            note_retrieval: self.note_retrieval.clone(),
             comptroller: self.comptroller.clone(),
             _indexer: self._indexer.clone(),
             default_workspace: self.default_workspace.clone(),
