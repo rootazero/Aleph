@@ -16,9 +16,8 @@ use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
-    ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, FactRetrieval,
-    FactRetrievalConfig, RetrievalResult, SqliteMemoryBackend, TokenBudget, TranscriptIndexer,
-    DEFAULT_AGENT,
+    ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, RetrievalResult,
+    SqliteMemoryBackend, TokenBudget, TranscriptIndexer, DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -142,7 +141,6 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
 /// Memory search tool with hybrid retrieval
 pub struct MemorySearchTool {
     database: MemoryBackend,
-    fact_retrieval: Arc<FactRetrieval>,
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
@@ -194,17 +192,7 @@ impl MemorySearchTool {
         embedder: Arc<dyn EmbeddingProvider>,
         similarity_threshold: Option<f32>,
     ) -> Self {
-        let threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
-        let fact_config = FactRetrievalConfig {
-            max_facts: 10,
-            max_raw_fallback: 10,
-            similarity_threshold: threshold,
-        };
-        let fact_retrieval = Arc::new(FactRetrieval::new(
-            database.clone(),
-            Arc::clone(&embedder),
-            fact_config,
-        ));
+        let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
 
         // NoteFactRetrieval: used for the primary long-term recall path.
         let memory_dir = crate::utils::paths::get_note_memory_dir()
@@ -219,7 +207,6 @@ impl MemorySearchTool {
 
         Self {
             database,
-            fact_retrieval,
             note_retrieval,
             comptroller,
             _indexer: indexer,
@@ -364,43 +351,92 @@ impl MemorySearchTool {
                 && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
 
             let (retrieval_result, cross_ws, triggered) = if use_smart_recall {
+                // Smart recall: search primary workspace first, then expand to all agents
+                // if primary results are sparse. Uses NoteFactRetrieval multi-agent path.
                 let primary_ws = match &workspace_filter {
-                    AgentEnvFilter::Single(ws) => ws.as_str(),
+                    AgentEnvFilter::Single(ws) => ws.clone(),
                     _ => unreachable!(),
                 };
                 let config = smart_recall_cfg.as_ref().ok_or_else(|| {
                     ToolError::Execution("Smart recall config disappeared".into())
                 })?;
-                debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
-                let smart_result = self
-                    .fact_retrieval
-                    .retrieve_with_smart_recall(&args.query, primary_ws, config)
-                    .await
-                    .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
+                let threshold = config.min_primary_results;
+                let max_cross = config.max_cross_results;
+                debug!(workspace = %workspace_label, "Performing Smart Recall retrieval via NoteFactRetrieval");
 
-                if smart_result.recall_triggered {
+                // Phase 1: primary workspace
+                let primary_scored = self
+                    .note_retrieval
+                    .retrieve(&args.query, &primary_ws, args.max_results)
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Smart recall phase 1 failed: {}", e)))?;
+
+                let recall_triggered = primary_scored.len() < threshold;
+
+                // Phase 2: cross-workspace expansion when primary results are sparse
+                let cross_scored = if recall_triggered {
                     info!(
-                        cross_count = smart_result.cross_workspace.len(),
-                        reason = ?smart_result.trigger_reason,
+                        primary_count = primary_scored.len(),
+                        threshold = threshold,
+                        "Smart Recall Phase 2 triggered — expanding to all agents"
+                    );
+                    let memory_dir = crate::utils::paths::get_note_memory_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+                    self.note_retrieval
+                        .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Smart recall phase 2 failed: {}", e)))?
+                } else {
+                    Vec::new()
+                };
+
+                // Merge primary + cross results, deduplicate by path
+                let mut seen_paths = std::collections::HashSet::new();
+                let mut merged_facts = Vec::new();
+                for sf in primary_scored.iter().chain(cross_scored.iter()) {
+                    if seen_paths.insert(sf.fact.path.clone()) {
+                        let mut fact = sf.fact.clone();
+                        fact.similarity_score = Some(sf.score);
+                        merged_facts.push(fact);
+                    }
+                }
+
+                // Build cross_workspace vec from the expansion results (capped at max_cross)
+                let cross_ws: Vec<CrossWorkspaceFact> = if recall_triggered {
+                    cross_scored
+                        .iter()
+                        .filter(|sf| !primary_scored.iter().any(|p| p.fact.path == sf.fact.path))
+                        .take(max_cross)
+                        .map(|sf| CrossWorkspaceFact {
+                            content: sf.fact.content.clone(),
+                            source_workspace: sf.fact.agent.clone(),
+                            relevance_score: sf.score,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                if recall_triggered {
+                    info!(
+                        cross_count = cross_ws.len(),
                         "Smart Recall Phase 2 returned cross-workspace results"
                     );
                 }
-                (
-                    smart_result.primary,
-                    smart_result.cross_workspace,
-                    smart_result.recall_triggered,
-                )
+
+                let result = RetrievalResult { facts: merged_facts };
+                (result, cross_ws, recall_triggered)
             } else {
                 // Use NoteFactRetrieval for primary long-term recall.
                 // Resolve agent_id from workspace_filter for note scoping.
                 let agent_id = match &workspace_filter {
-                    crate::gateway::agent_env::AgentEnvFilter::Single(ws) => ws.clone(),
+                    AgentEnvFilter::Single(ws) => ws.clone(),
                     _ => workspace_label.clone(),
                 };
                 debug!(workspace = %workspace_label, "Performing note-based retrieval");
                 let scored = self
                     .note_retrieval
-                    .retrieve(&args.query, &agent_id, 10)
+                    .retrieve(&args.query, &agent_id, args.max_results)
                     .await
                     .map_err(|e| ToolError::Execution(format!("Note retrieval failed: {}", e)))?;
                 // Convert Vec<ScoredFact> → RetrievalResult for the comptroller pipeline.
@@ -513,7 +549,6 @@ impl Clone for MemorySearchTool {
     fn clone(&self) -> Self {
         Self {
             database: self.database.clone(),
-            fact_retrieval: self.fact_retrieval.clone(),
             note_retrieval: self.note_retrieval.clone(),
             comptroller: self.comptroller.clone(),
             _indexer: self._indexer.clone(),
