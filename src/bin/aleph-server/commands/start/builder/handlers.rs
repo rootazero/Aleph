@@ -658,6 +658,8 @@ pub(in crate::commands::start) fn register_memory_handlers(
             let emb = ::std::sync::Arc::clone(emb);
             let eb = ::std::sync::Arc::clone(event_bus);
             let rs = ::std::sync::Arc::clone(&reembed_state);
+            let mem_dir = alephcore::utils::paths::get_note_memory_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from(""));
             server
                 .handlers_mut()
                 .register("memory.reembed", move |req| {
@@ -665,7 +667,8 @@ pub(in crate::commands::start) fn register_memory_handlers(
                     let emb = ::std::sync::Arc::clone(&emb);
                     let eb = ::std::sync::Arc::clone(&eb);
                     let rs = ::std::sync::Arc::clone(&rs);
-                    async move { memory_handlers::handle_reembed(req, db, emb, eb, rs).await }
+                    let md = mem_dir.clone();
+                    async move { memory_handlers::handle_reembed(req, db, md, emb, eb, rs).await }
                 });
         }
 
@@ -753,39 +756,14 @@ pub(in crate::commands::start) fn init_compression_service(
 pub(in crate::commands::start) async fn init_command_handler(
     state_db: &std::sync::Arc<alephcore::resilience::database::StateDatabase>,
     memory_db: &alephcore::memory::store::MemoryBackend,
-    daemon: bool,
+    _daemon: bool,
 ) -> std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler> {
     use alephcore::memory::events::handler::MemoryCommandHandler;
-    use alephcore::memory::events::migration::EventSourcingMigration;
-    use alephcore::memory::store::MemoryStore;
 
     let handler = std::sync::Arc::new(MemoryCommandHandler::new(
         std::sync::Arc::clone(state_db),
         Some(memory_db.clone()),
     ));
-
-    // Run one-shot migration (idempotent)
-    let migration = EventSourcingMigration::new(std::sync::Arc::clone(state_db));
-    match memory_db.get_all_facts(true, None).await {
-        Ok(facts) => {
-            match migration.run_if_needed(&facts).await {
-                Ok(report) => {
-                    if report.migrated > 0 && !daemon {
-                        println!(
-                            "Event sourcing migration: {} facts migrated, {} skipped",
-                            report.migrated, report.skipped
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Event sourcing migration failed (non-fatal)");
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to load facts for event sourcing migration (non-fatal)");
-        }
-    }
 
     handler
 }
