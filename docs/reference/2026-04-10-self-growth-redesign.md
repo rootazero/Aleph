@@ -224,11 +224,11 @@ pub struct SkillManageArgs {
 ```
 
 Operations:
-- **create**: validate name → create FactType::Skill fact → generate embedding → insert via MemoryStore::insert_fact()
-- **patch**: find fact by VFS path → update content → regenerate embedding → update via MemoryStore::update_fact()
-- **delete**: find fact by VFS path → invalidate via MemoryStore::invalidate_fact()
-- **list**: query MemoryStore with fact_type=Skill filter → return name + description list
-- **export**: dump skill fact content to SKILL.md file on disk
+- **create**: validate name → generate embedding → persist to [raw memory](../memory/RAW_MEMORY.md) → synthesize to [notes](../memory/NOTES.md)
+- **patch**: find by VFS path → update content → regenerate embedding → persist and resynthessize
+- **delete**: mark as deleted in [raw memory](../memory/RAW_MEMORY.md)
+- **list**: query [raw memory](../memory/RAW_MEMORY.md) with category=Skill filter → return name + description list
+- **export**: dump skill content to SKILL.md file on disk
 
 ### skill_search Tool
 

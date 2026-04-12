@@ -178,8 +178,8 @@ pub struct MemorySearchOutput {
 **Architecture**:
 ```
 memory_search(query)
-  → FactRetrieval.retrieve(query)
-    → Hybrid search (facts + raw memories fallback)
+  → Hybrid search (see [Retrieval](../memory/RETRIEVAL.md))
+    → Facts + raw memories fallback
   → ContextComptroller.arbitrate(results, budget)
     → Detect redundancy via cosine similarity (threshold: 0.95)
     → Remove redundant transcripts when facts exist
