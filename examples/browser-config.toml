@@ -1,23 +1,31 @@
-# Browser System Configuration Example
-# Add this to your ~/.aleph/aleph.toml
+# Aleph browser configuration example.
+#
+# Playwright CLI drives the managed headless mode; Chrome DevTools MCP
+# drives the existing-session (attach to your Chrome) mode.
 
-[browser.profiles.default]
+[profiles.default]
 browser = "chromium"
-cdp_port = 18800
-headless = false
-idle_timeout_secs = 1800
+driver = "managed"
+color = "#4A90E2"
+# headless omitted → follows [playwright_cli].headless
 
-[browser.profiles.work]
+[profiles.user]
 browser = "chrome"
-cdp_port = 18801
-proxy = "socks5://127.0.0.1:1080"
+driver = "existing_session"
+color = "#00AA00"
 
-[browser.policy]
+[policy]
 block_private = true
 blocked_domains = ["*.malware.com"]
-allowed_domains = []
 
-[browser.playwright_mcp]
+[playwright_cli]
 enabled = true
+# binary_path = "/custom/path/to/playwright-cli"   # optional override
+headless = true
+nav_timeout_secs = 30
+action_timeout_secs = 10
+persistent_sessions = false
+
+[chrome_mcp]
 command = "npx"
-args = ["@anthropic/mcp-playwright"]
+args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Playwright CLI runtime bootstrap: one-click install of fnm, Node LTS, @playwright/cli, Chromium, and skills from Panel → Settings → Browser → "Install All".
+- `BrowserBackend` trait reshaped to text-first (SnapshotOutput / ScreenshotOutput / String) for token-efficient LLM responses.
+- Gateway RPCs `browser.runtime_status`, `browser.install_runtime`, `browser.refresh_runtime` for UI-driven runtime management.
+- `BrowserInstallProgressEvent` streaming event for UI progress feedback.
+
+### Changed
+- Managed browser automation now uses @playwright/cli instead of @playwright/mcp + chromiumoxide.
+- PDF generation (`pdf_generate` tool) migrated from chromiumoxide to `playwright-cli pdf`.
+- Browser configuration TOML key renamed from `[playwright_mcp]` to `[playwright_cli]` (serde alias kept for backward compat — old keys silently upgrade).
+- `ProfileConfig.headless` changed from `bool` to `Option<bool>` (None = follow global `playwright_cli.headless`).
+
+### Removed
+- `chromiumoxide` dependency.
+- `@playwright/mcp` integration (`PlaywrightMcpDriver`, `PlaywrightMcpBackend`, `PlaywrightMcpConfig`).
+- `AriaSnapshot` / `AriaElement` / `ConsoleMessage` / `TabInfo` / `ScreenshotResult` structured types (replaced by text-first types).
+- Legacy `builtin_tools/browser/` folder (dead code, no external consumers).
+
+### Migration Notes
+- TOML `[playwright_mcp]` sections silently read as `[playwright_cli]`; old `command` / `args` fields are discarded. No action required.
+- First-run: open Panel → Settings → Browser, click "Install All" to bootstrap fnm + Node + @playwright/cli + Chromium.
+- Windows users: fnm auto-install is not supported v1; install manually via `winget install Schniz.fnm` before clicking "Install All".
+
 ## [2026.04.08]
 
 ### Added
