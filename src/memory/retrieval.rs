@@ -1,20 +1,17 @@
 /// Memory retrieval module
 ///
-/// Tries note-based retrieval first (knowledge notes with vector search).
-/// If no notes are found, falls back to `FactRetrieval` for backward
-/// compatibility with callers that still use the `MemoryEntry` type.
+/// Retrieves memories using note-based vector search (knowledge notes).
 use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::record_activity;
-use crate::memory::fact_retrieval::{FactRetrieval, FactRetrievalConfig};
 use crate::memory::notes::{NoteContent, NoteRetrieval};
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tracing::debug;
 
-/// Memory retrieval service — delegates to `FactRetrieval`
+/// Memory retrieval service — delegates to `NoteRetrieval`.
 #[derive(Clone)]
 pub struct MemoryRetrieval {
     database: MemoryBackend,
@@ -36,38 +33,16 @@ impl MemoryRetrieval {
         }
     }
 
-    /// Retrieve memories — tries knowledge notes first, falls back to facts.
+    /// Retrieve memories using note-based vector search.
     pub async fn retrieve_memories(
         &self,
         _context: &ContextAnchor,
         query: &str,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
-        record_activity();
-
-        if !self.config.enabled {
-            debug!("Memory retrieval skipped: memory disabled");
-            return Ok(Vec::new());
-        }
-
-        // Try note-based retrieval first
-        if let Some(entries) = self.try_note_retrieval(query, 5).await {
-            if !entries.is_empty() {
-                debug!("Returning {} notes from NoteRetrieval", entries.len());
-                return Ok(entries);
-            }
-        }
-
-        // Fall back to fact retrieval
-        let fact_retrieval = FactRetrieval::with_defaults(
-            self.database.clone(),
-            self.embedder.clone(),
-        )
-        .with_rerank_config(self.config.rerank.clone());
-        let result = fact_retrieval.retrieve(query).await?;
-        Ok(result.facts.into_iter().map(fact_to_entry).collect())
+        self.retrieve_memories_with_limit(_context, query, 5).await
     }
 
-    /// Retrieve memories with custom limit — tries notes first, falls back to facts.
+    /// Retrieve memories with custom limit using note-based vector search.
     pub async fn retrieve_memories_with_limit(
         &self,
         _context: &ContextAnchor,
@@ -81,45 +56,34 @@ impl MemoryRetrieval {
             return Ok(Vec::new());
         }
 
-        // Try note-based retrieval first
-        if let Some(entries) = self.try_note_retrieval(query, limit).await {
-            if !entries.is_empty() {
-                debug!("Returning {} notes from NoteRetrieval (limit={})", entries.len(), limit);
-                return Ok(entries);
+        let memory_dir = match crate::utils::paths::get_note_memory_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                debug!(error = %e, "Note memory dir unavailable, returning empty");
+                return Ok(Vec::new());
             }
-        }
+        };
 
-        // Fall back to fact retrieval
-        let fact_retrieval = FactRetrieval::new(
-            self.database.clone(),
-            self.embedder.clone(),
-            FactRetrievalConfig {
-                max_facts: limit as u32,
-                ..FactRetrievalConfig::default()
-            },
-        )
-        .with_rerank_config(self.config.rerank.clone());
-        let result = fact_retrieval.retrieve(query).await?;
-        Ok(result.facts.into_iter().map(fact_to_entry).collect())
-    }
-
-    /// Attempt note retrieval; returns `None` on any error (graceful fallback).
-    async fn try_note_retrieval(&self, query: &str, limit: usize) -> Option<Vec<MemoryEntry>> {
-        let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
         let note_retrieval = NoteRetrieval::new(
             memory_dir,
             self.database.clone(),
             self.embedder.clone(),
         );
+
         let notes = note_retrieval
             .retrieve(query, "default", limit)
             .await
-            .ok()?;
-        Some(notes.into_iter().map(note_to_entry).collect())
+            .unwrap_or_else(|e| {
+                debug!(error = %e, "NoteRetrieval failed, returning empty");
+                Vec::new()
+            });
+
+        debug!(count = notes.len(), limit, "NoteRetrieval returned notes");
+        Ok(notes.into_iter().map(note_to_entry).collect())
     }
 }
 
-/// Convert a `NoteContent` into a `MemoryEntry` for backward compatibility.
+/// Convert a `NoteContent` into a `MemoryEntry`.
 fn note_to_entry(note: NoteContent) -> MemoryEntry {
     MemoryEntry {
         id: note.path.clone(),
@@ -130,20 +94,6 @@ fn note_to_entry(note: NoteContent) -> MemoryEntry {
         namespace: "owner".to_string(),
         agent: "default".to_string(),
         similarity_score: Some(note.score),
-    }
-}
-
-/// Convert a `MemoryFact` into a `MemoryEntry` for backward compatibility.
-fn fact_to_entry(fact: crate::memory::context::MemoryFact) -> MemoryEntry {
-    MemoryEntry {
-        id: fact.id,
-        context: ContextAnchor::with_timestamp(String::new(), fact.created_at),
-        user_input: fact.content,
-        ai_output: String::new(),
-        embedding: None,
-        namespace: fact.namespace,
-        agent: fact.agent,
-        similarity_score: fact.similarity_score,
     }
 }
 
