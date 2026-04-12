@@ -169,6 +169,166 @@ async fn run_capture(bin: &PathBuf, args: &[&str]) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// A single install step that can be executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallStep {
+    Fnm,
+    Node,
+    PlaywrightCli,
+    Chromium,
+    Skills,
+}
+
+impl InstallStep {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fnm => "fnm",
+            Self::Node => "node",
+            Self::PlaywrightCli => "playwright_cli",
+            Self::Chromium => "chromium",
+            Self::Skills => "skills",
+        }
+    }
+
+    pub const ORDER: &'static [InstallStep] = &[
+        Self::Fnm,
+        Self::Node,
+        Self::PlaywrightCli,
+        Self::Chromium,
+        Self::Skills,
+    ];
+}
+
+/// Callback for streaming install progress.
+/// Invocations: `on_progress(step, "started" | "log" | "done" | "failed", line_or_err)`.
+pub type ProgressFn = std::sync::Arc<dyn Fn(InstallStep, &str, Option<String>) + Send + Sync>;
+
+/// Run a full install of all missing components. Idempotent — skips installed ones.
+pub async fn install_missing(on_progress: ProgressFn) -> Result<BootstrapStatus, String> {
+    let status = BootstrapStatus::probe().await;
+    for step in InstallStep::ORDER {
+        let needs_install = match step {
+            InstallStep::Fnm => matches!(status.fnm, ComponentStatus::Missing),
+            InstallStep::Node => matches!(status.node, ComponentStatus::Missing),
+            InstallStep::PlaywrightCli => matches!(status.playwright_cli, ComponentStatus::Missing),
+            InstallStep::Chromium => matches!(status.chromium, ComponentStatus::Missing),
+            InstallStep::Skills => matches!(status.skills, ComponentStatus::Missing),
+        };
+        if !needs_install {
+            on_progress(*step, "done", Some("already installed".into()));
+            continue;
+        }
+        on_progress(*step, "started", None);
+        let result = match step {
+            InstallStep::Fnm => install_fnm(on_progress.clone()).await,
+            InstallStep::Node => install_node(on_progress.clone()).await,
+            InstallStep::PlaywrightCli => install_playwright_cli(on_progress.clone()).await,
+            InstallStep::Chromium => install_chromium(on_progress.clone()).await,
+            InstallStep::Skills => install_skills(on_progress.clone()).await,
+        };
+        match result {
+            Ok(_) => on_progress(*step, "done", None),
+            Err(e) => {
+                on_progress(*step, "failed", Some(e.clone()));
+                return Err(format!("step {} failed: {e}", step.as_str()));
+            }
+        }
+    }
+    Ok(BootstrapStatus::probe().await)
+}
+
+async fn install_fnm(on_progress: ProgressFn) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = on_progress;
+        return Err("Windows auto-install of fnm not supported. Please run `winget install Schniz.fnm` manually.".into());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        on_progress(InstallStep::Fnm, "log", Some("downloading fnm installer…".into()));
+        let sh_cmd = r#"curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell"#;
+        let output = tokio::process::Command::new("bash")
+            .args(["-c", sh_cmd])
+            .output()
+            .await
+            .map_err(|e| format!("spawn bash: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        on_progress(
+            InstallStep::Fnm,
+            "log",
+            Some(String::from_utf8_lossy(&output.stdout).to_string()),
+        );
+        Ok(())
+    }
+}
+
+async fn install_node(on_progress: ProgressFn) -> Result<(), String> {
+    on_progress(InstallStep::Node, "log", Some("fnm install --lts".into()));
+    let output = tokio::process::Command::new("fnm")
+        .args(["install", "--lts"])
+        .output()
+        .await
+        .map_err(|e| format!("spawn fnm: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+async fn install_playwright_cli(_on_progress: ProgressFn) -> Result<(), String> {
+    let output = tokio::process::Command::new("fnm")
+        .args(["exec", "--using", "lts", "--", "npm", "install", "-g", "@playwright/cli@latest"])
+        .output()
+        .await
+        .map_err(|e| format!("spawn fnm: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+async fn install_chromium(_on_progress: ProgressFn) -> Result<(), String> {
+    let output = tokio::process::Command::new("fnm")
+        .args(["exec", "--using", "lts", "--", "playwright", "install", "chromium"])
+        .output()
+        .await
+        .map_err(|e| format!("spawn fnm: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+async fn install_skills(_on_progress: ProgressFn) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "no home dir".to_string())?;
+    let skills_target = home.join(".aleph/skills/playwright-cli");
+    tokio::fs::create_dir_all(&skills_target)
+        .await
+        .map_err(|e| e.to_string())?;
+    let target_str = skills_target.to_string_lossy().to_string();
+    // Try `--target <path>` first; fall back to default install if CLI rejects the flag.
+    let with_target = tokio::process::Command::new("fnm")
+        .args(["exec", "--using", "lts", "--", "playwright-cli", "install", "--skills", "--target", &target_str])
+        .output()
+        .await
+        .map_err(|e| format!("spawn fnm: {e}"))?;
+    if with_target.status.success() {
+        return Ok(());
+    }
+    let default_install = tokio::process::Command::new("fnm")
+        .args(["exec", "--using", "lts", "--", "playwright-cli", "install", "--skills"])
+        .output()
+        .await
+        .map_err(|e| format!("spawn fnm: {e}"))?;
+    if !default_install.status.success() {
+        return Err(String::from_utf8_lossy(&default_install.stderr).to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +357,18 @@ mod tests {
     async fn test_probe_completes_without_panicking() {
         let status = BootstrapStatus::probe().await;
         let _ = serde_json::to_value(&status).unwrap();
+    }
+
+    #[test]
+    fn test_install_step_order() {
+        let order: Vec<&str> = InstallStep::ORDER.iter().map(|s| s.as_str()).collect();
+        assert_eq!(order, vec!["fnm", "node", "playwright_cli", "chromium", "skills"]);
+    }
+
+    #[test]
+    fn test_install_step_serde() {
+        let s = InstallStep::PlaywrightCli;
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j, serde_json::Value::String("playwright_cli".into()));
     }
 }
