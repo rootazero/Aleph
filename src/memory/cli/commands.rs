@@ -1,23 +1,20 @@
 //! CLI Commands for Memory Management
 //!
-//! Provides command implementations for listing, showing, adding, editing, and managing facts.
+//! Provides command implementations for listing, showing, adding, and managing
+//! knowledge notes.  Migrated from MemoryFact (MemoryStore) to NoteStore CRUD.
 
 use crate::error::AlephError;
-use crate::memory::context::{FactSpecificity, NoteType, MemoryFact, TemporalScope};
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::EmbeddingProvider;
+use crate::memory::notes::store::NoteIndexEntry;
+use crate::memory::notes::store::NoteStore;
+use crate::memory::store::MemoryBackend;
 use crate::sync_primitives::Arc;
 
-/// Filter options for listing facts
+/// Filter options for listing notes
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
-    /// Filter by fact type
-    pub note_type: Option<NoteType>,
-    /// Minimum strength threshold
-    pub min_strength: Option<f32>,
-    /// Include decayed/invalidated facts
-    pub include_decayed: bool,
-    /// Keyword filter on content
+    /// Filter by category (e.g. "preference", "wiki")
+    pub category: Option<String>,
+    /// Keyword filter on path / filename
     pub query: Option<String>,
     /// Maximum number of results
     pub limit: Option<usize>,
@@ -29,25 +26,13 @@ impl ListFilter {
         Self::default()
     }
 
-    /// Set fact type filter
-    pub fn with_type(mut self, note_type: NoteType) -> Self {
-        self.note_type = Some(note_type);
+    /// Set category filter
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
         self
     }
 
-    /// Set minimum strength filter
-    pub fn with_min_strength(mut self, min: f32) -> Self {
-        self.min_strength = Some(min);
-        self
-    }
-
-    /// Include decayed facts
-    pub fn include_decayed(mut self) -> Self {
-        self.include_decayed = true;
-        self
-    }
-
-    /// Set keyword query
+    /// Set keyword query (matches on filename / path)
     pub fn with_query(mut self, query: impl Into<String>) -> Self {
         self.query = Some(query.into());
         self
@@ -85,139 +70,130 @@ impl std::str::FromStr for OutputFormat {
     }
 }
 
-/// A fact summary for display
+/// A note summary for display
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct FactSummary {
-    /// Short ID (first 8 chars)
-    pub id: String,
-    /// Full ID
-    pub full_id: String,
-    /// Fact type
-    pub note_type: String,
-    /// Current strength (calculated)
-    pub strength: f32,
-    /// Truncated content
-    pub content_preview: String,
-    /// Full content
-    pub content: String,
-    /// Is valid
-    pub is_valid: bool,
-    /// Created timestamp
-    pub created_at: i64,
+pub struct NoteSummary {
+    /// Note path (e.g. "preference/editor")
+    pub path: String,
+    /// Filename / title
+    pub filename: String,
+    /// Category
+    pub category: String,
+    /// Tags
+    pub tags: Vec<String>,
+    /// Number of outgoing wikilinks
+    pub link_count: usize,
+    /// Last updated timestamp
+    pub updated_at: i64,
 }
 
-impl FactSummary {
-    /// Create from a MemoryFact
-    pub fn from_fact(fact: &MemoryFact, strength: f32) -> Self {
-        let content_preview = if fact.content.chars().count() > 50 {
-            let truncated: String = fact.content.chars().take(47).collect();
-            format!("{}...", truncated)
-        } else {
-            fact.content.clone()
-        };
-
+impl NoteSummary {
+    /// Create from a NoteIndexEntry
+    pub fn from_entry(entry: &NoteIndexEntry) -> Self {
         Self {
-            id: fact.id[..8.min(fact.id.len())].to_string(),
-            full_id: fact.id.clone(),
-            note_type: format!("{:?}", fact.note_type).to_lowercase(),
-            strength,
-            content_preview,
-            content: fact.content.clone(),
-            is_valid: fact.is_valid,
-            created_at: fact.created_at,
+            path: entry.path.clone(),
+            filename: entry.filename.clone(),
+            category: entry.category.clone(),
+            tags: entry.tags.clone(),
+            link_count: entry.link_count,
+            updated_at: entry.updated_at,
         }
     }
 
     /// Format as table row
     pub fn to_table_row(&self) -> String {
+        let tags_preview = if self.tags.is_empty() {
+            "-".to_string()
+        } else {
+            self.tags.join(", ")
+        };
+        let filename_col = if self.filename.chars().count() > 30 {
+            let t: String = self.filename.chars().take(27).collect();
+            format!("{}...", t)
+        } else {
+            self.filename.clone()
+        };
         format!(
-            "{:<10} {:<12} {:>6.2}  {}",
-            self.id, self.note_type, self.strength, self.content_preview
+            "{:<35} {:<12} {:>5}  {}",
+            filename_col, self.category, self.link_count, tags_preview
         )
     }
 
     /// Format as CSV row
     pub fn to_csv_row(&self) -> String {
         format!(
-            "{},{},{:.2},\"{}\"",
-            self.full_id,
-            self.note_type,
-            self.strength,
-            self.content.replace('"', "\"\"")
+            "{},{},{},\"{}\"",
+            self.path,
+            self.category,
+            self.link_count,
+            self.tags.join(";").replace('"', "\"\"")
         )
     }
 }
 
-/// Memory CLI commands
+/// Memory CLI commands — operates on NoteStore (notes index).
 pub struct MemoryCommands {
     db: MemoryBackend,
+    /// Agent scope for all operations
+    agent_id: String,
+    /// Base memory directory for reading note file content
+    memory_dir: std::path::PathBuf,
 }
 
 impl MemoryCommands {
     /// Create new commands instance
-    pub fn new(db: MemoryBackend) -> Self {
-        Self { db }
+    pub fn new(db: MemoryBackend, agent_id: impl Into<String>) -> Self {
+        let memory_dir = crate::utils::paths::get_note_memory_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        Self {
+            db,
+            agent_id: agent_id.into(),
+            memory_dir,
+        }
     }
 
-    /// List facts with optional filtering
-    pub async fn list(&self, filter: ListFilter) -> Result<Vec<FactSummary>, AlephError> {
-        // Get facts from database
-        let facts = self.db.get_all_facts(filter.include_decayed, None).await?;
+    /// Create with an explicit memory directory (useful for testing)
+    pub fn with_memory_dir(
+        db: MemoryBackend,
+        agent_id: impl Into<String>,
+        memory_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            db,
+            agent_id: agent_id.into(),
+            memory_dir,
+        }
+    }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+    /// List notes with optional filtering
+    pub async fn list(&self, filter: ListFilter) -> Result<Vec<NoteSummary>, AlephError> {
+        let entries = self.db.list_notes(&self.agent_id).await?;
 
-        // Apply filters and convert to summaries
-        let mut summaries: Vec<FactSummary> = facts
+        let mut summaries: Vec<NoteSummary> = entries
             .iter()
-            .filter(|f| {
-                // Type filter
-                if let Some(ref ft) = filter.note_type {
-                    if &f.note_type != ft {
+            .filter(|e| {
+                // Category filter
+                if let Some(ref cat) = filter.category {
+                    if &e.category != cat {
                         return false;
                     }
                 }
-
-                // Query filter
+                // Query filter (matches on path or filename)
                 if let Some(ref q) = filter.query {
-                    if !f.content.to_lowercase().contains(&q.to_lowercase()) {
-                        return false;
-                    }
-                }
-
-                true
-            })
-            .map(|f| {
-                // Calculate strength (simplified - use decay config if available)
-                let days_old = (now - f.updated_at) as f32 / 86400.0;
-                let strength = if f.is_valid {
-                    0.5_f32.powf(days_old / 30.0).max(0.0)
-                } else {
-                    0.0
-                };
-                FactSummary::from_fact(f, strength)
-            })
-            .filter(|s| {
-                // Strength filter
-                if let Some(min) = filter.min_strength {
-                    if s.strength < min {
+                    let q_lower = q.to_lowercase();
+                    if !e.path.to_lowercase().contains(&q_lower)
+                        && !e.filename.to_lowercase().contains(&q_lower)
+                    {
                         return false;
                     }
                 }
                 true
             })
+            .map(NoteSummary::from_entry)
             .collect();
 
-        // Sort by strength descending
-        summaries.sort_by(|a, b| {
-            b.strength
-                .partial_cmp(&a.strength)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Apply limit
+        // Sort by most recently updated first (list_notes already does this,
+        // but category filtering may reorder — preserve original ordering)
         if let Some(limit) = filter.limit {
             summaries.truncate(limit);
         }
@@ -225,59 +201,50 @@ impl MemoryCommands {
         Ok(summaries)
     }
 
-    /// Get a single fact by ID (supports partial ID match)
-    pub async fn show(&self, id: &str) -> Result<Option<FactSummary>, AlephError> {
-        // Try exact match first
-        if let Some(fact) = self.db.get_fact(id).await? {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let days_old = (now - fact.updated_at) as f32 / 86400.0;
-            let strength = if fact.is_valid {
-                0.5_f32.powf(days_old / 30.0).max(0.0)
-            } else {
-                0.0
-            };
-            return Ok(Some(FactSummary::from_fact(&fact, strength)));
+    /// Get a single note by path (e.g. "preference/editor") or by filename prefix.
+    ///
+    /// Returns the index metadata and the markdown content from disk.
+    pub async fn show(
+        &self,
+        path_or_prefix: &str,
+    ) -> Result<Option<(NoteSummary, String)>, AlephError> {
+        // Try exact path first
+        if let Some(entry) = self.db.get_note_index(path_or_prefix, &self.agent_id).await? {
+            let content = self.read_note_file(&entry).await.unwrap_or_default();
+            return Ok(Some((NoteSummary::from_entry(&entry), content)));
         }
 
-        // Try prefix match
-        let facts = self.db.get_all_facts(true, None).await?;
-        let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
+        // Try prefix match on filename
+        let all = self.db.list_notes(&self.agent_id).await?;
+        let matches: Vec<_> = all
+            .iter()
+            .filter(|e| e.filename.to_lowercase().starts_with(&path_or_prefix.to_lowercase()))
+            .collect();
 
         match matches.len() {
             0 => Ok(None),
             1 => {
-                let fact = matches[0];
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                let days_old = (now - fact.updated_at) as f32 / 86400.0;
-                let strength = if fact.is_valid {
-                    0.5_f32.powf(days_old / 30.0).max(0.0)
-                } else {
-                    0.0
-                };
-                Ok(Some(FactSummary::from_fact(fact, strength)))
+                let entry = matches[0];
+                let content = self.read_note_file(entry).await.unwrap_or_default();
+                Ok(Some((NoteSummary::from_entry(entry), content)))
             }
             _ => Err(AlephError::other(format!(
-                "Ambiguous ID '{}' matches {} facts. Use more characters.",
-                id,
+                "Ambiguous prefix '{}' matches {} notes. Use more characters.",
+                path_or_prefix,
                 matches.len()
             ))),
         }
     }
 
     /// Format list output
-    pub fn format_list(&self, summaries: &[FactSummary], format: OutputFormat) -> String {
+    pub fn format_list(&self, summaries: &[NoteSummary], format: OutputFormat) -> String {
         match format {
             OutputFormat::Table => {
                 let mut output = String::new();
-                output.push_str("ID          TYPE         STRENGTH  CONTENT\n");
-                output
-                    .push_str("---------------------------------------------------------------\n");
+                output.push_str("FILENAME                            CATEGORY     LINKS  TAGS\n");
+                output.push_str(
+                    "---------------------------------------------------------------------\n",
+                );
                 for s in summaries {
                     output.push_str(&s.to_table_row());
                     output.push('\n');
@@ -286,7 +253,7 @@ impl MemoryCommands {
             }
             OutputFormat::Json => serde_json::to_string_pretty(summaries).unwrap_or_default(),
             OutputFormat::Csv => {
-                let mut output = String::from("id,type,strength,content\n");
+                let mut output = String::from("path,category,link_count,tags\n");
                 for s in summaries {
                     output.push_str(&s.to_csv_row());
                     output.push('\n');
@@ -296,294 +263,155 @@ impl MemoryCommands {
         }
     }
 
-    /// Format single fact output
-    pub fn format_show(&self, summary: &FactSummary, format: OutputFormat) -> String {
+    /// Format single note output
+    pub fn format_show(
+        &self,
+        summary: &NoteSummary,
+        content: &str,
+        format: OutputFormat,
+    ) -> String {
         match format {
             OutputFormat::Table => {
                 format!(
                     r#"+-------------------------------------------------------------+
-| Fact: {}
+| Note: {}
 +-------------------------------------------------------------+
-| Content:    {}
-|
-| Type:       {}
-| Strength:   {:.2}
-| Valid:      {}
-| Created:    {}
+{}
 +-------------------------------------------------------------+"#,
-                    summary.full_id,
-                    summary.content,
-                    summary.note_type,
-                    summary.strength,
-                    summary.is_valid,
-                    summary.created_at
+                    summary.path, content
                 )
             }
-            OutputFormat::Json => serde_json::to_string_pretty(summary).unwrap_or_default(),
+            OutputFormat::Json => {
+                #[derive(serde::Serialize)]
+                struct NoteDetail<'a> {
+                    #[serde(flatten)]
+                    summary: &'a NoteSummary,
+                    content: &'a str,
+                }
+                serde_json::to_string_pretty(&NoteDetail { summary, content })
+                    .unwrap_or_default()
+            }
             OutputFormat::Csv => summary.to_csv_row(),
         }
     }
 
-    /// Add a new fact manually
-    pub async fn add(
-        &self,
-        content: &str,
-        note_type: NoteType,
-        embedder: Option<&Arc<dyn EmbeddingProvider>>,
-    ) -> Result<String, AlephError> {
-        // Generate embedding if embedder is available
-        let embedding = if let Some(emb) = embedder {
-            Some(emb.embed(content).await?)
-        } else {
-            None
-        };
+    /// Soft-delete (forget) a note by removing its index entry and deleting the file.
+    ///
+    /// `path_or_prefix` is a full path like "preference/editor" or a filename prefix.
+    pub async fn forget(&self, path_or_prefix: &str) -> Result<String, AlephError> {
+        let full_path = self.resolve_note_path(path_or_prefix).await?;
 
-        // Create fact
-        let mut fact = MemoryFact::new(content.to_string(), note_type, vec![]);
-        if let Some(emb) = embedding {
-            fact = fact.with_embedding(emb);
+        // Remove from index (links + FTS included)
+        self.db.remove_note_index(&full_path, &self.agent_id).await?;
+
+        // Delete the markdown file from disk
+        if let Some(entry_) = self.resolve_entry(&full_path).await {
+            let file_path = self
+                .memory_dir
+                .join(&self.agent_id)
+                .join(&entry_.category)
+                .join(format!("{}.md", entry_.filename));
+            let _ = tokio::fs::remove_file(&file_path).await;
+        } else {
+            // Entry was already removed from index — try to infer the file path
+            // from the path components ("category/filename")
+            if let Some((category, filename)) = full_path.split_once('/') {
+                let file_path = self
+                    .memory_dir
+                    .join(&self.agent_id)
+                    .join(category)
+                    .join(format!("{filename}.md"));
+                let _ = tokio::fs::remove_file(&file_path).await;
+            }
         }
-        fact.specificity = FactSpecificity::Pattern;
-        fact.temporal_scope = TemporalScope::Contextual;
 
-        let fact_id = fact.id.clone();
-
-        // Insert into database
-        self.db.insert_fact(&fact).await?;
-
-        Ok(fact_id)
+        Ok(full_path)
     }
 
-    /// Edit an existing fact's content
-    pub async fn edit(
-        &self,
-        id: &str,
-        new_content: &str,
-        embedder: Option<&Arc<dyn EmbeddingProvider>>,
-    ) -> Result<String, AlephError> {
-        // Resolve ID (support prefix match)
-        let full_id = self.resolve_fact_id(id).await?;
-
-        // Generate new embedding if embedder is available
-        let embedding = if let Some(emb) = embedder {
-            Some(emb.embed(new_content).await?)
-        } else {
-            None
-        };
-
-        // Update in database
-        // TODO: Handle embedding update separately if needed
-        let _ = embedding; // embedding update not supported in new API
-        self.db.update_fact_content(&full_id, new_content).await?;
-
-        Ok(full_id)
+    /// Count total notes for the agent.
+    pub async fn count(&self) -> Result<i64, AlephError> {
+        self.db.count_all_notes().await
     }
 
-    /// Soft-delete (forget) a fact
-    pub async fn forget(&self, id: &str, reason: Option<&str>) -> Result<String, AlephError> {
-        // Resolve ID (support prefix match)
-        let full_id = self.resolve_fact_id(id).await?;
-
-        let reason_str = reason.unwrap_or("User requested deletion");
-        self.db.invalidate_fact(&full_id, reason_str).await?;
-
-        Ok(full_id)
+    /// Get statistics about the memory database
+    pub async fn stats(&self) -> Result<MemoryStats, AlephError> {
+        let total = self.db.count_all_notes().await? as usize;
+        Ok(MemoryStats { total_notes: total })
     }
 
-    /// Restore a fact from recycle bin
-    pub async fn restore(&self, id: &str) -> Result<String, AlephError> {
-        // Resolve ID (support prefix match)
-        let _full_id = self.resolve_fact_id(id).await?;
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
-        // TODO: Implement restore via new store API (update fact to set is_valid = true)
-        // self.db.restore_fact(&full_id).await?;
-        return Err(AlephError::other(
-            "restore_fact not yet implemented in new store API",
-        ));
-
-        #[allow(unreachable_code)]
-        Ok(_full_id)
+    /// Read markdown content for a note from disk.
+    async fn read_note_file(&self, entry: &NoteIndexEntry) -> Option<String> {
+        let file_path = self
+            .memory_dir
+            .join(&self.agent_id)
+            .join(&entry.category)
+            .join(format!("{}.md", entry.filename));
+        tokio::fs::read_to_string(&file_path).await.ok()
     }
 
-    /// Resolve a fact ID (supports prefix matching)
-    async fn resolve_fact_id(&self, id: &str) -> Result<String, AlephError> {
+    /// Resolve a path or filename prefix to a full note path.
+    async fn resolve_note_path(&self, path_or_prefix: &str) -> Result<String, AlephError> {
         // Try exact match first
-        if let Some(fact) = self.db.get_fact(id).await? {
-            return Ok(fact.id);
+        if self
+            .db
+            .get_note_index(path_or_prefix, &self.agent_id)
+            .await?
+            .is_some()
+        {
+            return Ok(path_or_prefix.to_string());
         }
 
-        // Try prefix match
-        let facts = self.db.get_all_facts(true, None).await?;
-        let matches: Vec<_> = facts.iter().filter(|f| f.id.starts_with(id)).collect();
+        // Try prefix match on filename
+        let all = self.db.list_notes(&self.agent_id).await?;
+        let matches: Vec<_> = all
+            .iter()
+            .filter(|e| {
+                e.filename
+                    .to_lowercase()
+                    .starts_with(&path_or_prefix.to_lowercase())
+            })
+            .collect();
 
         match matches.len() {
-            0 => Err(AlephError::other(format!("Fact not found: {}", id))),
-            1 => Ok(matches[0].id.clone()),
+            0 => Err(AlephError::other(format!(
+                "Note not found: {}",
+                path_or_prefix
+            ))),
+            1 => Ok(matches[0].path.clone()),
             _ => Err(AlephError::other(format!(
-                "Ambiguous ID '{}' matches {} facts. Use more characters.",
-                id,
+                "Ambiguous prefix '{}' matches {} notes. Use more characters.",
+                path_or_prefix,
                 matches.len()
             ))),
         }
     }
 
-    /// Run garbage collection to permanently delete old invalidated facts
-    ///
-    /// Returns GC statistics
-    pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AlephError> {
-        // TODO: Implement purge via new store API
-        let deleted = 0usize; // self.db.purge_old_invalidated_facts(retention_days).await?;
-        let valid_facts = self
-            .db
-            .count_facts(&crate::memory::store::types::SearchFilter::valid_only(None))
-            .await?;
-        let remaining_invalid = {
-            let all = self
-                .db
-                .count_facts(&crate::memory::store::types::SearchFilter::new())
-                .await?;
-            all.saturating_sub(valid_facts)
-        };
-
-        Ok(GcResult {
-            deleted_count: deleted,
-            valid_facts,
-            remaining_invalid,
-            retention_days,
-        })
-    }
-
-    /// Export all facts to JSON format
-    pub async fn dump(&self, include_invalid: bool) -> Result<String, AlephError> {
-        let facts = self.db.get_all_facts(include_invalid, None).await?;
-
-        let export = FactExport {
-            version: 1,
-            exported_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64,
-            facts: facts.into_iter().map(ExportedFact::from).collect(),
-        };
-
-        serde_json::to_string_pretty(&export)
-            .map_err(|e| AlephError::other(format!("Failed to serialize: {}", e)))
-    }
-
-    /// Import facts from JSON format
-    ///
-    /// Returns import statistics
-    pub async fn import(
-        &self,
-        json: &str,
-        embedder: Option<&Arc<dyn EmbeddingProvider>>,
-    ) -> Result<ImportResult, AlephError> {
-        let export: FactExport = serde_json::from_str(json)
-            .map_err(|e| AlephError::other(format!("Failed to parse JSON: {}", e)))?;
-
-        let mut imported = 0;
-        let mut skipped = 0;
-        let mut errors = Vec::new();
-
-        for exported in export.facts {
-            // Check if fact already exists
-            if self.db.get_fact(&exported.id).await?.is_some() {
-                skipped += 1;
-                continue;
-            }
-
-            // Reconstruct fact
-            let mut fact = MemoryFact::with_id(
-                exported.id.clone(),
-                exported.content.clone(),
-                NoteType::from_str_or_other(&exported.note_type),
-            );
-            fact.created_at = exported.created_at;
-            fact.updated_at = exported.updated_at;
-            fact.confidence = exported.confidence;
-            fact.is_valid = exported.is_valid;
-            fact.invalidation_reason = exported.invalidation_reason;
-            fact.specificity = FactSpecificity::from_str_or_default(&exported.specificity);
-            fact.temporal_scope = TemporalScope::from_str_or_default(&exported.temporal_scope);
-
-            // Generate embedding if embedder is available
-            if let Some(emb) = embedder {
-                match emb.embed(&fact.content).await {
-                    Ok(embedding) => {
-                        fact = fact.with_embedding(embedding);
-                    }
-                    Err(e) => {
-                        errors.push(format!("{}: embedding failed - {}", exported.id, e));
-                    }
-                }
-            }
-
-            // Insert fact
-            match self.db.insert_fact(&fact).await {
-                Ok(_) => imported += 1,
-                Err(e) => errors.push(format!("{}: {}", exported.id, e)),
-            }
-        }
-
-        Ok(ImportResult {
-            imported,
-            skipped,
-            errors,
-        })
-    }
-
-    /// Get statistics about the memory database
-    pub async fn stats(&self) -> Result<MemoryStats, AlephError> {
-        let valid = self
-            .db
-            .count_facts(&crate::memory::store::types::SearchFilter::valid_only(None))
-            .await?;
-        let invalid = {
-            let all = self
-                .db
-                .count_facts(&crate::memory::store::types::SearchFilter::new())
-                .await?;
-            all.saturating_sub(valid)
-        };
-
-        Ok(MemoryStats {
-            total_facts: valid + invalid,
-            valid_facts: valid,
-            invalid_facts: invalid,
-        })
+    /// Look up an entry after it has already been removed from the index.
+    /// Returns `None` if the entry is gone (already deleted).
+    async fn resolve_entry(&self, path: &str) -> Option<NoteIndexEntry> {
+        self.db.get_note_index(path, &self.agent_id).await.ok().flatten()
     }
 }
 
-/// Result of a write operation
+/// Result of a delete operation
 #[derive(Debug, Clone)]
-pub struct WriteResult {
-    /// The affected fact ID
-    pub fact_id: String,
-    /// Action performed
-    pub action: WriteAction,
-    /// Previous content (for edit operations)
-    pub previous_content: Option<String>,
+pub struct DeleteResult {
+    /// The deleted note path
+    pub note_path: String,
 }
 
-/// Type of write action
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WriteAction {
-    Added,
-    Edited,
-    Forgotten,
-    Restored,
-}
-
-/// Result of garbage collection
+/// Result of garbage collection (stub — notes use file deletion via `forget`)
 #[derive(Debug, Clone)]
 pub struct GcResult {
-    /// Number of facts permanently deleted
+    /// Number of orphaned index entries cleaned
     pub deleted_count: usize,
-    /// Number of valid facts remaining
-    pub valid_facts: usize,
-    /// Number of invalid facts remaining (within retention period)
-    pub remaining_invalid: usize,
-    /// Retention period used
+    /// Number of valid notes remaining
+    pub valid_notes: usize,
+    /// Retention period used (days)
     pub retention_days: u32,
 }
 
@@ -591,71 +419,8 @@ impl std::fmt::Display for GcResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "GC complete: {} deleted, {} valid, {} in recycle bin (retention: {} days)",
-            self.deleted_count, self.valid_facts, self.remaining_invalid, self.retention_days
-        )
-    }
-}
-
-/// Exported fact structure for JSON export/import
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExportedFact {
-    pub id: String,
-    pub content: String,
-    pub note_type: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub confidence: f32,
-    pub is_valid: bool,
-    pub invalidation_reason: Option<String>,
-    pub specificity: String,
-    pub temporal_scope: String,
-}
-
-impl From<MemoryFact> for ExportedFact {
-    fn from(fact: MemoryFact) -> Self {
-        Self {
-            id: fact.id,
-            content: fact.content,
-            note_type: fact.note_type.as_str().to_string(),
-            created_at: fact.created_at,
-            updated_at: fact.updated_at,
-            confidence: fact.confidence,
-            is_valid: fact.is_valid,
-            invalidation_reason: fact.invalidation_reason,
-            specificity: fact.specificity.as_str().to_string(),
-            temporal_scope: fact.temporal_scope.as_str().to_string(),
-        }
-    }
-}
-
-/// Export file format
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FactExport {
-    pub version: u32,
-    pub exported_at: i64,
-    pub facts: Vec<ExportedFact>,
-}
-
-/// Result of import operation
-#[derive(Debug, Clone)]
-pub struct ImportResult {
-    /// Number of facts successfully imported
-    pub imported: usize,
-    /// Number of facts skipped (already exist)
-    pub skipped: usize,
-    /// Errors encountered
-    pub errors: Vec<String>,
-}
-
-impl std::fmt::Display for ImportResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Import complete: {} imported, {} skipped, {} errors",
-            self.imported,
-            self.skipped,
-            self.errors.len()
+            "GC complete: {} orphan entries removed, {} notes remain (retention: {} days)",
+            self.deleted_count, self.valid_notes, self.retention_days
         )
     }
 }
@@ -663,9 +428,7 @@ impl std::fmt::Display for ImportResult {
 /// Memory database statistics
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemoryStats {
-    pub total_facts: usize,
-    pub valid_facts: usize,
-    pub invalid_facts: usize,
+    pub total_notes: usize,
 }
 
 #[cfg(test)]
@@ -675,12 +438,10 @@ mod tests {
     #[test]
     fn test_list_filter_builder() {
         let filter = ListFilter::new()
-            .with_type(NoteType::Preference)
-            .with_min_strength(0.5)
+            .with_category("preference")
             .with_limit(10);
 
-        assert_eq!(filter.note_type, Some(NoteType::Preference));
-        assert_eq!(filter.min_strength, Some(0.5));
+        assert_eq!(filter.category, Some("preference".to_string()));
         assert_eq!(filter.limit, Some(10));
     }
 
@@ -696,146 +457,58 @@ mod tests {
     }
 
     #[test]
-    fn test_fact_summary_table_row() {
-        let summary = FactSummary {
-            id: "abc12345".to_string(),
-            full_id: "abc12345-6789".to_string(),
-            note_type: "preference".to_string(),
-            strength: 0.85,
-            content_preview: "User likes Rust".to_string(),
-            content: "User likes Rust".to_string(),
-            is_valid: true,
-            created_at: 1234567890,
+    fn test_note_summary_table_row() {
+        let summary = NoteSummary {
+            path: "preference/editor".to_string(),
+            filename: "editor".to_string(),
+            category: "preference".to_string(),
+            tags: vec!["vim".to_string()],
+            link_count: 3,
+            updated_at: 1234567890,
         };
 
         let row = summary.to_table_row();
-        assert!(row.contains("abc12345"));
+        assert!(row.contains("editor"));
         assert!(row.contains("preference"));
-        assert!(row.contains("0.85"));
+        assert!(row.contains("3"));
+        assert!(row.contains("vim"));
     }
 
     #[test]
-    fn test_fact_summary_csv_row() {
-        let summary = FactSummary {
-            id: "abc12345".to_string(),
-            full_id: "abc12345-6789".to_string(),
-            note_type: "knowledge".to_string(),
-            strength: 0.75,
-            content_preview: "Test".to_string(),
-            content: "Test with \"quotes\"".to_string(),
-            is_valid: true,
-            created_at: 1234567890,
+    fn test_note_summary_csv_row() {
+        let summary = NoteSummary {
+            path: "wiki/rust".to_string(),
+            filename: "rust".to_string(),
+            category: "wiki".to_string(),
+            tags: vec!["systems".to_string(), "language".to_string()],
+            link_count: 5,
+            updated_at: 1234567890,
         };
 
         let csv = summary.to_csv_row();
-        assert!(csv.contains("abc12345-6789"));
-        assert!(csv.contains("\"\"quotes\"\"")); // Escaped quotes
-    }
-
-    #[test]
-    fn test_write_action_enum() {
-        assert_ne!(WriteAction::Added, WriteAction::Edited);
-        assert_ne!(WriteAction::Forgotten, WriteAction::Restored);
-    }
-
-    #[test]
-    fn test_write_result() {
-        let result = WriteResult {
-            fact_id: "test-123".to_string(),
-            action: WriteAction::Added,
-            previous_content: None,
-        };
-
-        assert_eq!(result.fact_id, "test-123");
-        assert_eq!(result.action, WriteAction::Added);
-        assert!(result.previous_content.is_none());
+        assert!(csv.contains("wiki/rust"));
+        assert!(csv.contains("wiki"));
+        assert!(csv.contains("5"));
     }
 
     #[test]
     fn test_gc_result_display() {
         let result = GcResult {
             deleted_count: 5,
-            valid_facts: 100,
-            remaining_invalid: 3,
+            valid_notes: 100,
             retention_days: 30,
         };
 
         let display = format!("{}", result);
-        assert!(display.contains("5 deleted"));
-        assert!(display.contains("100 valid"));
-        assert!(display.contains("3 in recycle bin"));
+        assert!(display.contains("5 orphan"));
+        assert!(display.contains("100 notes"));
         assert!(display.contains("30 days"));
     }
 
     #[test]
-    fn test_import_result_display() {
-        let result = ImportResult {
-            imported: 10,
-            skipped: 2,
-            errors: vec!["error1".to_string()],
-        };
-
-        let display = format!("{}", result);
-        assert!(display.contains("10 imported"));
-        assert!(display.contains("2 skipped"));
-        assert!(display.contains("1 errors"));
-    }
-
-    #[test]
-    fn test_exported_fact_from_memory_fact() {
-        let fact = MemoryFact::new(
-            "User prefers Rust".to_string(),
-            NoteType::Preference,
-            vec!["source-1".to_string()],
-        );
-
-        let exported = ExportedFact::from(fact.clone());
-
-        assert_eq!(exported.id, fact.id);
-        assert_eq!(exported.content, "User prefers Rust");
-        assert_eq!(exported.note_type, "preference");
-        assert!(exported.is_valid);
-    }
-
-    #[test]
-    fn test_fact_export_serialization() {
-        let export = FactExport {
-            version: 1,
-            exported_at: 1234567890,
-            facts: vec![ExportedFact {
-                id: "test-123".to_string(),
-                content: "Test content".to_string(),
-                note_type: "preference".to_string(),
-                created_at: 1234567890,
-                updated_at: 1234567890,
-                confidence: 0.9,
-                is_valid: true,
-                invalidation_reason: None,
-                specificity: "pattern".to_string(),
-                temporal_scope: "contextual".to_string(),
-            }],
-        };
-
-        let json = serde_json::to_string(&export).unwrap();
-        assert!(json.contains("test-123"));
-        assert!(json.contains("Test content"));
-
-        let parsed: FactExport = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.version, 1);
-        assert_eq!(parsed.facts.len(), 1);
-    }
-
-    #[test]
     fn test_memory_stats() {
-        let stats = MemoryStats {
-            total_facts: 100,
-            valid_facts: 95,
-            invalid_facts: 5,
-        };
-
+        let stats = MemoryStats { total_notes: 42 };
         let json = serde_json::to_string(&stats).unwrap();
-        assert!(json.contains("100"));
-        assert!(json.contains("95"));
-        assert!(json.contains("5"));
+        assert!(json.contains("42"));
     }
 }
