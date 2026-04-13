@@ -4,7 +4,7 @@
 //! and store them in MemoryContext for the layer to format.
 
 use super::memory_context::MemoryContext;
-use crate::config::types::memory::AssemblerConfig;
+use crate::config::types::memory::{AssemblerConfig, MemoryInjectionMode};
 use crate::memory::assembler::envelope::{ItemSource, MemoryEnvelope};
 use crate::memory::assembler::hybrid::{AiProviderReranker, LlmReranker};
 use crate::memory::assembler::{
@@ -63,6 +63,8 @@ impl LlmReranker for NoopReranker {
 pub struct MemoryContextProvider {
     assembler: Arc<dyn WorkingMemoryAssembler>,
     config: MemoryContextConfig,
+    /// Controls whether memory is auto-injected (Context/Hybrid) or gated behind tools (Tools).
+    injection_mode: MemoryInjectionMode,
 }
 
 impl MemoryContextProvider {
@@ -111,7 +113,62 @@ impl MemoryContextProvider {
         assembler: Arc<dyn WorkingMemoryAssembler>,
         config: MemoryContextConfig,
     ) -> Self {
-        Self { assembler, config }
+        Self {
+            assembler,
+            config,
+            injection_mode: MemoryInjectionMode::default(),
+        }
+    }
+
+    /// Set the injection mode on an existing provider (builder-style).
+    pub fn with_injection_mode(mut self, mode: MemoryInjectionMode) -> Self {
+        self.injection_mode = mode;
+        self
+    }
+
+    /// Test helper: build a provider whose assembler always returns an empty
+    /// envelope, with the given injection mode. Used by spec3_tests to verify
+    /// mode-gating without needing real retrieval infrastructure.
+    #[cfg(test)]
+    pub(crate) fn new_for_test_empty_envelope(mode: MemoryInjectionMode) -> Self {
+        use crate::memory::assembler::envelope::EnvelopeMeta;
+        use async_trait::async_trait;
+
+        struct EmptyAssembler;
+
+        #[async_trait]
+        impl WorkingMemoryAssembler for EmptyAssembler {
+            async fn assemble(
+                &self,
+                query: &str,
+                agent_id: &str,
+                _session_id: Option<&str>,
+                _budget: AssemblyBudget,
+            ) -> Result<MemoryEnvelope, crate::error::AlephError> {
+                Ok(MemoryEnvelope {
+                    schema_version: "1.0".into(),
+                    generated_at: 0,
+                    query: query.to_string(),
+                    agent_id: agent_id.to_string(),
+                    session_id: None,
+                    slots: vec![],
+                    meta: EnvelopeMeta {
+                        strategy: "test_empty".into(),
+                        candidates_considered: 0,
+                        used_fallback: false,
+                        fallback_reason: None,
+                        llm_rerank_latency_ms: None,
+                        total_latency_ms: 0,
+                    },
+                })
+            }
+        }
+
+        Self {
+            assembler: Arc::new(EmptyAssembler),
+            config: MemoryContextConfig::default(),
+            injection_mode: mode,
+        }
     }
 
     /// Return a clone of the inner assembler handle.
@@ -166,13 +223,55 @@ impl MemoryContextProvider {
             reranker,
             assembler_config,
         ));
-        Self { assembler, config }
+        Self {
+            assembler,
+            config,
+            injection_mode: MemoryInjectionMode::default(),
+        }
+    }
+
+    /// Build a memory user-message for injection into the prompt.
+    ///
+    /// Returns `Ok(None)` when injection is disabled (`Tools` mode) or when
+    /// the assembler returned an empty envelope. Otherwise returns
+    /// `Ok(Some(UnifiedMessage::user(render_with(&env, RenderStyle::Xml))))`.
+    pub async fn build_memory_user_message(
+        &self,
+        agent_id: &str,
+        query: &str,
+    ) -> Result<Option<crate::providers::message::UnifiedMessage>, crate::error::AlephError> {
+        use crate::config::types::memory::MemoryInjectionMode;
+        use crate::memory::assembler::render::{render_with, RenderStyle};
+        use crate::providers::message::UnifiedMessage;
+
+        match self.injection_mode {
+            MemoryInjectionMode::Tools => return Ok(None),
+            MemoryInjectionMode::Context | MemoryInjectionMode::Hybrid => {}
+        }
+
+        let budget = AssemblyBudget {
+            total_tokens: (self.config.max_output_chars / 4) as u32,
+        };
+        let envelope = self
+            .assembler
+            .assemble(query, agent_id, None, budget)
+            .await?;
+
+        let rendered = render_with(&envelope, RenderStyle::Xml);
+        if rendered.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(UnifiedMessage::user(rendered)))
     }
 
     /// Fetch relevant memory context for a user query.
     ///
     /// When `session_id` is provided, memory search is scoped to that session.
     /// Returns empty context on any failure (never blocks LLM calls).
+    #[deprecated(
+        note = "Spec 3 replaces MemoryContext-based injection with \
+                build_memory_user_message. Task 4 migrates callers."
+    )]
     pub async fn fetch(
         &self,
         query: &str,
@@ -208,6 +307,51 @@ impl MemoryContextProvider {
             "Memory context assembled for prompt augmentation"
         );
         ctx
+    }
+}
+
+#[cfg(test)]
+mod spec3_tests {
+    use super::*;
+    use crate::config::types::memory::MemoryInjectionMode;
+
+    #[tokio::test]
+    async fn tools_mode_returns_none_regardless_of_envelope() {
+        let provider = MemoryContextProvider::new_for_test_empty_envelope(
+            MemoryInjectionMode::Tools,
+        );
+        let msg = provider
+            .build_memory_user_message("agent-1", "any query")
+            .await
+            .unwrap();
+        assert!(msg.is_none(), "Tools mode must not auto-inject");
+    }
+
+    #[tokio::test]
+    async fn context_mode_with_empty_envelope_returns_none() {
+        let provider = MemoryContextProvider::new_for_test_empty_envelope(
+            MemoryInjectionMode::Context,
+        );
+        let msg = provider
+            .build_memory_user_message("agent-1", "any query")
+            .await
+            .unwrap();
+        assert!(
+            msg.is_none(),
+            "empty envelope must short-circuit to None in Context mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn hybrid_mode_with_empty_envelope_returns_none() {
+        let provider = MemoryContextProvider::new_for_test_empty_envelope(
+            MemoryInjectionMode::Hybrid,
+        );
+        let msg = provider
+            .build_memory_user_message("agent-1", "any query")
+            .await
+            .unwrap();
+        assert!(msg.is_none());
     }
 }
 
