@@ -70,6 +70,7 @@ pub mod pim;
 pub mod recall_context;
 pub mod scratchpad;
 pub mod search;
+pub mod session_complete;
 pub mod self_config;
 pub mod self_manage;
 pub mod session_search;
@@ -152,6 +153,7 @@ pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTo
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use search::{SearchArgs, SearchTool};
 pub use self_manage::{SelfManageArgs, SelfManageOutput, SelfManageTool};
+pub use session_complete::{SessionCompleteArgs, SessionCompleteResult, SessionCompleteTool};
 pub use session_search::{SessionSearchArgs, SessionSearchOutput, SessionSearchTool};
 pub use skill_reader::{ListSkillsArgs, ListSkillsOutput, ListSkillsTool, SkillSummary};
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};

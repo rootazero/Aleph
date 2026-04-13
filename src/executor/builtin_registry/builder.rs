@@ -765,6 +765,34 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Session-complete tool — requires memory_db (same guard as note_manage)
+        let session_complete_tool = if let Some(ref db) = config.memory_db {
+            let agent_id = config
+                .current_agent_id
+                .clone()
+                .unwrap_or_else(|| "main".to_string());
+            let tool =
+                crate::builtin_tools::session_complete::SessionCompleteTool::new(db.clone(), agent_id);
+
+            // Register tool schema
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered session_complete tool");
+            Some(tool)
+        } else {
+            None
+        };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config
             .tool_policy
@@ -901,6 +929,7 @@ impl BuiltinToolRegistry {
             skill_install_tool,
             skill_manage_tool,
             note_manage_tool,
+            session_complete_tool,
             tools,
         }
     }

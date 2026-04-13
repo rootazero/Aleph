@@ -205,6 +205,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
     /// Unified note management tool (optional - requires memory_db)
     pub(crate) note_manage_tool: Option<crate::builtin_tools::note_manage::NoteManageTool>,
+    /// Session-complete tool (optional - requires memory_db)
+    pub(crate) session_complete_tool:
+        Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -933,6 +936,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                     Box::pin(async move {
                         Err(AlephError::tool(
                             "note_manage tool is not available: memory backend not configured",
+                        ))
+                    })
+                }
+            }
+
+            "session_complete" => {
+                if let Some(ref tool) = self.session_complete_tool {
+                    let tool = tool.clone();
+                    Box::pin(async move { tool.call_json(arguments).await })
+                } else {
+                    Box::pin(async move {
+                        Err(AlephError::tool(
+                            "session_complete tool is not available: memory backend not configured",
                         ))
                     })
                 }
