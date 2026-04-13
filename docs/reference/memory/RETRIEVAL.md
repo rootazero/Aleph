@@ -356,6 +356,22 @@ Explainability is served by two derived views. `FactExplanation { fact_id, conte
 
 **Explain path.** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
 
+## 13. Reflection / Synthesis (Spec 2)
+
+`MemoryReflector` at `src/memory/reflector/` composes the hybrid assembler with an LLM synthesis pass. Given a natural-language query, it:
+
+1. calls `HybridAssembler::assemble(query, agent_id, session_id, budget)` for retrieval
+2. returns a stub `Synthesis { text: "No relevant memories found.", sources: [] }` immediately if the envelope has zero items (no LLM cost)
+3. otherwise formats the envelope into a user prompt via `envelope_to_synthesis_context`, calls the LLM with `PROMPT_SYNTHESIS`, parses the JSON response, **overlays canonical titles from the lookup** (so LLM-fabricated paths are dropped and titles cannot be hallucinated), and returns a `Synthesis { text, sources }` where each `NoteRef = { path, title, relevance }`.
+
+Side effect: one `recall_signals` row per note in the synthesis context, `channel = "reflect"`. Failures are logged but swallowed — recall-signal write errors must never fail a `reflect()` call. The dream-daemon decay logic observes these signals and treats reflect-touched notes as active memory on par with `memory_search` hits.
+
+LLM-facing entry: the `memory_reflect` builtin tool (`src/builtin_tools/memory_reflect.rs`), schema `{ "query": string }`, returns `Synthesis` as JSON.
+
+Internal-caller entry: `MemoryReflector::reflect(query, ReflectOpts) -> Result<Synthesis, AlephError>`. `ReflectOpts` carries `agent_id`, `namespace`, optional `max_tokens` / `time_range` / `session_id`.
+
+See `docs/superpowers/specs/2026-04-13-memory-evolution-spec2-reflector-design.md`.
+
 ## Appendix: Retrieval Tuning Tips
 
 - **Raise `hard_min_score` when noise surfaces.** The default 0.35 is tuned against the current confidence + decay profile; bump to 0.45 if retrieval surfaces marginal matches, lower to 0.25 for sparse knowledge bases.
