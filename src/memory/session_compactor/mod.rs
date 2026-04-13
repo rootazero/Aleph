@@ -121,6 +121,11 @@ pub struct SessionCompactor {
     config: SessionCompactorConfig,
     metrics: Arc<CompactorMetrics>,
     indexer: Option<crate::memory::transcript_indexer::TranscriptIndexer>,
+    /// Optional writer for pre-compress raw-memory hooks (Spec 1 G1).
+    /// When set, `post_turn_compress` emits a `RawMemory(PreCompress)` row
+    /// for each chunk before it is summarised, so CompressionService can
+    /// rescue knowledge from the raw conversation text later.
+    raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
 }
 
 impl SessionCompactor {
@@ -132,6 +137,7 @@ impl SessionCompactor {
             config,
             metrics: Arc::new(CompactorMetrics::default()),
             indexer: None,
+            raw_memory_writer: None,
         }
     }
 
@@ -162,6 +168,16 @@ impl SessionCompactor {
             self.database.clone(),
             embedder,
         ));
+        self
+    }
+
+    /// Attach an optional raw-memory writer for pre-compress hooks (Spec 1 G1).
+    ///
+    /// When set, `post_turn_compress` will emit a `RawMemory(PreCompress)` row
+    /// for each chunk before it is summarised, carrying the raw conversation
+    /// text so CompressionService can extract knowledge from it later.
+    pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
+        self.raw_memory_writer = Some(writer);
         self
     }
 
@@ -406,6 +422,27 @@ impl SessionCompactor {
 
             if chunk.is_empty() {
                 continue;
+            }
+
+            // Spec 1 G1: emit PreCompress raw memory for this chunk before summarising.
+            // This lets CompressionService rescue knowledge from the raw conversation text.
+            if let Some(ref writer) = self.raw_memory_writer {
+                let raw_text: String = chunk
+                    .iter()
+                    .map(|(role, text)| format!("[{}]: {}", role, text))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                if !raw_text.is_empty() {
+                    let raw = RawMemory::new(raw_text, RawMemorySource::PreCompress)
+                        .with_agent(&agent_id)
+                        .with_session(&session_id);
+                    let writer = writer.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = writer.insert_raw_memory(&raw).await {
+                            tracing::warn!("pre_compress raw_memory write failed: {e}");
+                        }
+                    });
+                }
             }
 
             let summary_text = self.generate_summary(&chunk, 0, None).await;

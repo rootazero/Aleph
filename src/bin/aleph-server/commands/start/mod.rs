@@ -368,6 +368,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
+    // disconnect hook captures session-end events (Task 8).
+    // Attach after memory_db is initialised — session_manager was created earlier
+    // without a writer because memory_db wasn't available yet.
+    let session_manager = Arc::new(
+        Arc::try_unwrap(session_manager)
+            .unwrap_or_else(|_| panic!("session_manager has no other owners at this point"))
+            .with_raw_memory_writer(
+                memory_db.clone()
+                    as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+            ),
+    );
+
     let event_bus = server.event_bus().clone();
 
     // Auth subsystem construction (early — vault needed for API key resolution)
@@ -824,7 +837,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let client_pool = Arc::new(A2AClientPool::new());
 
                 // 9. Create A2ASubAgent and refresh cached names for can_handle
-                let _a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
+                // Spec 1 G2: wire raw-memory writer so delegation hook fires when execute() is called.
+                let _a2a_sub_agent = Arc::new(
+                    A2ASubAgent::new(smart_router, client_pool).with_raw_memory_writer(
+                        memory_db.clone()
+                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                    ),
+                );
                 _a2a_sub_agent.refresh_agent_names().await;
 
                 if !args.daemon {

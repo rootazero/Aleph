@@ -977,6 +977,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 if let Some(ref emb) = embedder_out {
                     compactor = compactor.with_embedder(emb.clone());
                 }
+                // Spec 1 G1: wire pre-compress hook so chunks are captured before summarisation.
+                compactor = compactor.with_raw_memory_writer(
+                    memory_db.clone() as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                );
                 let compactor = std::sync::Arc::new(compactor);
                 engine = engine.with_session_compactor(compactor);
                 if !daemon {
