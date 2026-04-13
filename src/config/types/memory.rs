@@ -142,13 +142,6 @@ pub struct MemoryConfig {
     /// Session-end reflection configuration.
     #[serde(default)]
     pub reflection: ReflectionConfig,
-
-    // ========================================
-    // Context Composer
-    // ========================================
-    /// Context composer configuration (core-set budget, etc.).
-    #[serde(default)]
-    pub context_composer: ContextComposerConfig,
 }
 
 // =============================================================================
@@ -553,32 +546,6 @@ pub fn default_memory_decay_protected_types() -> Vec<String> {
 
 
 // =============================================================================
-// ContextComposerConfig
-// =============================================================================
-
-/// Controls how `ContextComposer` assembles the always-loaded core set.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ContextComposerConfig {
-    /// Maximum tokens of `persona/` + `preference/` notes to inject into
-    /// the system prompt per composition. Notes that don't fit remain
-    /// reachable via query-time retrieval.
-    #[serde(default = "default_core_budget_tokens")]
-    pub core_budget_tokens: usize,
-}
-
-impl Default for ContextComposerConfig {
-    fn default() -> Self {
-        Self {
-            core_budget_tokens: default_core_budget_tokens(),
-        }
-    }
-}
-
-fn default_core_budget_tokens() -> usize {
-    2000
-}
-
-// =============================================================================
 // ReflectionConfig
 // =============================================================================
 
@@ -689,8 +656,6 @@ impl Default for MemoryConfig {
             backup_max_files: default_backup_max_files(),
             // Reflection
             reflection: ReflectionConfig::default(),
-            // Context Composer
-            context_composer: ContextComposerConfig::default(),
         }
     }
 }
@@ -728,22 +693,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn context_composer_config_default_budget_is_2000() {
-        let cfg = ContextComposerConfig::default();
-        assert_eq!(cfg.core_budget_tokens, 2000);
-    }
-
-    #[test]
-    fn context_composer_config_roundtrips_toml() {
-        let toml_src = "core_budget_tokens = 3000\n";
-        let cfg: ContextComposerConfig = toml::from_str(toml_src).unwrap();
-        assert_eq!(cfg.core_budget_tokens, 3000);
-    }
-
-    #[test]
-    fn context_composer_config_default_on_empty_toml() {
-        let cfg: ContextComposerConfig = toml::from_str("").unwrap();
-        assert_eq!(cfg.core_budget_tokens, 2000);
-    }
 }

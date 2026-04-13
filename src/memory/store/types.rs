@@ -5,7 +5,7 @@
 
 use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{
-    NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope,
+    NoteType, MemoryCategory, MemoryFact, MemoryLayer,
 };
 use crate::memory::namespace::NamespaceScope;
 
@@ -66,8 +66,6 @@ pub struct SearchFilter {
     pub created_after: Option<i64>,
     /// Only facts created at or before this Unix timestamp (seconds).
     pub created_before: Option<i64>,
-    /// Restrict to a specific visibility scope.
-    pub scope: Option<MemoryScope>,
     /// Restrict to a specific persona identifier.
     pub persona_id: Option<String>,
     /// Restrict to a specific domain (derived from VFS path first segment).
@@ -155,12 +153,6 @@ impl SearchFilter {
     /// Set created-before timestamp.
     pub fn with_created_before(mut self, ts: i64) -> Self {
         self.created_before = Some(ts);
-        self
-    }
-
-    /// Set visibility scope filter.
-    pub fn with_scope(mut self, scope: MemoryScope) -> Self {
-        self.scope = Some(scope);
         self
     }
 
@@ -254,9 +246,6 @@ impl SearchFilter {
             clauses.push(format!("created_at <= {}", ts));
         }
 
-        if let Some(ref scope) = self.scope {
-            clauses.push(format!("scope = '{}'", escape_sql_string(scope.as_str())));
-        }
         if let Some(ref persona_id) = self.persona_id {
             clauses.push(format!("persona_id = '{}'", escape_sql_string(persona_id)));
         }
@@ -514,12 +503,9 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_supports_scope_and_persona() {
-        let filter = SearchFilter::new()
-            .with_scope(MemoryScope::SessionLocal)
-            .with_persona_id("reviewer");
+    fn search_filter_supports_persona() {
+        let filter = SearchFilter::new().with_persona_id("reviewer");
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("scope = 'session_local'"));
         assert!(sql.contains("persona_id = 'reviewer'"));
     }
 

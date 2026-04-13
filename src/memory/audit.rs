@@ -112,10 +112,7 @@ pub enum AuditDetails {
         reason: String,
     },
     /// Details for fact invalidation
-    Invalidated {
-        reason: String,
-        strength_at_invalidation: Option<f32>,
-    },
+    Invalidated { reason: String },
     /// Details for fact restoration
     Restored { new_strength: f32 },
     /// Details for permanent deletion
@@ -223,8 +220,6 @@ pub struct ForgettingExplanation {
     pub reason: String,
     /// Who/what caused the forgetting
     pub actor: AuditActor,
-    /// Memory strength at invalidation
-    pub strength_at_invalidation: Option<f32>,
     /// When it was forgotten
     pub timestamp: Option<i64>,
     /// Days since creation
@@ -279,19 +274,13 @@ mod tests {
     fn test_details_serialization() {
         let details = AuditDetails::Invalidated {
             reason: "decay".to_string(),
-            strength_at_invalidation: Some(0.08),
         };
 
         let json = serde_json::to_string(&details).unwrap();
         let parsed: AuditDetails = serde_json::from_str(&json).unwrap();
 
-        if let AuditDetails::Invalidated {
-            reason,
-            strength_at_invalidation,
-        } = parsed
-        {
+        if let AuditDetails::Invalidated { reason } = parsed {
             assert_eq!(reason, "decay");
-            assert_eq!(strength_at_invalidation, Some(0.08));
         } else {
             panic!("Wrong variant");
         }
@@ -347,7 +336,6 @@ mod tests {
             fact_id: "fact-456".to_string(),
             reason: "Memory strength below threshold".to_string(),
             actor: AuditActor::Decay,
-            strength_at_invalidation: Some(0.08),
             timestamp: Some(1234567890),
             days_since_creation: 45.5,
             explanation: "This fact was automatically forgotten after 45.5 days.".to_string(),
@@ -355,7 +343,6 @@ mod tests {
 
         assert_eq!(explanation.fact_id, "fact-456");
         assert_eq!(explanation.actor, AuditActor::Decay);
-        assert_eq!(explanation.strength_at_invalidation, Some(0.08));
     }
 
     #[test]
@@ -364,7 +351,6 @@ mod tests {
             fact_id: "test-fact".to_string(),
             reason: "User requested deletion".to_string(),
             actor: AuditActor::User,
-            strength_at_invalidation: None,
             timestamp: Some(1234567890),
             days_since_creation: 7.0,
             explanation: "Manually forgotten by user.".to_string(),
