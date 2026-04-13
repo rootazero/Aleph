@@ -274,14 +274,18 @@ Framework treats `extra` as opaque passthrough.
 
 Concurrent fan-out via `tokio::join!`. Each source's failure is caught and degraded to empty:
 
-| Source | Call | Default limit |
+| Source | Call (real types) | Default limit |
 |---|---|---|
-| Relevant notes | `NoteFactRetrieval::retrieve(query, agent_id, candidate_pool_limit)` | 20 |
-| Session recent | `SessionSummarySource::latest(session_id, 3)` | 3 (latest d1/d2 summaries) |
-| Raw fragments | `RawMemoryStore::get_raw_by_path_prefix("aleph://session/{sid}/raw/", agent_id, 5)` | 5 |
-| User profile | `UserProfileLoader::load(agent_id)` → read `personal/profile.md` | 1 |
+| Relevant notes | `Arc<NoteFactRetrieval<SqliteMemoryBackend>>::retrieve(query, agent_id, candidate_pool_limit)` | 20 |
+| Session snapshot | `SnapshotReader::load_latest(session_id)` → `Option<SessionSnapshot>` | 1 (most recent) |
+| Raw fragments | `MemoryBackend::get_raw_by_path_prefix(prefix, agent_id, limit)` via `Arc<SqliteMemoryBackend>` | 5 |
+| User profile | `UserProfileLoader` (new, thin wrapper over `tokio::fs::read_to_string` of `memory/note/{agent_id}/personal/profile.md`) | 1 |
 
-**UserProfile is always injected**, bypasses Stage 2 — persona is stable, LLM need not re-decide each turn.
+**UserProfile is always injected**, bypasses Stage 2 — persona is stable, LLM need not re-decide each turn. If the file does not exist, the slot is empty (no error surfaced).
+
+**Note on `SessionSnapshot`:** Aleph does not have a distinct `SessionSummarySource` type. Session continuity data lives in `src/memory/session_resume/` as `SessionSnapshot { session_id, summary, key_decisions, active_files, pending_tasks }` read by `SnapshotReader`. The assembler uses the snapshot's `summary` + `key_decisions` fields as `SessionRecent` slot content.
+
+**Note on raw memory access:** Raw fragments are accessed directly through `SqliteMemoryBackend` (no separate `RawMemoryStore` trait exists); the concrete backend is injected as `Arc<SqliteMemoryBackend>` via the same DI pattern used by `MemoryContextProvider`.
 
 ### 5.2 Stage 2: LLM Re-rank (B strategy)
 
@@ -387,39 +391,50 @@ for slot in &mut envelope.slots {
 
 ### 6.1 Call Site Change
 
-`src/agent_loop/adapters/memory_adapter.rs`:
+The real pre-prompt memory fetch lives in `src/thinker/memory_context_provider.rs::MemoryContextProvider::fetch()`. That function currently calls `NoteFactRetrieval::vector_retrieve` directly, builds a legacy `MemoryContext { facts, memory_summaries, structured_index }`, and truncates by char budget. The assembler replaces the internals of that function without changing its external signature:
 
 ```rust
-// Before (conceptual):
-let results = self.retrieval.retrieve(query, agent_id, 10).await?;
-let arbitrated = self.comptroller.arbitrate(results.into(), budget);
-let block = arbitrated.facts.iter().map(|f| f.content.clone()).join("\n\n");
+// Before (conceptual, in memory_context_provider.rs):
+let facts = self.note_retrieval.vector_retrieve(query, agent_id, max_facts).await?;
+let mut ctx = MemoryContext { facts, memory_summaries: vec![], structured_index: None };
+self.truncate_to_budget(&mut ctx);
+ctx
 
 // After:
 let envelope = self.assembler.assemble(
     query, agent_id, session_id,
-    AssemblyBudget { total_tokens: budget.total as u32 },
+    AssemblyBudget { total_tokens: self.config.max_output_chars as u32 / 4 },
 ).await?;
-let block = render_envelope(&envelope);
-self.record_assembly_trace(&envelope);  // tracing::info + optional DB write
+// Keep MemoryContext as the wire format to PromptLayer; populate it from the envelope:
+let ctx = memory_context_from_envelope(&envelope);
+// Alternatively (preferred once PromptLayer is ready): PromptLayer consumes
+// render_envelope(&envelope) directly and MemoryContext bridging is removed.
+ctx
 ```
+
+**Note on `ContextComptroller`.** The only remaining in-tree caller of `ContextComptroller` is `src/builtin_tools/memory_search.rs` (the explicit LLM-facing recall tool). It is **not** on the auto-inject path. Spec 1 leaves `memory_search.rs` unchanged. Migrating `memory_search` to also use the assembler is an optional follow-up in Spec 2 (so implicit and explicit recall share a single policy surface) and is explicitly not required for Spec 1 DoD.
 
 ### 6.2 Dependency Injection
 
-`AppContext` holds `Arc<dyn WorkingMemoryAssembler>` constructed once at startup:
+Aleph has no centralized `AppContext` container — it uses Arc-based DI, constructing and threading `Arc<T>` / `Arc<dyn Trait>` down from server startup (following the pattern used by `MemoryContextProvider`). The assembler follows the same convention:
 
 ```rust
+// At server startup (or wherever MemoryContextProvider is currently built):
 let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
-    retrieval.clone(),
-    session_source.clone(),
-    raw_store.clone(),
-    profile_loader.clone(),
-    ai_provider.clone(),
+    note_retrieval.clone(),     // Arc<NoteFactRetrieval<SqliteMemoryBackend>>
+    snapshot_reader.clone(),    // Arc<SnapshotReader>
+    memory_backend.clone(),     // Arc<SqliteMemoryBackend>
+    profile_loader.clone(),     // Arc<UserProfileLoader>
+    ai_provider.clone(),        // Arc<dyn AiProvider>
     assembler_config.clone(),
 ));
+
+// MemoryContextProvider now holds Arc<dyn WorkingMemoryAssembler> instead of
+// Arc<NoteFactRetrieval<...>>.
+let provider = MemoryContextProvider::new_with_assembler(assembler, config);
 ```
 
-`HybridAssembler::new` takes all collaborators as `Arc<dyn Trait>` — supports mockall in tests (P4 dependency inversion).
+Collaborators are held as `Arc<T>` (concrete) or `Arc<dyn Trait>` (where a trait exists); `HybridAssembler::new` takes them all — supports mockall in tests for the trait-typed collaborators (`dyn AiProvider` especially). For concrete types without traits, tests use a thin in-memory stub in the test module.
 
 ### 6.3 Renderer
 
