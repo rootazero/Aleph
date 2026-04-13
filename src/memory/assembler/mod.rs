@@ -8,6 +8,7 @@ pub(crate) mod gather;
 pub mod hydration;
 pub(crate) mod profile;
 pub mod render;
+pub(crate) mod rerank;
 
 pub use profile::UserProfileLoader;
 
