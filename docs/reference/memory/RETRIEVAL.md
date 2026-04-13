@@ -372,6 +372,36 @@ Internal-caller entry: `MemoryReflector::reflect(query, ReflectOpts) -> Result<S
 
 See `docs/superpowers/specs/2026-04-13-memory-evolution-spec2-reflector-design.md`.
 
+## 14. Context Fencing + Injection Modes (Spec 3)
+
+Recalled memory is injected into the LLM prompt as an independent `role=user` message containing a fenced XML envelope:
+
+```xml
+<MemoryEnvelope>
+  <schema_version>1</schema_version>
+  <query>...</query>
+  <slot kind="...">
+    <item id="..."><title>...</title><content>...</content></item>
+  </slot>
+</MemoryEnvelope>
+```
+
+All user-supplied fields are `xml_escape`d so evil content in a note cannot break the fence. A unit test invariant verifies that exactly one `</MemoryEnvelope>` appears in the rendered output regardless of content.
+
+`MemoryConfig.injection_mode` controls the surface:
+
+| Mode      | Auto-inject | `memory_*` retrieval tools registered |
+|-----------|-------------|---------------------------------------|
+| `Context` | yes         | no                                    |
+| `Tools`   | no          | yes                                   |
+| `Hybrid`  | yes         | yes                                   |
+
+Default is `Hybrid` (pre-Spec-3 behaviour). The six retrieval tools gated by mode are: `memory_search`, `memory_reflect`, `recall_context`, `memory_browse`, `memory_explore`, `memory_timeline`. `note_manage` and `session_complete` are always registered — they are write-side and task-boundary tools unaffected by retrieval mode.
+
+The legacy `MemoryContext` type, `memory_context_from_envelope` adapter, and `MemoryContextProvider::fetch()` method were deleted in Spec 3. Production now uses `MemoryContextProvider::build_memory_user_message` → `render_with(&env, RenderStyle::Xml)` → `UnifiedMessage::user(rendered)`, threaded through the prompt builder via `LayerInput::memory_user_message`.
+
+See `docs/superpowers/specs/2026-04-13-memory-evolution-spec3-fencing-modes-design.md`.
+
 ## Appendix: Retrieval Tuning Tips
 
 - **Raise `hard_min_score` when noise surfaces.** The default 0.35 is tuned against the current confidence + decay profile; bump to 0.45 if retrieval surfaces marginal matches, lower to 0.25 for sparse knowledge bases.

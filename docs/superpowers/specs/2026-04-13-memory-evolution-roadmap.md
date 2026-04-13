@@ -134,7 +134,7 @@ Spec 1 (Hooks) ─────┬─────► Spec 2 (Reflect)
 |------|------|----------|----------|----------|
 | 1. Capture Hooks | ✅ shipped | [design](2026-04-13-memory-evolution-spec1-capture-hooks-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec1-capture-hooks.md) | 2026-04-13 |
 | 2. Reflect | ✅ shipped | [design](2026-04-13-memory-evolution-spec2-reflector-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec2-reflector.md) | 2026-04-13 |
-| 3. Fencing/Modes | ⚪ pending | — | — | — |
+| 3. Fencing/Modes | ✅ shipped | [design](2026-04-13-memory-evolution-spec3-fencing-modes-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec3-fencing-modes.md) | 2026-04-13 |
 | 4. Extensions | ⚪ YAGNI-gated | — | — | — |
 
 > 每个 spec 完成后回到本文档更新状态栏和文档链接。
