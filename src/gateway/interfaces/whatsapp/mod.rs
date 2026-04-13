@@ -49,6 +49,7 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, InboundMessageSender, MessageId, OutboundMessage,
     PairingData, SendResult,
 };
+use crate::gateway::interfaces::whatsapp::baileys_runtime::WhatsAppRuntime;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -58,6 +59,7 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use bridge_manager::{BridgeManager, BridgeManagerConfig};
 use bridge_protocol::BridgeEvent;
 use pairing::PairingState;
+use reactions::ReactionHandler;
 #[cfg(unix)]
 use rpc_client::BridgeRpcClient;
 
@@ -73,7 +75,7 @@ pub struct WhatsAppChannel {
     bridge_manager: BridgeManager,
     /// JSON-RPC client for communicating with the bridge (Unix only)
     #[cfg(unix)]
-    rpc_client: Option<BridgeRpcClient>,
+    rpc_client: Option<Arc<BridgeRpcClient>>,
     /// Fine-grained pairing state
     pairing_state: Arc<RwLock<PairingState>>,
     /// Shutdown signal sender for the event loop
@@ -186,6 +188,7 @@ async fn event_loop(
     inbound_tx: InboundMessageSender,
     channel_id: ChannelId,
     mut shutdown_rx: oneshot::Receiver<()>,
+    reaction_handler: Option<ReactionHandler>,
 ) {
     loop {
         tokio::select! {
@@ -290,6 +293,15 @@ async fn event_loop(
                     }
                     BridgeEvent::Message { .. } => {
                         if let Some(msg) = message::bridge_message_to_inbound(&event, &channel_id) {
+                            if let Some(ref handler) = reaction_handler {
+                                if let Err(e) = handler.send_ack(&msg).await {
+                                    tracing::warn!(
+                                        channel = %channel_id,
+                                        error = %e,
+                                        "Failed to send ack reaction"
+                                    );
+                                }
+                            }
                             if inbound_tx.send(msg).is_err() {
                                 tracing::debug!(
                                     channel = %channel_id,
@@ -305,6 +317,27 @@ async fn event_loop(
                             message_id = %message_id,
                             receipt_type = %receipt_type,
                             "Receipt received"
+                        );
+                    }
+                    BridgeEvent::Reaction { from, from_name, chat_id, message_id, text, timestamp, has_reaction } => {
+                        tracing::debug!(
+                            channel = %channel_id,
+                            from = %from,
+                            from_name = ?from_name,
+                            chat_id = %chat_id,
+                            message_id = %message_id,
+                            text = %text,
+                            timestamp = %timestamp,
+                            has_reaction = %has_reaction,
+                            "Reaction received"
+                        );
+                    }
+                    BridgeEvent::Presence { jid, presence } => {
+                        tracing::debug!(
+                            channel = %channel_id,
+                            jid = %jid,
+                            presence = %presence,
+                            "Presence update"
                         );
                     }
                 }
@@ -375,7 +408,7 @@ impl Channel for WhatsAppChannel {
             // 3. Create event channel and RPC client
             let (event_tx, event_rx) = mpsc::channel(64);
             let socket_path = self.bridge_manager.socket_path().clone();
-            let rpc_client = BridgeRpcClient::new(&socket_path, event_tx);
+            let rpc_client = Arc::new(BridgeRpcClient::new(&socket_path, event_tx));
 
             // 4. Connect RPC client with retries
             if let Err(e) = rpc_client.connect(5, 500).await {
@@ -400,7 +433,19 @@ impl Channel for WhatsAppChannel {
                 )));
             }
 
-            // 6. Spawn event loop
+            // 6. Create reaction handler if enabled
+            let reaction_handler = if !matches!(self.config.reactions.level, reactions::ReactionLevel::Off) {
+                let runtime: Arc<dyn WhatsAppRuntime> = rpc_client.clone() as Arc<dyn WhatsAppRuntime>;
+                Some(ReactionHandler::new(
+                    self.config.reactions.level,
+                    self.config.reactions.ack.clone(),
+                    runtime,
+                ))
+            } else {
+                None
+            };
+
+            // 7. Spawn event loop
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let pairing_state = Arc::clone(&self.pairing_state);
             let inbound_tx = self.channel_state.sender();
@@ -412,6 +457,7 @@ impl Channel for WhatsAppChannel {
                 inbound_tx,
                 channel_id,
                 shutdown_rx,
+                reaction_handler,
             ));
 
             self.rpc_client = Some(rpc_client);

@@ -360,6 +360,78 @@ impl BridgeRpcClient {
     }
 }
 
+// ─── WhatsAppRuntime Implementation ───────────────────────────────────────────
+
+use crate::gateway::channel::{ChannelError, ChannelResult, OutboundMessage};
+use crate::gateway::channel_policy::E164Number;
+use crate::gateway::interfaces::whatsapp::baileys_runtime::{ConnectionInfo, SendResponse, WhatsAppRuntime};
+use crate::gateway::interfaces::whatsapp::bridge_protocol::{OkResponse, SendReactionRequest};
+use async_trait::async_trait;
+use chrono::Utc;
+
+#[async_trait]
+impl WhatsAppRuntime for BridgeRpcClient {
+    async fn connect(&self) -> ChannelResult<ConnectionInfo> {
+        let _: OkResponse = self
+            .call("bridge.connect", None)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("bridge.connect failed: {}", e)))?;
+        Ok(ConnectionInfo {
+            phone_number: E164Number(String::new()),
+            device_name: "Unknown".to_string(),
+            wid: Default::default(),
+            connected_at: Utc::now(),
+        })
+    }
+
+    async fn disconnect(&self) -> ChannelResult<()> {
+        let _: OkResponse = self
+            .call("bridge.disconnect", None)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("bridge.disconnect failed: {}", e)))?;
+        Ok(())
+    }
+
+    async fn send_message(&self, msg: OutboundMessage) -> ChannelResult<SendResponse> {
+        let send_request = crate::gateway::interfaces::whatsapp::message::outbound_to_send_request(&msg);
+        let params = serde_json::to_value(&send_request).map_err(|e| {
+            ChannelError::SendFailed(format!("Failed to serialize send request: {}", e))
+        })?;
+        let response: crate::gateway::interfaces::whatsapp::bridge_protocol::SendResponse = self
+            .call("bridge.send", Some(params))
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("bridge.send failed: {}", e)))?;
+        Ok(SendResponse { id: response.id })
+    }
+
+    async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> ChannelResult<()> {
+        let req = SendReactionRequest {
+            to: jid.to_string(),
+            message_id: msg_id.to_string(),
+            reaction: emoji.to_string(),
+        };
+        let params = serde_json::to_value(&req)
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to serialize reaction request: {}", e)))?;
+        let _: OkResponse = self
+            .call("bridge.send_reaction", Some(params))
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("bridge.send_reaction failed: {}", e)))?;
+        Ok(())
+    }
+
+    async fn mark_read(&self, _jid: &str, _msg_id: &str) -> ChannelResult<()> {
+        Ok(())
+    }
+
+    async fn send_typing(&self, _jid: &str) -> ChannelResult<()> {
+        Ok(())
+    }
+
+    fn connection_info(&self) -> Option<ConnectionInfo> {
+        None
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

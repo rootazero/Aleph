@@ -63,6 +63,17 @@ pub struct PingRequest {}
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusRequest {}
 
+/// Request the bridge to send a reaction to a message.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendReactionRequest {
+    /// Recipient JID
+    pub to: String,
+    /// Message ID to react to
+    pub message_id: String,
+    /// Reaction emoji/text (empty string to remove reaction)
+    pub reaction: String,
+}
+
 // ─── Response Types (Go → Rust) ──────────────────────────────────────────────
 
 /// Simple acknowledgment response.
@@ -170,6 +181,32 @@ pub enum BridgeEvent {
         message_id: String,
         /// Receipt type (e.g. "delivered", "read", "played")
         receipt_type: String,
+    },
+
+    /// A reaction to a message (inbound or sent by us).
+    Reaction {
+        /// JID of the message sender
+        from: String,
+        /// Display name of the sender
+        from_name: Option<String>,
+        /// Chat/conversation JID
+        chat_id: String,
+        /// The message ID this reaction is for
+        message_id: String,
+        /// The emoji/reaction text
+        text: String,
+        /// Unix timestamp
+        timestamp: i64,
+        /// Whether this reaction was added (true) or removed (false)
+        has_reaction: bool,
+    },
+
+    /// Presence update (typing, online/offline).
+    Presence {
+        /// JID of the user
+        jid: String,
+        /// Presence type: "typing", "paused", "online", "offline"
+        presence: String,
     },
 
     /// The bridge is fully initialized and ready to send/receive.
@@ -651,5 +688,145 @@ mod tests {
                 _ => panic!("Expected Receipt event"),
             }
         }
+    }
+
+    #[test]
+    fn test_event_reaction_added() {
+        let json = r#"{
+            "type": "reaction",
+            "from": "user@s.whatsapp.net",
+            "from_name": "Alice",
+            "chat_id": "user@s.whatsapp.net",
+            "message_id": "msg-abc-123",
+            "text": "👍",
+            "timestamp": 1708531300,
+            "has_reaction": true
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BridgeEvent::Reaction {
+                from,
+                from_name,
+                chat_id,
+                message_id,
+                text,
+                timestamp,
+                has_reaction,
+            } => {
+                assert_eq!(from, "user@s.whatsapp.net");
+                assert_eq!(from_name, Some("Alice".to_string()));
+                assert_eq!(chat_id, "user@s.whatsapp.net");
+                assert_eq!(message_id, "msg-abc-123");
+                assert_eq!(text, "👍");
+                assert_eq!(timestamp, 1708531300);
+                assert!(has_reaction);
+            }
+            _ => panic!("Expected Reaction event"),
+        }
+    }
+
+    #[test]
+    fn test_event_reaction_removed() {
+        let json = r#"{
+            "type": "reaction",
+            "from": "user@s.whatsapp.net",
+            "from_name": null,
+            "chat_id": "user@s.whatsapp.net",
+            "message_id": "msg-abc-123",
+            "text": "👍",
+            "timestamp": 1708531400,
+            "has_reaction": false
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BridgeEvent::Reaction {
+                from,
+                from_name,
+                chat_id,
+                message_id,
+                has_reaction,
+                ..
+            } => {
+                assert_eq!(from, "user@s.whatsapp.net");
+                assert!(from_name.is_none());
+                assert_eq!(chat_id, "user@s.whatsapp.net");
+                assert_eq!(message_id, "msg-abc-123");
+                assert!(!has_reaction);
+            }
+            _ => panic!("Expected Reaction event"),
+        }
+    }
+
+    #[test]
+    fn test_event_presence_typing() {
+        let json = r#"{
+            "type": "presence",
+            "jid": "user@s.whatsapp.net",
+            "presence": "typing"
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BridgeEvent::Presence { jid, presence } => {
+                assert_eq!(jid, "user@s.whatsapp.net");
+                assert_eq!(presence, "typing");
+            }
+            _ => panic!("Expected Presence event"),
+        }
+    }
+
+    #[test]
+    fn test_event_presence_online() {
+        let json = r#"{
+            "type": "presence",
+            "jid": "1234567890@g.us",
+            "presence": "online"
+        }"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BridgeEvent::Presence { jid, presence } => {
+                assert_eq!(jid, "1234567890@g.us");
+                assert_eq!(presence, "online");
+            }
+            _ => panic!("Expected Presence event"),
+        }
+    }
+
+    #[test]
+    fn test_event_presence_offline() {
+        let json = r#"{"type": "presence", "jid": "user@s.whatsapp.net", "presence": "offline"}"#;
+        let event: BridgeEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BridgeEvent::Presence { jid, presence } => {
+                assert_eq!(jid, "user@s.whatsapp.net");
+                assert_eq!(presence, "offline");
+            }
+            _ => panic!("Expected Presence event"),
+        }
+    }
+
+    #[test]
+    fn test_send_reaction_request_serialization() {
+        let req = SendReactionRequest {
+            to: "user@s.whatsapp.net".to_string(),
+            message_id: "msg-abc-123".to_string(),
+            reaction: "👍".to_string(),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["to"], "user@s.whatsapp.net");
+        assert_eq!(json["message_id"], "msg-abc-123");
+        assert_eq!(json["reaction"], "👍");
+    }
+
+    #[test]
+    fn test_send_reaction_request_empty_removes_reaction() {
+        let req = SendReactionRequest {
+            to: "user@s.whatsapp.net".to_string(),
+            message_id: "msg-abc-123".to_string(),
+            reaction: "".to_string(),
+        };
+
+        let json_str = serde_json::to_string(&req).unwrap();
+        assert!(json_str.contains("\"reaction\":\"\""));
     }
 }

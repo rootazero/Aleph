@@ -36,6 +36,18 @@ pub enum WaEvent {
         message_id: String,
         kind: ReceiptType,
     },
+    Reaction {
+        from: String,
+        from_name: Option<String>,
+        chat_id: String,
+        message_id: String,
+        text: String,
+        has_reaction: bool,
+    },
+    Presence {
+        jid: String,
+        presence: String,
+    },
     Error {
         message: String,
     },
