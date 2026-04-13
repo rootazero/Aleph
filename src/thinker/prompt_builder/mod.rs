@@ -134,6 +134,11 @@ pub struct PromptBuilder {
     /// Optional soul manifest for identity/personality.
     /// When set, `build_system_prompt` uses the Soul assembly path.
     soul: Option<SoulManifest>,
+    /// Loaded identity files (SOUL.md, IDENTITY.md, MEMORY.md, …) from
+    /// `~/.aleph/agents/{agent_id}/`. When set, these are threaded into every
+    /// `LayerInput` so `SoulLayer`, `IdentityFilesLayer`, `ProfileLayer`, and
+    /// `CustomInstructionsLayer` can read their respective files.
+    identity_files: Option<IdentityFiles>,
 }
 
 impl PromptBuilder {
@@ -145,6 +150,7 @@ impl PromptBuilder {
             pipeline,
             agent_def: None,
             soul: None,
+            identity_files: None,
         }
     }
 
@@ -166,6 +172,20 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach identity files loaded from the agent identity directory.
+    ///
+    /// Identity files (SOUL.md, IDENTITY.md, AGENTS.md, MEMORY.md, etc.)
+    /// live under `~/.aleph/agents/{agent_id}/` — NOT under
+    /// `~/.aleph/workspaces/{agent_id}/` (which is the runtime work directory).
+    ///
+    /// When set, `build_system_prompt` threads these files into the layer
+    /// input so `SoulLayer`, `IdentityFilesLayer`, and related layers can
+    /// render them into the system prompt.
+    pub fn with_identity_files(mut self, files: IdentityFiles) -> Self {
+        self.identity_files = Some(files);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -175,6 +195,7 @@ impl PromptBuilder {
             ),
             None => (AssemblyPath::Basic, LayerInput::basic(&self.config, tools)),
         };
+        let input = input.with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.agent_def {
             Some(agent) => input.with_agent_def(agent),
             None => input,
@@ -209,7 +230,9 @@ impl PromptBuilder {
         soul: &SoulManifest,
         profile: Option<&ProfileConfig>,
     ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul).with_profile(profile);
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_profile(profile)
+            .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -238,8 +261,12 @@ impl PromptBuilder {
             }
         }
 
-        // Build with potentially modified config
-        let builder = PromptBuilder::new(config);
+        // Build with potentially modified config; carry over identity_files
+        // so SoulLayer / IdentityFilesLayer see the agent identity directory.
+        let mut builder = PromptBuilder::new(config);
+        if let Some(files) = self.identity_files.clone() {
+            builder = builder.with_identity_files(files);
+        }
         let mut prompt = builder.build_system_prompt_with_soul(tools, soul, profile);
 
         // After hooks
@@ -262,7 +289,9 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         soul: &SoulManifest,
     ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul).with_agent_def(agent_def);
+        let input = LayerInput::soul(&self.config, tools, soul)
+            .with_agent_def(agent_def)
+            .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -278,7 +307,9 @@ impl PromptBuilder {
         agent_def: &crate::agents::AgentDef,
         tools: &[ToolInfo],
     ) -> String {
-        let input = LayerInput::basic(&self.config, tools).with_agent_def(agent_def);
+        let input = LayerInput::basic(&self.config, tools)
+            .with_agent_def(agent_def)
+            .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -296,6 +327,7 @@ impl PromptBuilder {
             Some(soul) => LayerInput::soul(&self.config, tools, soul),
             None => LayerInput::basic(&self.config, tools),
         };
+        let input = input.with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -318,7 +350,8 @@ impl PromptBuilder {
             Some(soul) => LayerInput::soul(&self.config, tools, soul),
             None => LayerInput::basic(&self.config, tools),
         }
-        .with_agent_def(agent_def);
+        .with_agent_def(agent_def)
+        .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -351,7 +384,8 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
-            .with_mode(mode);
+            .with_mode(mode)
+            .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -375,7 +409,8 @@ impl PromptBuilder {
     ) -> PromptResult {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
-            .with_mode(mode);
+            .with_mode(mode)
+            .with_identity_files_opt(self.identity_files.as_ref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -384,7 +419,7 @@ impl PromptBuilder {
             .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
 
-    /// Build system prompt with full context (soul + profile + workspace + inbound).
+    /// Build system prompt with full context (soul + profile + identity files + inbound).
     ///
     /// This is the comprehensive entry point that passes all available context
     /// through to the prompt pipeline via LayerInput.
@@ -393,13 +428,13 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         soul: &SoulManifest,
         profile: Option<&ProfileConfig>,
-        workspace: Option<&IdentityFiles>,
+        identity_files: Option<&IdentityFiles>,
         inbound: Option<&InboundContext>,
         memory_context: Option<&super::memory_context::MemoryContext>,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
-            .with_workspace_opt(workspace)
+            .with_identity_files_opt(identity_files)
             .with_inbound_opt(inbound)
             .with_memory_context_opt(memory_context);
         let input = match &self.config.mcp_instructions {

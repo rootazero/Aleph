@@ -48,25 +48,30 @@ pub struct IdentityFile {
     pub original_size: usize,
 }
 
-/// Collection of loaded identity files from an identity directory.
+/// Collection of loaded identity files from an agent identity directory.
+///
+/// Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / TOOLS.md /
+/// HEARTBEAT.md) live under `~/.aleph/agents/{agent_id}/` — this is the
+/// agent's *identity* directory, distinct from `~/.aleph/workspaces/{agent_id}/`
+/// which only holds runtime tool output and scratch files.
 #[derive(Debug, Clone)]
 pub struct IdentityFiles {
-    /// The workspace directory these files were loaded from.
-    pub workspace_dir: PathBuf,
+    /// The agent identity directory these files were loaded from.
+    pub identity_dir: PathBuf,
     /// Loaded files in canonical order.
     pub files: Vec<IdentityFile>,
 }
 
-/// Resolve the path for a workspace file.
+/// Resolve the path for an identity file.
 ///
-/// Checks `.aleph/<filename>` first, then `<workspace>/<filename>`.
+/// Checks `.aleph/<filename>` first, then `<identity_dir>/<filename>`.
 /// Returns the first path that exists, or None.
-pub fn resolve_path(workspace: &Path, filename: &str) -> Option<PathBuf> {
-    let aleph_path = workspace.join(".aleph").join(filename);
+pub fn resolve_path(identity_dir: &Path, filename: &str) -> Option<PathBuf> {
+    let aleph_path = identity_dir.join(".aleph").join(filename);
     if aleph_path.is_file() {
         return Some(aleph_path);
     }
-    let root_path = workspace.join(filename);
+    let root_path = identity_dir.join(filename);
     if root_path.is_file() {
         return Some(root_path);
     }
@@ -74,17 +79,18 @@ pub fn resolve_path(workspace: &Path, filename: &str) -> Option<PathBuf> {
 }
 
 impl IdentityFiles {
-    /// Load all identity files from the given directory, applying truncation.
+    /// Load all identity files from the given agent identity directory,
+    /// applying truncation.
     ///
     /// Files are loaded in `IDENTITY_FILE_NAMES` order. Each file is
     /// individually capped at `config.per_file_max_chars`, and the total
     /// across all files is capped at `config.total_max_chars`.
-    pub fn load(workspace: &Path, config: &IdentityFilesConfig) -> Self {
+    pub fn load(identity_dir: &Path, config: &IdentityFilesConfig) -> Self {
         let mut files = Vec::with_capacity(IDENTITY_FILE_NAMES.len());
         let mut total_chars = 0usize;
 
         for &name in IDENTITY_FILE_NAMES {
-            let path = resolve_path(workspace, name);
+            let path = resolve_path(identity_dir, name);
 
             let raw = path.and_then(|p| std::fs::read_to_string(p).ok());
 
@@ -136,7 +142,7 @@ impl IdentityFiles {
         }
 
         Self {
-            workspace_dir: workspace.to_path_buf(),
+            identity_dir: identity_dir.to_path_buf(),
             files,
         }
     }

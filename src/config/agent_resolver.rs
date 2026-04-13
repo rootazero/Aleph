@@ -19,7 +19,7 @@ use crate::config::types::agents_def::{
     AgentDefaults, AgentDefinition, AgentsConfig, SubagentPolicy,
 };
 use crate::config::types::profile::ProfileConfig;
-use crate::gateway::workspace_loader::WorkspaceFileLoader;
+use crate::gateway::identity_loader::IdentityFileLoader;
 use crate::thinker::soul::SoulManifest;
 
 // =============================================================================
@@ -100,7 +100,7 @@ pub struct ResolvedAgent {
 /// resolved `ResolvedAgent` instances.
 #[derive(Default)]
 pub struct AgentDefinitionResolver {
-    workspace_loader: WorkspaceFileLoader,
+    identity_loader: IdentityFileLoader,
 }
 
 impl AgentDefinitionResolver {
@@ -295,12 +295,12 @@ impl AgentDefinitionResolver {
             .unwrap_or_default();
 
         // 6. Load SOUL.md, AGENTS.md, MEMORY.md from agent identity directory
-        let soul = self.workspace_loader.load_soul(&agent_dir);
-        let agents_md = self.workspace_loader.load_agents_md(&agent_dir);
+        let soul = self.identity_loader.load_soul(&agent_dir);
+        let agents_md = self.identity_loader.load_agents_md(&agent_dir);
         let max_chars = defaults
             .bootstrap_max_chars
             .unwrap_or(DEFAULT_BOOTSTRAP_MAX_CHARS);
-        let memory_md = self.workspace_loader.load_memory_md(&agent_dir, max_chars);
+        let memory_md = self.identity_loader.load_memory_md(&agent_dir, max_chars);
 
         // 7. Build ResolvedAgent
         let name = agent.name.clone().unwrap_or_else(|| agent.id.clone());

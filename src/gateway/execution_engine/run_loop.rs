@@ -203,7 +203,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
 
-        // Resolve soul for prompt building (constant across retries)
+        // Resolve soul for prompt building (constant across retries).
+        //
+        // Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / …)
+        // live in the AGENT identity directory (`~/.aleph/agents/{agent_id}/`),
+        // NOT in the workspace directory (`~/.aleph/workspaces/{agent_id}/`
+        // — that's only for runtime tool output). Load them from `agent_dir()`
+        // here so `SoulLayer` / `IdentityFilesLayer` can inject them below.
+        let identity_files = crate::thinker::identity_files::IdentityFiles::load(
+            agent.agent_dir(),
+            &crate::thinker::identity_files::IdentityFilesConfig::default(),
+        );
+        // Legacy global `~/.aleph/soul.md` fallback only kicks in when no
+        // per-agent SOUL.md exists. SoulLayer prefers `input.identity_file("SOUL.md")`
+        // over `input.soul`, so the agent-dir file always wins when present.
         let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
         let resolved_soul = identity_resolver.resolve();
 
@@ -514,6 +527,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             } else {
                 PromptBuilder::new(config).with_soul(resolved_soul.clone())
             };
+            let prompt_builder = prompt_builder.with_identity_files(identity_files.clone());
 
             // Safety guard from merged global + agent permissions
             let safety = SafetyGuard::from_permissions(

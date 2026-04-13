@@ -56,9 +56,6 @@ mod session_context_guide;
 // --- Session resume layer ---
 mod session_resume;
 
-// --- Bootstrap layer ---
-pub mod bootstrap;
-
 // --- Re-exports ---
 pub use citation_standards::CitationStandardsLayer;
 pub use guidelines::GuidelinesLayer;
@@ -86,7 +83,6 @@ pub use tool_usage_grammar::ToolUsageGrammarLayer;
 pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 
-pub use bootstrap::BootstrapLayer;
 pub use environment::EnvironmentLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;

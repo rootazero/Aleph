@@ -24,7 +24,7 @@ impl PromptLayer for ProfileLayer {
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Priority 1: workspace AGENTS.md
-        if let Some(agents_content) = input.workspace_file("AGENTS.md") {
+        if let Some(agents_content) = input.identity_file("AGENTS.md") {
             output.push_str("## Project Context\n\n");
             output.push_str(agents_content);
             output.push_str("\n\n");
@@ -133,7 +133,7 @@ mod tests {
             ..Default::default()
         };
         let ws = IdentityFiles {
-            workspace_dir: PathBuf::from("/tmp/test"),
+            identity_dir: PathBuf::from("/tmp/test"),
             files: vec![IdentityFile {
                 name: "AGENTS.md",
                 content: Some("Custom agent instructions".to_string()),
@@ -143,7 +143,7 @@ mod tests {
         };
         let input = LayerInput::soul(&config, &tools, &soul)
             .with_profile(Some(&profile))
-            .with_workspace(&ws);
+            .with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -166,7 +166,7 @@ mod tests {
         };
         // Workspace exists but has no AGENTS.md
         let ws = IdentityFiles {
-            workspace_dir: PathBuf::from("/tmp/test"),
+            identity_dir: PathBuf::from("/tmp/test"),
             files: vec![IdentityFile {
                 name: "IDENTITY.md",
                 content: Some("identity content".to_string()),
@@ -176,7 +176,7 @@ mod tests {
         };
         let input = LayerInput::soul(&config, &tools, &soul)
             .with_profile(Some(&profile))
-            .with_workspace(&ws);
+            .with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 

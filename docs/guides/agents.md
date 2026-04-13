@@ -77,13 +77,18 @@ I am an expert systems programmer...
 ## Common Operations
 
 ### Modify agent personality
-Edit `~/.aleph/workspaces/{agent_id}/SOUL.md` directly.
+Edit `~/.aleph/agents/{agent_id}/SOUL.md` directly.
+
+> Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / TOOLS.md / HEARTBEAT.md)
+> live under `~/.aleph/agents/{agent_id}/`. The `~/.aleph/workspaces/{agent_id}/`
+> directory is only the agent's runtime working directory (tool output,
+> scratch files) — it does NOT hold any identity data.
 
 ### Change agent's model
 Edit `model` field in the agent's `[[agents.list]]` entry in config.toml.
 
 ### Add agent memory
-Edit `~/.aleph/workspaces/{agent_id}/MEMORY.md` (keep under 20K chars).
+Edit `~/.aleph/agents/{agent_id}/MEMORY.md` (keep under 20K chars).
 
 ## Caveats
 - Model resolution: agent.model > defaults.model > profile.model > "claude-opus-4-6"

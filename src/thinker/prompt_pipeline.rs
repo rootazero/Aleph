@@ -276,14 +276,6 @@ impl PromptPipeline {
         ])
     }
 
-    /// Add bootstrap layer for workspace context injection.
-    pub fn with_bootstrap(mut self, workspace: PathBuf, per_file: usize, total: usize) -> Self {
-        let layer = BootstrapLayer::new(workspace).with_limits(per_file, total);
-        self.layers.push(Box::new(layer));
-        self.layers.sort_by_key(|l| l.priority());
-        self
-    }
-
     /// Execute with section-level caching for Stable layers.
     pub fn execute_cached(&self, path: AssemblyPath, input: &LayerInput) -> String {
         let cache = self.cache.read().unwrap_or_else(|e| e.into_inner());

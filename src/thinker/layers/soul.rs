@@ -18,7 +18,7 @@ impl PromptLayer for SoulLayer {
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         // Priority 1: workspace SOUL.md
-        if let Some(soul_content) = input.workspace_file("SOUL.md") {
+        if let Some(soul_content) = input.identity_file("SOUL.md") {
             output.push_str("# Soul\n\n");
             output.push_str(soul_content);
             output.push_str("\n\n---\n\n");
@@ -237,7 +237,7 @@ mod tests {
             ..Default::default()
         };
         let workspace = IdentityFiles {
-            workspace_dir: PathBuf::from("/tmp/test"),
+            identity_dir: PathBuf::from("/tmp/test"),
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("You are a custom soul from workspace.".to_string()),
@@ -245,7 +245,7 @@ mod tests {
                 original_size: 37,
             }],
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_workspace(&workspace);
+        let input = LayerInput::soul(&config, &tools, &soul).with_identity_files(&workspace);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -282,10 +282,10 @@ mod tests {
         };
         // Workspace with no SOUL.md
         let workspace = IdentityFiles {
-            workspace_dir: PathBuf::from("/tmp/test"),
+            identity_dir: PathBuf::from("/tmp/test"),
             files: vec![],
         };
-        let input = LayerInput::soul(&config, &tools, &soul).with_workspace(&workspace);
+        let input = LayerInput::soul(&config, &tools, &soul).with_identity_files(&workspace);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 

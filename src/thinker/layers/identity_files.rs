@@ -40,14 +40,14 @@ impl PromptLayer for IdentityFilesLayer {
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        let workspace = match input.workspace {
-            Some(ws) => ws,
+        let identity = match input.identity_files {
+            Some(files) => files,
             None => return,
         };
 
         let mut sections = Vec::new();
 
-        for file in &workspace.files {
+        for file in &identity.files {
             if HANDLED_ELSEWHERE.contains(&file.name) {
                 continue;
             }
@@ -57,7 +57,7 @@ impl PromptLayer for IdentityFilesLayer {
         }
 
         if !sections.is_empty() {
-            output.push_str("## Workspace Files\n\n");
+            output.push_str("## Identity Files\n\n");
             output.push_str(&sections.join("\n\n"));
             output.push_str("\n\n");
         }
@@ -72,9 +72,9 @@ mod tests {
     use crate::thinker::prompt_mode::PromptMode;
     use std::path::PathBuf;
 
-    fn make_workspace(files: Vec<IdentityFile>) -> IdentityFiles {
+    fn make_identity(files: Vec<IdentityFile>) -> IdentityFiles {
         IdentityFiles {
-            workspace_dir: PathBuf::from("/tmp/test"),
+            identity_dir: PathBuf::from("/tmp/test"),
             files,
         }
     }
@@ -121,7 +121,7 @@ mod tests {
         let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
-        let ws = make_workspace(vec![
+        let ws = make_identity(vec![
             make_file("SOUL.md", "soul content"),
             make_file("IDENTITY.md", "identity content"),
             make_file("AGENTS.md", "agents content"),
@@ -130,12 +130,12 @@ mod tests {
             make_file("HEARTBEAT.md", "heartbeat content"),
         ]);
 
-        let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
         // Should contain the header
-        assert!(out.contains("## Workspace Files"));
+        assert!(out.contains("## Identity Files"));
 
         // Should include remaining files
         assert!(out.contains("### IDENTITY.md"));
@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_when_no_workspace() {
+    fn skips_when_no_identity_files() {
         let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
         let input = LayerInput::basic(&config, &[]);
@@ -170,13 +170,13 @@ mod tests {
         let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
-        let ws = make_workspace(vec![
+        let ws = make_identity(vec![
             make_empty_file("IDENTITY.md"),
             make_file("TOOLS.md", "has content"),
             make_empty_file("MEMORY.md"),
         ]);
 
-        let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -190,13 +190,13 @@ mod tests {
         let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
-        let ws = make_workspace(vec![
+        let ws = make_identity(vec![
             make_file("SOUL.md", "excluded"),
             make_file("AGENTS.md", "excluded"),
             make_empty_file("IDENTITY.md"),
         ]);
 
-        let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 

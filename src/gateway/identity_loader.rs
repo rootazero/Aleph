@@ -1,7 +1,12 @@
-//! Workspace file loader with mtime-based caching.
+//! Identity file loader with mtime-based caching.
 //!
-//! Reads markdown files from agent workspace directories (SOUL.md, AGENTS.md,
-//! MEMORY.md) with filesystem mtime caching to avoid re-reading unchanged files.
+//! Reads markdown files from the agent identity directory
+//! (`~/.aleph/agents/{agent_id}/`) — SOUL.md, AGENTS.md, MEMORY.md — with
+//! filesystem mtime caching to avoid re-reading unchanged files.
+//!
+//! Identity files live under the agent directory, distinct from the agent's
+//! runtime workspace directory (`~/.aleph/workspaces/{agent_id}/`) which only
+//! holds tool output and scratch files.
 
 use std::collections::HashMap;
 use std::fs;
@@ -16,17 +21,17 @@ pub(crate) struct CachedFile {
     mtime: SystemTime,
 }
 
-/// Workspace file loader with mtime-based caching.
+/// Identity file loader with mtime-based caching.
 ///
-/// Loads markdown files from agent workspace directories and caches them
+/// Loads markdown files from the agent identity directory and caches them
 /// by filesystem modification time. On subsequent loads the file is only
 /// re-read when its mtime has changed.
-pub struct WorkspaceFileLoader {
+pub struct IdentityFileLoader {
     /// File cache keyed by absolute path. Pub(crate) for test access.
     pub(crate) cache: HashMap<PathBuf, CachedFile>,
 }
 
-impl WorkspaceFileLoader {
+impl IdentityFileLoader {
     /// Create a new loader with an empty cache.
     pub fn new() -> Self {
         Self {
@@ -34,11 +39,11 @@ impl WorkspaceFileLoader {
         }
     }
 
-    /// Load a file from `workspace/filename` with mtime caching.
+    /// Load a file from `identity_dir/filename` with mtime caching.
     ///
     /// Returns `None` if the file does not exist or cannot be read.
-    pub fn load(&mut self, workspace: &Path, filename: &str) -> Option<String> {
-        let path = workspace.join(filename);
+    pub fn load(&mut self, identity_dir: &Path, filename: &str) -> Option<String> {
+        let path = identity_dir.join(filename);
 
         let metadata = fs::metadata(&path).ok()?;
         let mtime = metadata.modified().ok()?;
@@ -65,25 +70,26 @@ impl WorkspaceFileLoader {
     /// Load and parse `SOUL.md` via `SoulManifest::from_file`.
     ///
     /// Returns `None` if the file does not exist or fails to parse.
-    pub fn load_soul(&mut self, workspace: &Path) -> Option<SoulManifest> {
-        let path = workspace.join("SOUL.md");
+    pub fn load_soul(&mut self, identity_dir: &Path) -> Option<SoulManifest> {
+        let path = identity_dir.join("SOUL.md");
         if !path.exists() {
             return None;
         }
         SoulManifest::from_file(&path).ok()
     }
 
-    /// Load `AGENTS.md` from the workspace.
-    pub fn load_agents_md(&mut self, workspace: &Path) -> Option<String> {
-        self.load(workspace, "AGENTS.md")
+    /// Load `AGENTS.md` from the agent identity directory.
+    pub fn load_agents_md(&mut self, identity_dir: &Path) -> Option<String> {
+        self.load(identity_dir, "AGENTS.md")
     }
 
-    /// Load `MEMORY.md` from the workspace, truncated at a char boundary.
+    /// Load `MEMORY.md` from the agent identity directory, truncated at a
+    /// char boundary.
     ///
     /// If the file content exceeds `max_chars`, the returned string is
     /// truncated to the largest valid char boundary at or before `max_chars`.
-    pub fn load_memory_md(&mut self, workspace: &Path, max_chars: usize) -> Option<String> {
-        let content = self.load(workspace, "MEMORY.md")?;
+    pub fn load_memory_md(&mut self, identity_dir: &Path, max_chars: usize) -> Option<String> {
+        let content = self.load(identity_dir, "MEMORY.md")?;
         if content.chars().count() <= max_chars {
             Some(content)
         } else {
@@ -98,7 +104,7 @@ impl WorkspaceFileLoader {
     }
 }
 
-impl Default for WorkspaceFileLoader {
+impl Default for IdentityFileLoader {
     fn default() -> Self {
         Self::new()
     }
@@ -112,11 +118,11 @@ mod tests {
     #[test]
     fn test_load_agents_md() {
         let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
-        fs::write(workspace.join("AGENTS.md"), "# Agents\nHello world").unwrap();
+        let identity_dir = tmp.path();
+        fs::write(identity_dir.join("AGENTS.md"), "# Agents\nHello world").unwrap();
 
-        let mut loader = WorkspaceFileLoader::new();
-        let content = loader.load_agents_md(workspace);
+        let mut loader = IdentityFileLoader::new();
+        let content = loader.load_agents_md(identity_dir);
         assert!(content.is_some());
         assert_eq!(content.unwrap(), "# Agents\nHello world");
     }
@@ -124,29 +130,29 @@ mod tests {
     #[test]
     fn test_load_missing_file_returns_none() {
         let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
+        let identity_dir = tmp.path();
 
-        let mut loader = WorkspaceFileLoader::new();
-        let content = loader.load(workspace, "DOES_NOT_EXIST.md");
+        let mut loader = IdentityFileLoader::new();
+        let content = loader.load(identity_dir, "DOES_NOT_EXIST.md");
         assert!(content.is_none());
     }
 
     #[test]
     fn test_load_memory_md_with_truncation() {
         let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
+        let identity_dir = tmp.path();
         // Write content longer than our max_chars
         let long_content = "abcdefghij".repeat(10); // 100 chars
-        fs::write(workspace.join("MEMORY.md"), &long_content).unwrap();
+        fs::write(identity_dir.join("MEMORY.md"), &long_content).unwrap();
 
-        let mut loader = WorkspaceFileLoader::new();
+        let mut loader = IdentityFileLoader::new();
 
         // No truncation needed
-        let full = loader.load_memory_md(workspace, 200).unwrap();
+        let full = loader.load_memory_md(identity_dir, 200).unwrap();
         assert_eq!(full.len(), 100);
 
         // Truncation at 50
-        let truncated = loader.load_memory_md(workspace, 50).unwrap();
+        let truncated = loader.load_memory_md(identity_dir, 50).unwrap();
         assert_eq!(truncated.len(), 50);
         assert_eq!(truncated, &long_content[..50]);
     }
@@ -154,17 +160,17 @@ mod tests {
     #[test]
     fn test_mtime_cache_hit() {
         let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
-        fs::write(workspace.join("test.md"), "cached content").unwrap();
+        let identity_dir = tmp.path();
+        fs::write(identity_dir.join("test.md"), "cached content").unwrap();
 
-        let mut loader = WorkspaceFileLoader::new();
+        let mut loader = IdentityFileLoader::new();
 
         // First load
-        let first = loader.load(workspace, "test.md");
+        let first = loader.load(identity_dir, "test.md");
         assert!(first.is_some());
 
         // Second load — should hit cache
-        let second = loader.load(workspace, "test.md");
+        let second = loader.load(identity_dir, "test.md");
         assert!(second.is_some());
         assert_eq!(first, second);
 
@@ -174,14 +180,14 @@ mod tests {
 
     #[test]
     fn test_default_creates_empty_loader() {
-        let loader = WorkspaceFileLoader::default();
+        let loader = IdentityFileLoader::default();
         assert!(loader.cache.is_empty());
     }
 
     #[test]
     fn test_load_soul() {
         let tmp = TempDir::new().unwrap();
-        let workspace = tmp.path();
+        let identity_dir = tmp.path();
 
         // Write a SOUL.md with YAML frontmatter
         let soul_content = r#"---
@@ -195,10 +201,10 @@ voice:
 
 - Be helpful
 "#;
-        fs::write(workspace.join("SOUL.md"), soul_content).unwrap();
+        fs::write(identity_dir.join("SOUL.md"), soul_content).unwrap();
 
-        let mut loader = WorkspaceFileLoader::new();
-        let result = loader.load_soul(workspace);
+        let mut loader = IdentityFileLoader::new();
+        let result = loader.load_soul(identity_dir);
 
         // SoulManifest::from_file should succeed with valid frontmatter
         // If it doesn't, that's also OK — we just test the method exists and runs

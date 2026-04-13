@@ -79,8 +79,9 @@ pub struct LayerInput<'a> {
     pub mode: PromptMode,
     /// Per-request inbound context (sender, channel, session metadata)
     pub inbound: Option<&'a InboundContext>,
-    /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.)
-    pub workspace: Option<&'a IdentityFiles>,
+    /// Loaded agent identity files (SOUL.md, IDENTITY.md, MEMORY.md, …)
+    /// from `~/.aleph/agents/{agent_id}/`.
+    pub identity_files: Option<&'a IdentityFiles>,
     /// Pre-fetched memory context from SQLite (facts + memory summaries).
     pub memory_context: Option<&'a super::memory_context::MemoryContext>,
     /// Whether the conversation history contains compressed session summaries.
@@ -120,7 +121,7 @@ impl<'a> LayerInput<'a> {
             profile: None,
             mode: PromptMode::Full,
             inbound: None,
-            workspace: None,
+            identity_files: None,
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
@@ -141,7 +142,7 @@ impl<'a> LayerInput<'a> {
             profile: None,
             mode: PromptMode::Full,
             inbound: None,
-            workspace: None,
+            identity_files: None,
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
@@ -162,7 +163,7 @@ impl<'a> LayerInput<'a> {
             profile: None,
             mode: PromptMode::Full,
             inbound: None,
-            workspace: None,
+            identity_files: None,
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
@@ -183,7 +184,7 @@ impl<'a> LayerInput<'a> {
             profile: None,
             mode: PromptMode::Full,
             inbound: None,
-            workspace: None,
+            identity_files: None,
             memory_context: None,
             has_session_summaries: false,
             agent_def: None,
@@ -211,9 +212,9 @@ impl<'a> LayerInput<'a> {
         self
     }
 
-    /// Attach workspace files to this input.
-    pub fn with_workspace(mut self, workspace: &'a IdentityFiles) -> Self {
-        self.workspace = Some(workspace);
+    /// Attach agent identity files to this input.
+    pub fn with_identity_files(mut self, files: &'a IdentityFiles) -> Self {
+        self.identity_files = Some(files);
         self
     }
 
@@ -223,9 +224,9 @@ impl<'a> LayerInput<'a> {
         self
     }
 
-    /// Attach optional workspace files to this input.
-    pub fn with_workspace_opt(mut self, workspace: Option<&'a IdentityFiles>) -> Self {
-        self.workspace = workspace;
+    /// Attach optional agent identity files to this input.
+    pub fn with_identity_files_opt(mut self, files: Option<&'a IdentityFiles>) -> Self {
+        self.identity_files = files;
         self
     }
 
@@ -277,9 +278,9 @@ impl<'a> LayerInput<'a> {
         self
     }
 
-    /// Get the content of a workspace file by name.
-    pub fn workspace_file(&self, name: &str) -> Option<&str> {
-        self.workspace.and_then(|ws| ws.get(name))
+    /// Get the content of an identity file by name (e.g. `"SOUL.md"`).
+    pub fn identity_file(&self, name: &str) -> Option<&str> {
+        self.identity_files.and_then(|files| files.get(name))
     }
 }
 
@@ -321,7 +322,7 @@ pub trait PromptLayer: Send + Sync {
 }
 
 #[cfg(test)]
-mod workspace_inbound_tests {
+mod identity_inbound_tests {
     use super::*;
     use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::inbound_context::{InboundContext, SenderInfo};
@@ -332,10 +333,10 @@ mod workspace_inbound_tests {
     }
 
     #[test]
-    fn layer_input_workspace_file_access() {
+    fn layer_input_identity_file_access() {
         let config = make_config();
-        let ws = IdentityFiles {
-            workspace_dir: std::path::PathBuf::from("/tmp"),
+        let files = IdentityFiles {
+            identity_dir: std::path::PathBuf::from("/tmp"),
             files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("You are Aleph.".to_string()),
@@ -344,9 +345,9 @@ mod workspace_inbound_tests {
             }],
         };
 
-        let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
-        assert_eq!(input.workspace_file("SOUL.md"), Some("You are Aleph."));
-        assert_eq!(input.workspace_file("MISSING.md"), None);
+        let input = LayerInput::basic(&config, &[]).with_identity_files(&files);
+        assert_eq!(input.identity_file("SOUL.md"), Some("You are Aleph."));
+        assert_eq!(input.identity_file("MISSING.md"), None);
     }
 
     #[test]
@@ -371,24 +372,24 @@ mod workspace_inbound_tests {
     #[test]
     fn with_opt_methods_work() {
         let config = make_config();
-        let ws = IdentityFiles {
-            workspace_dir: std::path::PathBuf::from("/tmp"),
+        let files = IdentityFiles {
+            identity_dir: std::path::PathBuf::from("/tmp"),
             files: vec![],
         };
         let inbound = InboundContext::default();
 
         // None variant
         let input = LayerInput::basic(&config, &[])
-            .with_workspace_opt(None)
+            .with_identity_files_opt(None)
             .with_inbound_opt(None);
-        assert!(input.workspace.is_none());
+        assert!(input.identity_files.is_none());
         assert!(input.inbound.is_none());
 
         // Some variant
         let input = LayerInput::basic(&config, &[])
-            .with_workspace_opt(Some(&ws))
+            .with_identity_files_opt(Some(&files))
             .with_inbound_opt(Some(&inbound));
-        assert!(input.workspace.is_some());
+        assert!(input.identity_files.is_some());
         assert!(input.inbound.is_some());
     }
 }

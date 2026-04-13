@@ -97,7 +97,7 @@ pub mod tailscale;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
-pub mod workspace_loader;
+pub mod identity_loader;
 pub use event_bus::GatewayEventBus;
 pub use event_emitter::{
     DynEventEmitter, EventEmitter, GatewayEventEmitter, NoOpEventEmitter, OutputMode, StreamEvent,
