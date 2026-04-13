@@ -34,6 +34,7 @@ pub mod notes;
 pub mod query_expander;
 pub mod reembed;
 pub mod rerank;
+pub mod reflector;
 pub mod reranker;
 pub mod retrieval;
 pub mod ripple;
