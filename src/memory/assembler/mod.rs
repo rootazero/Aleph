@@ -5,11 +5,13 @@ pub mod envelope;
 pub(crate) mod error;
 pub(crate) mod fallback;
 pub(crate) mod gather;
+pub mod hybrid;
 pub mod hydration;
 pub(crate) mod profile;
 pub mod render;
 pub(crate) mod rerank;
 
+pub use hybrid::HybridAssembler;
 pub use profile::UserProfileLoader;
 
 pub use envelope::{
