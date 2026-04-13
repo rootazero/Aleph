@@ -2,7 +2,9 @@
 //! each LLM call. See `docs/superpowers/specs/2026-04-13-memory-evolution-spec1-assembler-design.md`.
 
 pub mod envelope;
+pub mod render;
 
 pub use envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
 };
+pub use render::{render_envelope, render_with, RenderStyle};
