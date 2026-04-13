@@ -12,7 +12,7 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/waLog"
+	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -184,11 +184,20 @@ func (h *Handler) handleQRChannel(qrChan <-chan whatsmeow.QRChannelItem) {
 func (h *Handler) handleWAMEvent(evt interface{}) {
 	switch e := evt.(type) {
 	case *events.Connected:
-		info := h.cli.GetInfo()
+		var deviceName, phoneNumber string
+		if h.cli.Store != nil {
+			deviceName = h.cli.Store.PushName
+			if deviceName == "" {
+				deviceName = h.cli.Store.BusinessName
+			}
+			if h.cli.Store.ID != nil {
+				phoneNumber = h.cli.Store.ID.User
+			}
+		}
 		h.events.Emit(map[string]interface{}{
 			"type":         "connected",
-			"device_name":  info.DeviceName,
-			"phone_number": info.PhoneNumber,
+			"device_name":  deviceName,
+			"phone_number": phoneNumber,
 		})
 
 	case *events.Disconnected:
@@ -281,7 +290,7 @@ func (h *Handler) handleChatPresence(e *events.ChatPresence) {
 
 	h.events.Emit(map[string]interface{}{
 		"type":     "presence",
-		"jid":      e.JID.String(),
+		"jid":      e.Chat.String(),
 		"presence": presence,
 	})
 }
@@ -331,7 +340,7 @@ func (h *Handler) handleSend(raw json.RawMessage) (interface{}, string) {
 		Conversation: proto.String(params.Text),
 	}
 
-	resp, err := h.cli.SendMessage(context.Background(), recvJID, msg, nil)
+	resp, err := h.cli.SendMessage(context.Background(), recvJID, msg)
 	if err != nil {
 		return nil, fmt.Sprintf("send failed: %v", err)
 	}
@@ -371,7 +380,7 @@ func (h *Handler) handleSendReaction(raw json.RawMessage) (interface{}, string) 
 		},
 	}
 
-	_, err = h.cli.SendMessage(context.Background(), recvJID, reaction, nil)
+	_, err = h.cli.SendMessage(context.Background(), recvJID, reaction)
 	if err != nil {
 		return nil, fmt.Sprintf("send reaction failed: %v", err)
 	}
@@ -393,10 +402,15 @@ func (h *Handler) handleStatus(_ json.RawMessage) (interface{}, string) {
 	defer h.mu.RUnlock()
 
 	var deviceName, phoneNumber string
-	if h.cli != nil {
-		info := h.cli.GetInfo()
-		deviceName = info.DeviceName
-		phoneNumber = info.PhoneNumber
+	if h.cli != nil && h.cli.Store != nil {
+		// whatsmeow >=0.2: GetInfo() removed; fields live on Client.Store (*store.Device).
+		deviceName = h.cli.Store.PushName
+		if deviceName == "" {
+			deviceName = h.cli.Store.BusinessName
+		}
+		if h.cli.Store.ID != nil {
+			phoneNumber = h.cli.Store.ID.User
+		}
 	}
 
 	return map[string]interface{}{
