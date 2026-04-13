@@ -265,8 +265,7 @@ impl PreflightStage for ContextCollapseStage {
             }
 
             let freed = group.total_tokens - summary_tokens;
-            let collapsed =
-                UnifiedMessage::user(format!("[Context collapsed] {summary}"));
+            let collapsed = UnifiedMessage::user(format!("[Context collapsed] {summary}"));
 
             messages.splice(group.range, std::iter::once(collapsed));
             total_freed += freed;
@@ -326,7 +325,7 @@ mod tests {
 
         let mut msgs = make_read_rounds(4);
         let original_len = msgs.len(); // 12
-        // Add fresh tail so partition covers the rounds
+                                       // Add fresh tail so partition covers the rounds
         msgs.push(UnifiedMessage::user("now summarize"));
 
         let freed = stage.prepare(&mut msgs, &high_pressure(), 1).await;
@@ -366,11 +365,7 @@ mod tests {
         let freed = stage.prepare(&mut msgs, &high_pressure(), 1).await;
 
         assert_eq!(freed, 0, "Write rounds should not be folded");
-        assert_eq!(
-            msgs.len(),
-            original_len,
-            "message count should not change"
-        );
+        assert_eq!(msgs.len(), original_len, "message count should not change");
     }
 
     #[tokio::test]

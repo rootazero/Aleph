@@ -51,7 +51,7 @@ mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
 
-    use crate::memory::context::{NoteType, MemoryFact};
+    use crate::memory::context::{MemoryFact, NoteType};
     use crate::memory::store::types::ScoredFact;
     use crate::thinker::memory_context::{MemoryContext, MemorySummary};
 

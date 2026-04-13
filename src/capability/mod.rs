@@ -39,9 +39,9 @@ pub use system::{
 use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
 use crate::error::Result;
 use crate::mcp::McpClient;
-use crate::memory::store::MemoryBackend;
-use crate::memory::notes::NoteIndexer;
 use crate::memory::note_retrieval::NoteFactRetrieval;
+use crate::memory::notes::NoteIndexer;
+use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::payload::{AgentPayload, Capability};
 use crate::skill::SkillSystem;
@@ -218,8 +218,12 @@ impl CapabilityExecutor {
         };
 
         // Build NoteFactRetrieval from the shared database and embedder
-        let memory_dir = crate::utils::paths::get_note_memory_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+            std::env::temp_dir()
+                .join("aleph")
+                .join("memory")
+                .join("note")
+        });
         let indexer = Arc::new(NoteIndexer::new(memory_dir, Arc::clone(db)));
         let note_retrieval = NoteFactRetrieval::new(indexer, Arc::clone(embedder));
 
@@ -231,7 +235,10 @@ impl CapabilityExecutor {
         if scored.is_empty() {
             info!("No relevant memory context found");
         } else {
-            info!(facts_count = scored.len(), "Retrieved memory context (notes)");
+            info!(
+                facts_count = scored.len(),
+                "Retrieved memory context (notes)"
+            );
         }
 
         // Extract MemoryFact from ScoredFact and store in payload

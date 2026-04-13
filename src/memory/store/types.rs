@@ -4,9 +4,7 @@
 //! MemoryStore and SessionStore implementations.
 
 use crate::gateway::agent_env::AgentEnvFilter;
-use crate::memory::context::{
-    NoteType, MemoryCategory, MemoryFact, MemoryLayer,
-};
+use crate::memory::context::{MemoryCategory, MemoryFact, MemoryLayer, NoteType};
 use crate::memory::namespace::NamespaceScope;
 
 // ---------------------------------------------------------------------------

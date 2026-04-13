@@ -246,9 +246,8 @@ impl SelfConfigTool {
         };
 
         let config_guard = config.read().await;
-        let config_json = serde_json::to_value(&*config_guard).map_err(|e| {
-            ToolError::Execution(format!("Failed to serialize config: {}", e))
-        })?;
+        let config_json = serde_json::to_value(&*config_guard)
+            .map_err(|e| ToolError::Execution(format!("Failed to serialize config: {}", e)))?;
 
         let value = get_nested_value(&config_json, config_path);
         match value {
@@ -328,12 +327,12 @@ impl SelfConfigTool {
 // =============================================================================
 
 /// Generate a human-readable preview message from a list of field diffs.
-fn generate_preview_message(config_path: &str, diffs: &[crate::config::patcher::FieldDiff]) -> String {
+fn generate_preview_message(
+    config_path: &str,
+    diffs: &[crate::config::patcher::FieldDiff],
+) -> String {
     if diffs.is_empty() {
-        return format!(
-            "配置路径 '{}' 无变更。",
-            config_path
-        );
+        return format!("配置路径 '{}' 无变更。", config_path);
     }
 
     let mut lines = vec![format!("将为 '{}' 做出以下更改：", config_path)];
@@ -347,7 +346,11 @@ fn generate_preview_message(config_path: &str, diffs: &[crate::config::patcher::
             }
             // Field removed
             (_, serde_json::Value::Null) => {
-                let old_str = diff.old_value.as_ref().map(value_to_string).unwrap_or_else(|| "null".to_string());
+                let old_str = diff
+                    .old_value
+                    .as_ref()
+                    .map(value_to_string)
+                    .unwrap_or_else(|| "null".to_string());
                 format!("• 删除字段: {} (原值: {})", diff.path, old_str)
             }
             // Field modified
@@ -361,7 +364,9 @@ fn generate_preview_message(config_path: &str, diffs: &[crate::config::patcher::
     }
 
     lines.push(String::new());
-    lines.push("此为预览模式，未写入配置文件。确认后将以 dry_run=false 再次调用以应用更改。".to_string());
+    lines.push(
+        "此为预览模式，未写入配置文件。确认后将以 dry_run=false 再次调用以应用更改。".to_string(),
+    );
 
     lines.join("\n")
 }
@@ -378,7 +383,8 @@ fn value_to_string(value: &serde_json::Value) -> String {
             format!("[{}]", items.join(", "))
         }
         serde_json::Value::Object(obj) => {
-            let items: Vec<String> = obj.iter()
+            let items: Vec<String> = obj
+                .iter()
                 .map(|(k, v)| format!("{}: {}", k, value_to_string(v)))
                 .collect();
             format!("{{{}}}", items.join(", "))
@@ -425,9 +431,7 @@ impl AlephTool for SelfConfigTool {
             SelfConfigArgs::WriteFile { file_name, content } => {
                 self.write_file(&file_name, &content)
             }
-            SelfConfigArgs::ReadConfig { config_path } => {
-                self.read_config(&config_path).await
-            }
+            SelfConfigArgs::ReadConfig { config_path } => self.read_config(&config_path).await,
             SelfConfigArgs::UpdateConfig {
                 config_path,
                 config_value,

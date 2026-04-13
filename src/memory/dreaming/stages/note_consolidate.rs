@@ -17,8 +17,8 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
-use crate::memory::notes::KnowledgeNote;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::KnowledgeNote;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
@@ -50,7 +50,10 @@ impl DreamStage for NoteConsolidateStage {
         // Group notes by category — snapshot to avoid borrowing ctx inside the loop.
         let mut by_category: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, note) in ctx.notes.iter().enumerate() {
-            by_category.entry(note.category.clone()).or_default().push(idx);
+            by_category
+                .entry(note.category.clone())
+                .or_default()
+                .push(idx);
         }
 
         for (category, indices) in &by_category {
@@ -125,9 +128,7 @@ async fn batch_consolidate_candidates(
     // Build the batch prompt
     let mut note_list = String::new();
     for (i, (_, path, preview)) in previews.iter().enumerate() {
-        note_list.push_str(&format!(
-            "Note {i} ({path}):\n{preview}\n\n"
-        ));
+        note_list.push_str(&format!("Note {i} ({path}):\n{preview}\n\n"));
     }
 
     let prompt = format!(
@@ -168,7 +169,11 @@ Output ONLY the required pair directives or NONE.";
     for line in trimmed.lines() {
         if let Some(pair) = parse_llm_pair_line(line, &pos_to_idx) {
             // Deduplicate: only keep pairs where idx_a < idx_b
-            let (a, b) = if pair.0 <= pair.1 { pair } else { (pair.1, pair.0) };
+            let (a, b) = if pair.0 <= pair.1 {
+                pair
+            } else {
+                (pair.1, pair.0)
+            };
             if !pairs.contains(&(a, b)) {
                 pairs.push((a, b));
             }
@@ -333,14 +338,28 @@ Respond with exactly one word: MERGE, COEXIST, ABSORB_A, or ABSORB_B.";
         }
         "ABSORB_A" => {
             // Keep A, absorb B into A
-            execute_merge(ctx, idx_a, idx_b, &content_a, &content_b, MergeMode::AbsorbIntoA)
-                .await?;
+            execute_merge(
+                ctx,
+                idx_a,
+                idx_b,
+                &content_a,
+                &content_b,
+                MergeMode::AbsorbIntoA,
+            )
+            .await?;
             Ok(true)
         }
         "ABSORB_B" => {
             // Keep B, absorb A into B — swap roles: keeper=B, absorbed=A
-            execute_merge(ctx, idx_b, idx_a, &content_b, &content_a, MergeMode::AbsorbIntoA)
-                .await?;
+            execute_merge(
+                ctx,
+                idx_b,
+                idx_a,
+                &content_b,
+                &content_a,
+                MergeMode::AbsorbIntoA,
+            )
+            .await?;
             Ok(true)
         }
         other => {
@@ -401,16 +420,20 @@ async fn execute_merge(
     let keeper_bak = keeper_file.with_extension("md.bak");
     let absorbed_bak = absorbed_file.with_extension("md.bak");
 
-    tokio::fs::copy(&keeper_file, &keeper_bak).await.map_err(|e| {
-        AlephError::other(format!(
-            "NoteConsolidate: failed to back up keeper {keeper_file:?}: {e}"
-        ))
-    })?;
-    tokio::fs::copy(&absorbed_file, &absorbed_bak).await.map_err(|e| {
-        AlephError::other(format!(
-            "NoteConsolidate: failed to back up absorbed {absorbed_file:?}: {e}"
-        ))
-    })?;
+    tokio::fs::copy(&keeper_file, &keeper_bak)
+        .await
+        .map_err(|e| {
+            AlephError::other(format!(
+                "NoteConsolidate: failed to back up keeper {keeper_file:?}: {e}"
+            ))
+        })?;
+    tokio::fs::copy(&absorbed_file, &absorbed_bak)
+        .await
+        .map_err(|e| {
+            AlephError::other(format!(
+                "NoteConsolidate: failed to back up absorbed {absorbed_file:?}: {e}"
+            ))
+        })?;
 
     // --- Parse both notes ---
     let mut keeper_note =
@@ -549,7 +572,10 @@ mod tests {
         let stage = NoteConsolidateStage;
         let notes = vec![make_note("wiki/rust", "wiki")];
         // Predicate: notes.len() >= 2
-        assert!(!notes.len() >= 2, "single note should NOT trigger consolidation");
+        assert!(
+            !notes.len() >= 2,
+            "single note should NOT trigger consolidation"
+        );
         let _ = stage;
     }
 

@@ -26,7 +26,15 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "file_code",
         name: "文件与代码",
-        tools: &["file_ops", "file_read", "file_write", "file_edit", "bash", "code_exec", "pdf_generate"],
+        tools: &[
+            "file_ops",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "bash",
+            "code_exec",
+            "pdf_generate",
+        ],
     },
     ToolCategory {
         id: "memory_knowledge",

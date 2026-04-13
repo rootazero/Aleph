@@ -330,12 +330,13 @@ impl AlephTool for AgentCreateTool {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
-            crate::error::AlephError::other(format!(
-                "Failed to create agent instance '{}': {}",
-                args.id, e
-            ))
-        })?;
+        let instance =
+            AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
+                crate::error::AlephError::other(format!(
+                    "Failed to create agent instance '{}': {}",
+                    args.id, e
+                ))
+            })?;
 
         // 8. Register in AgentRegistry (runtime)
         self.registry.register(instance).await;

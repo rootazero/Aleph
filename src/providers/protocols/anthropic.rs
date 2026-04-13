@@ -179,9 +179,9 @@ impl AnthropicProtocol {
                             let output = content
                                 .iter()
                                 .map(|b| match b {
-                                    crate::providers::message::ContentBlock::Text { text, .. } => {
-                                        text.clone()
-                                    }
+                                    crate::providers::message::ContentBlock::Text {
+                                        text, ..
+                                    } => text.clone(),
                                     crate::providers::message::ContentBlock::Json { value } => {
                                         serde_json::to_string(value).unwrap_or_default()
                                     }

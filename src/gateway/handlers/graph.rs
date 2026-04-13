@@ -26,8 +26,12 @@ fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {
 
 /// Resolve the note memory directory: `~/.aleph/memory/note/`
 fn notes_dir() -> std::path::PathBuf {
-    crate::utils::paths::get_note_memory_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"))
+    crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join("aleph")
+            .join("memory")
+            .join("note")
+    })
 }
 
 /// Handle graph.query — returns nodes and edges for visualization.
@@ -82,10 +86,7 @@ pub async fn handle_search(req: JsonRpcRequest) -> JsonRpcResponse {
 ///
 /// Returns notes sorted by link_count + recency (up to `limit`),
 /// plus all edges (links) between the returned notes.
-pub async fn handle_query_impl(
-    req: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphQueryParams = match serde_json::from_value(
         req.params
             .clone()
@@ -93,22 +94,17 @@ pub async fn handle_query_impl(
     ) {
         Ok(p) => p,
         Err(e) => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                format!("Invalid params: {e}"),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, format!("Invalid params: {e}"))
         }
     };
 
-    let (entries, links) = match db.get_graph_data(crate::routing::DEFAULT_AGENT_ID, params.limit).await {
+    let (entries, links) = match db
+        .get_graph_data(crate::routing::DEFAULT_AGENT_ID, params.limit)
+        .await
+    {
         Ok(data) => data,
         Err(e) => {
-            return JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                format!("NoteStore error: {e}"),
-            )
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
         }
     };
 
@@ -130,10 +126,7 @@ pub async fn handle_query_impl(
 ///
 /// BFS from the given `node_id` up to `depth` hops, collecting up to `limit`
 /// neighbour notes and all edges between them.
-pub async fn handle_neighbors_impl(
-    req: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphNeighborsParams = match req
         .params
         .as_ref()
@@ -150,16 +143,17 @@ pub async fn handle_neighbors_impl(
     };
 
     let (entries, links) = match db
-        .get_neighbors(&params.node_id, crate::routing::DEFAULT_AGENT_ID, params.depth, params.limit)
+        .get_neighbors(
+            &params.node_id,
+            crate::routing::DEFAULT_AGENT_ID,
+            params.depth,
+            params.limit,
+        )
         .await
     {
         Ok(data) => data,
         Err(e) => {
-            return JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                format!("NoteStore error: {e}"),
-            )
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
         }
     };
 
@@ -181,10 +175,7 @@ pub async fn handle_neighbors_impl(
 ///
 /// Returns the note index entry, full markdown content (read from disk),
 /// and backlinks (incoming links from other notes).
-pub async fn handle_node_detail_impl(
-    req: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphNodeDetailParams = match req
         .params
         .as_ref()
@@ -201,7 +192,10 @@ pub async fn handle_node_detail_impl(
     };
 
     // Fetch the note index entry.
-    let entry = match db.get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID).await {
+    let entry = match db
+        .get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
+        .await
+    {
         Ok(Some(e)) => e,
         Ok(None) => {
             return JsonRpcResponse::error(
@@ -211,24 +205,25 @@ pub async fn handle_node_detail_impl(
             )
         }
         Err(e) => {
-            return JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                format!("NoteStore error: {e}"),
-            )
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
         }
     };
 
     // Read the markdown file from disk using the full path (includes category subdirectory).
     let agent_id = crate::routing::DEFAULT_AGENT_ID; // TODO: derive from request when multi-agent is wired
-    let md_path = notes_dir().join(agent_id).join(format!("{}.md", entry.path));
+    let md_path = notes_dir()
+        .join(agent_id)
+        .join(format!("{}.md", entry.path));
     let content = match tokio::fs::read_to_string(&md_path).await {
         Ok(c) => c,
         Err(_) => String::new(), // graceful fallback if file is missing
     };
 
     // Fetch backlinks (incoming links).
-    let backlinks = match db.get_incoming_links(&params.node_id, crate::routing::DEFAULT_AGENT_ID).await {
+    let backlinks = match db
+        .get_incoming_links(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
+        .await
+    {
         Ok(links) => links,
         Err(_) => Vec::new(),
     };
@@ -249,10 +244,7 @@ pub async fn handle_node_detail_impl(
 /// Real implementation of graph.search.
 ///
 /// Full-text search over note content via NoteStore FTS index.
-pub async fn handle_search_impl(
-    req: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: GraphSearchParams = match req
         .params
         .as_ref()
@@ -268,14 +260,17 @@ pub async fn handle_search_impl(
         }
     };
 
-    let entries = match db.search_notes_fts(&params.query, crate::routing::DEFAULT_AGENT_ID, params.limit).await {
+    let entries = match db
+        .search_notes_fts(
+            &params.query,
+            crate::routing::DEFAULT_AGENT_ID,
+            params.limit,
+        )
+        .await
+    {
         Ok(e) => e,
         Err(e) => {
-            return JsonRpcResponse::error(
-                req.id,
-                INTERNAL_ERROR,
-                format!("NoteStore error: {e}"),
-            )
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
         }
     };
 
@@ -283,12 +278,15 @@ pub async fn handle_search_impl(
         .into_iter()
         .map(|entry| {
             // Determine match field heuristic: check if filename contains the query.
-            let match_field =
-                if entry.filename.to_lowercase().contains(&params.query.to_lowercase()) {
-                    "title".to_string()
-                } else {
-                    "content".to_string()
-                };
+            let match_field = if entry
+                .filename
+                .to_lowercase()
+                .contains(&params.query.to_lowercase())
+            {
+                "title".to_string()
+            } else {
+                "content".to_string()
+            };
             SearchResultDto {
                 id: entry.path.clone(),
                 name: entry.filename,

@@ -10,16 +10,27 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 
 use crate::error::AlephError;
+use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
 use crate::memory::notes::{sanitize_title, KnowledgeNote};
-use crate::memory::notes::store::NoteStore;
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
 pub const CATEGORY_DIRS: &[&str] = &[
-    "preference", "plan", "learning", "project", "personal",
-    "tool", "lesson", "skill", "wiki", "transcript",
-    "subagent-run", "subagent-session", "subagent-checkpoint",
-    "subagent-transcript", "other",
+    "preference",
+    "plan",
+    "learning",
+    "project",
+    "personal",
+    "tool",
+    "lesson",
+    "skill",
+    "wiki",
+    "transcript",
+    "subagent-run",
+    "subagent-session",
+    "subagent-checkpoint",
+    "subagent-transcript",
+    "other",
 ];
 
 /// Statistics from an indexing operation.
@@ -61,12 +72,12 @@ impl<S: NoteStore> NoteIndexer<S> {
     pub async fn ensure_dirs(&self, agent_id: &str) -> Result<(), AlephError> {
         let agent_dir = self.memory_dir.join(agent_id);
         for cat in CATEGORY_DIRS {
-            fs::create_dir_all(agent_dir.join(cat)).await.map_err(|e| {
-                AlephError::ConfigError {
+            fs::create_dir_all(agent_dir.join(cat))
+                .await
+                .map_err(|e| AlephError::ConfigError {
                     message: format!("Failed to create {}/{cat}: {e}", agent_dir.display()),
                     suggestion: None,
-                }
-            })?;
+                })?;
         }
         Ok(())
     }
@@ -109,21 +120,26 @@ impl<S: NoteStore> NoteIndexer<S> {
     ///
     /// Returns `Ok(true)` if the file was (re-)indexed, `Ok(false)` if skipped
     /// because the content hash is unchanged.
-    pub async fn index_file(&self, agent_id: &str, category: &str, path: &Path) -> Result<bool, AlephError> {
-        let content = fs::read_to_string(path).await.map_err(|e| {
-            AlephError::ConfigError {
+    pub async fn index_file(
+        &self,
+        agent_id: &str,
+        category: &str,
+        path: &Path,
+    ) -> Result<bool, AlephError> {
+        let content = fs::read_to_string(path)
+            .await
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to read {:?}: {e}", path),
                 suggestion: None,
-            }
-        })?;
-
-        let title = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| AlephError::ConfigError {
-                message: format!("Invalid filename: {:?}", path),
-                suggestion: None,
             })?;
+
+        let title =
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| AlephError::ConfigError {
+                    message: format!("Invalid filename: {:?}", path),
+                    suggestion: None,
+                })?;
 
         let hash = sha2_hash(&content);
 
@@ -148,9 +164,18 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// Returns the path of the written file.
     ///
     /// The title is sanitized to prevent path traversal.
-    pub async fn write_note(&self, agent_id: &str, category: &str, note: &KnowledgeNote) -> Result<PathBuf, AlephError> {
+    pub async fn write_note(
+        &self,
+        agent_id: &str,
+        category: &str,
+        note: &KnowledgeNote,
+    ) -> Result<PathBuf, AlephError> {
         let safe_title = sanitize_title(&note.title);
-        let path = self.memory_dir.join(agent_id).join(category).join(format!("{safe_title}.md"));
+        let path = self
+            .memory_dir
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe_title}.md"));
 
         // Ensure parent dir exists
         if let Some(parent) = path.parent() {
@@ -158,12 +183,12 @@ impl<S: NoteStore> NoteIndexer<S> {
         }
 
         let content = note.to_markdown();
-        fs::write(&path, &content).await.map_err(|e| {
-            AlephError::ConfigError {
+        fs::write(&path, &content)
+            .await
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to write {:?}: {e}", path),
                 suggestion: None,
-            }
-        })?;
+            })?;
 
         Ok(path)
     }
@@ -179,22 +204,31 @@ impl<S: NoteStore> NoteIndexer<S> {
         new_facts: &[String],
         new_links: &[String],
     ) -> Result<(), AlephError> {
-        let (category, filename) = note_path.split_once('/')
-            .ok_or_else(|| AlephError::ConfigError {
-                message: format!("Invalid note_path (expected 'category/filename'): {note_path}"),
-                suggestion: None,
-            })?;
+        let (category, filename) =
+            note_path
+                .split_once('/')
+                .ok_or_else(|| AlephError::ConfigError {
+                    message: format!(
+                        "Invalid note_path (expected 'category/filename'): {note_path}"
+                    ),
+                    suggestion: None,
+                })?;
 
         let safe_title = sanitize_title(filename);
-        let file_path = self.memory_dir.join(agent_id).join(category).join(format!("{safe_title}.md"));
+        let file_path = self
+            .memory_dir
+            .join(agent_id)
+            .join(category)
+            .join(format!("{safe_title}.md"));
 
         let mut note = if file_path.exists() {
-            let content = fs::read_to_string(&file_path).await.map_err(|e| {
-                AlephError::ConfigError {
-                    message: format!("Failed to read {:?}: {e}", file_path),
-                    suggestion: None,
-                }
-            })?;
+            let content =
+                fs::read_to_string(&file_path)
+                    .await
+                    .map_err(|e| AlephError::ConfigError {
+                        message: format!("Failed to read {:?}: {e}", file_path),
+                        suggestion: None,
+                    })?;
             KnowledgeNote::from_markdown(filename, &content)?
         } else {
             // Ensure parent dir exists
@@ -231,12 +265,12 @@ impl<S: NoteStore> NoteIndexer<S> {
         note.content_hash = sha2_hash(&md);
 
         // Write file + index
-        fs::write(&file_path, &md).await.map_err(|e| {
-            AlephError::ConfigError {
+        fs::write(&file_path, &md)
+            .await
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to write {:?}: {e}", file_path),
                 suggestion: None,
-            }
-        })?;
+            })?;
         self.store.index_note(&note, agent_id, category).await?;
 
         Ok(())
@@ -254,7 +288,11 @@ impl<S: NoteStore> NoteIndexer<S> {
         let safe_new = sanitize_title(new_title);
 
         // Find the old note to determine its category
-        let old_paths = self.store.find_by_filename(old_title, agent_id).await.unwrap_or_default();
+        let old_paths = self
+            .store
+            .find_by_filename(old_title, agent_id)
+            .await
+            .unwrap_or_default();
         let category = if let Some(first_path) = old_paths.first() {
             first_path.split('/').next().unwrap_or("other").to_string()
         } else {
@@ -266,12 +304,12 @@ impl<S: NoteStore> NoteIndexer<S> {
         let new_path = cat_dir.join(format!("{safe_new}.md"));
 
         // Rename the file
-        fs::rename(&old_path, &new_path).await.map_err(|e| {
-            AlephError::ConfigError {
+        fs::rename(&old_path, &new_path)
+            .await
+            .map_err(|e| AlephError::ConfigError {
                 message: format!("Failed to rename {:?} → {:?}: {e}", old_path, new_path),
                 suggestion: None,
-            }
-        })?;
+            })?;
 
         // Remove old index entries
         for old_p in &old_paths {
@@ -380,7 +418,10 @@ mod tests {
         indexer.ensure_dirs(AGENT).await.unwrap();
 
         for cat in CATEGORY_DIRS {
-            assert!(memory_dir.join(AGENT).join(cat).is_dir(), "Missing dir: {cat}");
+            assert!(
+                memory_dir.join(AGENT).join(cat).is_dir(),
+                "Missing dir: {cat}"
+            );
         }
     }
 
@@ -416,10 +457,16 @@ mod tests {
         assert_eq!(notes.len(), 2);
 
         // Verify wikilinks are indexed
-        let out_links = db.get_outgoing_links("preference/Editor Preferences", AGENT).await.unwrap();
+        let out_links = db
+            .get_outgoing_links("preference/Editor Preferences", AGENT)
+            .await
+            .unwrap();
         assert!(out_links.contains(&"Dev Environment".to_string()));
 
-        let out_links2 = db.get_outgoing_links("skill/Rust Learning", AGENT).await.unwrap();
+        let out_links2 = db
+            .get_outgoing_links("skill/Rust Learning", AGENT)
+            .await
+            .unwrap();
         assert!(out_links2.contains(&"Editor Preferences".to_string()));
     }
 
@@ -534,7 +581,11 @@ mod tests {
         assert!(content.contains("[[Link2]]"));
 
         // Verify indexed
-        let entry = db.get_note_index("preference/Target", AGENT).await.unwrap().unwrap();
+        let entry = db
+            .get_note_index("preference/Target", AGENT)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.link_count, 2); // Link1 deduped + Link2
     }
 
@@ -551,9 +602,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(memory_dir.join(AGENT).join("other").join("Brand New.md").exists());
+        assert!(memory_dir
+            .join(AGENT)
+            .join("other")
+            .join("Brand New.md")
+            .exists());
 
-        let entry = db.get_note_index("other/Brand New", AGENT).await.unwrap().unwrap();
+        let entry = db
+            .get_note_index("other/Brand New", AGENT)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.category, "other");
     }
 
@@ -580,7 +639,10 @@ mod tests {
         indexer.full_rebuild(AGENT).await.unwrap();
 
         // Rename "Old Name" → "New Name"
-        indexer.rename_note(AGENT, "Old Name", "New Name").await.unwrap();
+        indexer
+            .rename_note(AGENT, "Old Name", "New Name")
+            .await
+            .unwrap();
 
         // Old file gone, new file exists
         assert!(!misc_dir.join("Old Name.md").exists());

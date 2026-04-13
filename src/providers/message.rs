@@ -64,7 +64,10 @@ impl UnifiedMessage {
     /// Single text user message
     pub fn user(text: impl Into<String>) -> Self {
         Self::User {
-            content: vec![ContentBlock::Text { text: text.into(), cache_control: None }],
+            content: vec![ContentBlock::Text {
+                text: text.into(),
+                cache_control: None,
+            }],
         }
     }
 
@@ -76,7 +79,10 @@ impl UnifiedMessage {
     /// Single text assistant message
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::Assistant {
-            content: vec![ContentBlock::Text { text: text.into(), cache_control: None }],
+            content: vec![ContentBlock::Text {
+                text: text.into(),
+                cache_control: None,
+            }],
         }
     }
 
@@ -122,7 +128,10 @@ impl UnifiedMessage {
             });
         }
         if let Some(ref text) = resp.text {
-            content.push(ContentBlock::Text { text: text.clone(), cache_control: None });
+            content.push(ContentBlock::Text {
+                text: text.clone(),
+                cache_control: None,
+            });
         }
         for tc in &resp.tool_calls {
             content.push(ContentBlock::ToolCall {
@@ -229,7 +238,10 @@ impl UnifiedMessage {
     /// No-op if this is not a ToolResult.
     pub fn replace_tool_result_content(&mut self, new_content: String) {
         if let Self::ToolResult { content, .. } = self {
-            *content = vec![ContentBlock::Text { text: new_content, cache_control: None }];
+            *content = vec![ContentBlock::Text {
+                text: new_content,
+                cache_control: None,
+            }];
         }
     }
 

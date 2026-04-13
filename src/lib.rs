@@ -129,9 +129,9 @@ pub use crate::config::{
     policies::CompressionPolicy,
     types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
-    BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig, FullConfig,
-    GeneralConfig, GenerationProviderConfig, MemoryConfig, PluginMarketplaceEntry, ProviderConfig,
-    RoutingRuleConfig, SmartFlowConfig,
+    AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
+    FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, PluginMarketplaceEntry,
+    ProviderConfig, RoutingRuleConfig, SmartFlowConfig,
 };
 
 // Initialization

@@ -56,7 +56,10 @@ mod tests {
     fn formats_single_skill() {
         let fact = make_skill_fact("rust-lifetimes", "Always annotate lifetimes explicitly.");
         let result = format_skills_prompt(&[fact]).unwrap();
-        assert!(result.contains("### rust-lifetimes"), "should contain skill name header");
+        assert!(
+            result.contains("### rust-lifetimes"),
+            "should contain skill name header"
+        );
         assert!(
             result.contains("Always annotate lifetimes explicitly."),
             "should contain skill content"
@@ -70,7 +73,13 @@ mod tests {
             make_skill_fact("error-handling", "Use thiserror for library errors."),
         ];
         let result = format_skills_prompt(&facts).unwrap();
-        assert!(result.contains("### rust-lifetimes"), "should contain first skill name");
-        assert!(result.contains("### error-handling"), "should contain second skill name");
+        assert!(
+            result.contains("### rust-lifetimes"),
+            "should contain first skill name"
+        );
+        assert!(
+            result.contains("### error-handling"),
+            "should contain second skill name"
+        );
     }
 }

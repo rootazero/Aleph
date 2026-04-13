@@ -125,19 +125,20 @@ fn split_frontmatter(content: &str) -> Result<(Frontmatter, String), AlephError>
 
     // Find the closing `---`
     let after_open = &trimmed[3..];
-    let close_pos = after_open.find("---").ok_or_else(|| AlephError::ConfigError {
-        message: "Note missing closing --- for YAML frontmatter".to_string(),
-        suggestion: None,
-    })?;
+    let close_pos = after_open
+        .find("---")
+        .ok_or_else(|| AlephError::ConfigError {
+            message: "Note missing closing --- for YAML frontmatter".to_string(),
+            suggestion: None,
+        })?;
 
     let yaml_str = &after_open[..close_pos];
     let body = after_open[close_pos + 3..].trim().to_string();
 
-    let fm: Frontmatter =
-        serde_yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to parse YAML frontmatter: {e}"),
-            suggestion: None,
-        })?;
+    let fm: Frontmatter = serde_yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
+        message: format!("Failed to parse YAML frontmatter: {e}"),
+        suggestion: None,
+    })?;
 
     Ok((fm, body))
 }
@@ -158,9 +159,7 @@ fn parse_date_to_unix(date: &Option<String>) -> Result<i64, AlephError> {
         suggestion: Some("Use YYYY-MM-DD format".to_string()),
     })?;
 
-    let dt = nd
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight is always valid");
+    let dt = nd.and_hms_opt(0, 0, 0).expect("midnight is always valid");
     Ok(dt.and_utc().timestamp())
 }
 

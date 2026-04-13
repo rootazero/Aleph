@@ -143,8 +143,12 @@ pub struct MemoryCommands {
 impl MemoryCommands {
     /// Create new commands instance
     pub fn new(db: MemoryBackend, agent_id: impl Into<String>) -> Self {
-        let memory_dir = crate::utils::paths::get_note_memory_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+            std::env::temp_dir()
+                .join("aleph")
+                .join("memory")
+                .join("note")
+        });
         Self {
             db,
             agent_id: agent_id.into(),
@@ -209,7 +213,11 @@ impl MemoryCommands {
         path_or_prefix: &str,
     ) -> Result<Option<(NoteSummary, String)>, AlephError> {
         // Try exact path first
-        if let Some(entry) = self.db.get_note_index(path_or_prefix, &self.agent_id).await? {
+        if let Some(entry) = self
+            .db
+            .get_note_index(path_or_prefix, &self.agent_id)
+            .await?
+        {
             let content = self.read_note_file(&entry).await.unwrap_or_default();
             return Ok(Some((NoteSummary::from_entry(&entry), content)));
         }
@@ -218,7 +226,11 @@ impl MemoryCommands {
         let all = self.db.list_notes(&self.agent_id).await?;
         let matches: Vec<_> = all
             .iter()
-            .filter(|e| e.filename.to_lowercase().starts_with(&path_or_prefix.to_lowercase()))
+            .filter(|e| {
+                e.filename
+                    .to_lowercase()
+                    .starts_with(&path_or_prefix.to_lowercase())
+            })
             .collect();
 
         match matches.len() {
@@ -288,8 +300,7 @@ impl MemoryCommands {
                     summary: &'a NoteSummary,
                     content: &'a str,
                 }
-                serde_json::to_string_pretty(&NoteDetail { summary, content })
-                    .unwrap_or_default()
+                serde_json::to_string_pretty(&NoteDetail { summary, content }).unwrap_or_default()
             }
             OutputFormat::Csv => summary.to_csv_row(),
         }
@@ -302,7 +313,9 @@ impl MemoryCommands {
         let full_path = self.resolve_note_path(path_or_prefix).await?;
 
         // Remove from index (links + FTS included)
-        self.db.remove_note_index(&full_path, &self.agent_id).await?;
+        self.db
+            .remove_note_index(&full_path, &self.agent_id)
+            .await?;
 
         // Delete the markdown file from disk
         if let Some(entry_) = self.resolve_entry(&full_path).await {
@@ -393,7 +406,11 @@ impl MemoryCommands {
     /// Look up an entry after it has already been removed from the index.
     /// Returns `None` if the entry is gone (already deleted).
     async fn resolve_entry(&self, path: &str) -> Option<NoteIndexEntry> {
-        self.db.get_note_index(path, &self.agent_id).await.ok().flatten()
+        self.db
+            .get_note_index(path, &self.agent_id)
+            .await
+            .ok()
+            .flatten()
     }
 }
 
@@ -437,9 +454,7 @@ mod tests {
 
     #[test]
     fn test_list_filter_builder() {
-        let filter = ListFilter::new()
-            .with_category("preference")
-            .with_limit(10);
+        let filter = ListFilter::new().with_category("preference").with_limit(10);
 
         assert_eq!(filter.category, Some("preference".to_string()));
         assert_eq!(filter.limit, Some(10));

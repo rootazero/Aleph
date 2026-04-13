@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::gateway::event_bus::{
-    GatewayEvent, GatewayEventBus, RuntimeInstallProgressEvent,
-};
+use crate::gateway::event_bus::{GatewayEvent, GatewayEventBus, RuntimeInstallProgressEvent};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus};
 use crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS};

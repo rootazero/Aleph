@@ -3,9 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::{
-    FactSource, NoteType, MemoryCategory, MemoryFact, MemoryLayer,
-};
+use crate::memory::context::{FactSource, MemoryCategory, MemoryFact, MemoryLayer, NoteType};
 use crate::skill::{is_valid_category, is_valid_skill_name};
 
 /// Actions supported by the skill_manage tool.

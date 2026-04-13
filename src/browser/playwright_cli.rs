@@ -74,9 +74,9 @@ impl PlaywrightCliDriver {
         let runtimes_dir = crate::runtimes::get_runtimes_dir()
             .map_err(|e| BrowserError::PlaywrightCliError(format!("runtimes dir: {e}")))?;
         let ledger_path = runtimes_dir.join("ledger.json");
-        let ledger = Arc::new(tokio::sync::RwLock::new(
-            CapabilityLedger::load_or_create(ledger_path),
-        ));
+        let ledger = Arc::new(tokio::sync::RwLock::new(CapabilityLedger::load_or_create(
+            ledger_path,
+        )));
 
         let resolved = ensure_capability("playwright-cli", &ledger)
             .await
@@ -158,7 +158,6 @@ impl PlaywrightCliDriver {
         &self.config
     }
 }
-
 
 fn classify_stderr(stderr: &str, exit_code: i32, session_key: &str) -> BrowserError {
     let s = stderr.to_lowercase();

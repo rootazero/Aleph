@@ -5,6 +5,6 @@ pub mod event;
 pub mod media;
 pub mod message;
 
-pub use errors::NativeBaileysError;
-pub use client::NativeBaileysClient;
 pub use auth::AuthManager;
+pub use client::NativeBaileysClient;
+pub use errors::NativeBaileysError;

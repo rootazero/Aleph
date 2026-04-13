@@ -81,7 +81,9 @@ impl TranscriptIndexer {
 
             // Insert to raw_memories
             {
-                use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+                use crate::memory::store::raw_memory::{
+                    RawMemory, RawMemorySource, RawMemoryStore,
+                };
                 let raw = RawMemory::new(chunk.clone(), RawMemorySource::Transcript)
                     .with_agent(agent)
                     .with_session(session_key)

@@ -799,11 +799,18 @@ mod tests {
 
         // Filter by Custom("discovery")
         let discoveries = store
-            .read_inbox("agent-b", "team-1", Some(&MessageType::Custom("discovery".into())))
+            .read_inbox(
+                "agent-b",
+                "team-1",
+                Some(&MessageType::Custom("discovery".into())),
+            )
             .await
             .unwrap();
         assert_eq!(discoveries.len(), 1);
-        assert_eq!(discoveries[0].msg_type, MessageType::Custom("discovery".into()));
+        assert_eq!(
+            discoveries[0].msg_type,
+            MessageType::Custom("discovery".into())
+        );
 
         // Filter by Message
         let messages = store

@@ -79,10 +79,7 @@ async fn test_two_agent_collaboration() {
         .unwrap();
 
     // Agent B reads inbox
-    let b_inbox = inbox
-        .read(agent_b, team_id, None, true)
-        .await
-        .unwrap();
+    let b_inbox = inbox.read(agent_b, team_id, None, true).await.unwrap();
     assert_eq!(b_inbox.len(), 1);
     assert_eq!(b_inbox[0].attachments[0], report.id);
 

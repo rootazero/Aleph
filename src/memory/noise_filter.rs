@@ -172,7 +172,7 @@ impl NoiseFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, NoteType, MemoryFact};
+    use crate::memory::context::{FactSource, MemoryFact, NoteType};
 
     /// Helper to create a default filter for testing.
     fn test_filter() -> NoiseFilter {

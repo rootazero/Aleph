@@ -5,10 +5,10 @@ mod strategy;
 pub use error::{Candidate, ChannelResolutionError};
 pub use input::ParsedInput;
 
-use std::sync::Arc;
-use strategy::search_in_guilds;
 use super::api::{list_channels, list_guilds, ChannelSummary, GuildSummary};
 use serenity::http::Http;
+use std::sync::Arc;
+use strategy::search_in_guilds;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedChannel {
@@ -59,9 +59,9 @@ impl DiscordResolver {
                 found
             }
             ParsedInput::GuildPrefix { guild, channel } => {
-                let target_guild = guilds_data.iter().find(|(g, _)| {
-                    to_guild_slug(&g.name) == to_guild_slug(guild)
-                });
+                let target_guild = guilds_data
+                    .iter()
+                    .find(|(g, _)| to_guild_slug(&g.name) == to_guild_slug(guild));
 
                 match target_guild {
                     Some((guild, channels)) => {
@@ -70,9 +70,7 @@ impl DiscordResolver {
                     None => Vec::new(),
                 }
             }
-            ParsedInput::ChannelName(name) => {
-                search_in_guilds(&guilds_data, name)
-            }
+            ParsedInput::ChannelName(name) => search_in_guilds(&guilds_data, name),
         };
 
         match candidates.len() {
@@ -129,10 +127,7 @@ impl DiscordResolver {
             match list_channels(&self.http, guild.guild_id).await {
                 Ok(chs) => channels.push((guild.clone(), chs)),
                 Err(_) => {
-                    tracing::debug!(
-                        "Skipping channels for guild {} (no permission)",
-                        guild.name
-                    );
+                    tracing::debug!("Skipping channels for guild {} (no permission)", guild.name);
                 }
             }
         }
@@ -172,8 +167,10 @@ mod tests {
     #[test]
     fn test_parse_input_guild_prefix() {
         let result = input::parse("my-guild/general");
-        assert!(matches!(result, Ok(ParsedInput::GuildPrefix { ref guild, ref channel })
-            if guild == "my-guild" && channel == "general"));
+        assert!(
+            matches!(result, Ok(ParsedInput::GuildPrefix { ref guild, ref channel })
+            if guild == "my-guild" && channel == "general")
+        );
     }
 
     #[test]

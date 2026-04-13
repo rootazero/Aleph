@@ -11,10 +11,7 @@ impl MediaProcessor {
         }
     }
 
-    pub async fn download_media(
-        &self,
-        _url: &str,
-    ) -> Result<Vec<u8>, NativeBaileysError> {
+    pub async fn download_media(&self, _url: &str) -> Result<Vec<u8>, NativeBaileysError> {
         Err(NativeBaileysError::MediaError("Not implemented".into()))
     }
 }

@@ -106,8 +106,8 @@ impl Default for ScoringPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::NoteType;
     use crate::memory::context::MemoryFact;
+    use crate::memory::context::NoteType;
     use crate::memory::store::types::ScoredFact;
 
     /// Helper: create a `ScoredFact` from a string and score.

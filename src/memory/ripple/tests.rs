@@ -2,10 +2,10 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::store::MemoryBackend;
+use crate::memory::store::SqliteMemoryBackend;
 use crate::memory::{
-    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+    FactSource, FactSpecificity, MemoryCategory, MemoryFact, MemoryLayer, NoteType, TemporalScope,
 };
 use crate::Result;
 

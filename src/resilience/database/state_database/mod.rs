@@ -118,8 +118,9 @@ impl StateDatabase {
         Self::create_schema(&conn, DEFAULT_EMBEDDING_DIM)?;
 
         // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
-        Self::drop_obsolete_state_facts_tables(&conn)
-            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {}", e)))?;
+        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
+            AlephError::config(format!("Failed to drop obsolete facts tables: {}", e))
+        })?;
 
         // Migrate to add experience_replays table for Cortex evolution system (idempotent)
         migration::migrate_add_experience_replays(&conn)?;
@@ -188,8 +189,9 @@ impl StateDatabase {
         Self::create_schema(&conn, embedding_dim)?;
 
         // Drop obsolete memory_facts / facts_fts / facts_vec tables from existing DBs
-        Self::drop_obsolete_state_facts_tables(&conn)
-            .map_err(|e| AlephError::config(format!("Failed to drop obsolete facts tables: {}", e)))?;
+        Self::drop_obsolete_state_facts_tables(&conn).map_err(|e| {
+            AlephError::config(format!("Failed to drop obsolete facts tables: {}", e))
+        })?;
 
         // Run migrations
         migration::migrate_add_experience_replays(&conn)?;

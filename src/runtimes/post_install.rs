@@ -30,10 +30,7 @@ fn expand_home(template: &str) -> String {
 
 /// Run a single post-install action. `bin_path` is the just-installed
 /// capability binary (used for `RunSubcommand` and `AssetProbe`).
-pub async fn run(
-    action: &PostInstallAction,
-    bin_path: &PathBuf,
-) -> Result<(), PostInstallError> {
+pub async fn run(action: &PostInstallAction, bin_path: &PathBuf) -> Result<(), PostInstallError> {
     match action {
         PostInstallAction::RunSubcommand { args, target_dir } => {
             run_subcommand(bin_path, args, *target_dir).await

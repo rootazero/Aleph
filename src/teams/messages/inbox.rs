@@ -98,13 +98,12 @@ impl Inbox {
     }
 
     /// Returns unread message counts without reading content.
-    pub async fn peek_count(
-        &self,
-        agent_id: &str,
-        team_id: &str,
-    ) -> Result<PeekCount> {
+    pub async fn peek_count(&self, agent_id: &str, team_id: &str) -> Result<PeekCount> {
         let (to, cc) = self.msg_store.get_unread_counts(agent_id, team_id).await?;
-        Ok(PeekCount { to: to as u64, cc: cc as u64 })
+        Ok(PeekCount {
+            to: to as u64,
+            cc: cc as u64,
+        })
     }
 }
 

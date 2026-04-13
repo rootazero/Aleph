@@ -187,7 +187,11 @@ pub(crate) fn compute_score(
     now: i64,
     incoming_count: usize,
 ) -> f64 {
-    let access_weight = if last_accessed_at.is_some() { 1.0_f64 } else { 0.0_f64 };
+    let access_weight = if last_accessed_at.is_some() {
+        1.0_f64
+    } else {
+        0.0_f64
+    };
 
     let days_since_update = (now - updated_at).max(0) as f64 / 86400.0;
     let recency_weight = 1.0_f64 / (1.0_f64 + days_since_update / 30.0_f64);
@@ -275,7 +279,7 @@ mod tests {
     #[test]
     fn test_score_calculation() {
         let now = 86400 * 100_i64; // 100 days epoch
-        // Updated 30 days ago → recency = 1/(1+1) = 0.5
+                                   // Updated 30 days ago → recency = 1/(1+1) = 0.5
         let updated_at = now - 30 * 86400;
         // No access, 1 incoming link → link_weight = 1/3
         let score = compute_score(None, updated_at, now, 1);

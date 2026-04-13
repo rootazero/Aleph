@@ -168,9 +168,10 @@ impl WhatsAppPolicy {
                 return true;
             }
             // Normalize both sides for E.164 comparison
-            if let (Some(entry_norm), Some(sender_norm)) =
-                (E164Number::normalize(entry), E164Number::normalize(sender.as_str()))
-            {
+            if let (Some(entry_norm), Some(sender_norm)) = (
+                E164Number::normalize(entry),
+                E164Number::normalize(sender.as_str()),
+            ) {
                 return entry_norm.as_str() == sender_norm.as_str();
             }
             false

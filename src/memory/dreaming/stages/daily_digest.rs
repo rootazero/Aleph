@@ -68,9 +68,7 @@ impl DreamStage for DailyDigestStage {
         let msgs = vec![UnifiedMessage::user(&prompt)];
         let response = ctx
             .provider
-            .process(
-                RequestPayload::new(&msgs).with_system(Some(system)),
-            )
+            .process(RequestPayload::new(&msgs).with_system(Some(system)))
             .await
             .map_err(|e| AlephError::other(format!("Daily digest LLM call failed: {e}")))?;
 
@@ -78,14 +76,12 @@ impl DreamStage for DailyDigestStage {
 
         // Store the daily insight
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let insight = crate::memory::dreaming::DailyInsight::new(today, digest_text, note_count as u32);
+        let insight =
+            crate::memory::dreaming::DailyInsight::new(today, digest_text, note_count as u32);
 
         ctx.database.upsert_daily_insight(insight).await?;
 
-        tracing::info!(
-            notes_count = note_count,
-            "Daily digest generated"
-        );
+        tracing::info!(notes_count = note_count, "Daily digest generated");
 
         Ok(ctx)
     }
@@ -127,7 +123,10 @@ mod tests {
         let result = notes
             .iter()
             .any(|n| n.updated_at > day_ago || n.created_at > day_ago);
-        assert!(!result, "should_run predicate should be false for old notes");
+        assert!(
+            !result,
+            "should_run predicate should be false for old notes"
+        );
 
         let _ = stage; // ensure stage is used
     }
@@ -149,7 +148,10 @@ mod tests {
         let result = notes
             .iter()
             .any(|n| n.updated_at > day_ago || n.created_at > day_ago);
-        assert!(result, "should_run predicate should be true when recent note exists");
+        assert!(
+            result,
+            "should_run predicate should be true when recent note exists"
+        );
 
         let _ = stage;
     }

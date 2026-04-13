@@ -75,7 +75,9 @@ impl BrowserBackend for PlaywrightCliBackend {
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
-        let _ = self.run(&["tab-close", tab_id], self.action_timeout()).await?;
+        let _ = self
+            .run(&["tab-close", tab_id], self.action_timeout())
+            .await?;
         Ok(())
     }
 
@@ -100,7 +102,8 @@ impl BrowserBackend for PlaywrightCliBackend {
             ActionTarget::Coordinates { x, y } => {
                 let xs = x.to_string();
                 let ys = y.to_string();
-                self.run(&["mousemove", &xs, &ys], self.action_timeout()).await?;
+                self.run(&["mousemove", &xs, &ys], self.action_timeout())
+                    .await?;
                 self.run(&["mousedown"], self.action_timeout()).await?;
                 self.run(&["mouseup"], self.action_timeout()).await?;
                 Ok(())
@@ -262,7 +265,9 @@ mod tests {
     #[tokio::test]
     async fn test_navigate_rejects_ssrf_blocked_url() {
         let backend = test_backend();
-        let result = backend.navigate("last", "http://127.0.0.1:8080/secret").await;
+        let result = backend
+            .navigate("last", "http://127.0.0.1:8080/secret")
+            .await;
         assert!(matches!(result, Err(BrowserError::NavigationFailed(_))));
     }
 }

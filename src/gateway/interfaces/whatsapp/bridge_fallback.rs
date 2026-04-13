@@ -31,7 +31,10 @@ impl FallbackManager {
                     return WhatsAppClientKind::Native;
                 }
                 Err(e) => {
-                    tracing::warn!("WhatsApp native client failed: {}, falling back to bridge", e);
+                    tracing::warn!(
+                        "WhatsApp native client failed: {}, falling back to bridge",
+                        e
+                    );
                 }
             }
         }
@@ -43,7 +46,9 @@ impl FallbackManager {
 
     #[cfg(feature = "native-whatsapp")]
     async fn try_native(&self) -> Result<(), String> {
-        use crate::gateway::interfaces::whatsapp::native_baileys::{AuthManager, NativeBaileysError};
+        use crate::gateway::interfaces::whatsapp::native_baileys::{
+            AuthManager, NativeBaileysError,
+        };
 
         let base_dir = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -51,7 +56,10 @@ impl FallbackManager {
             .join("channels")
             .join("whatsapp");
 
-        let auth_manager = AuthManager::new(self.config.phone_number.as_deref().unwrap_or("default"), base_dir);
+        let auth_manager = AuthManager::new(
+            self.config.phone_number.as_deref().unwrap_or("default"),
+            base_dir,
+        );
 
         match auth_manager.load_auth().await {
             Ok(_) => {

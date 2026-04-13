@@ -12,6 +12,7 @@ use tracing::{debug, info};
 use super::error::ToolError;
 use crate::config::types::profile::SmartRecallConfig;
 use crate::error::Result;
+use crate::memory::context_comptroller::RetrievalResult;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::raw_memory::RawMemoryStore;
@@ -20,7 +21,6 @@ use crate::memory::{
     ComptrollerConfig, ContextComptroller, EmbeddingProvider, SqliteMemoryBackend, TokenBudget,
     TranscriptIndexer, DEFAULT_AGENT,
 };
-use crate::memory::context_comptroller::RetrievalResult;
 use crate::tools::AlephTool;
 
 /// Arguments for memory_search tool
@@ -203,8 +203,12 @@ impl MemorySearchTool {
         let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
 
         // NoteFactRetrieval: used for the primary long-term recall path.
-        let memory_dir = crate::utils::paths::get_note_memory_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+            std::env::temp_dir()
+                .join("aleph")
+                .join("memory")
+                .join("note")
+        });
         let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
         let note_retrieval = Arc::new(NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder)));
 
@@ -365,7 +369,9 @@ impl MemorySearchTool {
                     .note_retrieval
                     .retrieve(&args.query, &primary_ws, args.max_results)
                     .await
-                    .map_err(|e| ToolError::Execution(format!("Smart recall phase 1 failed: {}", e)))?;
+                    .map_err(|e| {
+                        ToolError::Execution(format!("Smart recall phase 1 failed: {}", e))
+                    })?;
 
                 let recall_triggered = primary_scored.len() < threshold;
 
@@ -376,12 +382,19 @@ impl MemorySearchTool {
                         threshold = threshold,
                         "Smart Recall Phase 2 triggered — expanding to all agents"
                     );
-                    let memory_dir = crate::utils::paths::get_note_memory_dir()
-                        .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+                    let memory_dir =
+                        crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+                            std::env::temp_dir()
+                                .join("aleph")
+                                .join("memory")
+                                .join("note")
+                        });
                     self.note_retrieval
                         .retrieve_all_agents(&args.query, &memory_dir, args.max_results)
                         .await
-                        .map_err(|e| ToolError::Execution(format!("Smart recall phase 2 failed: {}", e)))?
+                        .map_err(|e| {
+                            ToolError::Execution(format!("Smart recall phase 2 failed: {}", e))
+                        })?
                 } else {
                     Vec::new()
                 };
@@ -420,7 +433,9 @@ impl MemorySearchTool {
                     );
                 }
 
-                let result = RetrievalResult { facts: merged_facts };
+                let result = RetrievalResult {
+                    facts: merged_facts,
+                };
                 (result, cross_ws, recall_triggered)
             } else {
                 // Use NoteFactRetrieval for primary long-term recall.

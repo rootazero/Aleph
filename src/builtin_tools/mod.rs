@@ -60,9 +60,10 @@ pub mod media_tool;
 pub mod media_tools;
 pub mod memory_browse;
 pub mod memory_explore;
-pub mod memory_timeline;
 pub mod memory_search;
+pub mod memory_timeline;
 pub mod meta_tools;
+pub mod note_manage;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;
@@ -84,7 +85,6 @@ pub mod vault_store;
 pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
-pub mod note_manage;
 
 pub use acp_tools::{
     AcpDelegateArgs, AcpDelegateOutput, AcpDelegateTool, AcpSwitchArgs, AcpSwitchOutput,
@@ -139,8 +139,8 @@ pub use media_tools::{
 };
 pub use memory_browse::{MemoryBrowseArgs, MemoryBrowseOutput, MemoryBrowseTool};
 pub use memory_explore::{MemoryExploreArgs, MemoryExploreOutput, MemoryExploreTool};
-pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
 pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, PathCluster};
+pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
 pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
     ListToolsTool,

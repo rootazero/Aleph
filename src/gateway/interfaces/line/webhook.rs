@@ -80,7 +80,10 @@ impl<'a> ParsedRequest<'a> {
 
 fn parse_http_request(data: &[u8]) -> Option<ParsedRequest<'_>> {
     let body_separator = b"\r\n\r\n";
-    let body_start = data.windows(4).position(|window| window == body_separator)? + 4;
+    let body_start = data
+        .windows(4)
+        .position(|window| window == body_separator)?
+        + 4;
 
     let headers_section = &data[..body_start - 4];
     let headers_str = std::str::from_utf8(headers_section).ok()?;
@@ -130,10 +133,7 @@ fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     if expected.len() != sig_bytes.len() {
         return false;
     }
-    expected
-        .iter()
-        .zip(sig_bytes.iter())
-        .all(|(a, b)| a == b)
+    expected.iter().zip(sig_bytes.iter()).all(|(a, b)| a == b)
 }
 
 async fn handle_connection(
@@ -215,7 +215,11 @@ async fn dispatch_event(event: &LineEvent, ctx: &WebhookContext) -> Result<(), S
         LineEvent::Follow {
             reply_token,
             source,
-        } => (source, Some(reply_token.clone()), "[Follow event]".to_string()),
+        } => (
+            source,
+            Some(reply_token.clone()),
+            "[Follow event]".to_string(),
+        ),
         LineEvent::Unfollow { source } => (source, None, "[Unfollow event]".to_string()),
         LineEvent::Join {
             reply_token,

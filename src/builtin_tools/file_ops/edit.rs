@@ -88,7 +88,10 @@ impl FileEditTool {
     }
 
     /// Internal implementation
-    async fn call_impl(&self, args: FileEditArgs) -> std::result::Result<FileEditOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: FileEditArgs,
+    ) -> std::result::Result<FileEditOutput, ToolError> {
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         // Notify start

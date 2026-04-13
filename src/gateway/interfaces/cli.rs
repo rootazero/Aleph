@@ -147,7 +147,8 @@ impl CliChannel {
             metadata: vec![],
         };
 
-        tx.send(message).map_err(|e| ChannelError::Internal(format!("Failed to inject message: {:?}", e)))?;
+        tx.send(message)
+            .map_err(|e| ChannelError::Internal(format!("Failed to inject message: {:?}", e)))?;
         Ok(())
     }
 }

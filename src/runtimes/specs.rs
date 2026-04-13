@@ -176,10 +176,7 @@ pub fn find_spec(name: &str) -> Option<&'static RuntimeSpec> {
     SPECS.iter().find(|s| s.name == name)
 }
 
-pub fn select_install<'a>(
-    installs: &'a [OsInstall],
-    current: TargetOs,
-) -> Option<&'a OsInstall> {
+pub fn select_install<'a>(installs: &'a [OsInstall], current: TargetOs) -> Option<&'a OsInstall> {
     installs.iter().find(|oi| oi.os.matches(current))
 }
 

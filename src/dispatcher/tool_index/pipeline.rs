@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_hydration_result_counts() {
-        use crate::memory::context::{NoteType, MemoryFact};
+        use crate::memory::context::{MemoryFact, NoteType};
 
         let config = ToolRetrievalConfig::default();
 

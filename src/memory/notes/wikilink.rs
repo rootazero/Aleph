@@ -7,8 +7,7 @@ use regex::Regex;
 use crate::memory::notes::store::NoteStore;
 
 /// Regex matching `[[...]]` wikilinks (non-greedy, no nested brackets).
-static WIKILINK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
+static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
 
 /// Extract all wikilink targets from `text`.
 ///
@@ -122,7 +121,9 @@ mod resolve_tests {
     #[tokio::test]
     async fn resolves_exact_path() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+        db.index_note(&make_note("rust"), "default", "wiki")
+            .await
+            .unwrap();
 
         let result = resolve_wikilink(&*db, "wiki/rust", "default").await;
         assert_eq!(result, Some("wiki/rust".to_string()));
@@ -131,7 +132,9 @@ mod resolve_tests {
     #[tokio::test]
     async fn resolves_unique_filename() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+        db.index_note(&make_note("rust"), "default", "wiki")
+            .await
+            .unwrap();
 
         let result = resolve_wikilink(&*db, "rust", "default").await;
         assert_eq!(result, Some("wiki/rust".to_string()));
@@ -140,8 +143,12 @@ mod resolve_tests {
     #[tokio::test]
     async fn returns_none_for_ambiguous() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
-        db.index_note(&make_note("rust"), "default", "learning").await.unwrap();
+        db.index_note(&make_note("rust"), "default", "wiki")
+            .await
+            .unwrap();
+        db.index_note(&make_note("rust"), "default", "learning")
+            .await
+            .unwrap();
 
         let result = resolve_wikilink(&*db, "rust", "default").await;
         assert_eq!(result, None); // ambiguous
@@ -157,7 +164,9 @@ mod resolve_tests {
     #[tokio::test]
     async fn returns_none_for_wrong_path() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki").await.unwrap();
+        db.index_note(&make_note("rust"), "default", "wiki")
+            .await
+            .unwrap();
 
         let result = resolve_wikilink(&*db, "skill/rust", "default").await;
         assert_eq!(result, None); // no note at skill/rust

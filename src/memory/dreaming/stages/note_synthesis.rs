@@ -120,7 +120,11 @@ impl DreamStage for NoteSynthesisStage {
                 continue;
             }
 
-            match ctx.indexer.write_note(&ctx.agent_id, "synthesis", &note).await {
+            match ctx
+                .indexer
+                .write_note(&ctx.agent_id, "synthesis", &note)
+                .await
+            {
                 Ok(_) => {
                     synthesis_count += 1;
                     tracing::info!(
@@ -196,7 +200,10 @@ mod tests {
         let pipeline_type = "weekly".to_string();
         let notes = make_notes(5, "preference");
         let result = pipeline_type == "weekly" && notes.len() >= 5;
-        assert!(result, "weekly pipeline with 5+ notes should trigger synthesis");
+        assert!(
+            result,
+            "weekly pipeline with 5+ notes should trigger synthesis"
+        );
     }
 
     #[test]
@@ -222,10 +229,16 @@ mod tests {
             if note.category == "synthesis" {
                 continue;
             }
-            by_category.entry(note.category.clone()).or_default().push(note);
+            by_category
+                .entry(note.category.clone())
+                .or_default()
+                .push(note);
         }
 
-        assert!(!by_category.contains_key("synthesis"), "synthesis category must be excluded");
+        assert!(
+            !by_category.contains_key("synthesis"),
+            "synthesis category must be excluded"
+        );
         assert_eq!(by_category["preference"].len(), 3);
     }
 }

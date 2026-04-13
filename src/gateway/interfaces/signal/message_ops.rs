@@ -148,12 +148,10 @@ impl SignalMonitor {
         config: &SignalConfig,
         inbound_tx: &InboundMessageSender,
     ) -> Result<(), SignalError> {
-        let request = client
-            .get(sse_url)
-            .header("Accept", "text/event-stream");
+        let request = client.get(sse_url).header("Accept", "text/event-stream");
 
-        let mut es = EventSource::new(request)
-            .map_err(|e| SignalError::SseConnection(e.to_string()))?;
+        let mut es =
+            EventSource::new(request).map_err(|e| SignalError::SseConnection(e.to_string()))?;
 
         tracing::debug!("Signal EventSource created, waiting for events");
 
@@ -164,12 +162,9 @@ impl SignalMonitor {
                 }
                 Ok(Event::Message(msg)) => {
                     // Parse the message JSON from SSE data
-                    if let Some(inbound) = Self::parse_and_convert(
-                        &msg.data,
-                        channel_id,
-                        &config.phone_number,
-                        config,
-                    ) {
+                    if let Some(inbound) =
+                        Self::parse_and_convert(&msg.data, channel_id, &config.phone_number, config)
+                    {
                         tracing::debug!(
                             sender = %inbound.sender_id.as_str(),
                             text_len = inbound.text.len(),
@@ -676,7 +671,8 @@ mod tests {
         let channel_id = ChannelId::new("signal");
         let config = SignalConfig::default();
 
-        let result = SignalMonitor::parse_and_convert("not json", &channel_id, "+1234567890", &config);
+        let result =
+            SignalMonitor::parse_and_convert("not json", &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 

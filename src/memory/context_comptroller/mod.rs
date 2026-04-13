@@ -14,7 +14,7 @@ pub use types::{ArbitratedContext, RetentionMode, TokenBudget};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{NoteType, MemoryFact};
+    use crate::memory::context::{MemoryFact, NoteType};
 
     #[test]
     fn test_token_budget_enforcement() {
@@ -42,8 +42,14 @@ mod tests {
         let arbitrated = comptroller.arbitrate(result, budget);
 
         // Should have trimmed to fit budget
-        assert!(arbitrated.facts.len() < 5, "Should have trimmed items to fit budget");
-        assert!(!arbitrated.facts.is_empty(), "Should have kept at least some items");
+        assert!(
+            arbitrated.facts.len() < 5,
+            "Should have trimmed items to fit budget"
+        );
+        assert!(
+            !arbitrated.facts.is_empty(),
+            "Should have kept at least some items"
+        );
 
         // Facts should be prioritized (higher similarity scores should be kept)
         if !arbitrated.facts.is_empty() {

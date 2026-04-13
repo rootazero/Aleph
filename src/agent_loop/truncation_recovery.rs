@@ -226,7 +226,9 @@ impl TruncationRecovery {
         let base = self
             .original_max_tokens
             .unwrap_or(self.provider_max_tokens / 2);
-        let next = base.saturating_mul(2u32.pow(self.attempts)).min(self.provider_max_tokens);
+        let next = base
+            .saturating_mul(2u32.pow(self.attempts))
+            .min(self.provider_max_tokens);
 
         // Give up if: exceeded max attempts OR already at provider cap after first attempt
         let at_cap = next >= self.provider_max_tokens;

@@ -129,18 +129,13 @@ impl ProfileManager {
     ///
     /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
     /// - `BrowserDriver::ExistingSession` → `ChromeMcpBackend`
-    pub fn get_backend(
-        &self,
-        profile_name: &str,
-    ) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
+    pub fn get_backend(&self, profile_name: &str) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
         let cfg = self
             .get_config(profile_name)
             .ok_or_else(|| BrowserError::ProfileNotFound(profile_name.into()))?;
         match cfg.driver {
             BrowserDriver::Managed => {
-                let headless = cfg
-                    .headless
-                    .unwrap_or(self.config.playwright_cli.headless);
+                let headless = cfg.headless.unwrap_or(self.config.playwright_cli.headless);
                 Ok(Arc::new(PlaywrightCliBackend::new(
                     self.playwright_cli_driver.clone(),
                     profile_name.to_string(),

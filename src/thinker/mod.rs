@@ -43,7 +43,7 @@ pub use identity::{IdentityResolver, IdentitySource};
 pub use interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
-pub use memory_context_provider::MemoryContextProvider;
+pub use memory_context_provider::{MemoryContextConfig, MemoryContextProvider};
 pub use prompt_budget::{PromptResult, TokenBudget};
 pub use prompt_builder::{PromptBuilder, PromptConfig};
 pub use prompt_layer::{LayerInput, PromptLayer};

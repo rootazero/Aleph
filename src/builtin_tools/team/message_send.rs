@@ -103,7 +103,9 @@ impl AlephTool for MessageSendTool {
                 .team_store
                 .get_members(&args.team_id)
                 .await
-                .map_err(|e| AlephError::other(format!("Failed to resolve broadcast recipients: {e}")))?;
+                .map_err(|e| {
+                    AlephError::other(format!("Failed to resolve broadcast recipients: {e}"))
+                })?;
             members
                 .into_iter()
                 .map(|m| m.agent_id)

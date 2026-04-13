@@ -7,7 +7,7 @@
 
 use super::config::ToolRetrievalConfig;
 use crate::error::AlephError;
-use crate::memory::context::{NoteType, MemoryFact};
+use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
 

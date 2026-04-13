@@ -16,11 +16,11 @@ pub struct LifecycleManager {
 }
 
 impl LifecycleManager {
-    pub fn new(
-        msg_router: Arc<MessageRouter>,
-        event_store: Arc<dyn EventLogStore>,
-    ) -> Self {
-        Self { msg_router, event_store }
+    pub fn new(msg_router: Arc<MessageRouter>, event_store: Arc<dyn EventLogStore>) -> Self {
+        Self {
+            msg_router,
+            event_store,
+        }
     }
 
     /// Agent requests to shut down — sends ShutdownRequest to the leader.
@@ -210,8 +210,14 @@ mod tests {
     #[tokio::test]
     async fn test_approve_shutdown() {
         let (lm, msg_store) = make_lifecycle().await;
-        let req = lm.request_shutdown("team-1", "worker-1", "leader-1", "Done").await.unwrap();
-        let approval = lm.approve_shutdown("team-1", "leader-1", "worker-1", &req.id).await.unwrap();
+        let req = lm
+            .request_shutdown("team-1", "worker-1", "leader-1", "Done")
+            .await
+            .unwrap();
+        let approval = lm
+            .approve_shutdown("team-1", "leader-1", "worker-1", &req.id)
+            .await
+            .unwrap();
         assert_eq!(approval.msg_type, MessageType::ShutdownApproved);
         let inbox = msg_store
             .read_inbox("worker-1", "team-1", Some(&MessageType::ShutdownApproved))
@@ -223,8 +229,20 @@ mod tests {
     #[tokio::test]
     async fn test_reject_shutdown() {
         let (lm, msg_store) = make_lifecycle().await;
-        let req = lm.request_shutdown("team-1", "worker-1", "leader-1", "Done").await.unwrap();
-        let rejection = lm.reject_shutdown("team-1", "leader-1", "worker-1", &req.id, "More work needed").await.unwrap();
+        let req = lm
+            .request_shutdown("team-1", "worker-1", "leader-1", "Done")
+            .await
+            .unwrap();
+        let rejection = lm
+            .reject_shutdown(
+                "team-1",
+                "leader-1",
+                "worker-1",
+                &req.id,
+                "More work needed",
+            )
+            .await
+            .unwrap();
         assert_eq!(rejection.msg_type, MessageType::ShutdownRejected);
         let inbox = msg_store
             .read_inbox("worker-1", "team-1", Some(&MessageType::ShutdownRejected))
@@ -236,7 +254,10 @@ mod tests {
     #[tokio::test]
     async fn test_send_idle() {
         let (lm, msg_store) = make_lifecycle().await;
-        let msg = lm.send_idle("team-1", "worker-1", "leader-1", Some("task-42")).await.unwrap();
+        let msg = lm
+            .send_idle("team-1", "worker-1", "leader-1", Some("task-42"))
+            .await
+            .unwrap();
         assert_eq!(msg.msg_type, MessageType::Idle);
         assert!(msg.content.contains("task-42"));
         let inbox = msg_store

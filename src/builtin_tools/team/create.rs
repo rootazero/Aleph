@@ -311,12 +311,13 @@ impl TeamCreateTool {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
-            AlephError::other(format!(
-                "Failed to create agent instance '{}': {}",
-                spec.id, e
-            ))
-        })?;
+        let instance =
+            AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
+                AlephError::other(format!(
+                    "Failed to create agent instance '{}': {}",
+                    spec.id, e
+                ))
+            })?;
 
         // Register in runtime registry
         self.registry.register(instance).await;

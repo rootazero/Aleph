@@ -987,9 +987,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        // Wire memory context provider for SQLite-backed prompt augmentation
+        // Wire memory context provider for SQLite-backed prompt augmentation.
+        // When an AiProvider is available the assembler drives its LLM re-rank
+        // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
         if let Some(ref emb) = embedder_out {
-            let mcp = super::init_memory_context_provider(memory_db, emb.clone());
+            let mcp = super::init_memory_context_provider(
+                memory_db,
+                emb.clone(),
+                default_prov.clone(),
+                app_config.memory.assembler.clone(),
+            );
             engine = engine.with_memory_context_provider(mcp);
         }
 

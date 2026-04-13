@@ -47,9 +47,9 @@ fn default_search_limit() -> usize {
 
 #[derive(Debug, Serialize)]
 pub struct NoteNodeDto {
-    pub id: String,         // path: "wiki/rust-ownership"
-    pub name: String,       // display: "rust-ownership" (filename only)
-    pub path: String,       // full relative path
+    pub id: String,   // path: "wiki/rust-ownership"
+    pub name: String, // display: "rust-ownership" (filename only)
+    pub path: String, // full relative path
     pub category: String,
     pub tags: Vec<String>,
     pub link_count: usize,

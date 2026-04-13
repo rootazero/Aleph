@@ -198,7 +198,9 @@ impl BrowserBackend for ChromeMcpBackend {
                     let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
                     let png_bytes = base64::engine::general_purpose::STANDARD
                         .decode(data)
-                        .map_err(|e| BrowserError::ScreenshotFailed(format!("base64 decode: {e}")))?;
+                        .map_err(|e| {
+                            BrowserError::ScreenshotFailed(format!("base64 decode: {e}"))
+                        })?;
                     return Ok(ScreenshotOutput { png_bytes });
                 }
             }

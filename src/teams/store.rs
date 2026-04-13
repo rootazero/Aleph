@@ -687,10 +687,7 @@ mod tests {
             .unwrap();
 
         // Can remove a regular member
-        store
-            .remove_member(&team.id, "member-1")
-            .await
-            .unwrap();
+        store.remove_member(&team.id, "member-1").await.unwrap();
         let members = store.get_members(&team.id).await.unwrap();
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].agent_id, "member-2");

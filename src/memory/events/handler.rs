@@ -10,10 +10,10 @@ use uuid::Uuid;
 
 use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
-use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::notes::store::NoteStore;
-use crate::memory::store::MemoryBackend;
+use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
+use crate::memory::store::MemoryBackend;
 use crate::resilience::database::StateDatabase;
 
 use super::commands::*;
@@ -29,7 +29,11 @@ pub struct MemoryCommandHandler {
 
 impl MemoryCommandHandler {
     pub fn new(db: Arc<StateDatabase>, memory_store: Option<MemoryBackend>) -> Self {
-        Self { db, memory_store, note_indexer: None }
+        Self {
+            db,
+            memory_store,
+            note_indexer: None,
+        }
     }
 
     /// Attach a `NoteIndexer` to enable the notes write path.
@@ -70,7 +74,11 @@ impl MemoryCommandHandler {
                 let path = indexer.write_note(&fact.agent, category, &note).await;
                 match path {
                     Ok(_) => {
-                        if let Err(e) = indexer.store().index_note(&note, &fact.agent, category).await {
+                        if let Err(e) = indexer
+                            .store()
+                            .index_note(&note, &fact.agent, category)
+                            .await
+                        {
                             tracing::error!(fact_id, error = %e, "Notes dual-write: failed to index note");
                         }
                     }
@@ -96,7 +104,11 @@ impl MemoryCommandHandler {
                         if file.exists() {
                             tokio::fs::remove_file(&file).await.ok();
                             let note_path = format!("{cat}/{title}");
-                            if let Err(e) = indexer.store().remove_note_index(&note_path, agent_id).await {
+                            if let Err(e) = indexer
+                                .store()
+                                .remove_note_index(&note_path, agent_id)
+                                .await
+                            {
                                 tracing::error!(fact_id, error = %e, "Notes dual-write: failed to remove note index");
                             }
                         }

@@ -31,12 +31,12 @@ pub mod permissions;
 pub mod resolver;
 
 pub use config::{DiscordConfig, IntentsConfig};
-pub use resolver::{ResolvedChannel, DiscordResolver, ChannelResolutionError, Candidate};
+pub use resolver::{Candidate, ChannelResolutionError, DiscordResolver, ResolvedChannel};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, InboundMessageSender,
-    MessageId, OutboundMessage, SendResult, UserId,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
+    InboundMessageSender, MessageId, OutboundMessage, SendResult, UserId,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;

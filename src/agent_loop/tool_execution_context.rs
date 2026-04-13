@@ -74,17 +74,26 @@ mod tests {
 
     #[test]
     fn classify_bash_as_abort_siblings() {
-        assert_eq!(CascadePolicy::classify("Bash"), CascadePolicy::AbortSiblings);
+        assert_eq!(
+            CascadePolicy::classify("Bash"),
+            CascadePolicy::AbortSiblings
+        );
     }
 
     #[test]
     fn classify_write_as_abort_siblings() {
-        assert_eq!(CascadePolicy::classify("Write"), CascadePolicy::AbortSiblings);
+        assert_eq!(
+            CascadePolicy::classify("Write"),
+            CascadePolicy::AbortSiblings
+        );
     }
 
     #[test]
     fn classify_edit_as_abort_siblings() {
-        assert_eq!(CascadePolicy::classify("Edit"), CascadePolicy::AbortSiblings);
+        assert_eq!(
+            CascadePolicy::classify("Edit"),
+            CascadePolicy::AbortSiblings
+        );
     }
 
     #[test]
@@ -94,7 +103,10 @@ mod tests {
 
     #[test]
     fn classify_unknown_as_isolated() {
-        assert_eq!(CascadePolicy::classify("SomeCustomTool"), CascadePolicy::Isolated);
+        assert_eq!(
+            CascadePolicy::classify("SomeCustomTool"),
+            CascadePolicy::Isolated
+        );
     }
 
     #[tokio::test]

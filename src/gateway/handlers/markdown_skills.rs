@@ -6,11 +6,11 @@
 //! - List loaded skills
 //! - Unload skills
 
+use crate::sync_primitives::Arc;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -52,7 +52,7 @@ impl From<&MarkdownCliTool> for MarkdownSkillInfo {
         Self {
             name: tool.spec.name.clone(),
             description: tool.spec.description.clone(),
-            source_path: None,  // Set by caller
+            source_path: None, // Set by caller
             sandbox_mode,
             requires_bins: tool.spec.metadata.requires.bins.clone(),
         }
@@ -139,9 +139,7 @@ fn install_from_git(
                         reference.set_target(commit.id(), "pull")?;
                     }
                     repo.set_head(refname)?;
-                    repo.checkout_head(Some(
-                        git2::build::CheckoutBuilder::default().force(),
-                    ))?;
+                    repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
                     Ok(())
                 })() {
                     warn!(error = %e, "Git pull failed, using existing directory");

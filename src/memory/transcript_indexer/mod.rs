@@ -17,7 +17,7 @@ mod semantic_tests;
 mod tests {
     use super::*;
     use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-    use crate::memory::store::{SqliteMemoryBackend, MemoryBackend};
+    use crate::memory::store::{MemoryBackend, SqliteMemoryBackend};
     use crate::memory::EmbeddingProvider;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;

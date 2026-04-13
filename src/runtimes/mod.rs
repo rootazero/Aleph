@@ -26,17 +26,17 @@ pub mod probe;
 pub mod specs;
 
 // Re-exports
+pub use bootstrap::{dependencies, has_spec, install, BootstrapError, BootstrapResult};
 pub use capability::{format_entries_for_prompt, RuntimeCapability};
-pub use post_install::PostInstallError;
+pub use ensure::ensure_capability;
+pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
 pub use os::TargetOs;
+pub use post_install::PostInstallError;
+pub use probe::ProbeResult;
 pub use specs::{
     find_spec, select_install, supported_on_current_os, InstallStrategy, OsInstall,
     PostInstallAction, RuntimeSpec, SPECS,
 };
-pub use bootstrap::{dependencies, has_spec, install, BootstrapError, BootstrapResult};
-pub use ensure::ensure_capability;
-pub use ledger::{CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus};
-pub use probe::ProbeResult;
 
 use crate::error::Result;
 use std::path::PathBuf;

@@ -145,10 +145,7 @@ pub async fn ensure_capability(
             guard.update_status(capability, CapabilityStatus::Missing);
             Err(AlephError::runtime(
                 capability,
-                format!(
-                    "Bootstrap completed but binary not found at: {}",
-                    expected
-                ),
+                format!("Bootstrap completed but binary not found at: {}", expected),
             ))
         }
         BootstrapResult::Failed { stderr } => {
@@ -162,7 +159,10 @@ pub async fn ensure_capability(
                 ),
             ))
         }
-        BootstrapResult::Unsupported { capability: cap, reason } => {
+        BootstrapResult::Unsupported {
+            capability: cap,
+            reason,
+        } => {
             let mut guard = ledger.write().await;
             guard.update_status(capability, CapabilityStatus::Missing);
             Err(AlephError::runtime(
@@ -175,10 +175,7 @@ pub async fn ensure_capability(
             guard.update_status(capability, CapabilityStatus::Missing);
             Err(AlephError::runtime(
                 capability,
-                format!(
-                    "Capability '{}' not found and no bootstrap available",
-                    cap
-                ),
+                format!("Capability '{}' not found and no bootstrap available", cap),
             ))
         }
     }

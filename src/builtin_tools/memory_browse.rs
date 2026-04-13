@@ -60,10 +60,7 @@ impl MemoryBrowseTool {
         }
     }
 
-    pub(crate) async fn handle_list(
-        &self,
-        category: Option<&str>,
-    ) -> Result<MemoryBrowseOutput> {
+    pub(crate) async fn handle_list(&self, category: Option<&str>) -> Result<MemoryBrowseOutput> {
         let base = self.memory_dir.join(&self.agent_id);
         let target = match category {
             None => base,
@@ -127,9 +124,9 @@ impl MemoryBrowseTool {
     }
 
     pub(crate) async fn handle_read(&self, path: &str) -> Result<MemoryBrowseOutput> {
-        let (category, filename) = path
-            .split_once('/')
-            .ok_or_else(|| AlephError::tool("path must be 'category/filename' (e.g. 'wiki/rust-ownership')"))?;
+        let (category, filename) = path.split_once('/').ok_or_else(|| {
+            AlephError::tool("path must be 'category/filename' (e.g. 'wiki/rust-ownership')")
+        })?;
 
         let file = self
             .memory_dir
@@ -153,8 +150,7 @@ impl MemoryBrowseTool {
 #[async_trait]
 impl AlephTool for MemoryBrowseTool {
     const NAME: &'static str = "memory_browse";
-    const DESCRIPTION: &'static str =
-        "Browse the knowledge notes filesystem. \
+    const DESCRIPTION: &'static str = "Browse the knowledge notes filesystem. \
          Action 'list' with no path shows categories; with a category name shows files in it. \
          Action 'read' with 'category/filename' returns the markdown content of that note.";
 
@@ -207,10 +203,18 @@ mod tests {
     async fn list_top_level_returns_categories_only() {
         let (tool, dir) = setup().await;
         let agent_dir = dir.path().join("default");
-        tokio::fs::create_dir_all(agent_dir.join("wiki")).await.unwrap();
-        tokio::fs::create_dir_all(agent_dir.join("preference")).await.unwrap();
-        tokio::fs::create_dir_all(agent_dir.join("archive")).await.unwrap(); // should be skipped
-        tokio::fs::write(agent_dir.join("stray.txt"), "x").await.unwrap(); // file at top level, skipped
+        tokio::fs::create_dir_all(agent_dir.join("wiki"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(agent_dir.join("preference"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(agent_dir.join("archive"))
+            .await
+            .unwrap(); // should be skipped
+        tokio::fs::write(agent_dir.join("stray.txt"), "x")
+            .await
+            .unwrap(); // file at top level, skipped
 
         let result = tool.handle_list(None).await.unwrap();
         let entries = result.entries.unwrap();
@@ -222,9 +226,15 @@ mod tests {
         let (tool, dir) = setup().await;
         let wiki = dir.path().join("default/wiki");
         tokio::fs::create_dir_all(&wiki).await.unwrap();
-        tokio::fs::write(wiki.join("rust.md"), "content").await.unwrap();
-        tokio::fs::write(wiki.join("go.md"), "content").await.unwrap();
-        tokio::fs::write(wiki.join("not-markdown.txt"), "x").await.unwrap();
+        tokio::fs::write(wiki.join("rust.md"), "content")
+            .await
+            .unwrap();
+        tokio::fs::write(wiki.join("go.md"), "content")
+            .await
+            .unwrap();
+        tokio::fs::write(wiki.join("not-markdown.txt"), "x")
+            .await
+            .unwrap();
 
         let result = tool.handle_list(Some("wiki")).await.unwrap();
         let entries = result.entries.unwrap();

@@ -124,10 +124,7 @@ impl CapabilityStrategy for MemoryStrategy {
             use crate::memory::notes::store::NoteStore;
             match db.count_all_notes().await {
                 Ok(total) => {
-                    debug!(
-                        total_notes = total,
-                        "Memory database health check passed"
-                    );
+                    debug!(total_notes = total, "Memory database health check passed");
                 }
                 Err(e) => {
                     warn!(error = %e, "Memory database health check failed");

@@ -262,7 +262,10 @@ impl AlephTool for HeartbeatUpdateTool {
                 .update_task(&args.id, updates, &clock)
                 .await
                 .map_err(|e| {
-                    crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e))
+                    crate::error::AlephError::tool(format!(
+                        "Failed to update heartbeat task: {}",
+                        e
+                    ))
                 })?;
         }
 

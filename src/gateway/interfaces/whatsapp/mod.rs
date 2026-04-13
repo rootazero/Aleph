@@ -46,8 +46,8 @@ pub use config::{
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessageSender, MessageId,
-    OutboundMessage, PairingData, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessageSender, MessageId, OutboundMessage,
+    PairingData, SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;

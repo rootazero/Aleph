@@ -170,7 +170,10 @@ mod tests {
 
     #[test]
     fn prompt_includes_existing_titles() {
-        let titles = vec!["preference/editor".to_string(), "learning/rust-async".to_string()];
+        let titles = vec![
+            "preference/editor".to_string(),
+            "learning/rust-async".to_string(),
+        ];
         let prompt = build_note_extraction_prompt(&titles);
         assert!(prompt.contains("- preference/editor"));
         assert!(prompt.contains("- learning/rust-async"));

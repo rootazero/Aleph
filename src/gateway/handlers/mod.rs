@@ -52,7 +52,6 @@ pub mod auth;
 pub mod auth_tools;
 pub mod behavior_config;
 pub mod browser_config;
-pub mod runtimes;
 pub mod channel;
 pub mod chat;
 pub mod clawhub;
@@ -70,16 +69,17 @@ pub mod exec_approvals;
 pub mod execution_config;
 pub mod general_config;
 pub mod generation;
-pub mod graph;
-pub mod graph_types;
 pub mod generation_config;
 pub mod generation_providers;
+pub mod graph;
+pub mod graph_types;
 pub mod group_chat;
 pub mod guests;
 pub mod health;
 pub mod heartbeat;
 pub mod identity;
 pub mod logs;
+pub mod markdown_skills;
 pub mod mcp;
 pub mod mcp_config;
 pub mod memory;
@@ -93,6 +93,7 @@ pub mod request_state;
 pub mod rerank_config;
 pub mod routing_rules;
 pub mod runs;
+pub mod runtimes;
 pub mod schema;
 pub mod search_config;
 pub mod secret_approvals;
@@ -102,7 +103,6 @@ pub mod services;
 pub mod session;
 pub mod session_usage;
 pub mod skills;
-pub mod markdown_skills;
 #[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;
 pub mod system_info;
@@ -133,9 +133,10 @@ use super::protocol::{
 /// Each call loads (or creates) the ledger from `~/.aleph/runtimes/ledger.json`.
 /// This avoids threading shared state through the registry while remaining correct —
 /// the ledger is persisted on disk, so concurrent callers see the same data.
-fn make_runtime_ledger() -> Result<std::sync::Arc<tokio::sync::RwLock<crate::runtimes::ledger::CapabilityLedger>>, String> {
-    let dir = crate::runtimes::get_runtimes_dir()
-        .map_err(|e| format!("runtimes dir: {e}"))?;
+fn make_runtime_ledger(
+) -> Result<std::sync::Arc<tokio::sync::RwLock<crate::runtimes::ledger::CapabilityLedger>>, String>
+{
+    let dir = crate::runtimes::get_runtimes_dir().map_err(|e| format!("runtimes dir: {e}"))?;
     let ledger = crate::runtimes::ledger::CapabilityLedger::load_or_create(dir.join("ledger.json"));
     Ok(std::sync::Arc::new(tokio::sync::RwLock::new(ledger)))
 }

@@ -95,9 +95,8 @@ pub fn parse_conflict_verdict(response: &str) -> ConflictVerdict {
         reason: Option<String>,
     }
 
-    let parsed: Option<VerdictResponse> =
-        crate::utils::json_extract::extract_json_robust(response)
-            .and_then(|v| serde_json::from_value(v).ok());
+    let parsed: Option<VerdictResponse> = crate::utils::json_extract::extract_json_robust(response)
+        .and_then(|v| serde_json::from_value(v).ok());
 
     match parsed {
         Some(r) => match r.verdict.as_str() {
@@ -162,8 +161,9 @@ impl ConflictDetector {
         );
 
         let msgs = [crate::providers::message::UnifiedMessage::user(&prompt)];
-        let payload = crate::providers::adapter::RequestPayload::new(&msgs)
-            .with_system(Some("You are a precise fact comparison assistant. Output JSON only."));
+        let payload = crate::providers::adapter::RequestPayload::new(&msgs).with_system(Some(
+            "You are a precise fact comparison assistant. Output JSON only.",
+        ));
 
         match provider.process(payload).await {
             Ok(response) => parse_conflict_verdict(&response.text_content()),
@@ -215,9 +215,7 @@ impl ConflictDetector {
 
         let mut resolutions = Vec::new();
         for result in similar {
-            let verdict = self
-                .llm_arbitrate(&result.content, &new_fact.content)
-                .await;
+            let verdict = self.llm_arbitrate(&result.content, &new_fact.content).await;
 
             match verdict {
                 ConflictVerdict::SameUpdated | ConflictVerdict::Contradicts => {
@@ -305,10 +303,8 @@ mod tests {
 
     async fn create_test_detector() -> ConflictDetector {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend = Arc::new(
-            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
-                .unwrap(),
-        );
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
         ConflictDetector::with_defaults(database)
     }
 
@@ -338,10 +334,8 @@ mod tests {
     #[tokio::test]
     async fn test_conflict_detection_with_similar_note() {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend = Arc::new(
-            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
-                .unwrap(),
-        );
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
 
         // Seed a note and its embedding via NoteStore + upsert_embedding
         use crate::memory::notes::store::NoteStore;
@@ -355,19 +349,25 @@ mod tests {
             updated_at: 0,
             content_hash: String::new(),
         };
-        database.index_note(&note, "default", "learning").await.unwrap();
         database
-            .upsert_embedding("learning/learning Python", "default", &vec![0.5_f32; 1024], 1024)
+            .index_note(&note, "default", "learning")
+            .await
+            .unwrap();
+        database
+            .upsert_embedding(
+                "learning/learning Python",
+                "default",
+                &vec![0.5_f32; 1024],
+                1024,
+            )
             .await
             .unwrap();
 
-        let mock_provider: Arc<dyn crate::providers::AiProvider> = Arc::new(
-            crate::providers::MockProvider::new(
+        let mock_provider: Arc<dyn crate::providers::AiProvider> =
+            Arc::new(crate::providers::MockProvider::new(
                 r#"{"verdict": "contradicts", "reason": "User stopped vs started"}"#,
-            ),
-        );
-        let detector = ConflictDetector::with_defaults(database)
-            .with_provider(mock_provider);
+            ));
+        let detector = ConflictDetector::with_defaults(database).with_provider(mock_provider);
 
         let mut new_fact = MemoryFact::new(
             "The user stopped learning Python".to_string(),
@@ -378,7 +378,10 @@ mod tests {
 
         let resolutions = detector.resolve_conflicts(&new_fact).await.unwrap();
         assert!(!resolutions.is_empty());
-        assert!(matches!(resolutions[0], ConflictResolution::Override { .. }));
+        assert!(matches!(
+            resolutions[0],
+            ConflictResolution::Override { .. }
+        ));
     }
 
     #[test]

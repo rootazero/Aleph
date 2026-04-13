@@ -29,7 +29,11 @@ impl PlanManager {
         artifact_store: Arc<dyn ArtifactStore>,
         event_store: Arc<dyn EventLogStore>,
     ) -> Self {
-        Self { msg_router, artifact_store, event_store }
+        Self {
+            msg_router,
+            artifact_store,
+            event_store,
+        }
     }
 
     /// Submit a plan for leader approval.
@@ -185,7 +189,11 @@ mod tests {
     use crate::teams::messages::router::EscalationRule;
     use crate::teams::messages::store::{MessageStore, SqliteMessageStore};
 
-    async fn make_plan_manager() -> (PlanManager, Arc<SqliteMessageStore>, Arc<SqliteArtifactStore>) {
+    async fn make_plan_manager() -> (
+        PlanManager,
+        Arc<SqliteMessageStore>,
+        Arc<SqliteArtifactStore>,
+    ) {
         let msg_store = Arc::new(SqliteMessageStore::new_in_memory().await);
         let event_store = Arc::new(SqliteEventLogStore::new_in_memory().await);
         let artifact_store = Arc::new(SqliteArtifactStore::new_in_memory().await);
@@ -203,31 +211,63 @@ mod tests {
     async fn test_submit_plan_creates_artifact_and_message() {
         let (pm, msg_store, artifact_store) = make_plan_manager().await;
         let submission = pm
-            .submit_plan("team-1", "worker-1", "leader-1", "Cache plan", "# Plan\n\n1. Benchmark\n2. Implement", "task-1")
+            .submit_plan(
+                "team-1",
+                "worker-1",
+                "leader-1",
+                "Cache plan",
+                "# Plan\n\n1. Benchmark\n2. Implement",
+                "task-1",
+            )
             .await
             .unwrap();
 
         assert_eq!(submission.artifact.artifact_type, ArtifactType::Plan);
         assert_eq!(submission.artifact.task_id, "task-1");
-        assert_eq!(submission.message.msg_type, MessageType::PlanApprovalRequest);
+        assert_eq!(
+            submission.message.msg_type,
+            MessageType::PlanApprovalRequest
+        );
         assert_eq!(submission.message.attachments.len(), 1);
         assert_eq!(submission.message.attachments[0], submission.artifact.id);
 
         let inbox = msg_store
-            .read_inbox("leader-1", "team-1", Some(&MessageType::PlanApprovalRequest))
+            .read_inbox(
+                "leader-1",
+                "team-1",
+                Some(&MessageType::PlanApprovalRequest),
+            )
             .await
             .unwrap();
         assert_eq!(inbox.len(), 1);
 
-        let stored = artifact_store.get_artifact(&submission.artifact.id).await.unwrap().unwrap();
+        let stored = artifact_store
+            .get_artifact(&submission.artifact.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.artifact_type, ArtifactType::Plan);
     }
 
     #[tokio::test]
     async fn test_approve_plan() {
         let (pm, msg_store, _) = make_plan_manager().await;
-        let submission = pm.submit_plan("team-1", "worker-1", "leader-1", "Plan", "Details", "task-1").await.unwrap();
-        let approval = pm.approve_plan("team-1", "leader-1", "worker-1", &submission.message.id, "Looks good").await.unwrap();
+        let submission = pm
+            .submit_plan(
+                "team-1", "worker-1", "leader-1", "Plan", "Details", "task-1",
+            )
+            .await
+            .unwrap();
+        let approval = pm
+            .approve_plan(
+                "team-1",
+                "leader-1",
+                "worker-1",
+                &submission.message.id,
+                "Looks good",
+            )
+            .await
+            .unwrap();
         assert_eq!(approval.msg_type, MessageType::PlanApproved);
         assert!(approval.content.contains("Looks good"));
         let inbox = msg_store
@@ -240,8 +280,22 @@ mod tests {
     #[tokio::test]
     async fn test_reject_plan() {
         let (pm, msg_store, _) = make_plan_manager().await;
-        let submission = pm.submit_plan("team-1", "worker-1", "leader-1", "Plan", "Details", "task-1").await.unwrap();
-        let rejection = pm.reject_plan("team-1", "leader-1", "worker-1", &submission.message.id, "Missing error handling").await.unwrap();
+        let submission = pm
+            .submit_plan(
+                "team-1", "worker-1", "leader-1", "Plan", "Details", "task-1",
+            )
+            .await
+            .unwrap();
+        let rejection = pm
+            .reject_plan(
+                "team-1",
+                "leader-1",
+                "worker-1",
+                &submission.message.id,
+                "Missing error handling",
+            )
+            .await
+            .unwrap();
         assert_eq!(rejection.msg_type, MessageType::PlanRejected);
         assert!(rejection.content.contains("Missing error handling"));
         let inbox = msg_store

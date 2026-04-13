@@ -511,12 +511,11 @@ impl ToolPipeline {
             ToolResult::Success { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let final_text = match store
-                    .and_then(|s| s.persist_if_large(id, name, &compressed, budget))
-                {
-                    Some(ref_marker) => ref_marker,
-                    None => truncate_tool_result_with_budget(&compressed, budget),
-                };
+                let final_text =
+                    match store.and_then(|s| s.persist_if_large(id, name, &compressed, budget)) {
+                        Some(ref_marker) => ref_marker,
+                        None => truncate_tool_result_with_budget(&compressed, budget),
+                    };
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
@@ -539,12 +538,11 @@ impl ToolPipeline {
             ToolResult::SuccessAndStopLoop { output } => {
                 let raw = value_to_text(output);
                 let compressed = compress_tool_output(name, &raw);
-                let final_text = match store
-                    .and_then(|s| s.persist_if_large(id, name, &compressed, budget))
-                {
-                    Some(ref_marker) => ref_marker,
-                    None => truncate_tool_result_with_budget(&compressed, budget),
-                };
+                let final_text =
+                    match store.and_then(|s| s.persist_if_large(id, name, &compressed, budget)) {
+                        Some(ref_marker) => ref_marker,
+                        None => truncate_tool_result_with_budget(&compressed, budget),
+                    };
                 ToolOutcome {
                     tool_id: id.to_string(),
                     tool_name: name.to_string(),
@@ -1336,7 +1334,10 @@ mod tests {
     fn truncate_with_budget_preserves_head_and_tail() {
         let mut lines = String::new();
         for i in 0..2000 {
-            lines.push_str(&format!("Line {:04}: content padding here to fill tokens\n", i));
+            lines.push_str(&format!(
+                "Line {:04}: content padding here to fill tokens\n",
+                i
+            ));
         }
         let result = truncate_tool_result_with_budget(&lines, 4000);
         assert!(result.len() < lines.len(), "should be truncated");

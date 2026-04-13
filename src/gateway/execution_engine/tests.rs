@@ -54,8 +54,7 @@ fn test_session_manager(
         ..Default::default()
     };
     Arc::new(
-        crate::gateway::session_manager::SessionManager::new(config)
-            .expect("test session manager"),
+        crate::gateway::session_manager::SessionManager::new(config).expect("test session manager"),
     )
 }
 

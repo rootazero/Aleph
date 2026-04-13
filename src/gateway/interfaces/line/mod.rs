@@ -14,8 +14,8 @@ use tokio::sync::watch;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
-    OutboundMessage, PairingData, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    PairingData, SendResult,
 };
 
 pub use config::{LineConfig, LineDmPolicy, LineGroupPolicy};
@@ -23,13 +23,13 @@ pub use config::{LineConfig, LineDmPolicy, LineGroupPolicy};
 use message_ops::LineMessagingApi;
 use webhook::WebhookContext;
 
-    pub struct LineChannel {
-        info: ChannelInfo,
-        config: LineConfig,
-        channel_state: ChannelState,
-        api: Option<Arc<LineMessagingApi>>,
-        shutdown_tx: Option<watch::Sender<bool>>,
-    }
+pub struct LineChannel {
+    info: ChannelInfo,
+    config: LineConfig,
+    channel_state: ChannelState,
+    api: Option<Arc<LineMessagingApi>>,
+    shutdown_tx: Option<watch::Sender<bool>>,
+}
 
 impl LineChannel {
     pub fn new(id: impl Into<String>, config: LineConfig) -> Self {
@@ -91,9 +91,7 @@ impl Channel for LineChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)
@@ -211,9 +209,7 @@ impl ChannelFactory for LineChannelFactory {
         let config: LineConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid LINE config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(LineChannel::new("line", config)))
     }

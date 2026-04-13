@@ -88,7 +88,12 @@ impl DreamStage for NoteLintStage {
                 None => continue,
             };
 
-            let outgoing = match ctx.indexer.store().get_outgoing_links(path, &ctx.agent_id).await {
+            let outgoing = match ctx
+                .indexer
+                .store()
+                .get_outgoing_links(path, &ctx.agent_id)
+                .await
+            {
                 Ok(links) => links,
                 Err(e) => {
                     tracing::warn!(path, error = %e, "NoteLint: failed to fetch outgoing links");
@@ -268,7 +273,11 @@ fn ensure_frontmatter(content: &str, default_category: &str) -> Option<String> {
         patched.push_str(&format!("\nupdated: {today}"));
     }
 
-    let fixed = format!("---\n{}\n---{}", patched.trim_start_matches('\n'), body_after);
+    let fixed = format!(
+        "---\n{}\n---{}",
+        patched.trim_start_matches('\n'),
+        body_after
+    );
     Some(fixed)
 }
 
@@ -316,7 +325,10 @@ updated: 2026-04-10
     fn ensure_frontmatter_prepends_when_missing_entirely() {
         let content = "- A fact without frontmatter\n";
         let fixed = ensure_frontmatter(content, "other").expect("Should return fixed content");
-        assert!(fixed.starts_with("---\n"), "Fixed content must start with ---");
+        assert!(
+            fixed.starts_with("---\n"),
+            "Fixed content must start with ---"
+        );
         assert!(fixed.contains("category: other"));
         assert!(fixed.contains("tags: []"));
         assert!(fixed.contains("created:"));

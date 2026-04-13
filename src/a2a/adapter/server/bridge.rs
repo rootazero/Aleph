@@ -348,12 +348,17 @@ mod tests {
         }
     }
 
-    fn test_session_manager(temp: &tempfile::TempDir) -> Arc<crate::gateway::session_manager::SessionManager> {
+    fn test_session_manager(
+        temp: &tempfile::TempDir,
+    ) -> Arc<crate::gateway::session_manager::SessionManager> {
         let config = crate::gateway::session_manager::SessionManagerConfig {
             db_path: temp.path().join("test_sessions.db"),
             ..Default::default()
         };
-        Arc::new(crate::gateway::session_manager::SessionManager::new(config).expect("test session manager"))
+        Arc::new(
+            crate::gateway::session_manager::SessionManager::new(config)
+                .expect("test session manager"),
+        )
     }
 
     /// Helper to create a test bridge with real TaskStore/StreamHub and mock adapter

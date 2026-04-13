@@ -64,11 +64,8 @@ impl MemoryRetrieval {
             }
         };
 
-        let note_retrieval = NoteRetrieval::new(
-            memory_dir,
-            self.database.clone(),
-            self.embedder.clone(),
-        );
+        let note_retrieval =
+            NoteRetrieval::new(memory_dir, self.database.clone(), self.embedder.clone());
 
         let notes = note_retrieval
             .retrieve(query, "default", limit)

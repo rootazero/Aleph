@@ -4,7 +4,7 @@
 //! Facts are third-person statements about the user.
 
 use crate::error::AlephError;
-use crate::memory::context::{NoteType, MemoryEntry, MemoryFact};
+use crate::memory::context::{MemoryEntry, MemoryFact, NoteType};
 use crate::memory::EmbeddingProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -239,7 +239,9 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
         memories: &[MemoryEntry],
         existing_titles: &[String],
     ) -> Result<crate::memory::notes::extractor::NoteExtractionResponse, AlephError> {
-        use crate::memory::notes::extractor::{build_note_extraction_prompt, NoteExtractionResponse};
+        use crate::memory::notes::extractor::{
+            build_note_extraction_prompt, NoteExtractionResponse,
+        };
 
         if memories.is_empty() {
             return Ok(NoteExtractionResponse { updates: vec![] });

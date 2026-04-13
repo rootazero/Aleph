@@ -92,7 +92,8 @@ impl AlephTool for BrowserTabsTool {
                             // Chrome DevTools MCP: "N: URL [selected]"
                             if let Some(colon_pos) = line.find(": ") {
                                 let id_str = line.get(..colon_pos)?.trim();
-                                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty()
+                                {
                                     let rest = line.get(colon_pos + 2..)?;
                                     let url = if let Some(bracket) = rest.rfind(" [") {
                                         rest.get(..bracket).unwrap_or(rest)

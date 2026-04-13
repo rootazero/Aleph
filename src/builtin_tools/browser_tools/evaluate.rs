@@ -51,8 +51,8 @@ impl AlephTool for BrowserEvaluateTool {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
                 Ok(value) => {
                     // evaluate() returns String; try to parse as JSON, else wrap as JSON string.
-                    let json_value: serde_json::Value = serde_json::from_str(&value)
-                        .unwrap_or(serde_json::Value::String(value));
+                    let json_value: serde_json::Value =
+                        serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
                     Ok(BrowserEvaluateOutput {
                         success: true,
                         result: Some(json_value),

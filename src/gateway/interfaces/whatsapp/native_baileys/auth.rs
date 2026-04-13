@@ -44,8 +44,8 @@ impl AuthManager {
     }
 
     pub async fn save_auth(&self, auth: &WaAuthData) -> Result<(), NativeBaileysError> {
-        let json = serde_json::to_vec(auth)
-            .map_err(|e| NativeBaileysError::VaultError(e.to_string()))?;
+        let json =
+            serde_json::to_vec(auth).map_err(|e| NativeBaileysError::VaultError(e.to_string()))?;
 
         if let Some(parent) = self.auth_path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
@@ -53,9 +53,9 @@ impl AuthManager {
             })?;
         }
 
-        fs::write(&self.auth_path, json).await.map_err(|e| {
-            NativeBaileysError::VaultError(format!("failed to write auth: {}", e))
-        })?;
+        fs::write(&self.auth_path, json)
+            .await
+            .map_err(|e| NativeBaileysError::VaultError(format!("failed to write auth: {}", e)))?;
 
         Ok(())
     }
@@ -65,13 +65,12 @@ impl AuthManager {
             return Err(NativeBaileysError::AuthFailed("No existing auth".into()));
         }
 
-        let json = fs::read(&self.auth_path).await.map_err(|e| {
-            NativeBaileysError::VaultError(format!("failed to read auth: {}", e))
-        })?;
+        let json = fs::read(&self.auth_path)
+            .await
+            .map_err(|e| NativeBaileysError::VaultError(format!("failed to read auth: {}", e)))?;
 
-        serde_json::from_slice(&json).map_err(|e| {
-            NativeBaileysError::AuthFailed(format!("failed to parse auth: {}", e))
-        })
+        serde_json::from_slice(&json)
+            .map_err(|e| NativeBaileysError::AuthFailed(format!("failed to parse auth: {}", e)))
     }
 
     pub fn auth_path(&self) -> &PathBuf {

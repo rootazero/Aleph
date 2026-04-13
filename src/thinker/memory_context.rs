@@ -105,7 +105,7 @@ impl MemoryContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{NoteType, MemoryFact};
+    use crate::memory::context::{MemoryFact, NoteType};
 
     #[test]
     fn test_empty_context() {

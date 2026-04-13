@@ -84,6 +84,9 @@ mod tests {
     #[test]
     fn test_current_returns_concrete() {
         let os = TargetOs::current();
-        assert!(matches!(os, TargetOs::MacOs | TargetOs::Linux | TargetOs::Windows));
+        assert!(matches!(
+            os,
+            TargetOs::MacOs | TargetOs::Linux | TargetOs::Windows
+        ));
     }
 }

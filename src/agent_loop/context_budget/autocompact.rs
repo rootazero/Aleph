@@ -154,13 +154,11 @@ impl PreflightStage for AutocompactStage {
         let tokens_after = estimate_tokens_smart(&compact_msg.text_content());
 
         // Replace the summary range with the compact message.
-        messages.splice(
-            summary_start..summary_end,
-            std::iter::once(compact_msg),
-        );
+        messages.splice(summary_start..summary_end, std::iter::once(compact_msg));
 
         // Update cooldown tracking (monotonic invocation count).
-        self.last_compact_turn.store(current_invocation, Ordering::Release);
+        self.last_compact_turn
+            .store(current_invocation, Ordering::Release);
 
         // Return tokens freed.
         tokens_before.saturating_sub(tokens_after)
@@ -256,19 +254,19 @@ mod tests {
         });
 
         let mut msgs = vec![
-            UnifiedMessage::user("Please help me refactor"),        // index 0: preserved
-            UnifiedMessage::assistant("Sure"),                       // index 1: compressible
-            UnifiedMessage::user("file A"),                          // index 2
+            UnifiedMessage::user("Please help me refactor"), // index 0: preserved
+            UnifiedMessage::assistant("Sure"),               // index 1: compressible
+            UnifiedMessage::user("file A"),                  // index 2
             UnifiedMessage::tool_result("c1", "Read", &"x".repeat(2000), false), // index 3
-            UnifiedMessage::assistant("I see A"),                    // index 4
-            UnifiedMessage::user("file B"),                          // index 5
+            UnifiedMessage::assistant("I see A"),            // index 4
+            UnifiedMessage::user("file B"),                  // index 5
             UnifiedMessage::tool_result("c2", "Read", &"y".repeat(2000), false), // index 6
-            UnifiedMessage::assistant("I see B"),                    // index 7
-            UnifiedMessage::user("file C"),                          // index 8
+            UnifiedMessage::assistant("I see B"),            // index 7
+            UnifiedMessage::user("file C"),                  // index 8
             UnifiedMessage::tool_result("c3", "Read", &"z".repeat(2000), false), // index 9
-            UnifiedMessage::assistant("I see C"),                    // index 10
-            UnifiedMessage::user("Now refactor"),                    // index 11: fresh tail
-            UnifiedMessage::assistant("Starting"),                   // index 12: fresh tail
+            UnifiedMessage::assistant("I see C"),            // index 10
+            UnifiedMessage::user("Now refactor"),            // index 11: fresh tail
+            UnifiedMessage::assistant("Starting"),           // index 12: fresh tail
         ];
         let original_len = msgs.len();
 
@@ -296,9 +294,9 @@ mod tests {
         );
 
         // A summary message should exist.
-        let has_summary = msgs.iter().any(|m| {
-            m.text_content().contains("[Conversation summary")
-        });
+        let has_summary = msgs
+            .iter()
+            .any(|m| m.text_content().contains("[Conversation summary"));
         assert!(has_summary, "should contain a summary message");
 
         // Total messages should be fewer than original.

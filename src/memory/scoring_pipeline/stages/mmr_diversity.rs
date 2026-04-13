@@ -72,7 +72,7 @@ impl ScoringStage for MmrDiversityStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{NoteType, MemoryFact};
+    use crate::memory::context::{MemoryFact, NoteType};
     use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
     use crate::memory::scoring_pipeline::context::ScoringContext;
 

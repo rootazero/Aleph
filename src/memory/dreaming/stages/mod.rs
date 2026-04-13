@@ -15,7 +15,6 @@ pub use note_drift::NoteDriftStage;
 pub use note_lint::NoteLintStage;
 pub use note_synthesis::NoteSynthesisStage;
 
-
 use async_trait::async_trait;
 
 use super::DreamContext;

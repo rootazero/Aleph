@@ -28,7 +28,10 @@ impl LineMessagingApi {
         let resp = self
             .http
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.channel_access_token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.channel_access_token),
+            )
             .json(payload)
             .send()
             .await
@@ -65,7 +68,10 @@ impl LineMessagingApi {
         let resp = self
             .http
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.channel_access_token))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.channel_access_token),
+            )
             .json(&payload)
             .send()
             .await
@@ -243,7 +249,11 @@ pub struct FlexPayload {
 }
 
 impl FlexPayload {
-    pub fn new(to: impl Into<String>, alt_text: impl Into<String>, contents: FlexBubbleContents) -> Self {
+    pub fn new(
+        to: impl Into<String>,
+        alt_text: impl Into<String>,
+        contents: FlexBubbleContents,
+    ) -> Self {
         Self {
             to: to.into(),
             alt_text: alt_text.into(),

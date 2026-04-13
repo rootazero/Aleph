@@ -46,7 +46,10 @@ fn test_vec0_tables_created() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(!facts_vec_exists, "facts_vec table should have been dropped");
+    assert!(
+        !facts_vec_exists,
+        "facts_vec table should have been dropped"
+    );
 }
 
 #[test]
@@ -98,7 +101,10 @@ fn test_fts5_tables_created() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(!facts_fts_exists, "facts_fts table should have been dropped");
+    assert!(
+        !facts_fts_exists,
+        "facts_fts table should have been dropped"
+    );
 }
 
 #[test]
@@ -127,7 +133,10 @@ fn test_fts5_sync_triggers_exist() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(!facts_trigger, "facts_fts_insert trigger should have been dropped");
+    assert!(
+        !facts_trigger,
+        "facts_fts_insert trigger should have been dropped"
+    );
 }
 
 #[test]

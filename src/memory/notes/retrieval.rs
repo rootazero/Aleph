@@ -58,10 +58,7 @@ impl<S: NoteStore> NoteRetrieval<S> {
         // 3. Read markdown files for top-K paths
         let mut notes = Vec::new();
         for (path, score) in results {
-            let file_path = self
-                .memory_dir
-                .join(agent_id)
-                .join(format!("{path}.md"));
+            let file_path = self.memory_dir.join(agent_id).join(format!("{path}.md"));
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
                 Err(_) => continue, // file missing on disk — skip gracefully
@@ -136,9 +133,12 @@ mod tests {
         // Create a note file on disk
         let note_dir = memory_dir.join(AGENT).join("wiki");
         fs::create_dir_all(&note_dir).await.unwrap();
-        fs::write(note_dir.join("rust-ownership.md"), "# Rust Ownership\n\nBorrow checker rules.")
-            .await
-            .unwrap();
+        fs::write(
+            note_dir.join("rust-ownership.md"),
+            "# Rust Ownership\n\nBorrow checker rules.",
+        )
+        .await
+        .unwrap();
 
         // Insert an embedding for this note
         let fake_embedding = vec![0.1_f32; 1024];

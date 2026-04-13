@@ -569,9 +569,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                 return Err(db_err(format!("task not found: {task_id}")));
             }
             // Task exists but locked by someone else
-            return Err(db_err(format!(
-                "task {task_id} is locked by another agent"
-            )));
+            return Err(db_err(format!("task {task_id} is locked by another agent")));
         }
         Ok(())
     }

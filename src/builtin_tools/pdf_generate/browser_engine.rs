@@ -65,10 +65,7 @@ pub async fn generate(
         ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
         ContentFormat::Text => {
             let escaped = html_escape(&args.content);
-            styles::wrap_html_with_styles(
-                &format!("<pre>{escaped}</pre>"),
-                args.title.as_deref(),
-            )
+            styles::wrap_html_with_styles(&format!("<pre>{escaped}</pre>"), args.title.as_deref())
         }
     };
 

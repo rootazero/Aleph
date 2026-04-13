@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::error::{AlephError, Result};
-use crate::memory::notes::{KnowledgeNote, NoteIndexer, sanitize_title};
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::SqliteMemoryBackend;
 use crate::tools::AlephTool;
 
@@ -179,11 +179,7 @@ impl NoteManageTool {
 
         // Ensure directory exists
         let safe_filename = sanitize_title(filename);
-        let note_dir = self
-            .indexer
-            .memory_dir()
-            .join(agent_id)
-            .join(category);
+        let note_dir = self.indexer.memory_dir().join(agent_id).join(category);
         tokio::fs::create_dir_all(&note_dir)
             .await
             .map_err(|e| AlephError::tool(format!("Failed to create category dir: {e}")))?;

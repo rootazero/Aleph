@@ -12,16 +12,16 @@ mod tests {
         HydratedTool, HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
         ToolRetrieval, ToolRetrievalConfig,
     };
-    use crate::memory::context::{NoteType, MemoryFact};
-    use crate::memory::store::SqliteMemoryBackend;
+    use crate::memory::context::{MemoryFact, NoteType};
     use crate::memory::store::MemoryBackend;
+    use crate::memory::store::SqliteMemoryBackend;
     use crate::sync_primitives::Arc;
 
     /// Create a test database and memory dir using a temp directory for isolation
     async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let backend = SqliteMemoryBackend::new(temp_dir.path())
-            .expect("Failed to create SQLite backend");
+        let backend =
+            SqliteMemoryBackend::new(temp_dir.path()).expect("Failed to create SQLite backend");
         (Arc::new(backend), temp_dir)
     }
 

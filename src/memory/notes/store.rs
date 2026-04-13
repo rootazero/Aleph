@@ -11,10 +11,10 @@ use crate::memory::notes::KnowledgeNote;
 /// Lightweight index entry for a knowledge note (no full content).
 #[derive(Debug, Clone)]
 pub struct NoteIndexEntry {
-    pub path: String,        // "wiki/rust-ownership" (relative within agent)
-    pub filename: String,    // "rust-ownership" (for global wikilink resolution)
-    pub agent_id: String,    // "default"
-    pub category: String,    // "wiki"
+    pub path: String,     // "wiki/rust-ownership" (relative within agent)
+    pub filename: String, // "rust-ownership" (for global wikilink resolution)
+    pub agent_id: String, // "default"
+    pub category: String, // "wiki"
     pub tags: Vec<String>,
     pub link_count: usize,
     pub created_at: i64,
@@ -31,22 +31,39 @@ pub trait NoteStore: Send + Sync {
     /// Insert or update the index entry, links, and FTS content for a note.
     ///
     /// `path` is computed as `"{category}/{note.title}"` inside the implementation.
-    async fn index_note(&self, note: &KnowledgeNote, agent_id: &str, category: &str) -> Result<(), AlephError>;
+    async fn index_note(
+        &self,
+        note: &KnowledgeNote,
+        agent_id: &str,
+        category: &str,
+    ) -> Result<(), AlephError>;
 
     /// Remove a note's index entry, links, and FTS content by path.
     async fn remove_note_index(&self, path: &str, agent_id: &str) -> Result<(), AlephError>;
 
     /// Look up a single note index entry by path.
-    async fn get_note_index(&self, path: &str, agent_id: &str) -> Result<Option<NoteIndexEntry>, AlephError>;
+    async fn get_note_index(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Option<NoteIndexEntry>, AlephError>;
 
     /// List all indexed notes for an agent, ordered by most recently updated first.
     async fn list_notes(&self, agent_id: &str) -> Result<Vec<NoteIndexEntry>, AlephError>;
 
     /// Paths of notes that this note links to.
-    async fn get_outgoing_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
+    async fn get_outgoing_links(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError>;
 
     /// Paths of notes that link to this note.
-    async fn get_incoming_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
+    async fn get_incoming_links(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError>;
 
     /// Full-text search over note content.
     async fn search_notes_fts(
@@ -76,13 +93,29 @@ pub trait NoteStore: Send + Sync {
     async fn count_all_notes(&self) -> Result<i64, AlephError>;
 
     /// Find all note paths that share the given filename (for wikilink resolution).
-    async fn find_by_filename(&self, filename: &str, agent_id: &str) -> Result<Vec<String>, AlephError>;
+    async fn find_by_filename(
+        &self,
+        filename: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError>;
 
     /// Store or update the embedding vector for a note.  Stub for now.
-    async fn upsert_embedding(&self, path: &str, agent_id: &str, embedding: &[f32], dim: u32) -> Result<(), AlephError>;
+    async fn upsert_embedding(
+        &self,
+        path: &str,
+        agent_id: &str,
+        embedding: &[f32],
+        dim: u32,
+    ) -> Result<(), AlephError>;
 
     /// Search notes by embedding similarity.  Stub for now.
-    async fn vector_search(&self, embedding: &[f32], dim: u32, agent_id: &str, limit: usize) -> Result<Vec<(String, f32)>, AlephError>;
+    async fn vector_search(
+        &self,
+        embedding: &[f32],
+        dim: u32,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, AlephError>;
 
     /// Vector + FTS hybrid search with RRF fusion, returning full content.
     async fn hybrid_search_notes(

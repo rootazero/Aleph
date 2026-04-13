@@ -451,14 +451,16 @@ impl SessionCompactor {
 
                 // Index raw content as transcript for direct retrieval
                 if let Some(ref indexer) = self.indexer {
-                    indexer.index_turn_text(
-                        &session_id,
-                        next_seq,
-                        &raw_content,
-                        "", // AI output already included in raw_content
-                        "owner",
-                        &agent_id,
-                    ).await;
+                    indexer
+                        .index_turn_text(
+                            &session_id,
+                            next_seq,
+                            &raw_content,
+                            "", // AI output already included in raw_content
+                            "owner",
+                            &agent_id,
+                        )
+                        .await;
                 }
             }
 

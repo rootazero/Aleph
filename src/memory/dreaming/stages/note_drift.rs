@@ -374,8 +374,14 @@ mod tests {
 
         let result = tokio::fs::read_to_string(&file).await.unwrap();
         assert!(result.contains("stale: true"), "stale key must be present");
-        assert!(result.starts_with("---\nstale: true\n"), "stale key must come first in frontmatter");
-        assert!(result.contains("category: wiki"), "original fields preserved");
+        assert!(
+            result.starts_with("---\nstale: true\n"),
+            "stale key must come first in frontmatter"
+        );
+        assert!(
+            result.contains("category: wiki"),
+            "original fields preserved"
+        );
         assert!(result.contains("- A fact"), "body preserved");
     }
 
@@ -393,7 +399,10 @@ mod tests {
         assert!(already_stale, "Pre-condition: stale already present");
         // If already_stale is true we do nothing — file remains unchanged.
         let after = tokio::fs::read_to_string(&file).await.unwrap();
-        assert_eq!(content, after, "File must not be modified if stale: already present");
+        assert_eq!(
+            content, after,
+            "File must not be modified if stale: already present"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -420,7 +429,10 @@ mod tests {
         tokio::fs::write(&file, &updated).await.unwrap();
 
         let result = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(result.contains("## Superseded"), "Superseded section must be appended");
+        assert!(
+            result.contains("## Superseded"),
+            "Superseded section must be appended"
+        );
         assert!(result.contains("- A fact"), "Original body preserved");
     }
 
@@ -429,12 +441,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.md");
 
-        let original = "---\ncategory: wiki\n---\n\n- A fact\n\n## Superseded\n\n_Already marked._\n";
+        let original =
+            "---\ncategory: wiki\n---\n\n- A fact\n\n## Superseded\n\n_Already marked._\n";
         tokio::fs::write(&file, original).await.unwrap();
 
         // Guard condition: if "## Superseded" already present, do nothing.
         let content = tokio::fs::read_to_string(&file).await.unwrap();
-        assert!(content.contains("## Superseded"), "Pre-condition: already marked");
+        assert!(
+            content.contains("## Superseded"),
+            "Pre-condition: already marked"
+        );
         // File unchanged — no second append.
         let after = tokio::fs::read_to_string(&file).await.unwrap();
         assert_eq!(content, after);

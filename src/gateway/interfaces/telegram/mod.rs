@@ -479,7 +479,8 @@ impl Channel for TelegramChannel {
                             };
                             if let Err(e) = inbound_tx.send(inbound) {
                                 tracing::error!(
-                                    "Failed to re-inject callback as inbound message: {:?}", e
+                                    "Failed to re-inject callback as inbound message: {:?}",
+                                    e
                                 );
                             }
                         }

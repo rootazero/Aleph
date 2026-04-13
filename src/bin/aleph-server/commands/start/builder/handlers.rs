@@ -722,17 +722,14 @@ pub(in crate::commands::start) fn init_compression_service(
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
     policy: &alephcore::CompressionPolicy,
     daemon: bool,
-    command_handler: Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
+    command_handler: Option<
+        std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
+    >,
 ) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
     let config = CompressionConfig::from_policy(policy);
-    let mut service = CompressionService::new(
-        memory_db.clone(),
-        provider,
-        embedder,
-        config,
-    );
+    let mut service = CompressionService::new(memory_db.clone(), provider, embedder, config);
     if let Some(handler) = command_handler {
         service = service.with_command_handler(handler);
     }
@@ -773,11 +770,20 @@ pub(in crate::commands::start) async fn init_command_handler(
 pub(in crate::commands::start) fn init_memory_context_provider(
     memory_db: &MemoryBackend,
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+    provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
+    assembler_config: alephcore::AssemblerConfig,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
-    std::sync::Arc::new(alephcore::thinker::MemoryContextProvider::new(
-        memory_db.clone(),
-        embedder,
-    ))
+    let mcp = match provider {
+        Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
+            memory_db.clone(),
+            embedder,
+            p,
+            assembler_config,
+            alephcore::thinker::MemoryContextConfig::default(),
+        ),
+        None => alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), embedder),
+    };
+    std::sync::Arc::new(mcp)
 }
 
 // ─── register_workspace_handlers ─────────────────────────────────────────────
@@ -1822,11 +1828,9 @@ pub(in crate::commands::start) fn register_graph_handlers(
 
     {
         let db = ::std::sync::Arc::clone(memory_db);
-        server
-            .handlers_mut()
-            .register("graph.search", move |req| {
-                let db = ::std::sync::Arc::clone(&db);
-                async move { graph::handle_search_impl(req, db).await }
-            });
+        server.handlers_mut().register("graph.search", move |req| {
+            let db = ::std::sync::Arc::clone(&db);
+            async move { graph::handle_search_impl(req, db).await }
+        });
     }
 }

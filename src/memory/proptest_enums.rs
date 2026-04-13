@@ -6,7 +6,7 @@
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-use super::{NoteType, MemoryLayer};
+use super::{MemoryLayer, NoteType};
 
 // ============================================================================
 // Strategies

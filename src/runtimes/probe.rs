@@ -111,11 +111,7 @@ fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
     }
 }
 
-fn get_version(
-    bin_path: &Path,
-    version_flag: &str,
-    version_regex: &'static str,
-) -> Option<String> {
+fn get_version(bin_path: &Path, version_flag: &str, version_regex: &'static str) -> Option<String> {
     let output = Command::new(bin_path).arg(version_flag).output().ok()?;
     let combined = format!(
         "{}{}",
@@ -145,8 +141,14 @@ fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<St
 fn version_lt(actual: &str, minimum: &str) -> bool {
     let parse = |s: &str| -> (u64, u64) {
         let mut parts = s.split('.');
-        let major = parts.next().and_then(|p| p.parse::<u64>().ok()).unwrap_or(0);
-        let minor = parts.next().and_then(|p| p.parse::<u64>().ok()).unwrap_or(0);
+        let major = parts
+            .next()
+            .and_then(|p| p.parse::<u64>().ok())
+            .unwrap_or(0);
+        let minor = parts
+            .next()
+            .and_then(|p| p.parse::<u64>().ok())
+            .unwrap_or(0);
         (major, minor)
     };
     parse(actual) < parse(minimum)

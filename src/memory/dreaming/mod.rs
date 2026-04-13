@@ -110,10 +110,10 @@ impl DreamPipeline {
     pub fn daily() -> Self {
         Self::new(vec![
             Box::new(stages::NoteConsolidateStage), // merge first to reduce volume
-            Box::new(stages::NoteDriftStage),        // detect contradictions
-            Box::new(stages::NoteLintStage),         // format fixes
-            Box::new(stages::NoteDecayStage),        // cleanup low-value
-            Box::new(stages::DailyDigestStage),      // generate daily report
+            Box::new(stages::NoteDriftStage),       // detect contradictions
+            Box::new(stages::NoteLintStage),        // format fixes
+            Box::new(stages::NoteDecayStage),       // cleanup low-value
+            Box::new(stages::DailyDigestStage),     // generate daily report
         ])
     }
 
@@ -430,7 +430,11 @@ impl DreamDaemon {
                     synthesis_count = report.synthesis_count,
                     notes_archived = report.notes_archived,
                     "DreamDaemon {}",
-                    if status == DreamRunStatus::Cancelled { "cancelled" } else { "completed" }
+                    if status == DreamRunStatus::Cancelled {
+                        "cancelled"
+                    } else {
+                        "completed"
+                    }
                 );
 
                 let _ = self

@@ -285,7 +285,11 @@ impl AgentInstance {
         if let Err(e) = self.session_manager.get_or_create(key).await {
             warn!("Failed to ensure session in SessionManager: {}", e);
         }
-        if let Err(e) = self.session_manager.add_message(key, role_str, content).await {
+        if let Err(e) = self
+            .session_manager
+            .add_message(key, role_str, content)
+            .await
+        {
             warn!("Failed to persist message to SQLite '{}': {}", key_str, e);
         }
     }
@@ -293,7 +297,10 @@ impl AgentInstance {
     /// Get session history (delegated to SessionManager / SQLite)
     pub async fn get_history(&self, key: &SessionKey, limit: Option<usize>) -> Vec<SessionMessage> {
         match self.session_manager.get_history(key, limit).await {
-            Ok(stored) => stored.into_iter().map(SessionMessage::from_stored).collect(),
+            Ok(stored) => stored
+                .into_iter()
+                .map(SessionMessage::from_stored)
+                .collect(),
             Err(e) => {
                 warn!("Failed to get history from SessionManager: {}", e);
                 Vec::new()
@@ -390,11 +397,11 @@ impl SessionMessage {
             "tool" => MessageRole::Tool,
             _ => MessageRole::User,
         };
-        let timestamp = chrono::DateTime::from_timestamp(stored.timestamp, 0)
-            .unwrap_or_else(chrono::Utc::now);
-        let metadata = stored.metadata.and_then(|json_str| {
-            serde_json::from_str::<HashMap<String, String>>(&json_str).ok()
-        });
+        let timestamp =
+            chrono::DateTime::from_timestamp(stored.timestamp, 0).unwrap_or_else(chrono::Utc::now);
+        let metadata = stored
+            .metadata
+            .and_then(|json_str| serde_json::from_str::<HashMap<String, String>>(&json_str).ok());
         Self {
             role,
             content: stored.content,

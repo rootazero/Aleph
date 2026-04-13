@@ -137,17 +137,9 @@ async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
     }
 }
 
-async fn run_via_parent(
-    parent: &str,
-    subcommand: &[&str],
-) -> Result<CmdOutcome, BootstrapError> {
+async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome, BootstrapError> {
     let output = match parent {
-        "fnm" => {
-            Command::new("fnm")
-                .args(subcommand)
-                .output()
-                .await?
-        }
+        "fnm" => Command::new("fnm").args(subcommand).output().await?,
         "node" => {
             // Wrap in `fnm exec --using lts --` to get a Node shell with PATH.
             let mut args: Vec<&str> = vec!["exec", "--using", "lts", "--"];

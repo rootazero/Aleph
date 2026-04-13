@@ -12,10 +12,10 @@ use super::inference::SemanticPurposeInferrer;
 use crate::error::AlephError;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{
-    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
+    FactSource, FactSpecificity, MemoryCategory, MemoryFact, MemoryLayer, NoteType, TemporalScope,
 };
-use crate::memory::notes::{KnowledgeNote, NoteIndexer};
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::{KnowledgeNote, NoteIndexer};
 use crate::memory::store::MemoryBackend;
 use crate::skill::{SkillSystem, SkillSystemEvent};
 use crate::sync_primitives::Arc;
@@ -141,8 +141,16 @@ impl ToolIndexCoordinator {
             note_type: NoteType::Tool,
             embedding: None,
             source_memory_ids: vec![],
-            created_at: if note.created_at > 0 { note.created_at } else { now },
-            updated_at: if note.updated_at > 0 { note.updated_at } else { now },
+            created_at: if note.created_at > 0 {
+                note.created_at
+            } else {
+                now
+            },
+            updated_at: if note.updated_at > 0 {
+                note.updated_at
+            } else {
+                now
+            },
             is_valid: true,
             invalidation_reason: None,
             decay_invalidated_at: None,
@@ -224,7 +232,9 @@ impl ToolIndexCoordinator {
         };
 
         // Write note file + update notes_index
-        self.indexer.write_note(TOOL_AGENT_ID, TOOL_CATEGORY, &note).await?;
+        self.indexer
+            .write_note(TOOL_AGENT_ID, TOOL_CATEGORY, &note)
+            .await?;
 
         // Re-index from disk so content_hash and index are consistent
         let note_path = self
@@ -233,7 +243,9 @@ impl ToolIndexCoordinator {
             .join(TOOL_AGENT_ID)
             .join(TOOL_CATEGORY)
             .join(format!("{name}.md"));
-        self.indexer.index_file(TOOL_AGENT_ID, TOOL_CATEGORY, &note_path).await?;
+        self.indexer
+            .index_file(TOOL_AGENT_ID, TOOL_CATEGORY, &note_path)
+            .await?;
 
         // Store embedding in notes vector table if provided.
         // ToolRetrieval will be switched to query notes in Task 8.
@@ -295,7 +307,8 @@ impl ToolIndexCoordinator {
                                 existing_note.updated_at = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .unwrap_or_default()
-                                    .as_secs() as i64;
+                                    .as_secs()
+                                    as i64;
 
                                 let updated_md = existing_note.to_markdown();
                                 if let Err(e) = tokio::fs::write(&file_path, &updated_md).await {
@@ -380,7 +393,6 @@ impl ToolIndexCoordinator {
     ///
     /// Returns entries ordered by updated_at descending.
     pub async fn get_tool_facts(&self) -> Result<Vec<MemoryFact>, AlephError> {
-
         let entries = self
             .indexer
             .store()
@@ -433,7 +445,6 @@ impl ToolIndexCoordinator {
 
     /// Get a specific tool fact by name.
     pub async fn get_tool_fact(&self, name: &str) -> Result<Option<MemoryFact>, AlephError> {
-
         let note_path = Self::tool_note_path(name);
         let entry = self
             .indexer
@@ -453,17 +464,15 @@ impl ToolIndexCoordinator {
             .join(format!("{}.md", entry.filename));
 
         let note = if let Ok(md) = tokio::fs::read_to_string(&file_path).await {
-            KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| {
-                KnowledgeNote {
-                    title: entry.filename.clone(),
-                    category: TOOL_CATEGORY.to_string(),
-                    tags: vec![],
-                    facts: vec![],
-                    links: vec![],
-                    created_at: entry.created_at,
-                    updated_at: entry.updated_at,
-                    content_hash: entry.content_hash.clone(),
-                }
+            KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| KnowledgeNote {
+                title: entry.filename.clone(),
+                category: TOOL_CATEGORY.to_string(),
+                tags: vec![],
+                facts: vec![],
+                links: vec![],
+                created_at: entry.created_at,
+                updated_at: entry.updated_at,
+                content_hash: entry.content_hash.clone(),
             })
         } else {
             KnowledgeNote {
@@ -489,7 +498,6 @@ impl ToolIndexCoordinator {
 
     /// Check if a tool note exists.
     pub async fn tool_exists(&self, name: &str) -> Result<bool, AlephError> {
-
         let note_path = Self::tool_note_path(name);
         let entry = self
             .indexer

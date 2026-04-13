@@ -3,8 +3,8 @@
 mod create;
 mod delegate;
 mod disband;
-mod member_remove;
 pub mod inbox_read;
+mod member_remove;
 pub mod message_send;
 pub mod session_collaborate;
 pub mod session_read;
@@ -19,8 +19,8 @@ pub use create::{
 };
 pub use delegate::{DelegateStatus, TeamDelegateArgs, TeamDelegateOutput, TeamDelegateTool};
 pub use disband::{TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool};
-pub use member_remove::{TeamMemberRemoveArgs, TeamMemberRemoveOutput, TeamMemberRemoveTool};
 pub use inbox_read::{InboxReadArgs, InboxReadOutput, InboxReadTool};
+pub use member_remove::{TeamMemberRemoveArgs, TeamMemberRemoveOutput, TeamMemberRemoveTool};
 pub use message_send::{MessageSendArgs, MessageSendOutput, MessageSendTool};
 
 pub use session_collaborate::{

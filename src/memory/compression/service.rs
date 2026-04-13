@@ -64,13 +64,27 @@ fn parse_raw_content(content: &str) -> (String, String) {
     // Try to split on "Assistant:" marker
     if let Some(pos) = content.find("\nAssistant:") {
         let user_part = content[..pos].to_string();
-        let user_part = user_part.strip_prefix("User:").unwrap_or(&user_part).trim().to_string();
-        let ai_part = content[pos..].trim_start_matches("\nAssistant:").trim().to_string();
+        let user_part = user_part
+            .strip_prefix("User:")
+            .unwrap_or(&user_part)
+            .trim()
+            .to_string();
+        let ai_part = content[pos..]
+            .trim_start_matches("\nAssistant:")
+            .trim()
+            .to_string();
         (user_part, ai_part)
     } else if let Some(pos) = content.find("Assistant:") {
         let user_part = content[..pos].to_string();
-        let user_part = user_part.strip_prefix("User:").unwrap_or(&user_part).trim().to_string();
-        let ai_part = content[pos..].trim_start_matches("Assistant:").trim().to_string();
+        let user_part = user_part
+            .strip_prefix("User:")
+            .unwrap_or(&user_part)
+            .trim()
+            .to_string();
+        let ai_part = content[pos..]
+            .trim_start_matches("Assistant:")
+            .trim()
+            .to_string();
         (user_part, ai_part)
     } else {
         (content.to_string(), String::new())
@@ -160,13 +174,14 @@ impl CompressionService {
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
-        let memory_dir = crate::utils::paths::get_note_memory_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+            std::env::temp_dir()
+                .join("aleph")
+                .join("memory")
+                .join("note")
+        });
 
-        let indexer = crate::memory::notes::NoteIndexer::new(
-            memory_dir,
-            self.database.clone(),
-        );
+        let indexer = crate::memory::notes::NoteIndexer::new(memory_dir, self.database.clone());
 
         self.compress_to_notes(workspace_id, &indexer).await
     }
@@ -229,7 +244,11 @@ impl CompressionService {
         );
 
         // 3. Get existing note context (path + first 300 chars of body)
-        let existing_notes = indexer.store().list_notes(workspace_id).await.unwrap_or_default();
+        let existing_notes = indexer
+            .store()
+            .list_notes(workspace_id)
+            .await
+            .unwrap_or_default();
         let mut existing_note_summaries: Vec<String> = Vec::new();
         for note_idx in &existing_notes {
             let note_file = indexer
@@ -256,9 +275,21 @@ impl CompressionService {
 
         // Validate extraction quality
         let valid_categories = [
-            "preference", "plan", "learning", "project", "personal",
-            "tool", "lesson", "skill", "wiki", "transcript", "other",
-            "subagent-run", "subagent-session", "subagent-checkpoint", "subagent-transcript",
+            "preference",
+            "plan",
+            "learning",
+            "project",
+            "personal",
+            "tool",
+            "lesson",
+            "skill",
+            "wiki",
+            "transcript",
+            "other",
+            "subagent-run",
+            "subagent-session",
+            "subagent-checkpoint",
+            "subagent-transcript",
         ];
 
         use crate::memory::notes::extractor::NoteExtractionResponse;
@@ -320,7 +351,10 @@ impl CompressionService {
                     let body = note.body_text();
                     if let Ok(embedding) = self.extractor.embedder().embed(&body).await {
                         let dim = embedding.len() as u32;
-                        let _ = indexer.store().upsert_embedding(&update.note_path, workspace_id, &embedding, dim).await;
+                        let _ = indexer
+                            .store()
+                            .upsert_embedding(&update.note_path, workspace_id, &embedding, dim)
+                            .await;
                     }
                     let note_file = indexer
                         .memory_dir()
@@ -333,7 +367,12 @@ impl CompressionService {
                 }
                 NoteAction::Append | NoteAction::Update => {
                     if let Err(e) = indexer
-                        .append_to_note(workspace_id, &update.note_path, &update.new_facts, &update.links)
+                        .append_to_note(
+                            workspace_id,
+                            &update.note_path,
+                            &update.new_facts,
+                            &update.links,
+                        )
                         .await
                     {
                         tracing::warn!(
@@ -350,10 +389,22 @@ impl CompressionService {
                         .join(category)
                         .join(format!("{filename}.md"));
                     if let Ok(content) = tokio::fs::read_to_string(&note_file).await {
-                        if let Ok(parsed) = crate::memory::notes::KnowledgeNote::from_markdown(filename, &content) {
-                            if let Ok(embedding) = self.extractor.embedder().embed(&parsed.body_text()).await {
+                        if let Ok(parsed) =
+                            crate::memory::notes::KnowledgeNote::from_markdown(filename, &content)
+                        {
+                            if let Ok(embedding) =
+                                self.extractor.embedder().embed(&parsed.body_text()).await
+                            {
                                 let dim = embedding.len() as u32;
-                                let _ = indexer.store().upsert_embedding(&update.note_path, workspace_id, &embedding, dim).await;
+                                let _ = indexer
+                                    .store()
+                                    .upsert_embedding(
+                                        &update.note_path,
+                                        workspace_id,
+                                        &embedding,
+                                        dim,
+                                    )
+                                    .await;
                             }
                         }
                     }
@@ -618,10 +669,8 @@ mod tests {
 
     async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir) {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend = Arc::new(
-            crate::memory::store::SqliteMemoryBackend::new(temp_dir.path())
-                .unwrap(),
-        );
+        let database: MemoryBackend =
+            Arc::new(crate::memory::store::SqliteMemoryBackend::new(temp_dir.path()).unwrap());
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
@@ -651,8 +700,7 @@ mod tests {
 
         // Separate db file for the compression backend
         let db_path = temp_dir.path().join("compression.db");
-        let database: MemoryBackend =
-            Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
+        let database: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
 
         // Separate db file for the notes index (NoteIndexer needs Arc<SqliteMemoryBackend>)
         let notes_db_path = temp_dir.path().join("notes.db");
@@ -733,8 +781,7 @@ mod tests {
     /// results, so no notes are created — but the state transitions must be correct.
     #[tokio::test]
     async fn test_full_pipeline_raw_to_notes() {
-        let (service, database, indexer, _temp_dir) =
-            create_test_service_with_indexer().await;
+        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
 
         // 1. Insert a raw memory with session-compressed content
         let raw = RawMemory::new(
@@ -771,15 +818,17 @@ mod tests {
     /// memory is still marked processed afterwards.
     #[tokio::test]
     async fn test_raw_memory_with_attachment_flows_through() {
-        let (service, database, indexer, _temp_dir) =
-            create_test_service_with_indexer().await;
+        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
 
         // Insert raw memory with attachment_text
         let raw = RawMemory::new(
-            "User: Analyze this document\nAssistant: The document discusses microservices.".to_string(),
+            "User: Analyze this document\nAssistant: The document discusses microservices."
+                .to_string(),
             RawMemorySource::SessionCompressed,
         )
-        .with_attachment_text("This is a PDF about microservices architecture with detailed diagrams.");
+        .with_attachment_text(
+            "This is a PDF about microservices architecture with detailed diagrams.",
+        );
 
         database.insert_raw_memory(&raw).await.unwrap();
 
@@ -794,15 +843,17 @@ mod tests {
 
         // Raw memory must be marked as processed
         let remaining = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(remaining, 0, "Raw memory with attachment should be processed");
+        assert_eq!(
+            remaining, 0,
+            "Raw memory with attachment should be processed"
+        );
     }
 
     /// Transcript-sourced raw memories are filtered out and NOT consumed by the
     /// notes compression pipeline (they go to the transcript indexer instead).
     #[tokio::test]
     async fn test_transcript_raw_memories_are_skipped() {
-        let (service, database, indexer, _temp_dir) =
-            create_test_service_with_indexer().await;
+        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
 
         // Insert one transcript memory (should be skipped) and one session memory
         let transcript = RawMemory::new(
@@ -847,8 +898,7 @@ mod tests {
     /// Multiple raw memories in one batch are all processed together.
     #[tokio::test]
     async fn test_multiple_raw_memories_batch_processed() {
-        let (service, database, indexer, _temp_dir) =
-            create_test_service_with_indexer().await;
+        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
 
         // Insert 3 raw memories
         for i in 0..3u32 {
@@ -866,17 +916,22 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.memories_processed, 3, "All 3 memories should be processed");
+        assert_eq!(
+            result.memories_processed, 3,
+            "All 3 memories should be processed"
+        );
 
         let remaining = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(remaining, 0, "All raw memories should be marked as processed");
+        assert_eq!(
+            remaining, 0,
+            "All raw memories should be marked as processed"
+        );
     }
 
     /// Empty database: compression returns an empty result without error.
     #[tokio::test]
     async fn test_compress_to_notes_empty_database() {
-        let (service, _database, indexer, _temp_dir) =
-            create_test_service_with_indexer().await;
+        let (service, _database, indexer, _temp_dir) = create_test_service_with_indexer().await;
 
         let result = service
             .compress_to_notes("default", &indexer)
@@ -893,12 +948,17 @@ mod tests {
     #[tokio::test]
     async fn test_raw_memory_full_roundtrip() {
         let temp_dir = tempdir().unwrap();
-        let backend: MemoryBackend =
-            Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
+        let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::new(temp_dir.path()).unwrap());
 
         // Insert 3 raw memories with varying sources
-        let raw1 = RawMemory::new("Session content 1".to_string(), RawMemorySource::SessionCompressed);
-        let raw2 = RawMemory::new("Session content 2".to_string(), RawMemorySource::SessionCompressed);
+        let raw1 = RawMemory::new(
+            "Session content 1".to_string(),
+            RawMemorySource::SessionCompressed,
+        );
+        let raw2 = RawMemory::new(
+            "Session content 2".to_string(),
+            RawMemorySource::SessionCompressed,
+        );
         let raw3 = RawMemory::new("Tool output".to_string(), RawMemorySource::ToolOutput);
 
         backend.insert_raw_memory(&raw1).await.unwrap();
