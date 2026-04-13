@@ -142,6 +142,13 @@ pub struct MemoryConfig {
     /// Session-end reflection configuration.
     #[serde(default)]
     pub reflection: ReflectionConfig,
+
+    // ========================================
+    // Working Memory Assembler (Spec 1)
+    // ========================================
+    /// Working memory assembler configuration.
+    #[serde(default)]
+    pub assembler: AssemblerConfig,
 }
 
 // =============================================================================
@@ -514,7 +521,6 @@ pub fn default_weekly_interval_days() -> u32 {
     7
 }
 
-
 pub fn default_drift_max_pairs_per_run() -> usize {
     20
 }
@@ -543,7 +549,6 @@ pub fn default_memory_decay_min_strength() -> f32 {
 pub fn default_memory_decay_protected_types() -> Vec<String> {
     vec!["personal".to_string()]
 }
-
 
 // =============================================================================
 // ReflectionConfig
@@ -595,6 +600,115 @@ fn default_reflection_min_chars() -> u32 {
 
 fn default_reflection_cooldown() -> u32 {
     30
+}
+
+// =============================================================================
+// AssemblerConfig (Memory Evolution Spec 1)
+// =============================================================================
+
+/// Working Memory Assembler configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AssemblerConfig {
+    #[serde(default = "default_assembler_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_total_budget")]
+    pub total_budget_tokens: u32,
+    #[serde(default = "default_pool_limit")]
+    pub candidate_pool_limit: usize,
+    #[serde(default = "default_rerank_timeout")]
+    pub rerank_timeout_ms: u64,
+    #[serde(default)]
+    pub rerank_model: Option<String>,
+    #[serde(default)]
+    pub render_style: crate::memory::assembler::render::RenderStyle,
+    #[serde(default)]
+    pub force_fallback: bool,
+    #[serde(default)]
+    pub fallback_skeleton: FallbackSkeleton,
+    #[serde(default)]
+    pub assembly_log: AssemblyLogConfig,
+}
+
+impl Default for AssemblerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_assembler_enabled(),
+            total_budget_tokens: default_total_budget(),
+            candidate_pool_limit: default_pool_limit(),
+            rerank_timeout_ms: default_rerank_timeout(),
+            rerank_model: None,
+            render_style: crate::memory::assembler::render::RenderStyle::default(),
+            force_fallback: false,
+            fallback_skeleton: FallbackSkeleton::default(),
+            assembly_log: AssemblyLogConfig::default(),
+        }
+    }
+}
+
+fn default_assembler_enabled() -> bool {
+    true
+}
+fn default_total_budget() -> u32 {
+    8000
+}
+fn default_pool_limit() -> usize {
+    20
+}
+fn default_rerank_timeout() -> u64 {
+    800
+}
+
+/// Deterministic slot budgets used when the LLM rerank path falls back.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FallbackSkeleton {
+    #[serde(default = "default_user_profile_tokens")]
+    pub user_profile_tokens: u32,
+    #[serde(default = "default_session_recent_tokens")]
+    pub session_recent_tokens: u32,
+    #[serde(default = "default_relevant_notes_tokens")]
+    pub relevant_notes_tokens: u32,
+    #[serde(default = "default_raw_fragments_tokens")]
+    pub raw_fragments_tokens: u32,
+    #[serde(default)]
+    pub nudges_tokens: u32,
+}
+
+impl Default for FallbackSkeleton {
+    fn default() -> Self {
+        Self {
+            user_profile_tokens: default_user_profile_tokens(),
+            session_recent_tokens: default_session_recent_tokens(),
+            relevant_notes_tokens: default_relevant_notes_tokens(),
+            raw_fragments_tokens: default_raw_fragments_tokens(),
+            nudges_tokens: 0,
+        }
+    }
+}
+
+fn default_user_profile_tokens() -> u32 {
+    200
+}
+fn default_session_recent_tokens() -> u32 {
+    1500
+}
+fn default_relevant_notes_tokens() -> u32 {
+    5000
+}
+fn default_raw_fragments_tokens() -> u32 {
+    1000
+}
+
+/// Optional persistence for assembly decisions (consumed by Spec 2).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AssemblyLogConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_assembly_retention_days")]
+    pub retention_days: u32,
+}
+
+fn default_assembly_retention_days() -> u32 {
+    14
 }
 
 // Hybrid retrieval defaults
@@ -656,6 +770,8 @@ impl Default for MemoryConfig {
             backup_max_files: default_backup_max_files(),
             // Reflection
             reflection: ReflectionConfig::default(),
+            // Working memory assembler
+            assembler: AssemblerConfig::default(),
         }
     }
 }
@@ -672,6 +788,30 @@ mod tests {
         assert_eq!(config.drift_max_pairs_per_run, 20);
         assert_eq!(config.synthesis_min_cluster_size, 3);
         assert_eq!(config.synthesis_max_insights, 10);
+    }
+
+    #[test]
+    fn assembler_config_defaults_sane() {
+        let c = AssemblerConfig::default();
+        assert!(c.enabled);
+        assert_eq!(c.total_budget_tokens, 8000);
+        assert_eq!(c.rerank_timeout_ms, 800);
+        assert!(!c.force_fallback);
+        assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
+        assert!(!c.assembly_log.enabled);
+    }
+
+    #[test]
+    fn assembler_partial_toml_falls_back_to_defaults() {
+        let toml_src = r#"
+            enabled = false
+            total_budget_tokens = 4000
+        "#;
+        let c: AssemblerConfig = toml::from_str(toml_src).expect("parse");
+        assert!(!c.enabled);
+        assert_eq!(c.total_budget_tokens, 4000);
+        assert_eq!(c.rerank_timeout_ms, 800);
+        assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
     }
 
     #[test]
@@ -692,5 +832,4 @@ mod tests {
             config.synthesis_max_insights
         );
     }
-
 }

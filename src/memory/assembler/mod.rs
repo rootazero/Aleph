@@ -2,6 +2,7 @@
 //! each LLM call. See `docs/superpowers/specs/2026-04-13-memory-evolution-spec1-assembler-design.md`.
 
 pub mod envelope;
+pub(crate) mod error;
 pub mod hydration;
 pub mod render;
 
@@ -9,3 +10,29 @@ pub use envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
 };
 pub use render::{render_envelope, render_with, RenderStyle};
+
+use crate::error::AlephError;
+use async_trait::async_trait;
+
+/// Token budget passed into the assembler. `total_tokens` is the hard cap
+/// before the LLM's reply headroom reservation (which the LLM re-rank path
+/// additionally honors).
+#[derive(Debug, Clone, Copy)]
+pub struct AssemblyBudget {
+    pub total_tokens: u32,
+}
+
+/// Produces a [`MemoryEnvelope`] for each LLM turn. Never returns `Err` for
+/// LLM-assist failures — internal failures (retrieval error, LLM timeout,
+/// hydration miss) are caught and degraded to fallback / empty slots. `Err`
+/// only surfaces for system-level misconfiguration at construction time.
+#[async_trait]
+pub trait WorkingMemoryAssembler: Send + Sync {
+    async fn assemble(
+        &self,
+        query: &str,
+        agent_id: &str,
+        session_id: Option<&str>,
+        budget: AssemblyBudget,
+    ) -> Result<MemoryEnvelope, AlephError>;
+}
