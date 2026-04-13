@@ -5,7 +5,7 @@ use crate::memory::assembler::envelope::MemoryEnvelope;
 use crate::memory::extensions::traits::MemoryExtension;
 use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
 use crate::memory::store::raw_memory::RawMemory;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::warn;
@@ -14,29 +14,66 @@ pub const ON_RETRIEVE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const ON_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
-#[derive(Default, Clone)]
+/// Registry for memory extension hooks with interior mutability.
+///
+/// Uses `RwLock` so that concurrent plugin loaders can call `register` safely
+/// while dispatch methods hold a snapshot of the extensions list (dropping
+/// the lock before any await points).
+#[derive(Default)]
 pub struct MemoryExtensionRegistry {
     /// Extensions in registration order (for on_capture this is the chain order).
-    extensions: Vec<Arc<dyn MemoryExtension>>,
+    extensions: RwLock<Vec<Arc<dyn MemoryExtension>>>,
+}
+
+impl Clone for MemoryExtensionRegistry {
+    fn clone(&self) -> Self {
+        let snapshot = self
+            .extensions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        Self {
+            extensions: RwLock::new(snapshot),
+        }
+    }
 }
 
 impl MemoryExtensionRegistry {
     pub fn new() -> Self {
         Self {
-            extensions: Vec::new(),
+            extensions: RwLock::new(Vec::new()),
         }
     }
 
-    pub fn register(&mut self, ext: Arc<dyn MemoryExtension>) {
-        self.extensions.push(ext);
+    /// Register an extension. Safe to call concurrently from multiple loaders.
+    pub fn register(&self, ext: Arc<dyn MemoryExtension>) {
+        self.extensions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ext);
     }
 
     pub fn len(&self) -> usize {
-        self.extensions.len()
+        self.extensions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.extensions.is_empty()
+        self.extensions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
+    /// Snapshot the current extension list. The lock is released before
+    /// any async dispatch to avoid holding it across await points.
+    fn snapshot(&self) -> Vec<Arc<dyn MemoryExtension>> {
+        self.extensions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// on_retrieve: sequential broadcast. Each extension sees the current
@@ -47,7 +84,7 @@ impl MemoryExtensionRegistry {
         ctx: &RetrieveCtx,
         envelope: &mut MemoryEnvelope,
     ) -> Result<(), AlephError> {
-        for ext in &self.extensions {
+        for ext in self.snapshot() {
             let name = ext.name().to_string();
             match timeout(ON_RETRIEVE_TIMEOUT, ext.on_retrieve(ctx, envelope)).await {
                 Ok(Ok(())) => {}
@@ -66,7 +103,7 @@ impl MemoryExtensionRegistry {
         ctx: &CaptureCtx,
         raw: &mut RawMemory,
     ) -> Result<CaptureDecision, AlephError> {
-        for ext in &self.extensions {
+        for ext in self.snapshot() {
             let name = ext.name().to_string();
             match timeout(ON_CAPTURE_TIMEOUT, ext.on_capture(ctx, raw)).await {
                 Ok(Ok(CaptureDecision::Allow)) => continue,
@@ -99,8 +136,8 @@ impl MemoryExtensionRegistry {
         &self,
         ctx: &ProduceCtx,
     ) -> Vec<(String, Result<Vec<RawMemory>, AlephError>)> {
-        let mut out = Vec::with_capacity(self.extensions.len());
-        for ext in &self.extensions {
+        let mut out = Vec::with_capacity(self.len());
+        for ext in self.snapshot() {
             let name = ext.name().to_string();
             let result = match timeout(PRODUCE_TIMEOUT, ext.produce(ctx)).await {
                 Ok(r) => r,
@@ -257,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_retrieve_broadcast_applies_each_extension() {
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(AppendQueryExt));
         reg.register(Arc::new(AppendQueryExt));
         let mut env = make_envelope();
@@ -281,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_capture_chain_short_circuits_on_block() {
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(BlockingExt));
         reg.register(Arc::new(PrefixContentExt));
         let mut raw = make_raw();
@@ -295,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_capture_chain_mutates_raw_in_order() {
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(PrefixContentExt));
         reg.register(Arc::new(PrefixContentExt));
         let mut raw = make_raw();
@@ -316,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_returns_per_plugin_results() {
-        let mut reg = MemoryExtensionRegistry::new();
+        let reg = MemoryExtensionRegistry::new();
         reg.register(Arc::new(StubProducerExt));
         reg.register(Arc::new(NoopExt));
         let out = reg.dispatch_produce(&produce_ctx()).await;

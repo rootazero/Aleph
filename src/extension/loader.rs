@@ -20,6 +20,7 @@
 //! responsible for registering these configs with `McpManager`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
@@ -29,6 +30,7 @@ use crate::extension::registry::PluginRegistry;
 use crate::extension::runtime::WasmRuntime;
 use crate::extension::types::{DirectCommandResult, PluginKind};
 use crate::mcp::McpManagerConfig;
+use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry, UnboundMcpCaller};
 
 /// Manages loading plugins into appropriate runtimes.
 pub struct PluginLoader {
@@ -174,6 +176,25 @@ impl PluginLoader {
             manifest.id, server_count, server_names
         );
 
+        Ok(())
+    }
+
+    /// Load a plugin and, if the manifest declares a `[memory]` section,
+    /// register a `McpMemoryExtension` backed by an `UnboundMcpCaller` into
+    /// `memory_registry`.
+    ///
+    /// This is the preferred entry point when the `MemoryExtensionRegistry` is
+    /// available (e.g. after Task 11 threads it through the server context).
+    /// Existing callers that don't yet have the registry can keep using
+    /// `load_plugin` unchanged.
+    pub fn load_plugin_with_memory(
+        &mut self,
+        manifest: &PluginManifest,
+        registry: &mut PluginRegistry,
+        memory_registry: &Arc<MemoryExtensionRegistry>,
+    ) -> ExtensionResult<()> {
+        self.load_plugin(manifest, registry)?;
+        register_memory_extension_if_declared(manifest, memory_registry);
         Ok(())
     }
 
@@ -368,6 +389,30 @@ impl Default for PluginLoader {
     }
 }
 
+/// Register a `McpMemoryExtension` into `registry` when `manifest` declares a
+/// `[memory]` section.
+///
+/// The extension is initially backed by `UnboundMcpCaller`, which returns a
+/// clear diagnostic error on every call. Task 11 replaces the caller with a
+/// real `McpManager` binding at server startup.
+///
+/// This is extracted as a free function so it can be unit-tested directly
+/// without constructing a full `PluginLoader`.
+pub(crate) fn register_memory_extension_if_declared(
+    manifest: &PluginManifest,
+    registry: &Arc<MemoryExtensionRegistry>,
+) {
+    if manifest.memory_manifest.is_some() {
+        let caller = Arc::new(UnboundMcpCaller::new(manifest.name.clone()));
+        let ext = McpMemoryExtension::new(manifest.name.clone(), caller);
+        registry.register(Arc::new(ext));
+        info!(
+            plugin = %manifest.name,
+            "registered McpMemoryExtension (UnboundMcpCaller) for plugin with [memory] section"
+        );
+    }
+}
+
 impl Drop for PluginLoader {
     fn drop(&mut self) {
         if self.is_any_runtime_active() || !self.loaded_plugins.is_empty() {
@@ -379,6 +424,8 @@ impl Drop for PluginLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::extensions::manifest::{MemoryHook, MemoryManifestSection};
+    use std::path::PathBuf;
 
     #[test]
     fn test_plugin_loader_new() {
@@ -473,6 +520,52 @@ mod tests {
         let loader = PluginLoader::new();
         assert!(loader.get_mcp_configs("nonexistent").is_none());
         assert!(loader.all_mcp_configs_map().is_empty());
+    }
+
+    // ===== Memory extension registration helpers =====
+
+    fn make_manifest_with_memory() -> PluginManifest {
+        let mut m = PluginManifest::new(
+            "test-mem-plugin".to_string(),
+            "Test Memory Plugin".to_string(),
+            PluginKind::Mcp,
+            PathBuf::from("index.js"),
+        );
+        m.memory_manifest = Some(MemoryManifestSection {
+            hooks: vec![MemoryHook::OnRetrieve],
+            priority: 100,
+            produce_interval_seconds: None,
+            on_capture_timeout_action: "block".to_string(),
+        });
+        m
+    }
+
+    fn make_manifest_no_memory() -> PluginManifest {
+        PluginManifest::new(
+            "test-plain-plugin".to_string(),
+            "Test Plain Plugin".to_string(),
+            PluginKind::Mcp,
+            PathBuf::from("index.js"),
+        )
+    }
+
+    #[test]
+    fn register_memory_extension_registers_when_memory_section_present() {
+        let manifest = make_manifest_with_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+
+        assert_eq!(registry.len(), 0);
+        register_memory_extension_if_declared(&manifest, &registry);
+        assert_eq!(registry.len(), 1, "should have registered one extension");
+    }
+
+    #[test]
+    fn register_memory_extension_skips_when_no_memory_section() {
+        let manifest = make_manifest_no_memory();
+        let registry = Arc::new(MemoryExtensionRegistry::new());
+
+        register_memory_extension_if_declared(&manifest, &registry);
+        assert_eq!(registry.len(), 0, "no extension should be registered without [memory] section");
     }
 
     #[test]
