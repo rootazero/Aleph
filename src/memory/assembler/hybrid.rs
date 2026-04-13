@@ -1,12 +1,15 @@
 //! Default implementation of [`WorkingMemoryAssembler`] — hybrid retrieval +
-//! LLM re-rank with deterministic skeleton fallback. Task 9 lands the
-//! fallback-only path; Task 10 will wire in the LLM re-rank.
+//! LLM re-rank (B strategy) with deterministic skeleton fallback (C strategy).
 
-use super::envelope::{EnvelopeMeta, EnvelopeSlot, MemoryEnvelope, SCHEMA_VERSION};
+use super::envelope::{
+    EnvelopeItem, EnvelopeMeta, EnvelopeSlot, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
+};
+use super::error::AssemblerError;
 use super::fallback::{skeleton_pack, Candidate};
 use super::gather::{GatherInputs, Gatherer};
 use super::hydration::{estimate_tokens, truncate_utf8_safe};
 use super::profile::UserProfileLoader;
+use super::rerank::{build_prompt, parse_response};
 use super::{AssemblyBudget, WorkingMemoryAssembler};
 use crate::config::types::memory::AssemblerConfig;
 use crate::error::AlephError;
@@ -14,12 +17,50 @@ use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::store::MemoryBackend;
 use crate::memory::SqliteMemoryBackend;
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use tracing::info;
+
+/// Abstraction over the LLM call used by the re-rank stage. The default
+/// implementation wraps `Arc<dyn AiProvider>`; tests inject stubs.
+#[async_trait]
+pub trait LlmReranker: Send + Sync {
+    async fn complete(&self, prompt: &str, model: Option<&str>) -> Result<String, AlephError>;
+}
+
+/// Default reranker that drives any [`AiProvider`] with a single user message.
+pub struct AiProviderReranker {
+    provider: Arc<dyn AiProvider>,
+}
+
+impl AiProviderReranker {
+    pub fn new(provider: Arc<dyn AiProvider>) -> Arc<Self> {
+        Arc::new(Self { provider })
+    }
+}
+
+#[async_trait]
+impl LlmReranker for AiProviderReranker {
+    async fn complete(&self, prompt: &str, model: Option<&str>) -> Result<String, AlephError> {
+        let messages = vec![UnifiedMessage::user(prompt.to_string())];
+        let mut payload = RequestPayload::new(&messages).with_system(Some(
+            "You respond only with strict JSON. No prose. No markdown fences.",
+        ));
+        if let Some(m) = model {
+            payload.model = Some(m.to_string());
+        }
+        let response = self.provider.process(payload).await?;
+        Ok(response.text_content())
+    }
+}
 
 pub struct HybridAssembler {
     gatherer: Gatherer,
+    reranker: Arc<dyn LlmReranker>,
     config: AssemblerConfig,
 }
 
@@ -29,6 +70,7 @@ impl HybridAssembler {
         snapshots: Arc<SnapshotReader>,
         backend: MemoryBackend,
         profile: Arc<UserProfileLoader>,
+        reranker: Arc<dyn LlmReranker>,
         config: AssemblerConfig,
     ) -> Self {
         Self {
@@ -38,12 +80,115 @@ impl HybridAssembler {
                 backend,
                 profile,
             },
+            reranker,
             config,
         }
     }
 
     fn now(&self) -> i64 {
         chrono::Utc::now().timestamp()
+    }
+
+    async fn run_rerank(
+        &self,
+        query: &str,
+        candidates: &[Candidate],
+        total_budget: u32,
+    ) -> Result<Vec<EnvelopeSlot>, &'static str> {
+        let prompt = build_prompt(query, candidates, total_budget);
+        let timeout = std::time::Duration::from_millis(self.config.rerank_timeout_ms);
+
+        let raw = match tokio::time::timeout(
+            timeout,
+            self.reranker
+                .complete(&prompt, self.config.rerank_model.as_deref()),
+        )
+        .await
+        {
+            Ok(Ok(text)) => text,
+            Ok(Err(_)) => return Err("llm_error"),
+            Err(_) => return Err("llm_timeout"),
+        };
+
+        let decisions = match parse_response(&raw, candidates, total_budget) {
+            Ok(v) => v,
+            Err(AssemblerError::RerankEmpty) => return Err("llm_empty_slots"),
+            Err(AssemblerError::RerankParse(_)) => return Err("llm_parse_error"),
+            Err(_) => return Err("llm_unknown_error"),
+        };
+
+        let by_id: HashMap<&str, &Candidate> =
+            candidates.iter().map(|c| (c.id.as_str(), c)).collect();
+        let mut slots: Vec<EnvelopeSlot> = Vec::new();
+
+        // UserProfile always appended first if present in candidates.
+        let profile_cands: Vec<&Candidate> = candidates
+            .iter()
+            .filter(|c| c.slot_hint == SlotKind::UserProfile)
+            .collect();
+        if !profile_cands.is_empty() {
+            let items = profile_cands
+                .into_iter()
+                .map(candidate_to_item)
+                .collect::<Vec<_>>();
+            slots.push(EnvelopeSlot {
+                kind: SlotKind::UserProfile,
+                items,
+                tokens_used: 0,
+                tokens_budget: self.config.fallback_skeleton.user_profile_tokens,
+            });
+        }
+
+        for (kind, ids, budget) in decisions {
+            let items = ids
+                .into_iter()
+                .filter_map(|id| by_id.get(id.as_str()).copied())
+                .map(candidate_to_item)
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                continue;
+            }
+            slots.push(EnvelopeSlot {
+                kind,
+                items,
+                tokens_used: 0,
+                tokens_budget: budget,
+            });
+        }
+        Ok(slots)
+    }
+
+    fn pack_envelope(
+        &self,
+        query: &str,
+        agent_id: &str,
+        session_id: Option<&str>,
+        candidates_considered: usize,
+        slots: Vec<EnvelopeSlot>,
+        strategy: &'static str,
+        used_fallback: bool,
+        fallback_reason: Option<String>,
+        llm_rerank_latency_ms: Option<u64>,
+        total_latency_ms: u64,
+    ) -> MemoryEnvelope {
+        let mut slots = slots;
+        hydrate(&mut slots);
+        MemoryEnvelope {
+            schema_version: SCHEMA_VERSION.to_string(),
+            generated_at: self.now(),
+            query: query.to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: session_id.map(str::to_string),
+            slots,
+            meta: EnvelopeMeta {
+                strategy: strategy.into(),
+                candidates_considered,
+                used_fallback,
+                fallback_reason,
+                llm_rerank_latency_ms,
+                total_latency_ms,
+            },
+        }
     }
 }
 
@@ -54,9 +199,26 @@ impl WorkingMemoryAssembler for HybridAssembler {
         query: &str,
         agent_id: &str,
         session_id: Option<&str>,
-        _budget: AssemblyBudget,
+        budget: AssemblyBudget,
     ) -> Result<MemoryEnvelope, AlephError> {
         let start = std::time::Instant::now();
+
+        if !self.config.enabled {
+            let env = self.pack_envelope(
+                query,
+                agent_id,
+                session_id,
+                0,
+                Vec::new(),
+                "disabled",
+                true,
+                Some("assembler_disabled".into()),
+                None,
+                start.elapsed().as_millis() as u64,
+            );
+            emit_tracing(&env, query);
+            return Ok(env);
+        }
 
         // Stage 1: gather
         let gathered = self
@@ -70,39 +232,85 @@ impl WorkingMemoryAssembler for HybridAssembler {
             .await;
         let candidates_considered = gathered.len();
 
-        // Stage 2 will be added in Task 10 — always fallback for now.
-        let mut slots = fallback_slots(&gathered, &self.config, self.now());
-        hydrate(&mut slots);
-
-        let total_latency = start.elapsed().as_millis() as u64;
-        let envelope = MemoryEnvelope {
-            schema_version: SCHEMA_VERSION.to_string(),
-            generated_at: self.now(),
-            query: query.to_string(),
-            agent_id: agent_id.to_string(),
-            session_id: session_id.map(str::to_string),
-            slots,
-            meta: EnvelopeMeta {
-                strategy: "skeleton_fallback_v1".into(),
+        // Fast-path: tiny pool or forced fallback skips LLM.
+        let too_small = candidates_considered < 3;
+        if self.config.force_fallback || too_small {
+            let reason = if self.config.force_fallback {
+                "forced"
+            } else {
+                "tiny_pool"
+            };
+            let slots = skeleton_pack(&gathered, &self.config.fallback_skeleton, self.now());
+            let env = self.pack_envelope(
+                query,
+                agent_id,
+                session_id,
                 candidates_considered,
-                used_fallback: true,
-                fallback_reason: Some("stage2_pending".into()),
-                llm_rerank_latency_ms: None,
-                total_latency_ms: total_latency,
-            },
-        };
+                slots,
+                "skeleton_fallback_v1",
+                true,
+                Some(reason.into()),
+                None,
+                start.elapsed().as_millis() as u64,
+            );
+            emit_tracing(&env, query);
+            return Ok(env);
+        }
 
-        emit_tracing(&envelope, query);
-        Ok(envelope)
+        // Stage 2: LLM rerank
+        let rerank_start = std::time::Instant::now();
+        let rerank_outcome = self.run_rerank(query, &gathered, budget.total_tokens).await;
+        let rerank_latency = rerank_start.elapsed().as_millis() as u64;
+
+        match rerank_outcome {
+            Ok(slots) => {
+                let env = self.pack_envelope(
+                    query,
+                    agent_id,
+                    session_id,
+                    candidates_considered,
+                    slots,
+                    "hybrid_v1",
+                    false,
+                    None,
+                    Some(rerank_latency),
+                    start.elapsed().as_millis() as u64,
+                );
+                emit_tracing(&env, query);
+                Ok(env)
+            }
+            Err(reason) => {
+                let slots = skeleton_pack(&gathered, &self.config.fallback_skeleton, self.now());
+                let env = self.pack_envelope(
+                    query,
+                    agent_id,
+                    session_id,
+                    candidates_considered,
+                    slots,
+                    "skeleton_fallback_v1",
+                    true,
+                    Some(reason.into()),
+                    Some(rerank_latency),
+                    start.elapsed().as_millis() as u64,
+                );
+                emit_tracing(&env, query);
+                Ok(env)
+            }
+        }
     }
 }
 
-fn fallback_slots(
-    candidates: &[Candidate],
-    config: &AssemblerConfig,
-    now: i64,
-) -> Vec<EnvelopeSlot> {
-    skeleton_pack(candidates, &config.fallback_skeleton, now)
+fn candidate_to_item(c: &Candidate) -> EnvelopeItem {
+    EnvelopeItem {
+        id: c.id.clone(),
+        title: c.title.clone(),
+        content: c.full_content.clone(),
+        source: c.source.clone(),
+        relevance: c.relevance,
+        tokens: 0,
+        updated_at: c.updated_at,
+        extra: Default::default(),
+    }
 }
 
 fn hydrate(slots: &mut [EnvelopeSlot]) {
@@ -150,7 +358,7 @@ fn emit_tracing(env: &MemoryEnvelope, query: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::assembler::envelope::{EnvelopeItem, ItemSource, SlotKind};
+    use crate::memory::assembler::envelope::{EnvelopeItem, ItemSource};
 
     #[test]
     fn hydrate_truncates_content_to_slot_budget() {

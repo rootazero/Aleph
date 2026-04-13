@@ -11,7 +11,7 @@ pub(crate) mod profile;
 pub mod render;
 pub(crate) mod rerank;
 
-pub use hybrid::HybridAssembler;
+pub use hybrid::{AiProviderReranker, HybridAssembler, LlmReranker};
 pub use profile::UserProfileLoader;
 
 pub use envelope::{
