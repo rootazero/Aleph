@@ -83,7 +83,15 @@ pub struct LayerInput<'a> {
     /// from `~/.aleph/agents/{agent_id}/`.
     pub identity_files: Option<&'a IdentityFiles>,
     /// Pre-fetched memory context from SQLite (facts + memory summaries).
+    ///
+    /// Deprecated: Task 5 will remove this field once all callers use
+    /// `memory_user_message` instead.
     pub memory_context: Option<&'a super::memory_context::MemoryContext>,
+    /// Pre-rendered memory XML from `MemoryContextProvider::build_memory_user_message`.
+    ///
+    /// When set, `MemoryAugmentationLayer` injects this text verbatim into the
+    /// system prompt.  Takes precedence over the legacy `memory_context` field.
+    pub memory_user_message: Option<String>,
     /// Whether the conversation history contains compressed session summaries.
     ///
     /// Set to `true` when session compaction has produced at least one
@@ -123,6 +131,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_context: None,
+            memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -144,6 +153,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_context: None,
+            memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -165,6 +175,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_context: None,
+            memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -186,6 +197,7 @@ impl<'a> LayerInput<'a> {
             inbound: None,
             identity_files: None,
             memory_context: None,
+            memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
             mcp_instructions: None,
@@ -242,6 +254,15 @@ impl<'a> LayerInput<'a> {
         ctx: Option<&'a super::memory_context::MemoryContext>,
     ) -> Self {
         self.memory_context = ctx;
+        self
+    }
+
+    /// Attach pre-rendered memory XML from `build_memory_user_message`.
+    ///
+    /// When set, `MemoryAugmentationLayer` injects this text verbatim and
+    /// ignores the legacy `memory_context` field.
+    pub fn with_memory_user_message(mut self, text: String) -> Self {
+        self.memory_user_message = Some(text);
         self
     }
 
