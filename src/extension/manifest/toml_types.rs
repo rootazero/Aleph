@@ -12,6 +12,7 @@
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::types::{AuthorInfo, ConfigUiHint, PluginManifest};
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
+use crate::memory::extensions::manifest::MemoryManifestSection;
 use crate::extension::runtime::wasm::{
     CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
     SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
@@ -59,6 +60,10 @@ pub struct AlephPluginToml {
     pub providers: Vec<ProviderSection>,
     #[serde(default)]
     pub http_routes: Vec<HttpRouteSection>,
+
+    /// Optional [memory] section — declares which memory extension hooks this plugin implements.
+    #[serde(default)]
+    pub memory: Option<MemoryManifestSection>,
 }
 
 // =============================================================================
@@ -599,5 +604,47 @@ pub fn parse_aleph_plugin_toml_content(
             Some(toml.http_routes)
         },
         aleph_extensions: None,
+        memory_manifest: toml.memory,
     })
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::extensions::manifest::MemoryHook;
+
+    #[test]
+    fn plugin_manifest_with_memory_section_parses() {
+        let toml_str = r#"
+[plugin]
+id = "memory-obsidian"
+name = "Memory Obsidian"
+version = "1.0.0"
+
+[memory]
+hooks = ["on_retrieve"]
+priority = 50
+"#;
+        let parsed: AlephPluginToml = toml::from_str(toml_str).unwrap();
+        let mem = parsed.memory.as_ref().expect("memory section should be present");
+        assert_eq!(mem.hooks.len(), 1);
+        assert_eq!(mem.hooks[0], MemoryHook::OnRetrieve);
+        assert_eq!(mem.priority, 50);
+        assert_eq!(mem.on_capture_timeout_action, "block");
+        assert!(mem.produce_interval_seconds.is_none());
+    }
+
+    #[test]
+    fn plugin_manifest_without_memory_section_is_none() {
+        let toml_str = r#"
+[plugin]
+id = "plain-plugin"
+"#;
+        let parsed: AlephPluginToml = toml::from_str(toml_str).unwrap();
+        assert!(parsed.memory.is_none());
+    }
 }

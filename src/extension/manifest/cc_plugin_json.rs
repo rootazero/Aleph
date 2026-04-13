@@ -241,6 +241,8 @@ pub fn parse_cc_plugin_json_content(
         http_routes_v2: None,
         // CC-compat extensions
         aleph_extensions: aleph_ext,
+        // Memory extension manifest — not available in CC JSON format
+        memory_manifest: None,
     };
 
     Ok(manifest)

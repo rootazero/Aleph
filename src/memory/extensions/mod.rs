@@ -5,6 +5,7 @@
 
 pub mod first_party;
 pub mod insert_helper;
+pub mod manifest;
 pub mod mcp_adapter;
 pub mod registry;
 pub mod scheduler;
@@ -12,6 +13,7 @@ pub mod traits;
 pub mod types;
 
 pub use first_party::EnvelopeRelevanceFloorExtension;
+pub use manifest::{MemoryHook, MemoryManifestSection};
 pub use insert_helper::insert_with_capture_filter;
 pub use mcp_adapter::{McpCaller, McpMemoryExtension};
 pub use registry::{
