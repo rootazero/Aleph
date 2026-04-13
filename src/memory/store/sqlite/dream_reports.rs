@@ -96,9 +96,7 @@ impl SqliteMemoryBackend {
         let mut results = Vec::new();
         for row in rows {
             results.push(
-                row.map_err(|e| {
-                    AlephError::config(format!("recent_dream_reports row: {e}"))
-                })?,
+                row.map_err(|e| AlephError::config(format!("recent_dream_reports row: {e}")))?,
             );
         }
         Ok(results)
@@ -112,11 +110,9 @@ impl SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
         let ts: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(finished_at) FROM dream_reports",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT MAX(finished_at) FROM dream_reports", [], |row| {
+                row.get(0)
+            })
             .map_err(|e| AlephError::config(format!("latest_dream_report_ts: {e}")))?;
 
         Ok(ts)
@@ -182,8 +178,12 @@ mod tests {
     fn latest_ts_after_insert() {
         let store = setup();
 
-        store.insert_dream_report(&sample_report("r1", 1000, 2000)).unwrap();
-        store.insert_dream_report(&sample_report("r2", 3000, 5000)).unwrap();
+        store
+            .insert_dream_report(&sample_report("r1", 1000, 2000))
+            .unwrap();
+        store
+            .insert_dream_report(&sample_report("r2", 3000, 5000))
+            .unwrap();
 
         let ts = store.latest_dream_report_ts().unwrap();
         assert_eq!(ts, Some(5000));

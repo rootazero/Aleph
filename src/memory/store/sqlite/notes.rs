@@ -56,14 +56,18 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<NoteIndexEntry> {
 
 #[async_trait]
 impl NoteStore for SqliteMemoryBackend {
-    async fn index_note(&self, note: &KnowledgeNote, agent_id: &str, category: &str) -> Result<(), AlephError> {
+    async fn index_note(
+        &self,
+        note: &KnowledgeNote,
+        agent_id: &str,
+        category: &str,
+    ) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
 
         let path = format!("{category}/{}", note.title);
         let filename = note.title.clone();
 
-        let tags_json =
-            serde_json::to_string(&note.tags).unwrap_or_else(|_| "[]".to_string());
+        let tags_json = serde_json::to_string(&note.tags).unwrap_or_else(|_| "[]".to_string());
 
         // Upsert notes_index
         conn.execute(
@@ -139,7 +143,11 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(())
     }
 
-    async fn get_note_index(&self, path: &str, agent_id: &str) -> Result<Option<NoteIndexEntry>, AlephError> {
+    async fn get_note_index(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Option<NoteIndexEntry>, AlephError> {
         let conn = lock_conn!(self)?;
 
         let mut stmt = conn
@@ -188,7 +196,11 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("count_all_notes failed: {e}")))
     }
 
-    async fn get_outgoing_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError> {
+    async fn get_outgoing_links(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
 
         let mut stmt = conn
@@ -201,14 +213,17 @@ impl NoteStore for SqliteMemoryBackend {
 
         let mut links = Vec::new();
         for row in rows {
-            links.push(
-                row.map_err(|e| AlephError::config(format!("get_outgoing_links row: {e}")))?,
-            );
+            links
+                .push(row.map_err(|e| AlephError::config(format!("get_outgoing_links row: {e}")))?);
         }
         Ok(links)
     }
 
-    async fn get_incoming_links(&self, path: &str, agent_id: &str) -> Result<Vec<String>, AlephError> {
+    async fn get_incoming_links(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
 
         let mut stmt = conn
@@ -221,9 +236,8 @@ impl NoteStore for SqliteMemoryBackend {
 
         let mut links = Vec::new();
         for row in rows {
-            links.push(
-                row.map_err(|e| AlephError::config(format!("get_incoming_links row: {e}")))?,
-            );
+            links
+                .push(row.map_err(|e| AlephError::config(format!("get_incoming_links row: {e}")))?);
         }
         Ok(links)
     }
@@ -382,7 +396,11 @@ impl NoteStore for SqliteMemoryBackend {
         Ok((entries, edges))
     }
 
-    async fn find_by_filename(&self, filename: &str, agent_id: &str) -> Result<Vec<String>, AlephError> {
+    async fn find_by_filename(
+        &self,
+        filename: &str,
+        agent_id: &str,
+    ) -> Result<Vec<String>, AlephError> {
         let conn = lock_conn!(self)?;
 
         let mut stmt = conn
@@ -400,7 +418,13 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(paths)
     }
 
-    async fn upsert_embedding(&self, path: &str, agent_id: &str, embedding: &[f32], dim: u32) -> Result<(), AlephError> {
+    async fn upsert_embedding(
+        &self,
+        path: &str,
+        agent_id: &str,
+        embedding: &[f32],
+        dim: u32,
+    ) -> Result<(), AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
         let conn = lock_conn!(self)?;
 
@@ -448,8 +472,12 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
         use std::collections::HashMap;
 
-        let vec_results = self.vector_search(embedding, dim_hint, agent_id, limit * 2).await?;
-        let fts_entries = self.search_notes_fts(query_text, agent_id, limit * 2).await?;
+        let vec_results = self
+            .vector_search(embedding, dim_hint, agent_id, limit * 2)
+            .await?;
+        let fts_entries = self
+            .search_notes_fts(query_text, agent_id, limit * 2)
+            .await?;
 
         // RRF fusion with k=60 (standard)
         let k = 60.0_f32;
@@ -472,7 +500,9 @@ impl NoteStore for SqliteMemoryBackend {
         let mut results = Vec::new();
         for (path, score) in sorted {
             if let Some(entry) = self.get_note_index(&path, agent_id).await? {
-                let content = load_note_content_from_disk(&entry, agent_id).await.unwrap_or_default();
+                let content = load_note_content_from_disk(&entry, agent_id)
+                    .await
+                    .unwrap_or_default();
                 results.push(crate::memory::notes::NoteSearchResult {
                     path: entry.path.clone(),
                     filename: entry.filename.clone(),
@@ -495,12 +525,16 @@ impl NoteStore for SqliteMemoryBackend {
         dim_hint: u32,
         limit: usize,
     ) -> Result<Vec<crate::memory::notes::NoteSearchResult>, AlephError> {
-        let pairs = self.vector_search(embedding, dim_hint, agent_id, limit).await?;
+        let pairs = self
+            .vector_search(embedding, dim_hint, agent_id, limit)
+            .await?;
 
         let mut results = Vec::new();
         for (path, score) in pairs {
             if let Some(entry) = self.get_note_index(&path, agent_id).await? {
-                let content = load_note_content_from_disk(&entry, agent_id).await.unwrap_or_default();
+                let content = load_note_content_from_disk(&entry, agent_id)
+                    .await
+                    .unwrap_or_default();
                 results.push(crate::memory::notes::NoteSearchResult {
                     path: entry.path.clone(),
                     filename: entry.filename.clone(),
@@ -559,9 +593,7 @@ impl NoteStore for SqliteMemoryBackend {
         };
 
         let sql = format!("SELECT embedding FROM {table} WHERE rowid = ?1");
-        let blob: Option<Vec<u8>> = conn
-            .query_row(&sql, params![rowid], |row| row.get(0))
-            .ok();
+        let blob: Option<Vec<u8>> = conn.query_row(&sql, params![rowid], |row| row.get(0)).ok();
 
         Ok(blob.map(|b| {
             b.chunks_exact(4)
@@ -570,7 +602,13 @@ impl NoteStore for SqliteMemoryBackend {
         }))
     }
 
-    async fn vector_search(&self, embedding: &[f32], dim: u32, agent_id: &str, limit: usize) -> Result<Vec<(String, f32)>, AlephError> {
+    async fn vector_search(
+        &self,
+        embedding: &[f32],
+        dim: u32,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, AlephError> {
         let table = vec::notes_vec_table_for_dim(dim)?;
         let conn = lock_conn!(self)?;
         let blob = vec::embedding_to_blob(embedding);
@@ -594,7 +632,8 @@ impl NoteStore for SqliteMemoryBackend {
 
             let mut results = Vec::with_capacity(k);
             for row in rows {
-                let pair = row.map_err(|e| AlephError::config(format!("vector_search knn row: {e}")))?;
+                let pair =
+                    row.map_err(|e| AlephError::config(format!("vector_search knn row: {e}")))?;
                 results.push(pair);
             }
             results
@@ -642,7 +681,8 @@ impl NoteStore for SqliteMemoryBackend {
 
         let mut results: Vec<(String, f32)> = Vec::with_capacity(limit);
         for row in rows {
-            let (rowid, path) = row.map_err(|e| AlephError::config(format!("vector_search row: {e}")))?;
+            let (rowid, path) =
+                row.map_err(|e| AlephError::config(format!("vector_search row: {e}")))?;
             if let Some(&dist) = distance_map.get(&rowid) {
                 results.push((path, dist as f32));
             }
@@ -757,7 +797,10 @@ mod tests {
         let backend = make_backend();
 
         let note = make_note("rust-async", "learning");
-        backend.index_note(&note, "default", "learning").await.unwrap();
+        backend
+            .index_note(&note, "default", "learning")
+            .await
+            .unwrap();
 
         let embedding = vec![0.5_f32; 1024];
         backend
@@ -782,13 +825,22 @@ mod tests {
         let wiki = make_note("rust", "wiki");
         let pref = make_note("editor", "preference");
         backend.index_note(&wiki, "default", "wiki").await.unwrap();
-        backend.index_note(&pref, "default", "preference").await.unwrap();
+        backend
+            .index_note(&pref, "default", "preference")
+            .await
+            .unwrap();
 
-        let wikis = backend.get_notes_by_category("default", "wiki", 10).await.unwrap();
+        let wikis = backend
+            .get_notes_by_category("default", "wiki", 10)
+            .await
+            .unwrap();
         assert_eq!(wikis.len(), 1);
         assert_eq!(wikis[0].category, "wiki");
 
-        let prefs = backend.get_notes_by_category("default", "preference", 10).await.unwrap();
+        let prefs = backend
+            .get_notes_by_category("default", "preference", 10)
+            .await
+            .unwrap();
         assert_eq!(prefs.len(), 1);
         assert_eq!(prefs[0].category, "preference");
     }
@@ -808,7 +860,10 @@ mod tests {
             .await
             .unwrap();
 
-        let retrieved = backend.get_embedding("other/x", "default", 1024).await.unwrap();
+        let retrieved = backend
+            .get_embedding("other/x", "default", 1024)
+            .await
+            .unwrap();
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.len(), 1024);
@@ -820,7 +875,10 @@ mod tests {
     #[tokio::test]
     async fn get_embedding_returns_none_for_missing_note() {
         let backend = make_backend();
-        let result = backend.get_embedding("missing/path", "default", 1024).await.unwrap();
+        let result = backend
+            .get_embedding("missing/path", "default", 1024)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 }

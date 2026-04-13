@@ -26,9 +26,7 @@ pub fn register_sqlite_vec() {
                 *mut *mut std::ffi::c_char,
                 *const rusqlite::ffi::sqlite3_api_routines,
             ) -> std::ffi::c_int,
-        >(
-            sqlite3_vec_init as *const (),
-        )));
+        >(sqlite3_vec_init as *const ())));
     }
 }
 

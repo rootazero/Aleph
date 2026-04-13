@@ -44,14 +44,12 @@ fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephError>
         .any(|name| name.map(|n| n == "fact_id").unwrap_or(false));
 
     if has_fact_id {
-        conn.execute_batch(
-            "ALTER TABLE recall_signals RENAME COLUMN fact_id TO note_path",
-        )
-        .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to rename recall_signals.fact_id to note_path: {e}"
-            ))
-        })?;
+        conn.execute_batch("ALTER TABLE recall_signals RENAME COLUMN fact_id TO note_path")
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to rename recall_signals.fact_id to note_path: {e}"
+                ))
+            })?;
     }
 
     Ok(())
@@ -124,9 +122,11 @@ fn migrate_dream_reports_drop_legacy_fields(conn: &Connection) -> Result<(), Ale
         COMMIT;
         "#,
     )
-    .map_err(|e| AlephError::config(format!(
-        "Failed to migrate dream_reports to new schema: {e}"
-    )))?;
+    .map_err(|e| {
+        AlephError::config(format!(
+            "Failed to migrate dream_reports to new schema: {e}"
+        ))
+    })?;
 
     Ok(())
 }
@@ -255,6 +255,32 @@ fn vec_table_ddl(dim: u32, table_name: &str) -> String {
 /// Drop legacy tables that were replaced by the notes pipeline.
 ///
 /// Safe to call on fresh databases (uses `DROP TABLE IF EXISTS`).
+// ---------------------------------------------------------------------------
+// Assembly logs (Memory Evolution Spec 1)
+// ---------------------------------------------------------------------------
+
+/// Per-assembly decision row. Default-disabled; Spec 2 consumes these rows
+/// to correlate with citation / re-retrieval signals.
+pub const ASSEMBLY_LOGS_DDL: &str = r#"
+CREATE TABLE IF NOT EXISTS assembly_logs (
+    id                 TEXT PRIMARY KEY,
+    agent_id           TEXT NOT NULL,
+    session_id         TEXT,
+    query_hash         TEXT NOT NULL,
+    strategy           TEXT NOT NULL,
+    used_fallback      INTEGER NOT NULL DEFAULT 0,
+    fallback_reason    TEXT,
+    candidates_count   INTEGER NOT NULL,
+    selected_item_ids  TEXT NOT NULL,
+    total_tokens       INTEGER NOT NULL,
+    rerank_latency_ms  INTEGER,
+    total_latency_ms   INTEGER NOT NULL,
+    created_at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assembly_logs_agent_created
+    ON assembly_logs(agent_id, created_at);
+"#;
+
 pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(
         "DROP TABLE IF EXISTS facts;
@@ -292,8 +318,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(DAILY_INSIGHTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create daily_insights table: {e}")))?;
 
-    conn.execute_batch(COMPRESSION_METADATA_DDL)
-        .map_err(|e| AlephError::config(format!("Failed to create compression_metadata table: {e}")))?;
+    conn.execute_batch(COMPRESSION_METADATA_DDL).map_err(|e| {
+        AlephError::config(format!("Failed to create compression_metadata table: {e}"))
+    })?;
 
     conn.execute_batch(CREATE_RAW_MEMORIES)
         .map_err(|e| AlephError::config(format!("Failed to create raw_memories table: {e}")))?;
@@ -308,6 +335,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
 
     migrate_recall_signals_note_path(conn)?;
+
+    conn.execute_batch(ASSEMBLY_LOGS_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;
 
     // One-time cleanup of obsolete facts tables from existing databases.
     drop_obsolete_facts_tables(conn)?;
@@ -338,9 +368,8 @@ CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);
 /// Initialize notes_vec virtual tables for 768, 1024, and 1536 dimensions,
 /// plus the mapping table that links `(path, agent_id)` to numeric rowids.
 pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
-    conn.execute_batch(NOTES_VEC_MAP_DDL).map_err(|e| {
-        AlephError::config(format!("Failed to create notes_vec_map table: {e}"))
-    })?;
+    conn.execute_batch(NOTES_VEC_MAP_DDL)
+        .map_err(|e| AlephError::config(format!("Failed to create notes_vec_map table: {e}")))?;
 
     let tables = [
         (768, "notes_vec_768"),
@@ -350,9 +379,8 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
 
     for (dim, name) in &tables {
         let ddl = vec_table_ddl(*dim, name);
-        conn.execute_batch(&ddl).map_err(|e| {
-            AlephError::config(format!("Failed to create vec table {name}: {e}"))
-        })?;
+        conn.execute_batch(&ddl)
+            .map_err(|e| AlephError::config(format!("Failed to create vec table {name}: {e}")))?;
     }
 
     Ok(())
@@ -496,8 +524,14 @@ mod tests {
                 [],
                 |row| {
                     Ok((
-                        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-                        row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
                     ))
                 },
             )

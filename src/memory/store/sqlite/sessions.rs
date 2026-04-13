@@ -22,25 +22,30 @@ impl DreamStore for SqliteMemoryBackend {
     async fn get_dream_status(&self) -> Result<DreamStatus, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
-            .prepare("SELECT last_run_at, last_status, last_duration_ms FROM dream_status WHERE id = 1")
-            .map_err(|e| AlephError::config(format!("Failed to prepare dream_status query: {e}")))?;
+            .prepare(
+                "SELECT last_run_at, last_status, last_duration_ms FROM dream_status WHERE id = 1",
+            )
+            .map_err(|e| {
+                AlephError::config(format!("Failed to prepare dream_status query: {e}"))
+            })?;
 
-        let result = stmt
-            .query_row(params![], |row| {
-                let last_run_at: Option<i64> = row.get(0)?;
-                let last_status: Option<String> = row.get(1)?;
-                let last_duration_ms: Option<i64> = row.get(2)?;
-                Ok(DreamStatus {
-                    last_run_at,
-                    last_status,
-                    last_duration_ms: last_duration_ms.map(|v| v as u64),
-                })
-            });
+        let result = stmt.query_row(params![], |row| {
+            let last_run_at: Option<i64> = row.get(0)?;
+            let last_status: Option<String> = row.get(1)?;
+            let last_duration_ms: Option<i64> = row.get(2)?;
+            Ok(DreamStatus {
+                last_run_at,
+                last_status,
+                last_duration_ms: last_duration_ms.map(|v| v as u64),
+            })
+        });
 
         match result {
             Ok(status) => Ok(status),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(DreamStatus::default()),
-            Err(e) => Err(AlephError::config(format!("Failed to get dream status: {e}"))),
+            Err(e) => Err(AlephError::config(format!(
+                "Failed to get dream status: {e}"
+            ))),
         }
     }
 
@@ -89,20 +94,21 @@ impl DreamStore for SqliteMemoryBackend {
             .prepare("SELECT date, content, source_memory_count, created_at FROM daily_insights WHERE date = ?1")
             .map_err(|e| AlephError::config(format!("Failed to prepare daily_insights query: {e}")))?;
 
-        let result = stmt
-            .query_row(params![date], |row| {
-                Ok(DailyInsight {
-                    date: row.get(0)?,
-                    content: row.get(1)?,
-                    source_memory_count: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            });
+        let result = stmt.query_row(params![date], |row| {
+            Ok(DailyInsight {
+                date: row.get(0)?,
+                content: row.get(1)?,
+                source_memory_count: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        });
 
         match result {
             Ok(insight) => Ok(Some(insight)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!("Failed to get daily insight: {e}"))),
+            Err(e) => Err(AlephError::config(format!(
+                "Failed to get daily insight: {e}"
+            ))),
         }
     }
 }
@@ -129,13 +135,16 @@ impl CompressionStore for SqliteMemoryBackend {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare("SELECT value FROM compression_metadata WHERE key = 'last_timestamp'")
-            .map_err(|e| AlephError::config(format!("Failed to prepare compression timestamp query: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!(
+                    "Failed to prepare compression timestamp query: {e}"
+                ))
+            })?;
 
-        let result = stmt
-            .query_row(params![], |row| {
-                let value: String = row.get(0)?;
-                Ok(value)
-            });
+        let result = stmt.query_row(params![], |row| {
+            let value: String = row.get(0)?;
+            Ok(value)
+        });
 
         match result {
             Ok(value) => {
@@ -145,7 +154,9 @@ impl CompressionStore for SqliteMemoryBackend {
                 Ok(Some(ts))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(AlephError::config(format!("Failed to get compression timestamp: {e}"))),
+            Err(e) => Err(AlephError::config(format!(
+                "Failed to get compression timestamp: {e}"
+            ))),
         }
     }
 

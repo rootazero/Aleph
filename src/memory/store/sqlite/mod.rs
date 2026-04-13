@@ -7,6 +7,7 @@
 pub mod schema;
 pub mod vec;
 
+pub mod assembly_logs;
 pub mod dream_reports;
 pub mod notes;
 pub mod raw_memories;
@@ -17,7 +18,6 @@ use crate::error::AlephError;
 use crate::sync_primitives::Mutex;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-
 
 /// SQLite-backed memory store using sqlite-vec for vector operations.
 pub struct SqliteMemoryBackend {
@@ -157,11 +157,9 @@ impl SqliteMemoryBackend {
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(
-                row.map_err(|e| {
-                    AlephError::config(format!("get_raw_memories_dashboard row failed: {e}"))
-                })?,
-            );
+            results.push(row.map_err(|e| {
+                AlephError::config(format!("get_raw_memories_dashboard row failed: {e}"))
+            })?);
         }
         Ok(results)
     }

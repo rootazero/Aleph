@@ -7,11 +7,13 @@ pub(crate) mod fallback;
 pub(crate) mod gather;
 pub mod hybrid;
 pub mod hydration;
+pub mod log_store;
 pub(crate) mod profile;
 pub mod render;
 pub(crate) mod rerank;
 
 pub use hybrid::{AiProviderReranker, HybridAssembler, LlmReranker};
+pub use log_store::AssemblyLogWriter;
 pub use profile::UserProfileLoader;
 
 pub use envelope::{

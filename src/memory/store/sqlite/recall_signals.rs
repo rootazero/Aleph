@@ -139,8 +139,7 @@ impl SqliteMemoryBackend {
 
         // Chunk to stay under SQLite's 999-variable limit
         for chunk in note_paths.chunks(Self::SQLITE_MAX_VARS) {
-            let placeholders: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
             let sql = format!(
                 "SELECT \
                      note_path, \
@@ -185,9 +184,7 @@ impl SqliteMemoryBackend {
 
             for row in rows {
                 results.push(
-                    row.map_err(|e| {
-                        AlephError::config(format!("aggregate_for_facts row: {e}"))
-                    })?,
+                    row.map_err(|e| AlephError::config(format!("aggregate_for_facts row: {e}")))?,
                 );
             }
         }
@@ -235,8 +232,14 @@ mod tests {
     fn record_and_aggregate_signals() {
         let store = setup();
         let hits = vec![
-            RecallHit { note_path: "f1".into(), score: 0.9 },
-            RecallHit { note_path: "f2".into(), score: 0.7 },
+            RecallHit {
+                note_path: "f1".into(),
+                score: 0.9,
+            },
+            RecallHit {
+                note_path: "f2".into(),
+                score: 0.7,
+            },
         ];
 
         let inserted = store
@@ -260,7 +263,10 @@ mod tests {
     #[test]
     fn dedup_same_query_same_day_same_channel() {
         let store = setup();
-        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.8 }];
+        let hits = vec![RecallHit {
+            note_path: "f1".into(),
+            score: 0.8,
+        }];
 
         let first = store
             .record_signals("test query", "slack", &hits, None, "owner")
@@ -277,10 +283,17 @@ mod tests {
     #[test]
     fn different_channels_count_separately() {
         let store = setup();
-        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.5 }];
+        let hits = vec![RecallHit {
+            note_path: "f1".into(),
+            score: 0.5,
+        }];
 
-        store.record_signals("q", "slack", &hits, None, "owner").unwrap();
-        store.record_signals("q", "web", &hits, None, "owner").unwrap();
+        store
+            .record_signals("q", "slack", &hits, None, "owner")
+            .unwrap();
+        store
+            .record_signals("q", "web", &hits, None, "owner")
+            .unwrap();
 
         let agg = store.aggregate_for_facts(&["f1".into()]).unwrap();
         assert_eq!(agg.len(), 1);
@@ -291,9 +304,14 @@ mod tests {
     #[test]
     fn cleanup_removes_old_signals() {
         let store = setup();
-        let hits = vec![RecallHit { note_path: "f1".into(), score: 0.6 }];
+        let hits = vec![RecallHit {
+            note_path: "f1".into(),
+            score: 0.6,
+        }];
 
-        store.record_signals("q", "slack", &hits, None, "owner").unwrap();
+        store
+            .record_signals("q", "slack", &hits, None, "owner")
+            .unwrap();
 
         // retention_days=0 means cutoff = now, so all signals created at now are < now+1
         // but created_at == now, so cutoff == now means created_at < now is false.

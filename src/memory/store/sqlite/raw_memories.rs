@@ -89,7 +89,9 @@ impl RawMemoryStore for SqliteMemoryBackend {
                  ORDER BY created_at ASC \
                  LIMIT ?2",
             )
-            .map_err(|e| AlephError::config(format!("get_unprocessed_raw_memories prepare: {e}")))?;
+            .map_err(|e| {
+                AlephError::config(format!("get_unprocessed_raw_memories prepare: {e}"))
+            })?;
 
         let rows = stmt
             .query_map(params![agent_id, limit as i64], row_to_raw_memory)
@@ -97,11 +99,9 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(
-                row.map_err(|e| {
-                    AlephError::config(format!("get_unprocessed_raw_memories row: {e}"))
-                })?,
-            );
+            results.push(row.map_err(|e| {
+                AlephError::config(format!("get_unprocessed_raw_memories row: {e}"))
+            })?);
         }
         Ok(results)
     }
@@ -119,8 +119,10 @@ impl RawMemoryStore for SqliteMemoryBackend {
             placeholders.join(", ")
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let affected = conn
             .execute(&sql, params.as_slice())
@@ -213,8 +215,8 @@ mod tests {
     #[tokio::test]
     async fn mark_as_processed_excludes_from_query() {
         let backend = make_backend();
-        let raw = RawMemory::new("data".to_string(), RawMemorySource::ToolOutput)
-            .with_agent("agent2");
+        let raw =
+            RawMemory::new("data".to_string(), RawMemorySource::ToolOutput).with_agent("agent2");
         let id = raw.id.clone();
 
         backend.insert_raw_memory(&raw).await.unwrap();
@@ -267,15 +269,24 @@ mod tests {
     async fn get_raw_by_path_prefix_filters_by_prefix_and_agent() {
         let backend = make_backend();
 
-        let r1 = RawMemory::new("session a msg1".to_string(), RawMemorySource::SessionCompressed)
-            .with_path("aleph://session/sess-a/d0/1")
-            .with_agent("default");
-        let r2 = RawMemory::new("session b msg1".to_string(), RawMemorySource::SessionCompressed)
-            .with_path("aleph://session/sess-b/d0/1")
-            .with_agent("default");
-        let r3 = RawMemory::new("other agent".to_string(), RawMemorySource::SessionCompressed)
-            .with_path("aleph://session/sess-a/d0/2")
-            .with_agent("other");
+        let r1 = RawMemory::new(
+            "session a msg1".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_path("aleph://session/sess-a/d0/1")
+        .with_agent("default");
+        let r2 = RawMemory::new(
+            "session b msg1".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_path("aleph://session/sess-b/d0/1")
+        .with_agent("default");
+        let r3 = RawMemory::new(
+            "other agent".to_string(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_path("aleph://session/sess-a/d0/2")
+        .with_agent("other");
 
         backend.insert_raw_memory(&r1).await.unwrap();
         backend.insert_raw_memory(&r2).await.unwrap();
@@ -286,7 +297,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(results.len(), 1, "Should only find sess-a for default agent");
+        assert_eq!(
+            results.len(),
+            1,
+            "Should only find sess-a for default agent"
+        );
         assert_eq!(results[0].content, "session a msg1");
     }
 
@@ -324,7 +339,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].content, "first", "Earlier created_at should come first");
+        assert_eq!(
+            results[0].content, "first",
+            "Earlier created_at should come first"
+        );
         assert_eq!(results[1].content, "second");
     }
 }
