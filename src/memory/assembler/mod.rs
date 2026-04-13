@@ -5,7 +5,10 @@ pub mod envelope;
 pub(crate) mod error;
 pub(crate) mod fallback;
 pub mod hydration;
+pub(crate) mod profile;
 pub mod render;
+
+pub use profile::UserProfileLoader;
 
 pub use envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
