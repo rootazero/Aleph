@@ -17,7 +17,6 @@
 pub mod ai_retrieval;
 pub mod audit;
 pub mod cli;
-pub mod composer;
 pub mod compression;
 pub mod content_scanner;
 pub mod context;
@@ -60,7 +59,6 @@ pub use audit::{
     ForgettingExplanation,
 };
 pub use cli::{LockError, LockMode, MemoryLock};
-pub use composer::{ComposedContext, CompositionRequest, ContextComposer};
 pub use compression::{
     CompressionPriority, CompressionScheduler, CompressionService, CompressionSignal,
     CompressionTrigger, DetectionResult, FactExtractor, SignalDetector, SignalKeywords,

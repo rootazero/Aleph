@@ -5,7 +5,7 @@
 
 use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{
-    NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope,
 };
 use crate::memory::namespace::NamespaceScope;
 
@@ -66,8 +66,6 @@ pub struct SearchFilter {
     pub created_after: Option<i64>,
     /// Only facts created at or before this Unix timestamp (seconds).
     pub created_before: Option<i64>,
-    /// Restrict to a specific cognitive memory tier.
-    pub tier: Option<MemoryTier>,
     /// Restrict to a specific visibility scope.
     pub scope: Option<MemoryScope>,
     /// Restrict to a specific persona identifier.
@@ -80,8 +78,6 @@ pub struct SearchFilter {
     pub as_of: Option<i64>,
     /// Include historically-valid facts (valid_to IS NOT NULL). Default: false.
     pub include_historical: bool,
-    /// Pre-built scope stack OR clause (set by `with_scope_stack`).
-    scope_stack_clause: Option<String>,
 }
 
 impl SearchFilter {
@@ -162,12 +158,6 @@ impl SearchFilter {
         self
     }
 
-    /// Set cognitive memory tier filter.
-    pub fn with_tier(mut self, tier: MemoryTier) -> Self {
-        self.tier = Some(tier);
-        self
-    }
-
     /// Set visibility scope filter.
     pub fn with_scope(mut self, scope: MemoryScope) -> Self {
         self.scope = Some(scope);
@@ -201,24 +191,6 @@ impl SearchFilter {
     /// Include historically-valid facts (those with a non-NULL valid_to).
     pub fn with_include_historical(mut self) -> Self {
         self.include_historical = true;
-        self
-    }
-
-    /// Build scope-stack filter: Global OR (Workspace=W) OR (Persona=P).
-    ///
-    /// This generates an OR-clause that retrieves facts visible from the
-    /// given scope stack. Overrides individual `scope` / `persona_id` filters.
-    pub fn with_scope_stack(mut self, persona_id: Option<&str>, workspace: &str) -> Self {
-        let ws_safe = escape_sql_string(workspace);
-        let mut parts = vec![
-            "scope = 'global'".to_string(),
-            format!("(scope = 'agent' AND agent = '{ws_safe}')"),
-        ];
-        if let Some(pid) = persona_id {
-            let pid_safe = escape_sql_string(pid);
-            parts.push(format!("(scope = 'persona' AND persona_id = '{pid_safe}')"));
-        }
-        self.scope_stack_clause = Some(format!("({})", parts.join(" OR ")));
         self
     }
 
@@ -282,21 +254,11 @@ impl SearchFilter {
             clauses.push(format!("created_at <= {}", ts));
         }
 
-        // If scope_stack_clause is set, use it (overrides individual scope/persona)
-        if let Some(ref clause) = self.scope_stack_clause {
-            clauses.push(clause.clone());
-        } else {
-            if let Some(ref scope) = self.scope {
-                clauses.push(format!("scope = '{}'", escape_sql_string(scope.as_str())));
-            }
-            if let Some(ref persona_id) = self.persona_id {
-                clauses.push(format!("persona_id = '{}'", escape_sql_string(persona_id)));
-            }
+        if let Some(ref scope) = self.scope {
+            clauses.push(format!("scope = '{}'", escape_sql_string(scope.as_str())));
         }
-
-        // tier filter always applies (independent of scope stack)
-        if let Some(ref tier) = self.tier {
-            clauses.push(format!("tier = '{}'", escape_sql_string(tier.as_str())));
+        if let Some(ref persona_id) = self.persona_id {
+            clauses.push(format!("persona_id = '{}'", escape_sql_string(persona_id)));
         }
 
         // Temporal validity filtering
@@ -552,13 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_supports_tier() {
-        let filter = SearchFilter::new().with_tier(MemoryTier::Core);
-        let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("tier = 'core'"));
-    }
-
-    #[test]
     fn search_filter_supports_scope_and_persona() {
         let filter = SearchFilter::new()
             .with_scope(MemoryScope::Persona)
@@ -566,25 +521,6 @@ mod tests {
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'persona'"));
         assert!(sql.contains("persona_id = 'reviewer'"));
-    }
-
-    #[test]
-    fn search_filter_scope_stack_generates_or_clause() {
-        let filter = SearchFilter::new().with_scope_stack(Some("reviewer"), "aleph");
-        let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("scope = 'global'"));
-        assert!(sql.contains("scope = 'agent'"));
-        assert!(sql.contains("scope = 'persona'"));
-        assert!(sql.contains("persona_id = 'reviewer'"));
-    }
-
-    #[test]
-    fn search_filter_scope_stack_without_persona() {
-        let filter = SearchFilter::new().with_scope_stack(None, "aleph");
-        let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("scope = 'global'"));
-        assert!(sql.contains("scope = 'agent'"));
-        assert!(!sql.contains("persona"));
     }
 
     #[test]
@@ -619,16 +555,6 @@ mod tests {
         };
         let sql = f.to_lance_filter().unwrap();
         assert!(sql.contains("O''Brien"));
-    }
-
-    #[test]
-    fn search_filter_tier_with_scope_stack() {
-        let filter = SearchFilter::new()
-            .with_tier(MemoryTier::Core)
-            .with_scope_stack(Some("reviewer"), "aleph");
-        let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("tier = 'core'"));
-        assert!(sql.contains("scope = 'global'"));
     }
 
     #[test]
