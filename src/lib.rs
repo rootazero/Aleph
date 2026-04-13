@@ -130,8 +130,8 @@ pub use crate::config::{
     types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
-    FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, PluginMarketplaceEntry,
-    ProviderConfig, RoutingRuleConfig, SmartFlowConfig,
+    FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
+    PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig, SmartFlowConfig,
 };
 
 // Initialization
