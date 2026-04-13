@@ -114,6 +114,14 @@ impl MemoryContextProvider {
         Self { assembler, config }
     }
 
+    /// Return a clone of the inner assembler handle.
+    ///
+    /// Used by Task 8 server wiring to share the same `HybridAssembler`
+    /// instance with `MemoryReflector` without constructing a second one.
+    pub fn assembler(&self) -> Arc<dyn WorkingMemoryAssembler> {
+        self.assembler.clone()
+    }
+
     fn assemble_default(
         memory_db: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,

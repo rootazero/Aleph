@@ -265,6 +265,21 @@ impl BuiltinToolRegistry {
         Arc::clone(&self.channel_registry_cell)
     }
 
+    /// Inject a `MemoryReflector` into the `memory_reflect` tool (Task 8 wiring).
+    ///
+    /// Must be called before the registry is wrapped in `Arc` (takes `&mut self`).
+    /// After injection the tool will synthesise answers from memory; without it
+    /// the tool returns a clear error rather than panicking.
+    pub fn set_memory_reflector(
+        &mut self,
+        reflector: Arc<crate::memory::reflector::MemoryReflector>,
+    ) {
+        if let Some(ref mut tool) = self.memory_reflect_tool {
+            *tool = tool.clone().with_reflector(reflector);
+            info!("MemoryReflector injected into memory_reflect tool");
+        }
+    }
+
     /// Get the parameter schema for a tool by name.
     ///
     /// Returns the schema if the tool exists in the internal registry and has

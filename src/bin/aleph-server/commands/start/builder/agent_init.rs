@@ -809,6 +809,55 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let gateway_context_cell = tool_registry.gateway_context_cell();
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
 
+        // Spec 2 Task 8: construct Arc<MemoryReflector> and inject into memory_reflect tool.
+        // Requires embedder (for retrieval) and a default provider (for LLM synthesis).
+        // On failure we log a warning and continue — memory_reflect will return a clear error.
+        if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
+            use alephcore::memory::reflector::{
+                recall_signals::SignalRow, reflector::RecallWriter, MemoryReflector,
+            };
+            use alephcore::memory::store::sqlite::recall_signals::RecallHit;
+
+            // Build a fresh assembler dedicated to the reflector (same config as MCP).
+            let reflector_mcp = super::init_memory_context_provider(
+                memory_db,
+                emb,
+                Some(prov.clone()),
+                app_config.memory.assembler.clone(),
+            );
+            let reflector_assembler = reflector_mcp.assembler();
+
+            // Build the recall-signal writer closure: translates SignalRow → record_signals.
+            let store_for_writer = memory_db.clone();
+            let writer: RecallWriter = Arc::new(move |row: SignalRow| {
+                let store = store_for_writer.clone();
+                Box::pin(async move {
+                    let hit = RecallHit {
+                        note_path: row.note_path.clone(),
+                        score: row.score as f64,
+                    };
+                    store
+                        .record_signals(
+                            &row.query_text,
+                            &row.channel,
+                            &[hit],
+                            row.session_id.as_deref(),
+                            &row.namespace,
+                        )
+                        .map(|_| ())
+                })
+            });
+
+            let reflector = Arc::new(MemoryReflector::new(
+                reflector_assembler,
+                prov,
+                writer,
+            ));
+            tool_registry.set_memory_reflector(reflector);
+        } else if !daemon {
+            println!("  memory_reflect tool: MemoryReflector not wired (no embedder or provider)");
+        }
+
         let tool_registry = Arc::new(tool_registry);
         let tool_registry_for_heartbeat = tool_registry.clone();
 
