@@ -100,11 +100,7 @@ impl NoteSearchResult {
         fact.agent = agent_id.to_string();
         fact.created_at = self.created_at;
         fact.updated_at = self.updated_at;
-        fact.confidence = self.score;
         fact.is_valid = true;
-        fact.tier = MemoryTier::LongTerm;
-        fact.scope = MemoryScope::Global;
-        fact.strength = 1.0;
         fact
     }
 
@@ -117,7 +113,7 @@ impl NoteSearchResult {
 }
 ```
 
-Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now `note://{category}/{filename}` and the `tier`/`strength`/`scope`/`is_valid` fields are hard-coded defaults: `LongTerm`, `1.0`, `Global`, `true`. Category tags ride along as `source_memory_ids` on the fact.
+Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now `note://{category}/{filename}` and `is_valid` is hard-coded to `true`. Category tags ride along as `source_memory_ids` on the fact. The legacy `tier` / `scope` / `strength` / `confidence` assignments were removed as part of the memory sovereignty cleanup — those fields no longer exist on `MemoryFact`.
 
 ## 4. Scoring Pipeline
 
@@ -129,25 +125,16 @@ Downstream consumers still receive `ScoredFact<MemoryFact>`, but the path is now
 |---|---|---|---|
 | 1 | `cosine_rerank` | Blend vector-search score with fresh cosine against `query_embedding` | `rerank_blend` (default 0.3) |
 | 2 | `recency_boost` | Additive boost for recently created facts | `recency_half_life_days` 14.0, `recency_weight` 0.1 |
-| 3 | `importance_weight` | Multiplicative weight from `fact.confidence` | *(no knob — hardcoded 0.7 + 0.3·confidence)* |
-| 4 | `length_normalization` | Penalize content much longer than anchor | `length_norm_anchor` (default 500 chars) |
-| 5 | `time_decay` | Exponential decay by age, floor 0.5 | `time_decay_half_life_days` (default 60.0) |
-| 6 | `hard_min_score` | Drop candidates below threshold | `hard_min_score` (default 0.35) |
-| 7 | `mmr_diversity` | Defer near-duplicate embeddings to tail | `mmr_similarity_threshold` (default 0.85) |
+| 3 | `length_normalization` | Penalize content much longer than anchor | `length_norm_anchor` (default 500 chars) |
+| 4 | `time_decay` | Exponential decay by age, floor 0.5 | `time_decay_half_life_days` (default 60.0) |
+| 5 | `hard_min_score` | Drop candidates below threshold | `hard_min_score` (default 0.35) |
+| 6 | `mmr_diversity` | Defer near-duplicate embeddings to tail | `mmr_similarity_threshold` (default 0.85) |
 
 `ScoringPipelineConfig::default()` also exposes `enabled: bool` (default `true`) as a top-level switch. All fields carry `#[serde(default = ...)]` so partial TOML configs fall back to defaults.
 
-### 4.2 `importance_weight` (and ValueEstimator)
+> The former `importance_weight` stage and its backing `ValueEstimator` (keyword heuristic + LLM scorer) were removed as part of the memory sovereignty cleanup. Confidence is no longer stored on facts, and value judgments are the LLM's responsibility at the prompt layer rather than a code-level multiplier.
 
-Source: `src/memory/scoring_pipeline/stages/importance_weight.rs`. Reads `candidate.fact.confidence`, clamps it to `[0.0, 1.0]`, and multiplies the current score by `0.7 + 0.3 * confidence`. So a fact with zero confidence keeps 70 % of its score; a fact with full confidence is unchanged. After rescaling, candidates are sorted descending. No config key controls this stage — the 0.7 / 0.3 split is a literal in the code. Ordering semantics: the stage always re-sorts, which matters when two candidates have identical pre-stage scores but different confidence.
-
-```rust
-c.score *= 0.7 + 0.3 * importance;  // importance = confidence.clamp(0.0, 1.0)
-```
-
-**ValueEstimator feeds this stage.** `src/memory/value_estimator/mod.rs` re-exports `ValueEstimator`, `CortexValueEstimator`, and `LlmScorer`. The `ValueEstimator` itself (in `value_estimator/estimator.rs`) prefers the LLM scorer when configured, and falls back to a lightweight keyword heuristic — the comment explicitly notes the previous `SignalDetector` was removed for violating the LLM-sovereignty principle. The 8 signal types expected in the task plan (UserPreference / FactualInfo / Decision / PersonalInfo / Question / Answer / Greeting / SmallTalk) do **not** exist in the current codebase; what remains is: a 0.5 base, a `+0.30` bump for `prefer / always / never / decide / i use / i like / i want / important`, a `+0.10` bump for text longer than 500 chars, a `-0.20` penalty under 20 chars, and a `-0.30` penalty for greetings. The hybrid LLM path computes `0.7 * llm_score + 0.3 * keyword_score`. The resulting `[0, 1]` score is what ends up on `MemoryFact.confidence`.
-
-### 4.3 `cosine_rerank`
+### 4.2 `cosine_rerank`
 
 Source: `src/memory/scoring_pipeline/stages/cosine_rerank.rs`. If `ctx.query_embedding` is `None`, the stage is a no-op passthrough. Otherwise, for each candidate that carries `fact.embedding`, it computes cosine similarity between the query vector and the fact vector (clamped to `[0, 1]`, returning 0 on zero-norm) and blends:
 
@@ -157,11 +144,11 @@ c.score = (1.0 - blend) * c.score + blend * sim;   // blend = ctx.config.rerank_
 
 Facts without an embedding keep their original score. The stage re-sorts at the end. Controlled by `rerank_blend` (0.0 = pure original retrieval score, 1.0 = pure fresh cosine). The default 0.3 keeps retrieval rank primary while nudging toward vector truth.
 
-### 4.4 `mmr_diversity`
+### 4.3 `mmr_diversity`
 
 Source: `src/memory/scoring_pipeline/stages/mmr_diversity.rs`. Greedy Maximal Marginal Relevance without dropping anything. For each candidate in input order, if it has no embedding it is treated as diverse and appended to `selected`. Otherwise, if its cosine similarity to any already-selected fact exceeds `mmr_similarity_threshold`, it is pushed to a `deferred` list. At the end, `deferred` is appended after `selected`, so near-duplicates end up at the tail rather than being dropped. This preserves recall but ranks visually distinct items higher — important when downstream uses the head of the list. Ordering semantics: input order matters; higher-scoring candidates should reach this stage first so the diverse survivors come from the top.
 
-### 4.5 `time_decay`
+### 4.4 `time_decay`
 
 Source: `src/memory/scoring_pipeline/stages/time_decay.rs`. If `time_decay_half_life_days <= 0`, the stage is a no-op. Otherwise:
 
@@ -173,7 +160,7 @@ c.score *= decay as f32;
 
 The `0.5 + 0.5 * exp(...)` shape floors decay at 0.5 so ancient facts retain half their score rather than vanishing. At half-life (default 60 days) the factor is `0.5 + 0.5 * e^-1 ≈ 0.684`. Re-sorts at the end.
 
-### 4.6 `recency_boost`
+### 4.5 `recency_boost`
 
 Source: `src/memory/scoring_pipeline/stages/recency_boost.rs`. Additive (not multiplicative), runs before `time_decay`. Disabled when `recency_weight <= 0` or `recency_half_life_days <= 0`. Otherwise:
 
@@ -184,7 +171,7 @@ c.score += boost as f32;
 
 With defaults `recency_half_life_days = 14`, `recency_weight = 0.1`: a brand-new fact gets `+0.1`; a 60-day-old fact gets roughly `+0.0014`. Complements time_decay — recency boosts young facts, decay fades old ones.
 
-### 4.7 `length_normalization`
+### 4.6 `length_normalization`
 
 Source: `src/memory/scoring_pipeline/stages/length_normalization.rs`. Penalizes very long facts logarithmically. `anchor = config.length_norm_anchor.max(1) as f32` (default 500 chars). For each candidate:
 
@@ -196,7 +183,7 @@ c.score *= factor;
 
 The `ratio.max(1.0)` clamp means short facts get `log2(1) = 0` → factor 1.0 (no bonus, no penalty). At 2× anchor, factor ≈ 0.667; at 4× anchor, factor = 0.5. Uses `chars().count()` so it is UTF-8 safe. Re-sorts.
 
-### 4.8 `hard_min_score`
+### 4.7 `hard_min_score`
 
 Source: `src/memory/scoring_pipeline/stages/hard_min_score.rs`. Pure filter — no score mutation, no re-ordering. `candidates.into_iter().filter(|c| c.score >= threshold).collect()`. Threshold is `config.hard_min_score` (default 0.35). Placed after all multiplicative stages so a candidate that started at 0.9 but got hammered by decay + length penalties can still be dropped. Surviving order is preserved for `mmr_diversity`.
 
@@ -271,28 +258,7 @@ From `src/config/types/memory.rs`:
 
 ## 8. Context Assembly
 
-### 8.1 `ContextComposer`
-
-`src/memory/composer.rs` defines `ContextComposer`, a stateless utility that builds `SearchFilter`s for layered Core / Global / Workspace / Persona retrieval. It does **not** perform retrieval itself — it constructs filters for the caller to execute.
-
-```rust
-pub struct CompositionRequest {
-    pub persona_id: Option<String>,
-    pub agent: String,
-    pub namespace: String,       // owner namespace
-    pub token_budget: usize,
-}
-
-pub struct ComposedContext {
-    pub core_facts: Vec<MemoryFact>,      // system-prompt-level facts
-    pub relevant_facts: Vec<MemoryFact>,  // for <relevant_memories> tag
-    pub total_tokens: usize,
-}
-```
-
-Two filter-builder helpers: `build_core_filter(&req)` matches `tier=Core AND (scope=Global OR scope=Persona(P)) AND namespace=owner AND is_valid=true` — always-loaded identity-level knowledge. `build_retrieval_filter(&req)` matches `scope_stack(Global, Agent=W, Persona=P) AND namespace=owner AND is_valid=true` with no tier restriction — both ShortTerm and LongTerm for the caller to rank. Persona is only included when `persona_id` is `Some`.
-
-### 8.2 `ContextComptroller`
+### 8.1 `ContextComptroller`
 
 `src/memory/context_comptroller/` arbitrates retrieved facts against a token budget. `ComptrollerConfig` carries `similarity_threshold: 0.95`, `token_budget: 100_000`, `fold_threshold: 0.2`, and a `retention_mode: RetentionMode`. The `RetentionMode` enum: `PreferTranscript` (keep original text), `PreferFact` (keep compressed), and `Hybrid` (mix by importance — the `Default`).
 
@@ -384,9 +350,9 @@ pub struct AuditEntry {
 }
 ```
 
-`AuditAction` covers `Created | Accessed | Updated | Invalidated | Restored | Deleted`. `AuditActor` covers `Agent | User | System | Decay`. `AuditDetails` is a `#[serde(tag = "type")]` enum with payloads per action — `Created { source, extraction_context }`, `Accessed { query, relevance_score, used_in_response }`, `Updated { old_content, new_content, reason }`, `Invalidated { reason, strength_at_invalidation }`, `Restored { new_strength }`, `Deleted { reason, days_in_recycle_bin }`.
+`AuditAction` covers `Created | Accessed | Updated | Invalidated | Restored | Deleted`. `AuditActor` covers `Agent | User | System | Decay`. `AuditDetails` is a `#[serde(tag = "type")]` enum with payloads per action — `Created { source, extraction_context }`, `Accessed { query, relevance_score, used_in_response }`, `Updated { old_content, new_content, reason }`, `Invalidated { reason }`, `Restored { new_strength }`, `Deleted { reason, days_in_recycle_bin }`.
 
-Explainability is served by two derived views. `FactExplanation { fact_id, content, is_valid, creation_source, access_count, invalidation_reason, events: Vec<ExplainedEvent> }` reconstructs a fact's lifecycle timeline. `ExplainedEvent { timestamp, action, description, actor }` is one line of that timeline. `ForgettingExplanation { fact_id, reason, actor, strength_at_invalidation, timestamp, days_since_creation, explanation }` is the specialized view for "why did this disappear?".
+Explainability is served by two derived views. `FactExplanation { fact_id, content, is_valid, creation_source, access_count, invalidation_reason, events: Vec<ExplainedEvent> }` reconstructs a fact's lifecycle timeline. `ExplainedEvent { timestamp, action, description, actor }` is one line of that timeline. `ForgettingExplanation { fact_id, reason, actor, timestamp, days_since_creation, explanation }` is the specialized view for "why did this disappear?".
 
 **Explain path.** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
 
@@ -394,7 +360,7 @@ Explainability is served by two derived views. `FactExplanation { fact_id, conte
 
 `src/memory/cortex/mod.rs` exposes submodules: `clustering`, `distillation`, `dreaming`, `integration`, `meta_cognition`, `pattern_extractor`, `types`. Re-exports include `ClusteringService`, `DistillationService`, `CortexDreamingService`, `PatternExtractor`, `BehavioralAnchor`, and `CortexIntegration`. The module-level doc comment marks it explicitly deprecated in favor of `crate::poe::meta_cognition` and `crate::poe::crystallization`, kept for backward compatibility during the transition.
 
-Self-contained experimental subsystem. Not invoked by `NoteFactRetrieval`, `ContextComposer`, or the main agent loop as of this doc. Retained for future integration — see `src/memory/cortex/integration.rs`. Curious readers should start there; everything else is placeholder machinery for an evolution pipeline that has not been wired to the L0/L1/L2 retrieval stack.
+Self-contained experimental subsystem. Not invoked by `NoteFactRetrieval` or the main agent loop as of this doc. Retained for future integration — see `src/memory/cortex/integration.rs`. Curious readers should start there; everything else is placeholder machinery for an evolution pipeline that has not been wired to the L0/L1/L2 retrieval stack.
 
 ## Appendix: Retrieval Tuning Tips
 

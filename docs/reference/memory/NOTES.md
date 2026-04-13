@@ -390,12 +390,13 @@ Commands in `src/memory/events/commands.rs`:
 
 - `CreateFactCommand` — emits `MemoryEvent::FactCreated` at seq 1.
 - `UpdateContentCommand` — rebuilds current content via `EventProjector::fold_events_to_fact`, then emits `FactContentUpdated { old_content, new_content, reason }`.
-- `InvalidateFactCommand` — soft delete; emits `FactInvalidated { reason, strength_at_invalidation }`.
+- `InvalidateFactCommand` — soft delete; emits `FactInvalidated { reason }`.
 - `RestoreFactCommand` — revives an invalidated fact; emits `FactRestored { new_strength }`.
 - `RecordAccessCommand` — emits `FactAccessed { query, relevance_score, used_in_response, new_access_count }` with `EventActor::Agent`.
-- `ApplyDecayCommand` — bulk `StrengthDecayed` batch with `EventActor::Decay`.
 - `ConsolidateCommand` — emits `FactConsolidated { source_fact_ids, consolidated_content }`.
 - `DeleteFactCommand` — hard delete; emits `FactDeleted { reason }`.
+
+> The former `ApplyDecayCommand` (bulk `StrengthDecayed` batch) and `TierTransitioned` event were removed as part of the memory sovereignty cleanup. Strength/tier/confidence are no longer part of the fact model; aging and salience are expressed through retrieval scoring stages and prompt-layer judgement instead of persisted per-fact fields.
 
 The command names still contain "Fact" for historical reasons — the events originally drove a separate `facts` table that has since been deleted (see §8's `drop_obsolete_facts_tables`). The commands are retained as the audit log, and `MemoryCommandHandler` in `src/memory/events/handler.rs` now projects each event into the notes layer via `project_to_notes`:
 
