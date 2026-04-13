@@ -4,6 +4,8 @@
 
 pub mod packet_adapter;
 pub mod prompts;
+pub mod reflector;
 pub mod types;
 
+pub use reflector::MemoryReflector;
 pub use types::{NoteRef, ReflectOpts, Synthesis};
