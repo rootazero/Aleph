@@ -92,4 +92,9 @@ pub struct BuiltinToolConfig {
     pub message_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
     /// State database for memory_timeline tool (event sourcing store)
     pub state_db: Option<Arc<crate::resilience::database::StateDatabase>>,
+    /// Controls which memory-retrieval tools are exposed to the LLM.
+    /// `Context` → skip all six retrieval tools (LLM can't call them).
+    /// `Tools` / `Hybrid` → register all six retrieval tools.
+    /// Defaults to `Hybrid` (same behaviour as before this field existed).
+    pub injection_mode: crate::config::types::memory::MemoryInjectionMode,
 }

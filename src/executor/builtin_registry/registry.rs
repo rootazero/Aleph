@@ -291,6 +291,11 @@ impl BuiltinToolRegistry {
             .and_then(|t| t.parameters_schema.clone())
     }
 
+    /// Returns `true` if a tool with this name has been registered in the metadata map.
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
     pub(crate) fn resolve_plugin_handler(&self, tool_name: &str) -> Option<(String, String)> {
         resolve_plugin_handler_from_sources(
             self.extension_manager.as_deref(),

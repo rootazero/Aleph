@@ -709,6 +709,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             session_manager: Some(session_manager.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
+            injection_mode: app_config.memory.injection_mode,
             coord_task_store: coord_store.clone(),
             agent_message_bus: agent_message_bus.clone(),
             team_store: team_store.clone(),
