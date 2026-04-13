@@ -2,6 +2,7 @@
 //! each LLM call. See `docs/superpowers/specs/2026-04-13-memory-evolution-spec1-assembler-design.md`.
 
 pub mod envelope;
+pub mod hydration;
 pub mod render;
 
 pub use envelope::{
