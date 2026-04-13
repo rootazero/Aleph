@@ -7,6 +7,29 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
+// MemoryInjectionMode
+// =============================================================================
+
+/// Controls how memory is surfaced to the LLM.
+///
+/// - `Context`: auto-inject retrieved memory as a fenced user-message; no memory tools exposed.
+/// - `Tools`: no auto-inject; LLM must call `memory_*` tools to retrieve.
+/// - `Hybrid` (default): both — memory is auto-injected AND tools are available.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryInjectionMode {
+    Context,
+    Tools,
+    Hybrid,
+}
+
+impl Default for MemoryInjectionMode {
+    fn default() -> Self {
+        Self::Hybrid
+    }
+}
+
+// =============================================================================
 // MemoryConfig
 // =============================================================================
 
@@ -149,6 +172,13 @@ pub struct MemoryConfig {
     /// Working memory assembler configuration.
     #[serde(default)]
     pub assembler: AssemblerConfig,
+
+    // ========================================
+    // Memory Injection Mode (Spec 3)
+    // ========================================
+    /// How memory is surfaced to the LLM: context / tools / hybrid.
+    #[serde(default)]
+    pub injection_mode: MemoryInjectionMode,
 }
 
 // =============================================================================
@@ -772,7 +802,45 @@ impl Default for MemoryConfig {
             reflection: ReflectionConfig::default(),
             // Working memory assembler
             assembler: AssemblerConfig::default(),
+            // Memory injection mode (Spec 3)
+            injection_mode: MemoryInjectionMode::Hybrid,
         }
+    }
+}
+
+#[cfg(test)]
+mod spec3_tests {
+    use super::*;
+
+    #[test]
+    fn injection_mode_default_is_hybrid() {
+        assert_eq!(MemoryInjectionMode::default(), MemoryInjectionMode::Hybrid);
+    }
+
+    #[test]
+    fn injection_mode_round_trips_json() {
+        for mode in [
+            MemoryInjectionMode::Context,
+            MemoryInjectionMode::Tools,
+            MemoryInjectionMode::Hybrid,
+        ] {
+            let s = serde_json::to_string(&mode).unwrap();
+            let back: MemoryInjectionMode = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, mode);
+        }
+    }
+
+    #[test]
+    fn injection_mode_serialises_lowercase() {
+        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Context).unwrap(), "\"context\"");
+        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Tools).unwrap(), "\"tools\"");
+        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Hybrid).unwrap(), "\"hybrid\"");
+    }
+
+    #[test]
+    fn memory_config_default_injection_mode_is_hybrid() {
+        let cfg = MemoryConfig::default();
+        assert_eq!(cfg.injection_mode, MemoryInjectionMode::Hybrid);
     }
 }
 
