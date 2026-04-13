@@ -9,6 +9,9 @@ use crate::a2a::adapter::client::A2AClientPool;
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::service::SmartRouter;
 use crate::agents::sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
+use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
 
@@ -31,6 +34,10 @@ pub struct A2ASubAgent {
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row before returning a successful result.
     raw_memory_writer: Option<std::sync::Arc<dyn RawMemoryStore>>,
+    /// Optional capture-filter registry (Spec 4 Task 6).
+    /// When set, delegation raw-memory writes go through `insert_with_capture_filter`.
+    /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
+    capture_registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
 }
 
 impl A2ASubAgent {
@@ -40,6 +47,7 @@ impl A2ASubAgent {
             client_pool,
             cached_names: crate::sync_primitives::RwLock::new(Vec::new()),
             raw_memory_writer: None,
+            capture_registry: None,
         }
     }
 
@@ -53,6 +61,18 @@ impl A2ASubAgent {
         writer: std::sync::Arc<dyn RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach a capture-filter registry (Spec 4 Task 6).
+    ///
+    /// When set, delegation raw-memory writes go through `insert_with_capture_filter`.
+    /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
+    pub fn with_capture_registry(
+        mut self,
+        registry: std::sync::Arc<MemoryExtensionRegistry>,
+    ) -> Self {
+        self.capture_registry = Some(registry);
         self
     }
 
@@ -106,6 +126,17 @@ pub(crate) fn emit_delegation_raw(
     result: &SubAgentResult,
     child_agent_id: impl Into<String>,
 ) {
+    emit_delegation_raw_with_registry(writer, request, result, child_agent_id, None);
+}
+
+/// Inner implementation that optionally threads an extension registry.
+pub(crate) fn emit_delegation_raw_with_registry(
+    writer: std::sync::Arc<dyn RawMemoryStore>,
+    request: &SubAgentRequest,
+    result: &SubAgentResult,
+    child_agent_id: impl Into<String>,
+    registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
+) {
     let child_agent_id = child_agent_id.into();
     let prompt_text = request.prompt.clone();
     let summary_text = result.summary.clone();
@@ -127,15 +158,25 @@ pub(crate) fn emit_delegation_raw(
         content,
         RawMemorySource::Delegation { child_agent_id },
     )
-    .with_agent(parent_agent_id);
+    .with_agent(parent_agent_id.clone());
 
-    if let Some(sid) = parent_session_id {
+    if let Some(sid) = parent_session_id.clone() {
         raw = raw.with_session(sid);
     }
 
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
         rt.spawn(async move {
-            if let Err(e) = writer.insert_raw_memory(&raw).await {
+            if let Some(reg) = registry {
+                let ctx = CaptureCtx {
+                    agent_id: parent_agent_id,
+                    namespace: NamespaceScope::Owner,
+                    session_id: parent_session_id,
+                    source_hint: "delegation".into(),
+                };
+                if let Err(e) = insert_with_capture_filter(&writer, &reg, &ctx, raw).await {
+                    tracing::warn!("delegation raw_memory write failed: {e}");
+                }
+            } else if let Err(e) = writer.insert_raw_memory(&raw).await {
                 tracing::warn!("delegation raw_memory write failed: {e}");
             }
         });
@@ -252,7 +293,13 @@ impl SubAgent for A2ASubAgent {
 
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
                 if let Some(w) = self.raw_memory_writer.clone() {
-                    emit_delegation_raw(w, &request, &result, &decision.agent.card.id);
+                    emit_delegation_raw_with_registry(
+                        w,
+                        &request,
+                        &result,
+                        &decision.agent.card.id,
+                        self.capture_registry.clone(),
+                    );
                 }
 
                 Ok(result)

@@ -1,4 +1,8 @@
 use crate::error::Result;
+use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::namespace::NamespaceScope;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
@@ -10,6 +14,10 @@ pub struct TranscriptIndexer {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
     config: TranscriptIndexerConfig,
+    /// Optional capture-filter registry (Spec 4 Task 6).
+    /// When set, transcript raw-memory rows go through `insert_with_capture_filter`.
+    /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
+    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
 }
 
 impl TranscriptIndexer {
@@ -19,6 +27,7 @@ impl TranscriptIndexer {
             database,
             embedder,
             config: TranscriptIndexerConfig::default(),
+            capture_registry: None,
         }
     }
 
@@ -32,7 +41,18 @@ impl TranscriptIndexer {
             database,
             embedder,
             config,
+            capture_registry: None,
         }
+    }
+
+    /// Attach a capture-filter registry (Spec 4 Task 6).
+    ///
+    /// When set, transcript raw-memory rows go through `insert_with_capture_filter`
+    /// so extensions can mutate or block them. Task 11 wires the real registry
+    /// at startup; `None` preserves current behaviour.
+    pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
+        self.capture_registry = Some(registry);
+        self
     }
 
     /// Index a single conversation turn's text into memory facts
@@ -81,15 +101,27 @@ impl TranscriptIndexer {
 
             // Insert to raw_memories
             {
-                use crate::memory::store::raw_memory::{
-                    RawMemory, RawMemorySource, RawMemoryStore,
-                };
+                use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
                 let raw = RawMemory::new(chunk.clone(), RawMemorySource::Transcript)
                     .with_agent(agent)
                     .with_session(session_key)
                     .with_path(path.clone());
                 let raw_id = raw.id.clone();
-                if let Err(e) = self.database.insert_raw_memory(&raw).await {
+                let insert_result = if let Some(ref registry) = self.capture_registry {
+                    let store: Arc<dyn RawMemoryStore> = self.database.clone();
+                    let ctx = CaptureCtx {
+                        agent_id: agent.to_string(),
+                        namespace: NamespaceScope::Owner,
+                        session_id: Some(session_key.to_string()),
+                        source_hint: "transcript".into(),
+                    };
+                    insert_with_capture_filter(&store, registry, &ctx, raw)
+                        .await
+                        .map(|_| ())
+                } else {
+                    self.database.insert_raw_memory(&raw).await
+                };
+                if let Err(e) = insert_result {
                     tracing::warn!(
                         session_key,
                         seq,

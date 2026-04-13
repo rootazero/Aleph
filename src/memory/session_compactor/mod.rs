@@ -20,6 +20,8 @@ use tracing::{debug, info, warn};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::router::SessionKey;
+use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::RequestPayload;
@@ -126,6 +128,12 @@ pub struct SessionCompactor {
     /// for each chunk before it is summarised, so CompressionService can
     /// rescue knowledge from the raw conversation text later.
     raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
+    /// Optional capture-filter registry (Spec 4 Task 6).
+    /// When set, every raw-memory write goes through `insert_with_capture_filter`
+    /// so extensions can mutate or block rows before persistence.
+    /// Task 11 will wire the real registry at server startup; until then `None`
+    /// falls back to direct `insert_raw_memory` (no behaviour change).
+    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
 }
 
 impl SessionCompactor {
@@ -138,6 +146,7 @@ impl SessionCompactor {
             metrics: Arc::new(CompactorMetrics::default()),
             indexer: None,
             raw_memory_writer: None,
+            capture_registry: None,
         }
     }
 
@@ -178,6 +187,16 @@ impl SessionCompactor {
     /// text so CompressionService can extract knowledge from it later.
     pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach a capture-filter registry (Spec 4 Task 6).
+    ///
+    /// When set, raw-memory writes go through `insert_with_capture_filter` so
+    /// extensions can mutate or block rows. Task 11 wires the real registry at
+    /// server startup; leave `None` for unchanged behaviour in the interim.
+    pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
+        self.capture_registry = Some(registry);
         self
     }
 
@@ -437,8 +456,23 @@ impl SessionCompactor {
                         .with_agent(&agent_id)
                         .with_session(&session_id);
                     let writer = writer.clone();
+                    let registry_opt = self.capture_registry.clone();
+                    let cap_agent = agent_id.clone();
+                    let cap_session = session_id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = writer.insert_raw_memory(&raw).await {
+                        if let Some(registry) = registry_opt {
+                            let ctx = CaptureCtx {
+                                agent_id: cap_agent,
+                                namespace: crate::memory::namespace::NamespaceScope::Owner,
+                                session_id: Some(cap_session),
+                                source_hint: "pre_compress".into(),
+                            };
+                            if let Err(e) =
+                                insert_with_capture_filter(&writer, &registry, &ctx, raw).await
+                            {
+                                tracing::warn!("pre_compress raw_memory write failed: {e}");
+                            }
+                        } else if let Err(e) = writer.insert_raw_memory(&raw).await {
                             tracing::warn!("pre_compress raw_memory write failed: {e}");
                         }
                     });
@@ -462,14 +496,41 @@ impl SessionCompactor {
                 .with_agent(&agent_id)
                 .with_session(&session_id)
                 .with_path(fact.path.clone());
-            if let Err(e) = self.database.insert_raw_memory(&raw).await {
-                warn!(
-                    error = %e,
-                    session = %session_id,
-                    seq = next_seq,
-                    "Failed to store d0 summary to raw_memories"
-                );
+            let insert_ok = if let Some(ref registry) = self.capture_registry {
+                let store: Arc<dyn RawMemoryStore> = self.database.clone();
+                let ctx = CaptureCtx {
+                    agent_id: agent_id.clone(),
+                    namespace: crate::memory::namespace::NamespaceScope::Owner,
+                    session_id: Some(session_id.clone()),
+                    source_hint: "session_compressed".into(),
+                };
+                match insert_with_capture_filter(&store, registry, &ctx, raw).await {
+                    Ok(_) => true,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            session = %session_id,
+                            seq = next_seq,
+                            "Failed to store d0 summary to raw_memories"
+                        );
+                        false
+                    }
+                }
             } else {
+                match self.database.insert_raw_memory(&raw).await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            session = %session_id,
+                            seq = next_seq,
+                            "Failed to store d0 summary to raw_memories"
+                        );
+                        false
+                    }
+                }
+            };
+            if insert_ok {
                 d0_created += 1;
                 self.metrics
                     .d0_summaries_created
@@ -690,7 +751,18 @@ impl SessionCompactor {
             .with_agent("default")
             .with_session(session_id)
             .with_path(path);
-        if let Err(e) = self.database.insert_raw_memory(&raw).await {
+        if let Some(ref registry) = self.capture_registry {
+            let store: Arc<dyn RawMemoryStore> = self.database.clone();
+            let ctx = CaptureCtx {
+                agent_id: "default".into(),
+                namespace: crate::memory::namespace::NamespaceScope::Owner,
+                session_id: Some(session_id.to_string()),
+                source_hint: "session_compressed".into(),
+            };
+            if let Err(e) = insert_with_capture_filter(&store, registry, &ctx, raw).await {
+                warn!(error = %e, session = %session_id, seq, "Failed to store raw chunk to raw_memories");
+            }
+        } else if let Err(e) = self.database.insert_raw_memory(&raw).await {
             warn!(
                 error = %e,
                 session = %session_id,
@@ -775,7 +847,18 @@ impl SessionCompactor {
             .with_agent(agent_id)
             .with_session(session_id)
             .with_path(fact.path.clone());
-        self.database.insert_raw_memory(&raw).await?;
+        if let Some(ref registry) = self.capture_registry {
+            let store: Arc<dyn RawMemoryStore> = self.database.clone();
+            let ctx = CaptureCtx {
+                agent_id: agent_id.to_string(),
+                namespace: crate::memory::namespace::NamespaceScope::Owner,
+                session_id: Some(session_id.to_string()),
+                source_hint: "session_compressed".into(),
+            };
+            insert_with_capture_filter(&store, registry, &ctx, raw).await?;
+        } else {
+            self.database.insert_raw_memory(&raw).await?;
+        }
 
         // Mark source raw memories as processed (consumed by condensation)
         let source_ids: Vec<String> = source_facts.iter().map(|r| r.id.clone()).collect();

@@ -7,6 +7,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
+use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
+use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason};
 use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
@@ -49,6 +52,10 @@ pub struct SessionCompleteTool {
     /// Wrapped in Arc<RwLock<…>> so it can be updated without re-building
     /// the registry (same pattern as `memory_workspace_handle`).
     session_id: Option<Arc<tokio::sync::RwLock<String>>>,
+    /// Optional capture-filter registry (Spec 4 Task 6).
+    /// When set, the SessionEnd row goes through `insert_with_capture_filter`.
+    /// Task 11 wires the real registry at startup; `None` falls back to direct insert.
+    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
 }
 
 impl SessionCompleteTool {
@@ -58,6 +65,7 @@ impl SessionCompleteTool {
             db,
             agent_id: agent_id.into(),
             session_id: None,
+            capture_registry: None,
         }
     }
 
@@ -67,6 +75,16 @@ impl SessionCompleteTool {
         handle: Arc<tokio::sync::RwLock<String>>,
     ) -> Self {
         self.session_id = Some(handle);
+        self
+    }
+
+    /// Attach a capture-filter registry (Spec 4 Task 6).
+    ///
+    /// When set, the SessionEnd raw-memory row goes through
+    /// `insert_with_capture_filter` so extensions can mutate or block it.
+    /// Task 11 wires the real registry at startup; `None` preserves current behaviour.
+    pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
+        self.capture_registry = Some(registry);
         self
     }
 
@@ -116,7 +134,18 @@ impl AlephTool for SessionCompleteTool {
             raw = raw.with_session(sid.clone());
         }
 
-        self.db.insert_raw_memory(&raw).await?;
+        if let Some(ref registry) = self.capture_registry {
+            let store: Arc<dyn RawMemoryStore> = self.db.clone();
+            let ctx = CaptureCtx {
+                agent_id: self.agent_id.clone(),
+                namespace: NamespaceScope::Owner,
+                session_id: session_id.clone(),
+                source_hint: "session_end".into(),
+            };
+            insert_with_capture_filter(&store, registry, &ctx, raw).await?;
+        } else {
+            self.db.insert_raw_memory(&raw).await?;
+        }
 
         Ok(SessionCompleteResult {
             ok: true,

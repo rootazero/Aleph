@@ -975,6 +975,18 @@ pub(crate) fn emit_session_end_raw(
     tail: String,
     reason: crate::memory::store::raw_memory::SessionEndReason,
 ) {
+    emit_session_end_raw_with_registry(writer, agent_id, session_id, tail, reason, None);
+}
+
+/// Inner implementation that optionally threads a capture-filter registry (Spec 4 Task 6).
+pub(crate) fn emit_session_end_raw_with_registry(
+    writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    agent_id: String,
+    session_id: String,
+    tail: String,
+    reason: crate::memory::store::raw_memory::SessionEndReason,
+    registry: Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+) {
     if tail.is_empty() {
         return;
     }
@@ -982,12 +994,25 @@ pub(crate) fn emit_session_end_raw(
         tail,
         crate::memory::store::raw_memory::RawMemorySource::SessionEnd { reason },
     )
-    .with_agent(agent_id)
-    .with_session(session_id);
+    .with_agent(agent_id.clone())
+    .with_session(session_id.clone());
 
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
         rt.spawn(async move {
-            if let Err(e) = writer.insert_raw_memory(&raw).await {
+            if let Some(reg) = registry {
+                let ctx = crate::memory::extensions::types::CaptureCtx {
+                    agent_id,
+                    namespace: crate::memory::namespace::NamespaceScope::Owner,
+                    session_id: Some(session_id),
+                    source_hint: "session_end".into(),
+                };
+                if let Err(e) =
+                    crate::memory::extensions::insert_with_capture_filter(&writer, &reg, &ctx, raw)
+                        .await
+                {
+                    tracing::warn!("session_end raw_memory write failed: {e}");
+                }
+            } else if let Err(e) = writer.insert_raw_memory(&raw).await {
                 tracing::warn!("session_end raw_memory write failed: {e}");
             }
         });
