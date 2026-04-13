@@ -46,8 +46,7 @@ fn arb_memory_layer() -> impl Strategy<Value = MemoryLayer> {
 fn arb_memory_scope() -> impl Strategy<Value = MemoryScope> {
     prop_oneof![
         Just(MemoryScope::Global),
-        Just(MemoryScope::Agent),
-        Just(MemoryScope::Persona),
+        Just(MemoryScope::SessionLocal),
     ]
 }
 

@@ -129,25 +129,20 @@ fn test_memory_category_roundtrip() {
 #[test]
 fn test_memory_scope_roundtrip() {
     assert_eq!(MemoryScope::Global.as_str(), "global");
-    assert_eq!(MemoryScope::Agent.as_str(), "agent");
-    assert_eq!(MemoryScope::Persona.as_str(), "persona");
+    assert_eq!(MemoryScope::SessionLocal.as_str(), "session_local");
     assert_eq!(
         MemoryScope::from_str_or_default("global"),
         MemoryScope::Global
     );
     assert_eq!(
-        MemoryScope::from_str_or_default("agent"),
-        MemoryScope::Agent
-    );
-    assert_eq!(
-        MemoryScope::from_str_or_default("persona"),
-        MemoryScope::Persona
+        MemoryScope::from_str_or_default("session_local"),
+        MemoryScope::SessionLocal
     );
     assert_eq!(
         MemoryScope::from_str_or_default("unknown"),
         MemoryScope::Global
     ); // default
-    assert_eq!(format!("{}", MemoryScope::Persona), "persona");
+    assert_eq!(format!("{}", MemoryScope::SessionLocal), "session_local");
 }
 
 #[test]

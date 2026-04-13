@@ -355,8 +355,6 @@ impl std::fmt::Display for MemoryCategory {
 ///
 /// Controls which retrieval contexts can see a given fact:
 /// - **Global**: visible everywhere
-/// - **Agent**: visible only within a specific agent
-/// - **Persona**: visible only to a specific persona
 /// - **SessionLocal**: visible only within the current session (ephemeral, not persisted long-term)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -364,10 +362,6 @@ pub enum MemoryScope {
     /// Visible everywhere.
     #[default]
     Global,
-    /// Visible only within a specific agent.
-    Agent,
-    /// Visible only to a specific persona.
-    Persona,
     /// Visible only within the current session; used by SessionCompactor for intra-session facts.
     SessionLocal,
 }
@@ -376,8 +370,6 @@ impl MemoryScope {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Global => "global",
-            Self::Agent => "agent",
-            Self::Persona => "persona",
             Self::SessionLocal => "session_local",
         }
     }
@@ -393,8 +385,6 @@ impl std::str::FromStr for MemoryScope {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "global" => Ok(Self::Global),
-            "agent" => Ok(Self::Agent),
-            "persona" => Ok(Self::Persona),
             "session_local" => Ok(Self::SessionLocal),
             _ => Err(format!("Unknown memory scope: {}", s)),
         }

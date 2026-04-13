@@ -516,10 +516,10 @@ mod tests {
     #[test]
     fn search_filter_supports_scope_and_persona() {
         let filter = SearchFilter::new()
-            .with_scope(MemoryScope::Persona)
+            .with_scope(MemoryScope::SessionLocal)
             .with_persona_id("reviewer");
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("scope = 'persona'"));
+        assert!(sql.contains("scope = 'session_local'"));
         assert!(sql.contains("persona_id = 'reviewer'"));
     }
 
