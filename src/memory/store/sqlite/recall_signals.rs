@@ -192,6 +192,27 @@ impl SqliteMemoryBackend {
         Ok(results)
     }
 
+    /// Count recall signals for a given channel.
+    ///
+    /// Returns the number of rows in `recall_signals` with the given channel.
+    /// Exposed as a public helper primarily for integration tests.
+    pub fn count_recall_signals_for_channel(&self, channel: &str) -> Result<u64, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recall_signals WHERE channel = ?1",
+                rusqlite::params![channel],
+                |row: &rusqlite::Row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| AlephError::config(format!("count_recall_signals_for_channel: {e}")))?;
+
+        Ok(count as u64)
+    }
+
     /// Delete recall signals older than `retention_days`.
     ///
     /// Returns the number of deleted rows.
