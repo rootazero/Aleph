@@ -26,6 +26,7 @@ pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
 pub mod events;
+pub mod extensions;
 pub mod ingestion;
 pub mod namespace;
 pub mod noise_filter;
