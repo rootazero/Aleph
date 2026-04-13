@@ -15,6 +15,7 @@
 
 // Public submodules
 pub mod ai_retrieval;
+pub mod assembler;
 pub mod audit;
 pub mod cli;
 pub mod compression;
@@ -64,7 +65,7 @@ pub use compression::{
 };
 pub use context::{
     compute_parent_path, CompressionResult, CompressionSession, ContextAnchor, FactSource,
-    FactSpecificity, FactStats, NoteType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
+    FactSpecificity, FactStats, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, NoteType,
     TemporalScope, PRESET_PATHS,
 };
 pub use context_comptroller::{
