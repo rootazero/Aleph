@@ -19,6 +19,7 @@ mod extractor;
 mod scheduler;
 mod service;
 pub mod signal_detector;
+pub mod source_prompts;
 mod trigger;
 
 pub use conflict::{ConflictConfig, ConflictDetector, ConflictResolution, MergeStrategy};
