@@ -11,7 +11,7 @@ pub const PRESET_PATHS: &[(&str, &str)] = &[
     ("aleph://knowledge/projects/", "Project knowledge"),
     ("aleph://agent/", "Agent domain root"),
     ("aleph://agent/tools/", "Tool usage experiences"),
-    ("aleph://agent/experiences/", "Cortex experiences"),
+    ("aleph://agent/experiences/", "Subagent transcripts"),
     ("aleph://session/", "Session temporary data"),
 ];
 

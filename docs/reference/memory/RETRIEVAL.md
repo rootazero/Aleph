@@ -356,12 +356,6 @@ Explainability is served by two derived views. `FactExplanation { fact_id, conte
 
 **Explain path.** To trace why a note was returned or dropped: look up the fact by `fact_id`, materialize `Vec<AuditEntry>` ordered by `created_at`, fold them into a `FactExplanation`, and for each `Accessed` event inspect the `relevance_score` and `query`. For forgetting, materialize a `ForgettingExplanation` from the final `Invalidated` entry. This is the read side of memory observability; the write side — event-sourced note mutations — is covered in `NOTES.md` §12.
 
-## 13. Cortex (Independent Subsystem)
-
-`src/memory/cortex/mod.rs` exposes submodules: `clustering`, `distillation`, `dreaming`, `integration`, `meta_cognition`, `pattern_extractor`, `types`. Re-exports include `ClusteringService`, `DistillationService`, `CortexDreamingService`, `PatternExtractor`, `BehavioralAnchor`, and `CortexIntegration`. The module-level doc comment marks it explicitly deprecated in favor of `crate::poe::meta_cognition` and `crate::poe::crystallization`, kept for backward compatibility during the transition.
-
-Self-contained experimental subsystem. Not invoked by `NoteFactRetrieval` or the main agent loop as of this doc. Retained for future integration — see `src/memory/cortex/integration.rs`. Curious readers should start there; everything else is placeholder machinery for an evolution pipeline that has not been wired to the L0/L1/L2 retrieval stack.
-
 ## Appendix: Retrieval Tuning Tips
 
 - **Raise `hard_min_score` when noise surfaces.** The default 0.35 is tuned against the current confidence + decay profile; bump to 0.45 if retrieval surfaces marginal matches, lower to 0.25 for sparse knowledge bases.

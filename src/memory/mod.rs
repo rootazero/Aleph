@@ -21,7 +21,6 @@ pub mod compression;
 pub mod content_scanner;
 pub mod context;
 pub mod context_comptroller;
-pub mod cortex;
 pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
@@ -70,10 +69,6 @@ pub use context::{
 };
 pub use context_comptroller::{
     ArbitratedContext, ComptrollerConfig, ContextComptroller, RetentionMode, TokenBudget,
-};
-pub use cortex::{
-    DistillationMode, DistillationTask, EnvironmentContext, EvolutionStatus, Experience,
-    ExperienceBuilder, ParameterConfig, ParameterMapping, ReplayMatch,
 };
 pub use dreaming::{ensure_dream_daemon, record_activity, DailyInsight, DreamStatus};
 pub use embedding_manager::EmbeddingManager;
