@@ -9,6 +9,7 @@ use crate::a2a::adapter::client::A2AClientPool;
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::service::SmartRouter;
 use crate::agents::sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
+use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
 
 /// SubAgent implementation that delegates tasks to remote A2A agents.
@@ -26,6 +27,10 @@ pub struct A2ASubAgent {
     client_pool: Arc<A2AClientPool>,
     /// Cached lowercased agent/skill names for sync can_handle matching
     cached_names: crate::sync_primitives::RwLock<Vec<String>>,
+    /// Optional writer for raw memory delegation hooks (Spec 1 G2).
+    /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
+    /// row before returning a successful result.
+    raw_memory_writer: Option<std::sync::Arc<dyn RawMemoryStore>>,
 }
 
 impl A2ASubAgent {
@@ -34,7 +39,21 @@ impl A2ASubAgent {
             smart_router,
             client_pool,
             cached_names: crate::sync_primitives::RwLock::new(Vec::new()),
+            raw_memory_writer: None,
         }
+    }
+
+    /// Attach an optional raw-memory writer for delegation hooks (Spec 1 G2).
+    ///
+    /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
+    /// row carrying the delegation prompt + sub-agent summary before returning,
+    /// allowing CompressionService to distil durable lessons for the parent agent.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: std::sync::Arc<dyn RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
     }
 
     /// Refresh the cached agent names from the resolver.
@@ -72,6 +91,56 @@ impl A2ASubAgent {
         } else {
             tracing::warn!("Failed to list agents from SmartRouter for name cache");
         }
+    }
+}
+
+/// Emit a `RawMemory(Delegation{child_agent_id})` row in a fire-and-forget spawn.
+///
+/// Carries the delegation prompt and sub-agent summary so CompressionService
+/// can distil durable lessons for the parent agent's long-term memory.
+/// The parent agent_id is taken from `execution_context.metadata["parent_agent_id"]`
+/// (falls back to `"default"` when absent — Task 10 will wire the real value at startup).
+pub(crate) fn emit_delegation_raw(
+    writer: std::sync::Arc<dyn RawMemoryStore>,
+    request: &SubAgentRequest,
+    result: &SubAgentResult,
+    child_agent_id: impl Into<String>,
+) {
+    let child_agent_id = child_agent_id.into();
+    let prompt_text = request.prompt.clone();
+    let summary_text = result.summary.clone();
+    let content = format!(
+        "DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",
+        prompt = prompt_text,
+        summary = summary_text,
+    );
+
+    let parent_agent_id = request
+        .execution_context
+        .as_ref()
+        .and_then(|ctx| ctx.metadata.get("parent_agent_id").cloned())
+        .unwrap_or_else(|| "default".to_string());
+
+    let parent_session_id = request.parent_session_id.clone();
+
+    let mut raw = RawMemory::new(
+        content,
+        RawMemorySource::Delegation { child_agent_id },
+    )
+    .with_agent(parent_agent_id);
+
+    if let Some(sid) = parent_session_id {
+        raw = raw.with_session(sid);
+    }
+
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        rt.spawn(async move {
+            if let Err(e) = writer.insert_raw_memory(&raw).await {
+                tracing::warn!("delegation raw_memory write failed: {e}");
+            }
+        });
+    } else {
+        tracing::warn!("no tokio runtime for delegation emit; skipping");
     }
 }
 
@@ -180,6 +249,12 @@ impl SubAgent for A2ASubAgent {
                 });
                 let result =
                     SubAgentResult::success(request.id.clone(), summary).with_output(output);
+
+                // Spec 1 G2: record delegation outcome for parent-agent memory.
+                if let Some(w) = self.raw_memory_writer.clone() {
+                    emit_delegation_raw(w, &request, &result, &decision.agent.card.id);
+                }
+
                 Ok(result)
             }
             Err(e) => Ok(SubAgentResult::failure(
@@ -424,5 +499,125 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("No matching A2A agent"));
+    }
+}
+
+#[cfg(test)]
+mod spec1_tests {
+    use super::*;
+    use crate::agents::sub_agents::SubAgentRequest;
+    use crate::error::AlephError;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct FakeWriter(std::sync::Mutex<Vec<RawMemory>>);
+
+    #[async_trait::async_trait]
+    impl RawMemoryStore for FakeWriter {
+        async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError> {
+            self.0.lock().unwrap().push(raw.clone());
+            Ok(())
+        }
+
+        async fn get_unprocessed_raw_memories(
+            &self,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<RawMemory>, AlephError> {
+            Ok(vec![])
+        }
+
+        async fn mark_raw_as_processed(
+            &self,
+            _ids: &[String],
+        ) -> Result<usize, AlephError> {
+            Ok(0)
+        }
+
+        async fn count_unprocessed(&self, _agent_id: &str) -> Result<usize, AlephError> {
+            Ok(0)
+        }
+
+        async fn get_raw_by_path_prefix(
+            &self,
+            _path_prefix: &str,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<RawMemory>, AlephError> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_delegation_raw_writes_expected_row() {
+        let fake = Arc::new(FakeWriter::default());
+        let writer: Arc<dyn RawMemoryStore> = fake.clone();
+
+        let request = SubAgentRequest::new("Summarise the trading report")
+            .with_parent_session("parent-session-42");
+        let result = crate::agents::sub_agents::SubAgentResult::success(
+            request.id.clone(),
+            "Completed: found 3 key insights",
+        );
+
+        emit_delegation_raw(writer, &request, &result, "trading-agent-id");
+
+        // Fire-and-forget: let the spawned task complete.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let captured = fake.0.lock().unwrap();
+        assert_eq!(captured.len(), 1, "expected exactly one RawMemory row");
+
+        let row = &captured[0];
+        match &row.source {
+            RawMemorySource::Delegation { child_agent_id } => {
+                assert_eq!(child_agent_id, "trading-agent-id");
+            }
+            other => panic!("expected Delegation source, got {:?}", other),
+        }
+
+        assert!(
+            row.content.contains("Summarise the trading report"),
+            "content should include delegation prompt"
+        );
+        assert!(
+            row.content.contains("Completed: found 3 key insights"),
+            "content should include delegation result summary"
+        );
+        assert_eq!(
+            row.session_id,
+            Some("parent-session-42".to_string()),
+            "session_id should match parent_session_id"
+        );
+        assert_eq!(
+            row.agent_id, "default",
+            "agent_id falls back to 'default' when no parent_agent_id in metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn emit_delegation_raw_uses_metadata_parent_agent_id() {
+        let fake = Arc::new(FakeWriter::default());
+        let writer: Arc<dyn RawMemoryStore> = fake.clone();
+
+        use crate::agents::sub_agents::ExecutionContextInfo;
+        let ctx = ExecutionContextInfo::new()
+            .with_metadata("parent_agent_id", "parent-agent-007");
+        let request = SubAgentRequest::new("Do the thing")
+            .with_parent_session("sess-99")
+            .with_execution_context(ctx);
+        let result = crate::agents::sub_agents::SubAgentResult::success(
+            request.id.clone(),
+            "Done",
+        );
+
+        emit_delegation_raw(writer, &request, &result, "child-007");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let captured = fake.0.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].agent_id, "parent-agent-007");
     }
 }
