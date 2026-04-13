@@ -4,6 +4,7 @@
 pub mod envelope;
 pub(crate) mod error;
 pub(crate) mod fallback;
+pub(crate) mod gather;
 pub mod hydration;
 pub(crate) mod profile;
 pub mod render;
