@@ -91,6 +91,36 @@ fn parse_raw_content(content: &str) -> (String, String) {
     }
 }
 
+/// Group raw memories by their source variant (preserving insertion order of first occurrence).
+/// Used by the compression service to run one extractor call per group so each call can
+/// use its source-specific system prompt.
+pub(crate) fn group_by_source<'a>(
+    rows: &'a [crate::memory::store::raw_memory::RawMemory],
+) -> Vec<(
+    crate::memory::store::raw_memory::RawMemorySource,
+    Vec<&'a crate::memory::store::raw_memory::RawMemory>,
+)> {
+    use std::collections::BTreeMap;
+    let mut order: Vec<crate::memory::store::raw_memory::RawMemorySource> = Vec::new();
+    let mut buckets: BTreeMap<String, Vec<&crate::memory::store::raw_memory::RawMemory>> =
+        BTreeMap::new();
+    for r in rows {
+        let key = format!("{:?}", r.source);
+        if !buckets.contains_key(&key) {
+            order.push(r.source.clone());
+        }
+        buckets.entry(key).or_default().push(r);
+    }
+    order
+        .into_iter()
+        .map(|src| {
+            let key = format!("{src:?}");
+            let v = buckets.remove(&key).unwrap_or_default();
+            (src, v)
+        })
+        .collect()
+}
+
 /// Main compression service
 pub struct CompressionService {
     database: MemoryBackend,
@@ -212,34 +242,13 @@ impl CompressionService {
             .filter(|r| r.source != crate::memory::store::raw_memory::RawMemorySource::Transcript)
             .collect();
 
-        let memories: Vec<crate::memory::context::MemoryEntry> = raw_memories
-            .iter()
-            .map(|raw| {
-                let (user_input, ai_output) = parse_raw_content(&raw.content);
-                // Inject attachment text if present
-                let enriched_input = match &raw.attachment_text {
-                    Some(att) if !att.is_empty() => {
-                        let att_preview: String = att.chars().take(2000).collect();
-                        format!("{user_input}\n[Attachment]: {att_preview}")
-                    }
-                    _ => user_input,
-                };
-                crate::memory::context::MemoryEntry::new(
-                    raw.id.clone(),
-                    crate::memory::context::ContextAnchor::now("".to_string()),
-                    enriched_input,
-                    ai_output,
-                )
-            })
-            .collect();
-
-        if memories.is_empty() {
+        if raw_memories.is_empty() {
             tracing::debug!("No uncompressed session memories for note-based compression");
             return Ok(CompressionResult::empty());
         }
 
         tracing::info!(
-            memory_count = memories.len(),
+            memory_count = raw_memories.len(),
             "Starting note-based compression"
         );
 
@@ -267,13 +276,7 @@ impl CompressionService {
             existing_note_summaries.push(summary);
         }
 
-        // 4. Extract note updates via LLM
-        let note_updates = self
-            .extractor
-            .extract_note_updates(&memories, &existing_note_summaries)
-            .await?;
-
-        // Validate extraction quality
+        // 4. Extract note updates via LLM — one call per source group (Spec 1).
         let valid_categories = [
             "preference",
             "plan",
@@ -293,8 +296,42 @@ impl CompressionService {
         ];
 
         use crate::memory::notes::extractor::NoteExtractionResponse;
+
+        // Accumulate updates across all source groups.
+        let mut all_updates: Vec<crate::memory::notes::extractor::NoteUpdate> = Vec::new();
+
+        for (source, group) in group_by_source(&raw_memories) {
+            // Build MemoryEntry slice for this group only.
+            let group_memories: Vec<crate::memory::context::MemoryEntry> = group
+                .iter()
+                .map(|raw| {
+                    let (user_input, ai_output) = parse_raw_content(&raw.content);
+                    let enriched_input = match &raw.attachment_text {
+                        Some(att) if !att.is_empty() => {
+                            let att_preview: String = att.chars().take(2000).collect();
+                            format!("{user_input}\n[Attachment]: {att_preview}")
+                        }
+                        _ => user_input,
+                    };
+                    crate::memory::context::MemoryEntry::new(
+                        raw.id.clone(),
+                        crate::memory::context::ContextAnchor::now("".to_string()),
+                        enriched_input,
+                        ai_output,
+                    )
+                })
+                .collect();
+
+            let group_updates = self
+                .extractor
+                .extract_note_updates_for_source(&group_memories, &existing_note_summaries, &source)
+                .await?;
+
+            all_updates.extend(group_updates.updates);
+        }
+
         let note_updates = NoteExtractionResponse {
-            updates: note_updates.updates.into_iter().filter(|u| {
+            updates: all_updates.into_iter().filter(|u| {
                 let has_slash = u.note_path.contains('/');
                 let has_content = !u.new_facts.is_empty()
                     || u.action == crate::memory::notes::extractor::NoteAction::Update;
@@ -436,7 +473,7 @@ impl CompressionService {
         );
 
         Ok(CompressionResult {
-            memories_processed: memories.len() as u32,
+            memories_processed: raw_memories.len() as u32,
             facts_extracted: facts_stored,
             facts_invalidated: 0,
             duration_ms,
@@ -992,5 +1029,60 @@ mod tests {
             .unwrap();
 
         assert_eq!(backend.count_unprocessed("default").await.unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_spec1 {
+    use super::*;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, SessionEndReason};
+
+    #[test]
+    fn group_by_source_separates_specialised_and_legacy() {
+        let mut rows = vec![
+            RawMemory::new("a".into(), RawMemorySource::Transcript),
+            RawMemory::new("b".into(), RawMemorySource::PreCompress),
+            RawMemory::new("c".into(), RawMemorySource::Transcript),
+            RawMemory::new(
+                "d".into(),
+                RawMemorySource::SessionEnd {
+                    reason: SessionEndReason::TaskDone,
+                },
+            ),
+        ];
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.id = format!("id-{i}");
+        }
+
+        let groups = group_by_source(&rows);
+        assert_eq!(groups.len(), 3, "expected 3 source groups");
+        let t_count = groups
+            .iter()
+            .find(|(s, _)| matches!(s, RawMemorySource::Transcript))
+            .unwrap()
+            .1
+            .len();
+        assert_eq!(t_count, 2);
+        let pc_count = groups
+            .iter()
+            .find(|(s, _)| matches!(s, RawMemorySource::PreCompress))
+            .unwrap()
+            .1
+            .len();
+        assert_eq!(pc_count, 1);
+        let se_count = groups
+            .iter()
+            .find(|(s, _)| {
+                matches!(
+                    s,
+                    RawMemorySource::SessionEnd {
+                        reason: SessionEndReason::TaskDone
+                    }
+                )
+            })
+            .unwrap()
+            .1
+            .len();
+        assert_eq!(se_count, 1);
     }
 }
