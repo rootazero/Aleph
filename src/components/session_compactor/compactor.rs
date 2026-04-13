@@ -38,6 +38,10 @@ pub struct SessionCompactor {
     pub(crate) keep_recent_tools: usize,
     /// Compaction configuration
     config: CompactionConfig,
+    /// Optional writer for raw memory pre-compress hooks (Spec 1 G1).
+    /// When set, `replace_with_summary` will write a `RawMemory(PreCompress)` row
+    /// carrying the chunk about to be dropped before draining it.
+    raw_memory_writer: Option<std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl Default for SessionCompactor {
@@ -53,6 +57,7 @@ impl SessionCompactor {
             token_tracker: TokenTracker::new(),
             keep_recent_tools: 10,
             config: CompactionConfig::default(),
+            raw_memory_writer: None,
         }
     }
 
@@ -62,6 +67,7 @@ impl SessionCompactor {
             token_tracker: TokenTracker::new(),
             keep_recent_tools,
             config: CompactionConfig::default(),
+            raw_memory_writer: None,
         }
     }
 
@@ -71,7 +77,21 @@ impl SessionCompactor {
             token_tracker: TokenTracker::new(),
             keep_recent_tools: 10,
             config,
+            raw_memory_writer: None,
         }
+    }
+
+    /// Attach an optional raw-memory writer for pre-compress hooks (Spec 1 G1).
+    ///
+    /// When set, `replace_with_summary` will write a `RawMemory(PreCompress)` row
+    /// carrying the chunk about to be dropped, allowing CompressionService to
+    /// rescue knowledge from it later.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
     }
 
     /// Get the compaction configuration
@@ -514,6 +534,37 @@ impl SessionCompactor {
             original_count: compact_count as u32,
             compacted_at: chrono::Utc::now().timestamp(),
         });
+
+        // Spec 1 G1: rescue the to-be-dropped chunk into raw_memories for later extraction.
+        if let Some(writer) = self.raw_memory_writer.clone() {
+            let doomed_text = session
+                .parts
+                .iter()
+                .take(compact_count)
+                .map(|p| format!("{p:?}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !doomed_text.is_empty() {
+                let raw = crate::memory::store::raw_memory::RawMemory::new(
+                    doomed_text,
+                    crate::memory::store::raw_memory::RawMemorySource::PreCompress,
+                )
+                .with_agent(session.agent_id.clone())
+                .with_session(session.id.clone());
+
+                // Fire-and-forget; extraction happens later in CompressionService.
+                // Errors are logged but must not block compaction.
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    rt.spawn(async move {
+                        if let Err(e) = writer.insert_raw_memory(&raw).await {
+                            tracing::warn!("pre_compress raw_memory write failed: {e}");
+                        }
+                    });
+                } else {
+                    tracing::warn!("no tokio runtime for pre_compress emit; skipping");
+                }
+            }
+        }
 
         // Remove old parts and insert summary
         let kept_parts: Vec<SessionPart> = session.parts.drain(compact_count..).collect();
