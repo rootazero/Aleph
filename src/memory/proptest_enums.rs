@@ -6,7 +6,7 @@
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-use super::{NoteType, MemoryLayer, MemoryScope};
+use super::{NoteType, MemoryLayer};
 
 // ============================================================================
 // Strategies
@@ -39,14 +39,6 @@ fn arb_memory_layer() -> impl Strategy<Value = MemoryLayer> {
         Just(MemoryLayer::L0Abstract),
         Just(MemoryLayer::L1Overview),
         Just(MemoryLayer::L2Detail),
-    ]
-}
-
-/// Generate an arbitrary MemoryScope variant.
-fn arb_memory_scope() -> impl Strategy<Value = MemoryScope> {
-    prop_oneof![
-        Just(MemoryScope::Global),
-        Just(MemoryScope::SessionLocal),
     ]
 }
 
@@ -90,13 +82,6 @@ proptest! {
         prop_assert_eq!(&parsed, layer);
     }
 
-    /// MemoryScope: serialize then deserialize preserves the variant.
-    #[test]
-    fn memory_scope_serde_roundtrip(ref scope in arb_memory_scope()) {
-        let json_str = serde_json::to_string(scope).unwrap();
-        let parsed: MemoryScope = serde_json::from_str(&json_str).unwrap();
-        prop_assert_eq!(&parsed, scope);
-    }
 }
 
 /// NoteType: all as_str() values are unique across all variants.

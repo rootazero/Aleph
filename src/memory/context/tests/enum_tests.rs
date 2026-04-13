@@ -127,25 +127,6 @@ fn test_memory_category_roundtrip() {
 }
 
 #[test]
-fn test_memory_scope_roundtrip() {
-    assert_eq!(MemoryScope::Global.as_str(), "global");
-    assert_eq!(MemoryScope::SessionLocal.as_str(), "session_local");
-    assert_eq!(
-        MemoryScope::from_str_or_default("global"),
-        MemoryScope::Global
-    );
-    assert_eq!(
-        MemoryScope::from_str_or_default("session_local"),
-        MemoryScope::SessionLocal
-    );
-    assert_eq!(
-        MemoryScope::from_str_or_default("unknown"),
-        MemoryScope::Global
-    ); // default
-    assert_eq!(format!("{}", MemoryScope::SessionLocal), "session_local");
-}
-
-#[test]
 fn test_note_type_default_path() {
     assert_eq!(
         NoteType::Preference.default_path(),

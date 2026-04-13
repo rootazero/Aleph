@@ -66,7 +66,7 @@ pub use compression::{
 pub use context::{
     compute_parent_path, CompressionResult, CompressionSession, ContextAnchor, FactSource,
     FactSpecificity, FactStats, NoteType, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
-    MemoryScope, TemporalScope, PRESET_PATHS,
+    TemporalScope, PRESET_PATHS,
 };
 pub use context_comptroller::{
     ArbitratedContext, ComptrollerConfig, ContextComptroller, RetentionMode, TokenBudget,

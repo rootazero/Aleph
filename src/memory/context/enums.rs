@@ -348,56 +348,6 @@ impl std::fmt::Display for MemoryCategory {
 }
 
 // ============================================================================
-// MemoryScope
-// ============================================================================
-
-/// Visibility scope for a memory fact.
-///
-/// Controls which retrieval contexts can see a given fact:
-/// - **Global**: visible everywhere
-/// - **SessionLocal**: visible only within the current session (ephemeral, not persisted long-term)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryScope {
-    /// Visible everywhere.
-    #[default]
-    Global,
-    /// Visible only within the current session; used by SessionCompactor for intra-session facts.
-    SessionLocal,
-}
-
-impl MemoryScope {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Global => "global",
-            Self::SessionLocal => "session_local",
-        }
-    }
-
-    pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(Self::Global)
-    }
-}
-
-impl std::str::FromStr for MemoryScope {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "global" => Ok(Self::Global),
-            "session_local" => Ok(Self::SessionLocal),
-            _ => Err(format!("Unknown memory scope: {}", s)),
-        }
-    }
-}
-
-impl std::fmt::Display for MemoryScope {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-// ============================================================================
 // FactSpecificity
 // ============================================================================
 
