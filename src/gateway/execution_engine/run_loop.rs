@@ -529,6 +529,27 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             };
             let prompt_builder = prompt_builder.with_identity_files(identity_files.clone());
 
+            // Wire memory injection: call build_memory_user_message and thread the
+            // rendered XML string into PromptBuilder so MemoryAugmentationLayer
+            // picks it up via LayerInput::memory_user_message.
+            let prompt_builder = if let Some(ref mcp) = self.memory_context_provider {
+                match mcp
+                    .build_memory_user_message(request.session_key.agent_id(), &request.input)
+                    .await
+                {
+                    Ok(Some(msg)) => {
+                        prompt_builder.with_memory_user_message(msg.text_content())
+                    }
+                    Ok(None) => prompt_builder,
+                    Err(e) => {
+                        warn!(error = %e, "memory injection failed; continuing without memory");
+                        prompt_builder
+                    }
+                }
+            } else {
+                prompt_builder
+            };
+
             // Safety guard from merged global + agent permissions
             let safety = SafetyGuard::from_permissions(
                 &self.global_tool_permissions,

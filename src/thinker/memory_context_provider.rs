@@ -1,26 +1,20 @@
 //! Async memory context provider — fetches relevant memories before prompt assembly.
-//!
-//! PromptLayer::inject() is sync, so we pre-fetch SQLite results here
-//! and store them in MemoryContext for the layer to format.
 
-use super::memory_context::MemoryContext;
 use crate::config::types::memory::{AssemblerConfig, MemoryInjectionMode};
-use crate::memory::assembler::envelope::{ItemSource, MemoryEnvelope};
+use crate::memory::assembler::envelope::MemoryEnvelope;
 use crate::memory::assembler::hybrid::{AiProviderReranker, LlmReranker};
 use crate::memory::assembler::{
     AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
 };
-use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::session_resume::reader::SnapshotReader;
-use crate::memory::store::types::ScoredFact;
 use crate::memory::store::MemoryBackend;
-use crate::memory::{EmbeddingProvider, SqliteMemoryBackend};
+use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Configuration for memory context retrieval.
 pub struct MemoryContextConfig {
@@ -264,50 +258,6 @@ impl MemoryContextProvider {
         Ok(Some(UnifiedMessage::user(rendered)))
     }
 
-    /// Fetch relevant memory context for a user query.
-    ///
-    /// When `session_id` is provided, memory search is scoped to that session.
-    /// Returns empty context on any failure (never blocks LLM calls).
-    #[deprecated(
-        note = "Spec 3 replaces MemoryContext-based injection with \
-                build_memory_user_message. Task 4 migrates callers."
-    )]
-    pub async fn fetch(
-        &self,
-        query: &str,
-        agent_id: &str,
-        session_id: Option<&str>,
-    ) -> MemoryContext {
-        if query.trim().is_empty() {
-            return MemoryContext::default();
-        }
-
-        let budget = AssemblyBudget {
-            total_tokens: (self.config.max_output_chars / 4) as u32,
-        };
-        let envelope = match self
-            .assembler
-            .assemble(query, agent_id, session_id, budget)
-            .await
-        {
-            Ok(env) => env,
-            Err(e) => {
-                warn!(error = %e, "assembler returned Err; falling through to empty context");
-                return MemoryContext::default();
-            }
-        };
-
-        let ctx =
-            memory_context_from_envelope(&envelope, agent_id, self.config.similarity_threshold);
-        debug!(
-            facts = ctx.facts.len(),
-            slots = envelope.slots.len(),
-            strategy = %envelope.meta.strategy,
-            agent_id = agent_id,
-            "Memory context assembled for prompt augmentation"
-        );
-        ctx
-    }
 }
 
 #[cfg(test)]
@@ -355,41 +305,3 @@ mod spec3_tests {
     }
 }
 
-/// Convert an assembler-produced envelope into the legacy `MemoryContext`
-/// shape so `PromptLayer::inject()` can keep its current rendering. Items
-/// with `relevance < similarity_threshold` are dropped to match the previous
-/// behaviour of `MemoryContextProvider::search_facts`.
-fn memory_context_from_envelope(
-    env: &MemoryEnvelope,
-    agent_id: &str,
-    similarity_threshold: f32,
-) -> MemoryContext {
-    let mut facts: Vec<ScoredFact> = Vec::new();
-    for slot in &env.slots {
-        for item in &slot.items {
-            if item.relevance < similarity_threshold {
-                continue;
-            }
-            let category = match &item.source {
-                ItemSource::Note { category, .. } => category.clone(),
-                ItemSource::Raw { .. } => "other".to_string(),
-                ItemSource::Summary { .. } => "other".to_string(),
-            };
-            let note_type = NoteType::from_str_or_other(&category);
-            let mut fact = MemoryFact::new(item.content.clone(), note_type, Vec::new());
-            fact.id = item.id.clone();
-            fact.path = item.id.clone();
-            fact.agent = agent_id.to_string();
-            fact.updated_at = item.updated_at;
-            facts.push(ScoredFact {
-                fact,
-                score: item.relevance,
-            });
-        }
-    }
-    MemoryContext {
-        facts,
-        memory_summaries: Vec::new(),
-        structured_index: None,
-    }
-}

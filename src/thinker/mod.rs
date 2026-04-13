@@ -16,7 +16,6 @@ pub mod identity_files;
 pub mod inbound_context;
 pub mod interaction;
 pub mod layers;
-pub mod memory_context;
 pub mod memory_context_provider;
 pub mod prompt_budget;
 pub mod prompt_builder;

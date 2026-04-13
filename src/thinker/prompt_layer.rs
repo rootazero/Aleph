@@ -82,11 +82,6 @@ pub struct LayerInput<'a> {
     /// Loaded agent identity files (SOUL.md, IDENTITY.md, MEMORY.md, …)
     /// from `~/.aleph/agents/{agent_id}/`.
     pub identity_files: Option<&'a IdentityFiles>,
-    /// Pre-fetched memory context from SQLite (facts + memory summaries).
-    ///
-    /// Deprecated: Task 5 will remove this field once all callers use
-    /// `memory_user_message` instead.
-    pub memory_context: Option<&'a super::memory_context::MemoryContext>,
     /// Pre-rendered memory XML from `MemoryContextProvider::build_memory_user_message`.
     ///
     /// When set, `MemoryAugmentationLayer` injects this text verbatim into the
@@ -130,7 +125,6 @@ impl<'a> LayerInput<'a> {
             mode: PromptMode::Full,
             inbound: None,
             identity_files: None,
-            memory_context: None,
             memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
@@ -152,7 +146,6 @@ impl<'a> LayerInput<'a> {
             mode: PromptMode::Full,
             inbound: None,
             identity_files: None,
-            memory_context: None,
             memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
@@ -174,7 +167,6 @@ impl<'a> LayerInput<'a> {
             mode: PromptMode::Full,
             inbound: None,
             identity_files: None,
-            memory_context: None,
             memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
@@ -196,7 +188,6 @@ impl<'a> LayerInput<'a> {
             mode: PromptMode::Full,
             inbound: None,
             identity_files: None,
-            memory_context: None,
             memory_user_message: None,
             has_session_summaries: false,
             agent_def: None,
@@ -239,21 +230,6 @@ impl<'a> LayerInput<'a> {
     /// Attach optional agent identity files to this input.
     pub fn with_identity_files_opt(mut self, files: Option<&'a IdentityFiles>) -> Self {
         self.identity_files = files;
-        self
-    }
-
-    /// Attach pre-fetched memory context.
-    pub fn with_memory_context(mut self, ctx: &'a super::memory_context::MemoryContext) -> Self {
-        self.memory_context = Some(ctx);
-        self
-    }
-
-    /// Attach optional pre-fetched memory context.
-    pub fn with_memory_context_opt(
-        mut self,
-        ctx: Option<&'a super::memory_context::MemoryContext>,
-    ) -> Self {
-        self.memory_context = ctx;
         self
     }
 

@@ -139,6 +139,11 @@ pub struct PromptBuilder {
     /// `LayerInput` so `SoulLayer`, `IdentityFilesLayer`, `ProfileLayer`, and
     /// `CustomInstructionsLayer` can read their respective files.
     identity_files: Option<IdentityFiles>,
+    /// Pre-rendered memory XML from `MemoryContextProvider::build_memory_user_message`.
+    ///
+    /// When set, threaded into every `LayerInput` as `memory_user_message` so
+    /// `MemoryAugmentationLayer` can inject it verbatim into the system prompt.
+    memory_user_message: Option<String>,
 }
 
 impl PromptBuilder {
@@ -151,6 +156,7 @@ impl PromptBuilder {
             agent_def: None,
             soul: None,
             identity_files: None,
+            memory_user_message: None,
         }
     }
 
@@ -186,6 +192,15 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach a pre-rendered memory XML string for prompt injection.
+    ///
+    /// When set, `build_system_prompt` threads this into `LayerInput::memory_user_message`
+    /// so `MemoryAugmentationLayer` injects it verbatim into the system prompt.
+    pub fn with_memory_user_message(mut self, text: String) -> Self {
+        self.memory_user_message = Some(text);
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -202,6 +217,10 @@ impl PromptBuilder {
         };
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
+        let input = match &self.memory_user_message {
+            Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
         self.pipeline.execute_cached(path, &input)
@@ -430,15 +449,17 @@ impl PromptBuilder {
         profile: Option<&ProfileConfig>,
         identity_files: Option<&IdentityFiles>,
         inbound: Option<&InboundContext>,
-        memory_context: Option<&super::memory_context::MemoryContext>,
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_identity_files_opt(identity_files)
-            .with_inbound_opt(inbound)
-            .with_memory_context_opt(memory_context);
+            .with_inbound_opt(inbound);
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
+            None => input,
+        };
+        let input = match &self.memory_user_message {
+            Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
