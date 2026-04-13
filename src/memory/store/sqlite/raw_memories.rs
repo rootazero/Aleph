@@ -26,12 +26,13 @@ macro_rules! lock_conn {
 
 fn row_to_raw_memory(row: &rusqlite::Row) -> rusqlite::Result<RawMemory> {
     let source_str: String = row.get("source")?;
+    let source_detail: Option<String> = row.get("source_detail")?;
     let is_processed_int: i64 = row.get("is_processed")?;
 
     Ok(RawMemory {
         id: row.get("id")?,
         content: row.get("content")?,
-        source: RawMemorySource::from_str(&source_str),
+        source: RawMemorySource::from_persisted(&source_str, source_detail.as_deref()),
         agent_id: row.get("agent_id")?,
         session_id: row.get("session_id")?,
         path: row.get("path")?,
@@ -50,15 +51,17 @@ fn row_to_raw_memory(row: &rusqlite::Row) -> rusqlite::Result<RawMemory> {
 impl RawMemoryStore for SqliteMemoryBackend {
     async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
+        let (src_token, src_detail) = raw.source.to_persisted();
 
         conn.execute(
             "INSERT INTO raw_memories \
-             (id, content, source, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 raw.id,
                 raw.content,
-                raw.source.as_str(),
+                src_token,
+                src_detail,
                 raw.agent_id,
                 raw.session_id,
                 raw.path,
@@ -82,7 +85,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE is_processed = 0 AND agent_id = ?1 \
@@ -156,7 +159,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
         let pattern = format!("{path_prefix}%");
         let mut stmt = conn
             .prepare(
-                "SELECT id, content, source, agent_id, session_id, path, layer, attachment_text, \
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
                  WHERE path LIKE ?1 AND agent_id = ?2 \
@@ -186,7 +189,7 @@ impl RawMemoryStore for SqliteMemoryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, SessionEndReason};
 
     fn make_backend() -> SqliteMemoryBackend {
         SqliteMemoryBackend::in_memory().expect("in-memory backend")
@@ -344,5 +347,56 @@ mod tests {
             "Earlier created_at should come first"
         );
         assert_eq!(results[1].content, "second");
+    }
+
+    #[tokio::test]
+    async fn raw_memory_source_detail_round_trips() {
+        let backend = make_backend();
+        let raw = RawMemory::new(
+            "user: x\nassistant: y".into(),
+            RawMemorySource::SessionEnd {
+                reason: SessionEndReason::TaskDone,
+            },
+        )
+        .with_agent("agent-1")
+        .with_session("sess-1");
+
+        backend.insert_raw_memory(&raw).await.unwrap();
+        let fetched = backend
+            .get_unprocessed_raw_memories("agent-1", 10)
+            .await
+            .unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(
+            fetched[0].source,
+            RawMemorySource::SessionEnd {
+                reason: SessionEndReason::TaskDone
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_null_source_detail_decodes_gracefully() {
+        // Simulates a row inserted before the source_detail column existed.
+        // Insert via raw SQL with source_detail = NULL, verify it round-trips
+        // to the simple token-only variant (ToolOutput in this case).
+        let backend = make_backend();
+        {
+            let conn = backend.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO raw_memories \
+                 (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
+                 VALUES ('legacy-1', 'legacy content', 'tool_output', NULL, 'agent-legacy', NULL, NULL, NULL, NULL, 0, 1000)",
+                [],
+            )
+            .unwrap();
+        }
+        let fetched = backend
+            .get_unprocessed_raw_memories("agent-legacy", 10)
+            .await
+            .unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0].source, RawMemorySource::ToolOutput);
+        assert_eq!(fetched[0].content, "legacy content");
     }
 }

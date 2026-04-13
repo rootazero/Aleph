@@ -325,6 +325,23 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(CREATE_RAW_MEMORIES)
         .map_err(|e| AlephError::config(format!("Failed to create raw_memories table: {e}")))?;
 
+    // Spec 1 (memory capture hooks): add detail column for enum payloads.
+    // Idempotent — PRAGMA table_info avoids duplicate column errors.
+    let has_source_detail: bool = conn
+        .prepare("PRAGMA table_info(raw_memories)")
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info failed: {e}")))?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AlephError::config(format!("PRAGMA table_info query failed: {e}")))?
+        .filter_map(Result::ok)
+        .any(|name| name == "source_detail");
+    if !has_source_detail {
+        conn.execute(
+            "ALTER TABLE raw_memories ADD COLUMN source_detail TEXT",
+            [],
+        )
+        .map_err(|e| AlephError::config(format!("ALTER TABLE raw_memories failed: {e}")))?;
+    }
+
     conn.execute_batch(NOTES_INDEX_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_index table: {e}")))?;
 
