@@ -3,10 +3,12 @@
 //!
 //! See `docs/superpowers/specs/2026-04-13-memory-evolution-spec4-extensions-design.md`.
 
+pub mod first_party;
 pub mod registry;
 pub mod traits;
 pub mod types;
 
+pub use first_party::EnvelopeRelevanceFloorExtension;
 pub use registry::{
     MemoryExtensionRegistry, ON_CAPTURE_TIMEOUT, ON_RETRIEVE_TIMEOUT, PRODUCE_TIMEOUT,
 };
