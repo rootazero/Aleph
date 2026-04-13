@@ -493,6 +493,36 @@ impl SessionManager {
         Ok(identity)
     }
 
+    /// Read the most recent `limit` messages for a session from the DB connection.
+    ///
+    /// Returns a newline-separated string in chronological order (oldest first).
+    /// Returns an empty string when the session has no messages yet.
+    fn read_recent_messages(
+        &self,
+        conn: &rusqlite::Connection,
+        key_str: &str,
+        limit: usize,
+    ) -> Result<String, rusqlite::Error> {
+        let mut stmt = conn.prepare(
+            "SELECT role, content FROM messages
+             WHERE session_key = ?
+             ORDER BY timestamp DESC
+             LIMIT ?",
+        )?;
+        let rows = stmt
+            .query_map(params![key_str, limit as i64], |row| {
+                Ok(format!(
+                    "{role}: {content}",
+                    role = row.get::<_, String>(0)?,
+                    content = row.get::<_, String>(1)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut v = rows;
+        v.reverse(); // oldest first
+        Ok(v.join("\n"))
+    }
+
     /// Close a session: set status=closed, store topic in metadata JSON
     pub async fn close_session(
         &self,
@@ -516,6 +546,22 @@ impl SessionManager {
 
         if current_state.as_deref() == Some("stopped") {
             return Ok(());
+        }
+
+        // Spec 1 G3-A: capture the conversation tail for end-of-session digest extraction.
+        if let Some(writer) = self.raw_memory_writer.clone() {
+            let agent_id = key.agent_id().to_string();
+            let session_id = key_str.clone();
+            let tail = self
+                .read_recent_messages(&conn, &key_str, 64)
+                .unwrap_or_default();
+            emit_session_end_raw(
+                writer,
+                agent_id,
+                session_id,
+                tail,
+                crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+            );
         }
 
         let existing_json: Option<String> = conn
@@ -915,5 +961,130 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+}
+
+/// Spec 1 G3-A: fire-and-forget emission of a `SessionEnd` raw-memory row.
+///
+/// Spawns a tokio task so `close_session` latency is unaffected.
+/// Skips silently when `tail` is empty (nothing to digest).
+pub(crate) fn emit_session_end_raw(
+    writer: std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    agent_id: String,
+    session_id: String,
+    tail: String,
+    reason: crate::memory::store::raw_memory::SessionEndReason,
+) {
+    if tail.is_empty() {
+        return;
+    }
+    let raw = crate::memory::store::raw_memory::RawMemory::new(
+        tail,
+        crate::memory::store::raw_memory::RawMemorySource::SessionEnd { reason },
+    )
+    .with_agent(agent_id)
+    .with_session(session_id);
+
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        rt.spawn(async move {
+            if let Err(e) = writer.insert_raw_memory(&raw).await {
+                tracing::warn!("session_end raw_memory write failed: {e}");
+            }
+        });
+    } else {
+        tracing::warn!("no tokio runtime for session_end emit; skipping");
+    }
+}
+
+#[cfg(test)]
+mod spec1_tests {
+    use super::*;
+    use crate::memory::store::raw_memory::{
+        RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
+    };
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct FakeWriter(std::sync::Mutex<Vec<RawMemory>>);
+
+    #[async_trait::async_trait]
+    impl RawMemoryStore for FakeWriter {
+        async fn insert_raw_memory(
+            &self,
+            raw: &RawMemory,
+        ) -> Result<(), crate::error::AlephError> {
+            self.0.lock().unwrap().push(raw.clone());
+            Ok(())
+        }
+
+        async fn get_unprocessed_raw_memories(
+            &self,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<RawMemory>, crate::error::AlephError> {
+            Ok(vec![])
+        }
+
+        async fn mark_raw_as_processed(
+            &self,
+            _ids: &[String],
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn count_unprocessed(
+            &self,
+            _agent_id: &str,
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn get_raw_by_path_prefix(
+            &self,
+            _path_prefix: &str,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<Vec<RawMemory>, crate::error::AlephError> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn emit_session_end_writes_disconnect_row() {
+        let fake = Arc::new(FakeWriter::default());
+        let writer: Arc<dyn RawMemoryStore> = fake.clone();
+        emit_session_end_raw(
+            writer,
+            "agent-x".into(),
+            "sess-y".into(),
+            "user: hi\nassistant: yo".into(),
+            SessionEndReason::Disconnect,
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let captured = fake.0.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].agent_id, "agent-x");
+        assert_eq!(captured[0].session_id.as_deref(), Some("sess-y"));
+        assert!(matches!(
+            captured[0].source,
+            RawMemorySource::SessionEnd {
+                reason: SessionEndReason::Disconnect
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_tail_does_not_emit() {
+        let fake = Arc::new(FakeWriter::default());
+        let writer: Arc<dyn RawMemoryStore> = fake.clone();
+        emit_session_end_raw(
+            writer,
+            "agent-x".into(),
+            "sess-y".into(),
+            String::new(),
+            SessionEndReason::Disconnect,
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(fake.0.lock().unwrap().is_empty());
     }
 }

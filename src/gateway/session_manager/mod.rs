@@ -246,6 +246,8 @@ impl Default for SessionManagerConfig {
 pub struct SessionManager {
     pub(super) config: SessionManagerConfig,
     pub(super) conn: Arc<Mutex<Connection>>,
+    /// Optional writer for Spec 1 memory capture hooks.
+    pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl SessionManager {
@@ -270,7 +272,17 @@ impl SessionManager {
         Ok(Self {
             config,
             conn: Arc::new(Mutex::new(conn)),
+            raw_memory_writer: None,
         })
+    }
+
+    /// Attach a raw-memory writer for Spec 1 memory capture hooks.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
     }
 
     /// Create with default configuration
