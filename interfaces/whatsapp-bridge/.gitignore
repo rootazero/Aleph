@@ -1,0 +1,14 @@
+# Compiled Go binaries (produced by `go build` in this directory)
+/whatsapp-bridge
+*.exe
+*.test
+*.out
+
+# Go build / tool caches
+/vendor/
+/.go-cache/
+
+# Local dev state
+.env
+*.log
+session.db
