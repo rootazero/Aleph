@@ -116,12 +116,12 @@ impl SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
         let sql = if agent_id.is_some() {
-            "SELECT id, content, source, agent_id, session_id, path, layer, attachment_text, \
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
              is_processed, created_at \
              FROM raw_memories WHERE agent_id = ?1 \
              ORDER BY created_at DESC LIMIT ?2"
         } else {
-            "SELECT id, content, source, agent_id, session_id, path, layer, attachment_text, \
+            "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
              is_processed, created_at \
              FROM raw_memories \
              ORDER BY created_at DESC LIMIT ?1"
@@ -133,11 +133,12 @@ impl SqliteMemoryBackend {
 
         let row_mapper = |row: &rusqlite::Row| -> rusqlite::Result<RawMemory> {
             let source_str: String = row.get("source")?;
+            let source_detail: Option<String> = row.get("source_detail")?;
             let is_processed_int: i64 = row.get("is_processed")?;
             Ok(RawMemory {
                 id: row.get("id")?,
                 content: row.get("content")?,
-                source: RawMemorySource::from_str(&source_str),
+                source: RawMemorySource::from_persisted(&source_str, source_detail.as_deref()),
                 agent_id: row.get("agent_id")?,
                 session_id: row.get("session_id")?,
                 path: row.get("path")?,
