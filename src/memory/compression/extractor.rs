@@ -221,8 +221,8 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
                 NoteType::from_str_or_other(&extracted_fact.note_type),
                 extracted_fact.source_ids,
             )
-            .with_embedding(embedding)
-            .with_confidence(extracted_fact.confidence);
+            .with_embedding(embedding);
+            let _ = extracted_fact.confidence;
 
             facts_with_embeddings.push(fact);
         }

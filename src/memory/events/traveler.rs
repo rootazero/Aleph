@@ -143,12 +143,8 @@ impl MemoryTimeTraveler {
 /// Generate a human-readable description for an event envelope.
 fn describe_event(env: &MemoryEventEnvelope) -> String {
     match &env.event {
-        MemoryEvent::FactCreated { content, tier, .. } => {
-            format!(
-                "Fact created in {:?} tier: \"{}\"",
-                tier,
-                truncate(content, 50)
-            )
+        MemoryEvent::FactCreated { content, .. } => {
+            format!("Fact created: \"{}\"", truncate(content, 50))
         }
         MemoryEvent::FactContentUpdated { reason, .. } => {
             format!("Content updated: {}", reason)
@@ -189,9 +185,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
         MemoryEvent::FactInvalidated { reason, actor, .. } => {
             format!("Invalidated by {}: {}", actor, reason)
         }
-        MemoryEvent::FactRestored { new_strength, .. } => {
-            format!("Restored with strength {:.2}", new_strength)
-        }
+        MemoryEvent::FactRestored { .. } => "Restored".to_string(),
         MemoryEvent::FactDeleted { reason, .. } => {
             format!("Permanently deleted: {}", reason)
         }
@@ -221,7 +215,7 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
+    use crate::memory::context::{FactSource, NoteType};
     use crate::memory::events::*;
 
     /// Helper: create an in-memory StateDatabase wrapped in Arc.
@@ -238,12 +232,9 @@ mod tests {
                 fact_id: fact_id.into(),
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "aleph://user/preferences/language".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec![],
             },
@@ -286,7 +277,6 @@ mod tests {
                 fact_id: fact_id.into(),
                 reason: "outdated".into(),
                 actor: EventActor::System,
-                strength_at_invalidation: Some(0.1),
             },
             EventActor::System,
             None,
@@ -562,7 +552,6 @@ mod tests {
             3,
             MemoryEvent::FactRestored {
                 fact_id: "fact-ex-4".into(),
-                new_strength: 0.7,
             },
             EventActor::User,
             None,
@@ -587,7 +576,6 @@ mod tests {
         let env = make_created("f", 1, 1000);
         let desc = describe_event(&env);
         assert!(desc.contains("Fact created"));
-        assert!(desc.contains("ShortTerm"));
 
         // FactContentUpdated
         let env = make_content_updated("f", 2, 2000, "new stuff");

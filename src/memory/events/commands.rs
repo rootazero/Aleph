@@ -3,19 +3,16 @@
 //! Each command maps to one or more MemoryEvents.
 //! Commands are the input to [`super::handler::MemoryCommandHandler`].
 
-use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
+use crate::memory::context::{FactSource, NoteType};
 use crate::memory::events::EventActor;
 
 /// Create a new memory fact.
 pub struct CreateFactCommand {
     pub content: String,
     pub note_type: NoteType,
-    pub tier: MemoryTier,
-    pub scope: MemoryScope,
     pub path: String,
     pub namespace: String,
     pub agent: String,
-    pub confidence: f32,
     pub source: FactSource,
     pub source_memory_ids: Vec<String>,
     pub actor: EventActor,
@@ -36,14 +33,12 @@ pub struct InvalidateFactCommand {
     pub fact_id: String,
     pub reason: String,
     pub actor: EventActor,
-    pub strength_at_invalidation: Option<f32>,
     pub correlation_id: Option<String>,
 }
 
 /// Restore a previously invalidated fact.
 pub struct RestoreFactCommand {
     pub fact_id: String,
-    pub new_strength: f32,
     pub correlation_id: Option<String>,
 }
 

@@ -28,7 +28,7 @@ pub mod traveler;
 
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
+use crate::memory::context::{FactSource, MemoryTier, NoteType};
 
 // ============================================================================
 // EventActor — who caused the event
@@ -141,12 +141,9 @@ pub enum MemoryEvent {
         fact_id: String,
         content: String,
         note_type: NoteType,
-        tier: MemoryTier,
-        scope: MemoryScope,
         path: String,
         namespace: String,
         agent: String,
-        confidence: f32,
         source: FactSource,
         source_memory_ids: Vec<String>,
     },
@@ -195,11 +192,10 @@ pub enum MemoryEvent {
         fact_id: String,
         reason: String,
         actor: EventActor,
-        strength_at_invalidation: Option<f32>,
     },
 
     /// The fact was restored from the recycle bin
-    FactRestored { fact_id: String, new_strength: f32 },
+    FactRestored { fact_id: String },
 
     /// The fact was permanently deleted
     FactDeleted { fact_id: String, reason: String },
@@ -428,12 +424,9 @@ mod tests {
                 fact_id: "a".into(),
                 content: "c".into(),
                 note_type: NoteType::Other,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "p".into(),
                 namespace: "n".into(),
                 agent: "w".into(),
-                confidence: 1.0,
                 source: FactSource::Manual,
                 source_memory_ids: vec![],
             },
@@ -466,11 +459,9 @@ mod tests {
                 fact_id: "g".into(),
                 reason: "r".into(),
                 actor: EventActor::Decay,
-                strength_at_invalidation: Some(0.05),
             },
             MemoryEvent::FactRestored {
                 fact_id: "h".into(),
-                new_strength: 0.8,
             },
             MemoryEvent::FactDeleted {
                 fact_id: "i".into(),
@@ -503,12 +494,9 @@ mod tests {
                     content: String::new(),
                     note_type: NoteType::Other,
                     source: FactSource::Extracted,
-                    tier: MemoryTier::ShortTerm,
-                    scope: MemoryScope::Global,
                     path: String::new(),
                     namespace: "owner".into(),
                     agent: "default".into(),
-                    confidence: 1.0,
                     source_memory_ids: vec![],
                 },
                 "FactCreated",
@@ -555,14 +543,12 @@ mod tests {
                     fact_id: "f".into(),
                     reason: String::new(),
                     actor: EventActor::System,
-                    strength_at_invalidation: None,
                 },
                 "FactInvalidated",
             ),
             (
                 MemoryEvent::FactRestored {
                     fact_id: "f".into(),
-                    new_strength: 0.5,
                 },
                 "FactRestored",
             ),
@@ -614,12 +600,9 @@ mod tests {
             fact_id: "f".into(),
             content: "c".into(),
             note_type: NoteType::Other,
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
             path: "p".into(),
             namespace: "n".into(),
             agent: "w".into(),
-            confidence: 1.0,
             source: FactSource::Extracted,
             source_memory_ids: vec![],
         }
@@ -644,12 +627,9 @@ mod tests {
             fact_id: "fact-001".into(),
             content: "User prefers Rust".into(),
             note_type: NoteType::Preference,
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
             path: "aleph://user/preferences/language".into(),
             namespace: "owner".into(),
             agent: "default".into(),
-            confidence: 0.85,
             source: FactSource::Extracted,
             source_memory_ids: vec!["mem-001".into()],
         };
@@ -714,12 +694,9 @@ mod tests {
                 content: "c".into(),
                 note_type: NoteType::Learning,
                 source: FactSource::Manual,
-                tier: MemoryTier::Core,
-                scope: MemoryScope::Agent,
                 path: "p".into(),
                 namespace: "n".into(),
                 agent: "w".into(),
-                confidence: 1.0,
                 source_memory_ids: vec![],
             },
             MemoryEvent::FactContentUpdated {
@@ -751,11 +728,9 @@ mod tests {
                 fact_id: "f".into(),
                 reason: "outdated".into(),
                 actor: EventActor::Decay,
-                strength_at_invalidation: Some(0.05),
             },
             MemoryEvent::FactRestored {
                 fact_id: "f".into(),
-                new_strength: 0.6,
             },
             MemoryEvent::FactDeleted {
                 fact_id: "f".into(),
@@ -789,12 +764,9 @@ mod tests {
             content: "Test fact".into(),
             note_type: NoteType::Other,
             source: FactSource::Extracted,
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
             path: "p".into(),
             namespace: "owner".into(),
             agent: "default".into(),
-            confidence: 1.0,
             source_memory_ids: vec![],
         };
 

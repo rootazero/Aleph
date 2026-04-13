@@ -179,11 +179,7 @@ fn scored_fact_from_index_entry(entry: &NoteIndexEntry, agent_id: &str, score: f
     fact.agent = agent_id.to_string();
     fact.created_at = entry.created_at;
     fact.updated_at = entry.updated_at;
-    fact.confidence = score;
     fact.is_valid = true;
-    fact.tier = MemoryTier::LongTerm;
-    fact.scope = MemoryScope::Global;
-    fact.strength = 1.0;
     ScoredFact { fact, score }
 }
 

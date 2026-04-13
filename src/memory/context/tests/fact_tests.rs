@@ -136,12 +136,9 @@ fn test_compute_parent_path() {
 }
 
 #[test]
-fn test_memory_fact_defaults_tier_and_scope() {
+fn test_memory_fact_defaults() {
     let fact = MemoryFact::new("User likes Vim".to_string(), NoteType::Preference, vec![]);
-    assert_eq!(fact.tier, MemoryTier::ShortTerm);
-    assert_eq!(fact.scope, MemoryScope::Global);
     assert_eq!(fact.persona_id, None);
-    assert!((fact.strength - 1.0).abs() < f32::EPSILON);
     assert_eq!(fact.access_count, 0);
     assert_eq!(fact.last_accessed_at, None);
 }
@@ -153,11 +150,7 @@ fn test_memory_fact_with_persona() {
         NoteType::Preference,
         vec![],
     )
-    .with_tier(MemoryTier::Core)
-    .with_scope(MemoryScope::Persona)
     .with_persona_id("persona-coder".to_string());
 
-    assert_eq!(fact.tier, MemoryTier::Core);
-    assert_eq!(fact.scope, MemoryScope::Persona);
     assert_eq!(fact.persona_id, Some("persona-coder".to_string()));
 }

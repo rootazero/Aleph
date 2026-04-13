@@ -163,10 +163,8 @@ mod tests {
 
         let mut fact_a = MemoryFact::new("alpha".to_string(), NoteType::Other, vec![]);
         fact_a.created_at = 1700000000; // same as ctx timestamp
-        fact_a.confidence = 1.0;
         let mut fact_b = MemoryFact::new("beta".to_string(), NoteType::Other, vec![]);
         fact_b.created_at = 1700000000;
-        fact_b.confidence = 1.0;
 
         let candidates = vec![
             ScoredFact {
@@ -225,7 +223,6 @@ mod tests {
             vec![],
         );
         fact1.created_at = now; // brand new
-        fact1.confidence = 1.0; // max confidence
 
         // Candidate 2: old + verbose
         let mut fact2 = MemoryFact::new(
@@ -234,12 +231,10 @@ mod tests {
             vec![],
         );
         fact2.created_at = now - 365 * 86400; // 1 year old
-        fact2.confidence = 0.5;
 
         // Candidate 3: low starting score — will be filtered
         let mut fact3 = MemoryFact::new("marginal fact".to_string(), NoteType::Other, vec![]);
         fact3.created_at = now - 180 * 86400;
-        fact3.confidence = 0.3;
 
         let candidates = vec![
             ScoredFact {

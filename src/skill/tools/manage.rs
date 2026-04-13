@@ -98,9 +98,6 @@ pub fn build_skill_fact(
     let full_content = format!("{}\n\n{}", description, content);
 
     MemoryFact::new(full_content, NoteType::Skill, Vec::new())
-        .with_confidence(0.80)
-        .with_tier(MemoryTier::ShortTerm)
-        .with_scope(MemoryScope::Persona)
         .with_layer(MemoryLayer::L1Overview)
         .with_category(MemoryCategory::Patterns)
         .with_path(path)
@@ -134,7 +131,6 @@ mod tests {
         );
         assert_eq!(fact.note_type, NoteType::Skill);
         assert_eq!(fact.path, "aleph://skills/coding/rust-debug/");
-        assert_eq!(fact.tier, MemoryTier::ShortTerm);
         assert!(fact.content.contains("Debug Rust errors"));
         assert!(fact.content.contains("Read error"));
     }

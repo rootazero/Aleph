@@ -182,7 +182,6 @@ mod tests {
     /// Helper to create a ScoredFact with the given content.
     fn scored_fact(content: &str) -> ScoredFact {
         let mut fact = MemoryFact::new(content.to_string(), NoteType::Other, vec![]);
-        fact.confidence = 0.9;
         fact.fact_source = FactSource::Extracted;
 
         ScoredFact { fact, score: 0.85 }

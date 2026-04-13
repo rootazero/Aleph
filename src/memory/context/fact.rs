@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{AggregateRoot, Entity};
 
 use super::enums::{
-    FactSource, FactSpecificity, NoteType, MemoryCategory, MemoryLayer, MemoryScope, MemoryTier,
-    TemporalScope,
+    FactSource, FactSpecificity, MemoryCategory, MemoryLayer, NoteType, TemporalScope,
 };
 use super::paths::compute_parent_path;
 
@@ -18,11 +17,6 @@ pub(crate) fn default_namespace() -> String {
 /// Default serde helper for agent_id field
 pub(crate) fn default_agent_id() -> String {
     "default".to_string()
-}
-
-/// Default serde helper for strength field
-fn default_strength() -> f32 {
-    1.0
 }
 
 /// A compressed memory fact extracted from conversations by LLM
@@ -47,8 +41,6 @@ pub struct MemoryFact {
     pub created_at: i64,
     /// Last update timestamp
     pub updated_at: i64,
-    /// Confidence score (0.0-1.0) from LLM
-    pub confidence: f32,
     /// Whether this fact is still valid (soft delete)
     pub is_valid: bool,
     /// Reason for invalidation (if is_valid = false)
@@ -83,18 +75,9 @@ pub struct MemoryFact {
     pub parent_path: String,
     /// Name of the embedding model that generated this fact's vector
     pub embedding_model: String,
-    /// Cognitive memory tier (Core / ShortTerm / LongTerm)
-    #[serde(default)]
-    pub tier: MemoryTier,
-    /// Visibility scope (Global / Workspace / Persona)
-    #[serde(default)]
-    pub scope: MemoryScope,
     /// Optional persona identifier when scope == Persona
     #[serde(default)]
     pub persona_id: Option<String>,
-    /// Reinforcement strength (0.0 .. 1.0+), decayed over time
-    #[serde(default = "default_strength")]
-    pub strength: f32,
     /// Number of times this fact has been accessed / retrieved
     #[serde(default)]
     pub access_count: u32,
@@ -139,7 +122,6 @@ impl MemoryFact {
             source_memory_ids: source_ids,
             created_at: now,
             updated_at: now,
-            confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
             decay_invalidated_at: None,
@@ -155,10 +137,7 @@ impl MemoryFact {
             content_hash: String::new(),
             parent_path,
             embedding_model: String::new(),
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
             persona_id: None,
-            strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
             valid_from: None,
@@ -185,7 +164,6 @@ impl MemoryFact {
             source_memory_ids: Vec::new(),
             created_at: now,
             updated_at: now,
-            confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
             decay_invalidated_at: None,
@@ -201,10 +179,7 @@ impl MemoryFact {
             content_hash: String::new(),
             parent_path,
             embedding_model: String::new(),
-            tier: MemoryTier::ShortTerm,
-            scope: MemoryScope::Global,
             persona_id: None,
-            strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
             valid_from: None,
@@ -215,12 +190,6 @@ impl MemoryFact {
     /// Add embedding to the fact
     pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embedding = Some(embedding);
-        self
-    }
-
-    /// Set confidence score
-    pub fn with_confidence(mut self, confidence: f32) -> Self {
-        self.confidence = confidence.clamp(0.0, 1.0);
         self
     }
 
@@ -264,18 +233,6 @@ impl MemoryFact {
     /// Set memory category
     pub fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = category;
-        self
-    }
-
-    /// Set cognitive memory tier
-    pub fn with_tier(mut self, tier: MemoryTier) -> Self {
-        self.tier = tier;
-        self
-    }
-
-    /// Set visibility scope
-    pub fn with_scope(mut self, scope: MemoryScope) -> Self {
-        self.scope = scope;
         self
     }
 

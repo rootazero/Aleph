@@ -6,7 +6,7 @@
 use super::context_window::estimate_tokens;
 use super::fallback::{target_tokens, FallbackLevel};
 use crate::agent_loop::compaction::summary_utils::IDENTIFIER_PRESERVATION;
-use crate::memory::{FactSource, NoteType, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
+use crate::memory::{FactSource, MemoryFact, MemoryLayer, NoteType};
 
 // Re-export for backwards compatibility.
 pub use crate::agent_loop::compaction::summary_utils::strip_analysis_block;
@@ -201,11 +201,8 @@ pub fn summary_to_fact(
 
     MemoryFact::new(summary_text, NoteType::Other, Vec::new())
         .with_fact_source(FactSource::SessionCompressed)
-        .with_scope(MemoryScope::SessionLocal)
-        .with_tier(MemoryTier::ShortTerm)
         .with_layer(layer)
         .with_path(path)
-        .with_confidence(0.9)
         .with_agent(agent_id.to_string())
 }
 
@@ -379,11 +376,8 @@ mod tests {
             "agent-1",
         );
         assert_eq!(fact.fact_source, FactSource::SessionCompressed);
-        assert_eq!(fact.scope, MemoryScope::SessionLocal);
-        assert_eq!(fact.tier, MemoryTier::ShortTerm);
         assert_eq!(fact.layer, MemoryLayer::L2Detail);
         assert_eq!(fact.path, "aleph://session/sess-123/d0/1");
-        assert!((fact.confidence - 0.9).abs() < 0.001);
         assert_eq!(fact.agent, "agent-1");
         assert_eq!(fact.content, "Summary text");
     }

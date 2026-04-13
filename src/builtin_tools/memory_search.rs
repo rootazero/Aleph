@@ -471,7 +471,7 @@ impl MemorySearchTool {
                 .map(|f| FactResult {
                     content: f.content,
                     note_type: format!("{:?}", f.note_type),
-                    confidence: f.confidence,
+                    confidence: f.similarity_score.unwrap_or(0.0),
                     similarity_score: f.similarity_score.unwrap_or(0.0),
                     path: f.path.clone(),
                 })

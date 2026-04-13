@@ -99,7 +99,6 @@ mod tests {
 
         // L0 inference uses structured_meta directly, so content should contain it
         assert!(fact.content.contains("sandboxed environment"));
-        assert_eq!(fact.confidence, 0.95); // L0 confidence
     }
 
     #[tokio::test]

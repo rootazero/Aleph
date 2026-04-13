@@ -107,12 +107,9 @@ mod event_sourcing {
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust for systems programming".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "/user/preferences/language".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec!["conv-001".into()],
                 actor: EventActor::Agent,
@@ -133,7 +130,6 @@ mod event_sourcing {
             .unwrap()
             .unwrap();
         assert_eq!(fact.content, "User prefers Rust for systems programming");
-        assert_eq!(fact.tier, MemoryTier::ShortTerm);
 
         // 2. Update content
         handler
@@ -173,7 +169,6 @@ mod event_sourcing {
                 fact_id: fact_id.clone(),
                 reason: "Contradicted by newer information".into(),
                 actor: EventActor::System,
-                strength_at_invalidation: Some(0.8),
                 correlation_id: None,
             })
             .await
@@ -183,7 +178,6 @@ mod event_sourcing {
         handler
             .restore_fact(RestoreFactCommand {
                 fact_id: fact_id.clone(),
-                new_strength: 0.7,
                 correlation_id: None,
             })
             .await
@@ -202,7 +196,6 @@ mod event_sourcing {
             "User strongly prefers Rust for all programming"
         );
         assert!(final_fact.is_valid);
-        assert_eq!(final_fact.strength, 0.7);
         assert_eq!(final_fact.access_count, 1);
 
         // 7. Time travel -- verify full timeline via traveler

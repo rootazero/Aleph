@@ -134,6 +134,7 @@ impl ToolIndexCoordinator {
     fn note_to_fact(note: &KnowledgeNote, confidence: f32) -> MemoryFact {
         let now = Self::now_timestamp();
         let content = note.facts.join("\n");
+        let _ = confidence;
         MemoryFact {
             id: format!("tool:{}", note.title),
             content: content.clone(),
@@ -142,7 +143,6 @@ impl ToolIndexCoordinator {
             source_memory_ids: vec![],
             created_at: if note.created_at > 0 { note.created_at } else { now },
             updated_at: if note.updated_at > 0 { note.updated_at } else { now },
-            confidence,
             is_valid: true,
             invalidation_reason: None,
             decay_invalidated_at: None,
@@ -158,10 +158,7 @@ impl ToolIndexCoordinator {
             embedding_model: String::new(),
             namespace: "owner".to_string(),
             agent: TOOL_AGENT_ID.to_string(),
-            tier: crate::memory::context::MemoryTier::ShortTerm,
-            scope: crate::memory::context::MemoryScope::Global,
             persona_id: None,
-            strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
             valid_from: None,

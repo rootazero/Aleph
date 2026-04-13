@@ -8,8 +8,7 @@ use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    compute_parent_path, FactSpecificity, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
-    TemporalScope,
+    compute_parent_path, FactSpecificity, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::resilience::database::StateDatabase;
@@ -68,12 +67,9 @@ impl EventProjector {
                     fact_id,
                     content,
                     note_type,
-                    tier,
-                    scope,
                     path,
                     namespace,
                     agent: workspace,
-                    confidence,
                     source,
                     source_memory_ids,
                 } => {
@@ -88,7 +84,6 @@ impl EventProjector {
                         source_memory_ids: source_memory_ids.clone(),
                         created_at: envelope.timestamp,
                         updated_at: envelope.timestamp,
-                        confidence: *confidence,
                         is_valid: true,
                         invalidation_reason: None,
                         decay_invalidated_at: None,
@@ -104,10 +99,7 @@ impl EventProjector {
                         content_hash: String::new(), // recomputed at projection time
                         parent_path,
                         embedding_model: String::new(), // set at projection time
-                        tier: *tier,
-                        scope: *scope,
                         persona_id: None,
-                        strength: 1.0,
                         access_count: 0,
                         last_accessed_at: None,
                         valid_from: None,
@@ -144,12 +136,6 @@ impl EventProjector {
                 } => {
                     if let Some(ref mut f) = fact {
                         match field.as_str() {
-                            "tier" => {
-                                f.tier = MemoryTier::from_str_or_default(new_value);
-                            }
-                            "scope" => {
-                                f.scope = MemoryScope::from_str_or_default(new_value);
-                            }
                             "path" => {
                                 f.path = new_value.clone();
                                 f.parent_path = compute_parent_path(new_value);
@@ -168,9 +154,8 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::TierTransitioned { to_tier, .. } => {
+                MemoryEvent::TierTransitioned { .. } => {
                     if let Some(ref mut f) = fact {
-                        f.tier = *to_tier;
                         f.updated_at = envelope.timestamp;
                     }
                 }
@@ -194,12 +179,11 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactRestored { new_strength, .. } => {
+                MemoryEvent::FactRestored { .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = true;
                         f.invalidation_reason = None;
                         f.decay_invalidated_at = None;
-                        f.strength = *new_strength;
                     }
                 }
 
@@ -261,12 +245,9 @@ mod tests {
                 fact_id: fact_id.to_string(),
                 content: "User prefers Rust".to_string(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "aleph://user/preferences/".to_string(),
                 namespace: "owner".to_string(),
                 agent: "default".to_string(),
-                confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec!["mem-001".to_string()],
             },
@@ -328,12 +309,9 @@ mod tests {
         assert_eq!(fact.id, "fact-001");
         assert_eq!(fact.content, "User prefers Rust");
         assert_eq!(fact.note_type, NoteType::Preference);
-        assert_eq!(fact.tier, MemoryTier::ShortTerm);
-        assert_eq!(fact.scope, MemoryScope::Global);
         assert_eq!(fact.path, "aleph://user/preferences/");
         assert_eq!(fact.namespace, "owner");
         assert_eq!(fact.agent, "default");
-        assert!((fact.confidence - 0.9).abs() < f32::EPSILON);
         assert_eq!(fact.fact_source, FactSource::Extracted);
         assert_eq!(fact.source_memory_ids, vec!["mem-001"]);
         assert_eq!(fact.created_at, 1000);
@@ -344,7 +322,6 @@ mod tests {
         assert!(fact.embedding.is_none());
         assert!(fact.similarity_score.is_none());
         assert!(fact.persona_id.is_none());
-        assert!((fact.strength - 1.0).abs() < f32::EPSILON);
         assert_eq!(fact.access_count, 0);
         assert!(fact.last_accessed_at.is_none());
         assert_eq!(fact.parent_path, "aleph://user/");
@@ -396,7 +373,6 @@ mod tests {
                     fact_id: "fact-003".to_string(),
                     reason: "outdated information".to_string(),
                     actor: EventActor::User,
-                    strength_at_invalidation: Some(0.5),
                 },
                 EventActor::User,
             ),
@@ -427,7 +403,6 @@ mod tests {
                     fact_id: "fact-003d".to_string(),
                     reason: "strength below threshold".to_string(),
                     actor: EventActor::Decay,
-                    strength_at_invalidation: Some(0.02),
                 },
                 EventActor::Decay,
             ),
@@ -516,7 +491,6 @@ mod tests {
                     fact_id: "fact-007".to_string(),
                     reason: "decay below threshold".to_string(),
                     actor: EventActor::Decay,
-                    strength_at_invalidation: Some(0.03),
                 },
                 EventActor::Decay,
             ),
@@ -526,7 +500,6 @@ mod tests {
                 3000,
                 MemoryEvent::FactRestored {
                     fact_id: "fact-007".to_string(),
-                    new_strength: 0.6,
                 },
             ),
         ];
@@ -538,7 +511,6 @@ mod tests {
         assert!(fact.is_valid);
         assert!(fact.invalidation_reason.is_none());
         assert!(fact.decay_invalidated_at.is_none());
-        assert!((fact.strength - 0.6).abs() < f32::EPSILON);
     }
 
     // --- fold: TierTransitioned ----------------------------------------------
@@ -564,7 +536,6 @@ mod tests {
             .unwrap()
             .expect("should produce a fact");
 
-        assert_eq!(fact.tier, MemoryTier::LongTerm);
         assert_eq!(fact.updated_at, 8000);
     }
 
@@ -620,8 +591,6 @@ mod tests {
         assert_eq!(fact.id, "migrated-001");
         assert_eq!(fact.content, "Migrated from legacy store");
         assert_eq!(fact.note_type, NoteType::Learning);
-        assert_eq!(fact.tier, MemoryTier::LongTerm);
-        assert!((fact.strength - 0.8).abs() < f32::EPSILON);
         assert_eq!(fact.access_count, 5);
         assert_eq!(fact.last_accessed_at, Some(800));
     }
@@ -659,7 +628,7 @@ mod tests {
     // --- fold: FactMetadataUpdated -------------------------------------------
 
     #[test]
-    fn test_fold_metadata_updated_tier() {
+    fn test_fold_metadata_updated_path_only() {
         let events = vec![
             make_created_envelope("fact-010", 1, 1000),
             wrap(
@@ -668,9 +637,9 @@ mod tests {
                 2000,
                 MemoryEvent::FactMetadataUpdated {
                     fact_id: "fact-010".to_string(),
-                    field: "tier".to_string(),
-                    old_value: "short_term".to_string(),
-                    new_value: "core".to_string(),
+                    field: "namespace".to_string(),
+                    old_value: "owner".to_string(),
+                    new_value: "guest".to_string(),
                 },
             ),
         ];
@@ -679,7 +648,7 @@ mod tests {
             .unwrap()
             .expect("should produce a fact");
 
-        assert_eq!(fact.tier, MemoryTier::Core);
+        assert_eq!(fact.namespace, "guest");
         assert_eq!(fact.updated_at, 2000);
     }
 
@@ -806,8 +775,6 @@ mod tests {
             fact.content,
             "User strongly prefers Rust for systems programming"
         );
-        assert_eq!(fact.tier, MemoryTier::LongTerm);
-        assert!((fact.strength - 1.0).abs() < f32::EPSILON);
         assert_eq!(fact.access_count, 1);
         assert_eq!(fact.last_accessed_at, Some(2000));
         assert_eq!(fact.created_at, 1000);

@@ -117,12 +117,9 @@ impl MemoryCommandHandler {
             fact_id: fact_id.clone(),
             content: cmd.content,
             note_type: cmd.note_type,
-            tier: cmd.tier,
-            scope: cmd.scope,
             path: cmd.path,
             namespace: cmd.namespace,
             agent: cmd.agent,
-            confidence: cmd.confidence,
             source: cmd.source,
             source_memory_ids: cmd.source_memory_ids,
         };
@@ -170,7 +167,6 @@ impl MemoryCommandHandler {
             fact_id: cmd.fact_id.clone(),
             reason: cmd.reason,
             actor: cmd.actor.clone(),
-            strength_at_invalidation: cmd.strength_at_invalidation,
         };
 
         let fact_id_ref = cmd.fact_id.clone();
@@ -188,7 +184,6 @@ impl MemoryCommandHandler {
 
         let event = MemoryEvent::FactRestored {
             fact_id: cmd.fact_id.clone(),
-            new_strength: cmd.new_strength,
         };
 
         let fact_id_ref = cmd.fact_id.clone();
@@ -277,7 +272,7 @@ impl MemoryCommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{FactSource, NoteType, MemoryScope, MemoryTier};
+    use crate::memory::context::{FactSource, NoteType};
     use crate::memory::events::projector::EventProjector;
 
     fn make_handler() -> MemoryCommandHandler {
@@ -292,12 +287,9 @@ mod tests {
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "/user/preferences".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec![],
                 actor: EventActor::Agent,
@@ -315,12 +307,9 @@ mod tests {
             .create_fact(CreateFactCommand {
                 content: "User prefers Rust".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "/user/preferences".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.9,
                 source: FactSource::Extracted,
                 source_memory_ids: vec![],
                 actor: EventActor::Agent,
@@ -349,7 +338,6 @@ mod tests {
         assert_eq!(fact.id, fact_id);
         assert_eq!(fact.content, "User prefers Rust");
         assert_eq!(fact.note_type, NoteType::Preference);
-        assert_eq!(fact.tier, MemoryTier::ShortTerm);
     }
 
     #[tokio::test]
@@ -424,7 +412,6 @@ mod tests {
                 fact_id: fact_id.clone(),
                 reason: "outdated information".into(),
                 actor: EventActor::User,
-                strength_at_invalidation: Some(0.5),
                 correlation_id: None,
             })
             .await
@@ -449,7 +436,6 @@ mod tests {
         handler
             .restore_fact(RestoreFactCommand {
                 fact_id: fact_id.clone(),
-                new_strength: 0.7,
                 correlation_id: None,
             })
             .await
@@ -467,7 +453,6 @@ mod tests {
             .expect("should produce a fact");
         assert!(fact.is_valid);
         assert!(fact.invalidation_reason.is_none());
-        assert!((fact.strength - 0.7).abs() < f32::EPSILON);
     }
 
     #[tokio::test]
@@ -549,12 +534,9 @@ mod tests {
             .create_fact(CreateFactCommand {
                 content: "User likes Rust".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "/user/preferences/lang1".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.8,
                 source: FactSource::Extracted,
                 source_memory_ids: vec![],
                 actor: EventActor::Agent,
@@ -567,12 +549,9 @@ mod tests {
             .create_fact(CreateFactCommand {
                 content: "User likes Go".into(),
                 note_type: NoteType::Preference,
-                tier: MemoryTier::ShortTerm,
-                scope: MemoryScope::Global,
                 path: "/user/preferences/lang2".into(),
                 namespace: "owner".into(),
                 agent: "default".into(),
-                confidence: 0.7,
                 source: FactSource::Extracted,
                 source_memory_ids: vec![],
                 actor: EventActor::Agent,

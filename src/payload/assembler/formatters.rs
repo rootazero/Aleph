@@ -21,11 +21,6 @@ pub fn format_facts_markdown(facts: &[MemoryFact]) -> String {
     for fact in facts {
         // Format as bullet point with fact content
         lines.push(format!("- {}", fact.content));
-
-        // Optionally show confidence if it's notably high or low
-        if fact.confidence < 0.7 {
-            lines.push(format!("  _(confidence: {:.0}%)_", fact.confidence * 100.0));
-        }
     }
 
     lines.join("\n")
