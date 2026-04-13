@@ -132,7 +132,7 @@ Spec 1 (Hooks) ─────┬─────► Spec 2 (Reflect)
 
 | Spec | 状态 | 设计文档 | 实施计划 | 完成日期 |
 |------|------|----------|----------|----------|
-| 1. Capture Hooks | 🟡 brainstorming | _TBD_ | _TBD_ | — |
+| 1. Capture Hooks | ✅ shipped | [design](2026-04-13-memory-evolution-spec1-capture-hooks-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec1-capture-hooks.md) | 2026-04-13 |
 | 2. Reflect | ⚪ pending | — | — | — |
 | 3. Fencing/Modes | ⚪ pending | — | — | — |
 | 4. Extensions | ⚪ YAGNI-gated | — | — | — |

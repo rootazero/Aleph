@@ -120,6 +120,20 @@ Config keys on `TranscriptIndexerConfig` (`src/memory/transcript_indexer/config.
 
 The `attachment_text` column and the `RawMemory::with_attachment_text` builder exist so that extracted text from PDF / Word / image OCR travels alongside its originating turn rather than becoming a standalone row. The consumer is `CompressionService`, which in `src/memory/compression/service.rs` reads `raw.attachment_text` and injects up to 2000 characters of it into the per-memory prompt as `"{user_input}\n[Attachment]: {att_preview}"`. `RawMemorySource::Attachment` is reserved for the case of attachment-only rows (e.g. an uploaded document with no accompanying turn). As of this writing the production gateway write sites that populate `attachment_text` during normal message ingestion are not present in `src/gateway/`; the field is wired end-to-end through schema, store, and compression, and is exercised in `src/memory/compression/service.rs` tests (`with_attachment_text(...)`).
 
+### 6.4 Capture Hooks (Spec 1)
+
+Three additional producers feed `raw_memories` via the Spec 1 memory capture hooks. Each writes rows with a dedicated `RawMemorySource` variant; `CompressionService::extract_note_updates_for_source` dispatches each group to a specialised system prompt via `memory::compression::source_prompts::prompt_for`.
+
+- **`PreCompress`** — emitted by `SessionCompactor` before a session chunk is dropped to summary. The pre-drop raw text lands in `raw_memories` so the RESCUE prompt can extract durable knowledge before the chunk is gone. Producer: `src/memory/session_compactor/mod.rs` (production path) and `src/components/session_compactor/compactor.rs::replace_with_summary` (event-driven variant). Writer injected via `SessionCompactor::with_raw_memory_writer(..)`.
+- **`Delegation { child_agent_id }`** — emitted by `A2ASubAgent::execute` (`src/a2a/sub_agent.rs`) on the success branch just before `Ok(SubAgentResult)`. Content carries delegation prompt + sub-agent summary; the LESSON prompt distills durable parent-agent lessons (tool patterns, gotchas, failure modes). Parent `agent_id` lifted from `request.execution_context.metadata["parent_agent_id"]` (falls back to `"default"`).
+- **`SessionEnd { reason }`** — two flavours:
+  - `reason = Disconnect`: emitted by `SessionManager::close_session` (`src/gateway/session_manager/ops.rs`) with the conversation tail (up to 64 most-recent messages). DIGEST prompt distills user preferences, project progress, unfinished items.
+  - `reason = TaskDone`: emitted by the new `session_complete` builtin tool (`src/builtin_tools/session_complete.rs`) when the LLM marks a self-contained task complete. RETRO prompt captures transferable lessons — the R8 LLM-sovereignty path for task-boundary detection.
+
+All producers are synchronous-write / async-extract: each writes exactly one `raw_memories` row and returns; extraction runs later in `CompressionService` per its normal schedule. Emission is fire-and-forget (`tokio::spawn`) so hook overhead is kept out of the hot path.
+
+See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md](../../../superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-design.md)
+
 ## 7. Readers
 
 ### 7.1 CompressionService
