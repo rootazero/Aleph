@@ -60,6 +60,7 @@ pub mod media_tool;
 pub mod media_tools;
 pub mod memory_browse;
 pub mod memory_explore;
+pub mod memory_reflect;
 pub mod memory_search;
 pub mod memory_timeline;
 pub mod meta_tools;
@@ -140,6 +141,7 @@ pub use media_tools::{
 };
 pub use memory_browse::{MemoryBrowseArgs, MemoryBrowseOutput, MemoryBrowseTool};
 pub use memory_explore::{MemoryExploreArgs, MemoryExploreOutput, MemoryExploreTool};
+pub use memory_reflect::{MemoryReflectArgs, MemoryReflectResult, MemoryReflectTool};
 pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, PathCluster};
 pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
 pub use meta_tools::{

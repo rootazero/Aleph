@@ -793,6 +793,32 @@ impl BuiltinToolRegistry {
             None
         };
 
+        // Memory-reflect tool — always constructed; reflector injected later by Task 8.
+        let memory_reflect_tool = {
+            let agent_id = config
+                .current_agent_id
+                .clone()
+                .unwrap_or_else(|| "main".to_string());
+            let tool =
+                crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
+
+            // Register tool schema
+            {
+                use crate::tools::AlephTool;
+                let td = tool.definition();
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered memory_reflect tool");
+            Some(tool)
+        };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config
             .tool_policy
@@ -930,6 +956,7 @@ impl BuiltinToolRegistry {
             skill_manage_tool,
             note_manage_tool,
             session_complete_tool,
+            memory_reflect_tool,
             tools,
         }
     }

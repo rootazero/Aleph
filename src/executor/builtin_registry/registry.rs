@@ -208,6 +208,9 @@ pub struct BuiltinToolRegistry {
     /// Session-complete tool (optional - requires memory_db)
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
+    /// Memory-reflect tool (optional - requires MemoryReflector, injected by Task 8)
+    pub(crate) memory_reflect_tool:
+        Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -949,6 +952,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                     Box::pin(async move {
                         Err(AlephError::tool(
                             "session_complete tool is not available: memory backend not configured",
+                        ))
+                    })
+                }
+            }
+
+            "memory_reflect" => {
+                if let Some(ref tool) = self.memory_reflect_tool {
+                    let tool = tool.clone();
+                    Box::pin(async move { tool.call_json(arguments).await })
+                } else {
+                    Box::pin(async move {
+                        Err(AlephError::tool(
+                            "memory_reflect tool is not available: MemoryReflector not wired (server builder needs to inject it)",
                         ))
                     })
                 }
