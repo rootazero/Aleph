@@ -230,6 +230,65 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
         Ok(facts_with_embeddings)
     }
 
+    /// Source-aware note extraction.
+    ///
+    /// If the `source` resolves to a specialised prompt via
+    /// `source_prompts::prompt_for`, use it — otherwise fall back to the
+    /// existing generic note-extraction prompt.
+    pub async fn extract_note_updates_for_source(
+        &self,
+        memories: &[MemoryEntry],
+        existing_titles: &[String],
+        source: &crate::memory::store::raw_memory::RawMemorySource,
+    ) -> Result<crate::memory::notes::extractor::NoteExtractionResponse, AlephError> {
+        use crate::memory::compression::source_prompts::prompt_for;
+        use crate::memory::notes::extractor::{
+            build_note_extraction_prompt, NoteExtractionResponse,
+        };
+
+        if memories.is_empty() {
+            return Ok(NoteExtractionResponse { updates: vec![] });
+        }
+
+        let system_prompt = match prompt_for(source) {
+            Some(prompt) => prompt.to_string(),
+            None => build_note_extraction_prompt(existing_titles),
+        };
+        let user_prompt = self.build_extraction_prompt(memories);
+
+        let msgs = [UnifiedMessage::user(&user_prompt)];
+        let response = self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(&system_prompt)))
+            .await
+            .map_err(|e| {
+                AlephError::other(format!(
+                    "Source-aware note extraction LLM call failed: {e}"
+                ))
+            })?;
+
+        let text = response.text_content();
+
+        let json_value = match extract_json_robust(&text) {
+            Some(v) => v,
+            None => {
+                warn!(
+                    "No JSON found in source-aware note extraction response \
+                     (source={:?}), returning empty updates",
+                    source
+                );
+                return Ok(NoteExtractionResponse { updates: vec![] });
+            }
+        };
+
+        serde_json::from_value(json_value).map_err(|e| {
+            warn!("Failed to parse source-aware note extraction JSON: {e}");
+            AlephError::other(format!(
+                "Failed to parse source-aware note extraction: {e}"
+            ))
+        })
+    }
+
     /// Extract note updates from conversation memories.
     ///
     /// Uses the note extraction prompt to ask the LLM which knowledge notes
@@ -555,5 +614,46 @@ mod tests {
         let result = parse_unified_response("no json here").unwrap();
         assert!(result.facts.is_empty());
         assert!(result.entities.is_empty());
+    }
+
+    #[tokio::test]
+    async fn extract_note_updates_for_source_uses_rescue_prompt() {
+        use crate::memory::context::ContextAnchor;
+        use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+        use crate::memory::store::raw_memory::RawMemorySource;
+        use crate::providers::recording_mock::RecordingMockProvider;
+
+        let provider = RecordingMockProvider::new(r#"{"updates":[]}"#.to_string());
+        let recorded = provider.recorded_system_prompt();
+        let extractor = FactExtractor::new(
+            Arc::new(provider),
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model")),
+        );
+
+        let mem = MemoryEntry {
+            id: "m1".into(),
+            user_input: "dummy".into(),
+            ai_output: "dummy".into(),
+            context: ContextAnchor {
+                window_title: String::new(),
+                timestamp: 0,
+                session_id: "s".into(),
+            },
+            embedding: None,
+            namespace: "owner".into(),
+            agent: "default".into(),
+            similarity_score: None,
+        };
+
+        let _ = extractor
+            .extract_note_updates_for_source(&[mem], &[], &RawMemorySource::PreCompress)
+            .await
+            .unwrap();
+
+        let got = recorded.lock().unwrap().clone().unwrap();
+        assert!(
+            got.contains("memory rescue assistant"),
+            "expected RESCUE prompt, got: {got}"
+        );
     }
 }

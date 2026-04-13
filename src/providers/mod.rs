@@ -68,6 +68,8 @@ pub mod http_provider;
 pub mod message;
 pub mod mock;
 pub mod model_discovery;
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod recording_mock;
 pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
