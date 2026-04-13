@@ -12,6 +12,9 @@ pub(crate) mod profile;
 pub mod render;
 pub(crate) mod rerank;
 
+#[cfg(test)]
+mod tests;
+
 pub use hybrid::{AiProviderReranker, HybridAssembler, LlmReranker};
 pub use log_store::AssemblyLogWriter;
 pub use profile::UserProfileLoader;
