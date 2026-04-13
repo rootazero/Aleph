@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::{MemoryFact, MemoryScope, MemoryTier, NoteType};
+use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::store::types::ScoredFact;
 
 /// Search result carrying full content from notes-based retrieval.
@@ -26,7 +26,7 @@ impl NoteSearchResult {
     ///
     /// Uses `path` as the ID and formats `note://{path}` as the VFS path.
     /// Tags are forwarded as source_memory_ids for traceability.
-    /// Defaults: is_valid=true, tier=LongTerm, scope=Global, strength=1.0.
+    /// Defaults: is_valid=true.
     pub fn to_memory_fact(&self, agent_id: &str) -> MemoryFact {
         let note_type = NoteType::from_str_or_other(&self.category);
         let mut fact = MemoryFact::new(self.content.clone(), note_type, self.tags.clone());
@@ -35,11 +35,7 @@ impl NoteSearchResult {
         fact.agent = agent_id.to_string();
         fact.created_at = self.created_at;
         fact.updated_at = self.updated_at;
-        fact.confidence = self.score;
         fact.is_valid = true;
-        fact.tier = MemoryTier::LongTerm;
-        fact.scope = MemoryScope::Global;
-        fact.strength = 1.0;
         fact
     }
 
@@ -74,7 +70,6 @@ mod tests {
         assert_eq!(fact.content, "The user prefers Vim");
         assert_eq!(fact.agent, "default");
         assert!(fact.is_valid);
-        assert!((fact.confidence - 0.95).abs() < f32::EPSILON);
     }
 
     #[test]
