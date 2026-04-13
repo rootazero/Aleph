@@ -4,6 +4,7 @@
 
 pub mod packet_adapter;
 pub mod prompts;
+pub mod recall_signals;
 pub mod reflector;
 pub mod types;
 

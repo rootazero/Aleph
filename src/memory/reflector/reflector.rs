@@ -4,6 +4,7 @@ use crate::error::AlephError;
 use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
 use crate::memory::reflector::packet_adapter::{envelope_to_synthesis_context, SynthesisContext};
 use crate::memory::reflector::prompts::PROMPT_SYNTHESIS;
+use crate::memory::reflector::recall_signals::{record_reflect_signals, SignalRow};
 use crate::memory::reflector::types::{NoteRef, ReflectOpts, Synthesis};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
@@ -11,10 +12,20 @@ use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::utils::json_extract::extract_json_robust;
 use serde::Deserialize;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::warn;
 
 /// Default token budget when the caller does not specify one.
 const DEFAULT_BUDGET_TOKENS: u32 = 4096;
+
+/// Async callable that takes a [`SignalRow`] and persists it. The reflector
+/// stays decoupled from concrete storage via this type.
+pub type RecallWriter = Arc<
+    dyn Fn(SignalRow) -> Pin<Box<dyn Future<Output = Result<(), AlephError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 // ---------------------------------------------------------------------------
 // LLM response types (internal only)
@@ -47,17 +58,19 @@ struct LlmSynthesis {
 pub struct MemoryReflector {
     assembler: Arc<dyn WorkingMemoryAssembler>,
     provider: Arc<dyn AiProvider>,
-    // recall_signals writer will be added in Task 6.
+    recall_writer: RecallWriter,
 }
 
 impl MemoryReflector {
     pub fn new(
         assembler: Arc<dyn WorkingMemoryAssembler>,
         provider: Arc<dyn AiProvider>,
+        recall_writer: RecallWriter,
     ) -> Self {
         Self {
             assembler,
             provider,
+            recall_writer,
         }
     }
 
@@ -98,8 +111,22 @@ impl MemoryReflector {
         }
 
         let ctx = envelope_to_synthesis_context(&envelope);
-        Self::synthesise_from_context(&ctx, &self.provider).await
-        // recall_signals side effect is added in Task 6.
+        let synthesis = Self::synthesise_from_context(&ctx, &self.provider).await?;
+
+        // Side effect: log one recall_signal per note in the context.
+        // Errors here must NOT fail the reflect() call — logging is best-effort.
+        let writer = self.recall_writer.clone();
+        let record = move |row: SignalRow| {
+            let writer = writer.clone();
+            async move { writer(row).await }
+        };
+        if let Err(e) =
+            record_reflect_signals(record, query, &ctx.note_lookup, &opts).await
+        {
+            tracing::warn!("reflector: failed to write recall_signals: {e}");
+        }
+
+        Ok(synthesis)
     }
 
     /// Pure LLM-facing synthesis step — isolated for unit testing.
