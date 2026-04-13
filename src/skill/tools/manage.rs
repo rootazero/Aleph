@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::memory::context::{
-    FactSource, NoteType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    FactSource, NoteType, MemoryCategory, MemoryFact, MemoryLayer,
 };
 use crate::skill::{is_valid_category, is_valid_skill_name};
 

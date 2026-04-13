@@ -154,12 +154,6 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::TierTransitioned { .. } => {
-                    if let Some(ref mut f) = fact {
-                        f.updated_at = envelope.timestamp;
-                    }
-                }
-
                 MemoryEvent::FactAccessed {
                     new_access_count, ..
                 } => {
@@ -513,32 +507,6 @@ mod tests {
         assert!(fact.decay_invalidated_at.is_none());
     }
 
-    // --- fold: TierTransitioned ----------------------------------------------
-
-    #[test]
-    fn test_fold_tier_transitioned() {
-        let events = vec![
-            make_created_envelope("fact-008", 1, 1000),
-            wrap(
-                "fact-008",
-                2,
-                8000,
-                MemoryEvent::TierTransitioned {
-                    fact_id: "fact-008".to_string(),
-                    from_tier: MemoryTier::ShortTerm,
-                    to_tier: MemoryTier::LongTerm,
-                    trigger: TierTransitionTrigger::Consolidation,
-                },
-            ),
-        ];
-
-        let fact = EventProjector::fold_events_to_fact(&events)
-            .unwrap()
-            .expect("should produce a fact");
-
-        assert_eq!(fact.updated_at, 8000);
-    }
-
     // --- fold: FactMigrated --------------------------------------------------
 
     #[test]
@@ -740,17 +708,6 @@ mod tests {
                     relevance_score: Some(0.9),
                     used_in_response: true,
                     new_access_count: 1,
-                },
-            ),
-            wrap(
-                "fact-complex",
-                4,
-                4000,
-                MemoryEvent::TierTransitioned {
-                    fact_id: "fact-complex".to_string(),
-                    from_tier: MemoryTier::ShortTerm,
-                    to_tier: MemoryTier::LongTerm,
-                    trigger: TierTransitionTrigger::Reinforcement,
                 },
             ),
             wrap(

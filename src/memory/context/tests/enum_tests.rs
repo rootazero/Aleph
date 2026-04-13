@@ -127,27 +127,6 @@ fn test_memory_category_roundtrip() {
 }
 
 #[test]
-fn test_memory_tier_roundtrip() {
-    assert_eq!(MemoryTier::Core.as_str(), "core");
-    assert_eq!(MemoryTier::ShortTerm.as_str(), "short_term");
-    assert_eq!(MemoryTier::LongTerm.as_str(), "long_term");
-    assert_eq!(MemoryTier::from_str_or_default("core"), MemoryTier::Core);
-    assert_eq!(
-        MemoryTier::from_str_or_default("short_term"),
-        MemoryTier::ShortTerm
-    );
-    assert_eq!(
-        MemoryTier::from_str_or_default("long_term"),
-        MemoryTier::LongTerm
-    );
-    assert_eq!(
-        MemoryTier::from_str_or_default("unknown"),
-        MemoryTier::ShortTerm
-    ); // default
-    assert_eq!(format!("{}", MemoryTier::Core), "core");
-}
-
-#[test]
 fn test_memory_scope_roundtrip() {
     assert_eq!(MemoryScope::Global.as_str(), "global");
     assert_eq!(MemoryScope::Agent.as_str(), "agent");

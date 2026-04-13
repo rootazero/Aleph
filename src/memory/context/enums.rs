@@ -348,61 +348,6 @@ impl std::fmt::Display for MemoryCategory {
 }
 
 // ============================================================================
-// MemoryTier
-// ============================================================================
-
-/// Memory tier for cognitive architecture.
-///
-/// Controls how a fact is treated during retrieval and decay:
-/// - **Core**: always loaded, never decayed (identity-level knowledge)
-/// - **ShortTerm**: active working memory, subject to rapid decay
-/// - **LongTerm**: consolidated knowledge, slow decay curve
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryTier {
-    /// Identity-level facts: always loaded, never decayed.
-    Core,
-    /// Active working memory, subject to rapid decay.
-    #[default]
-    ShortTerm,
-    /// Consolidated knowledge, slow decay curve.
-    LongTerm,
-}
-
-impl MemoryTier {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Core => "core",
-            Self::ShortTerm => "short_term",
-            Self::LongTerm => "long_term",
-        }
-    }
-
-    pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(Self::ShortTerm)
-    }
-}
-
-impl std::str::FromStr for MemoryTier {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "core" => Ok(Self::Core),
-            "short_term" => Ok(Self::ShortTerm),
-            "long_term" => Ok(Self::LongTerm),
-            _ => Err(format!("Unknown memory tier: {}", s)),
-        }
-    }
-}
-
-impl std::fmt::Display for MemoryTier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-// ============================================================================
 // MemoryScope
 // ============================================================================
 

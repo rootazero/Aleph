@@ -7,7 +7,7 @@
 //!
 //! Events follow the Skeleton/Pulse classification from the resilience layer:
 //! - **Skeleton** — structural mutations that must be persisted immediately
-//!   (FactCreated, FactContentUpdated, FactMetadataUpdated, TierTransitioned,
+//!   (FactCreated, FactContentUpdated, FactMetadataUpdated,
 //!   FactInvalidated, FactRestored, FactDeleted, FactConsolidated, FactMigrated)
 //! - **Pulse** — high-frequency observations that may be buffered before persist
 //!   (FactAccessed)
@@ -28,7 +28,7 @@ pub mod traveler;
 
 use serde::{Deserialize, Serialize};
 
-use crate::memory::context::{FactSource, MemoryTier, NoteType};
+use crate::memory::context::{FactSource, NoteType};
 
 // ============================================================================
 // EventActor — who caused the event
@@ -81,45 +81,6 @@ impl std::str::FromStr for EventActor {
 }
 
 // ============================================================================
-// TierTransitionTrigger — why a tier transition happened
-// ============================================================================
-
-/// The trigger that caused a memory tier transition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TierTransitionTrigger {
-    /// Consolidation promoted the fact (e.g. ShortTerm -> LongTerm)
-    Consolidation,
-    /// Repeated access reinforced the fact (e.g. ShortTerm -> LongTerm)
-    Reinforcement,
-    /// Decay demoted the fact (e.g. LongTerm -> ShortTerm)
-    Decay,
-}
-
-impl std::fmt::Display for TierTransitionTrigger {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TierTransitionTrigger::Consolidation => write!(f, "consolidation"),
-            TierTransitionTrigger::Reinforcement => write!(f, "reinforcement"),
-            TierTransitionTrigger::Decay => write!(f, "decay"),
-        }
-    }
-}
-
-impl std::str::FromStr for TierTransitionTrigger {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "consolidation" => Ok(TierTransitionTrigger::Consolidation),
-            "reinforcement" => Ok(TierTransitionTrigger::Reinforcement),
-            "decay" => Ok(TierTransitionTrigger::Decay),
-            _ => Err(format!("Unknown tier transition trigger: {}", s)),
-        }
-    }
-}
-
-// ============================================================================
 // MemoryEvent — the domain event enum
 // ============================================================================
 
@@ -162,14 +123,6 @@ pub enum MemoryEvent {
         field: String,
         old_value: String,
         new_value: String,
-    },
-
-    /// The fact moved between memory tiers
-    TierTransitioned {
-        fact_id: String,
-        from_tier: MemoryTier,
-        to_tier: MemoryTier,
-        trigger: TierTransitionTrigger,
     },
 
     // ------------------------------------------------------------------
@@ -221,7 +174,6 @@ impl MemoryEvent {
             MemoryEvent::FactCreated { fact_id, .. }
             | MemoryEvent::FactContentUpdated { fact_id, .. }
             | MemoryEvent::FactMetadataUpdated { fact_id, .. }
-            | MemoryEvent::TierTransitioned { fact_id, .. }
             | MemoryEvent::FactAccessed { fact_id, .. }
             | MemoryEvent::FactInvalidated { fact_id, .. }
             | MemoryEvent::FactRestored { fact_id, .. }
@@ -240,7 +192,6 @@ impl MemoryEvent {
             MemoryEvent::FactCreated { .. } => "FactCreated",
             MemoryEvent::FactContentUpdated { .. } => "FactContentUpdated",
             MemoryEvent::FactMetadataUpdated { .. } => "FactMetadataUpdated",
-            MemoryEvent::TierTransitioned { .. } => "TierTransitioned",
             MemoryEvent::FactAccessed { .. } => "FactAccessed",
             MemoryEvent::FactInvalidated { .. } => "FactInvalidated",
             MemoryEvent::FactRestored { .. } => "FactRestored",
@@ -381,40 +332,6 @@ mod tests {
         assert_eq!(parsed, EventActor::Migration);
     }
 
-    // --- TierTransitionTrigger ----------------------------------------------
-
-    #[test]
-    fn test_tier_transition_trigger_display() {
-        assert_eq!(
-            TierTransitionTrigger::Consolidation.to_string(),
-            "consolidation"
-        );
-        assert_eq!(
-            TierTransitionTrigger::Reinforcement.to_string(),
-            "reinforcement"
-        );
-        assert_eq!(TierTransitionTrigger::Decay.to_string(), "decay");
-    }
-
-    #[test]
-    fn test_tier_transition_trigger_from_str_unknown() {
-        assert!("unknown_trigger".parse::<TierTransitionTrigger>().is_err());
-        assert!("INVALID".parse::<TierTransitionTrigger>().is_err());
-    }
-
-    #[test]
-    fn test_tier_transition_trigger_roundtrip() {
-        for trigger in &[
-            TierTransitionTrigger::Consolidation,
-            TierTransitionTrigger::Reinforcement,
-            TierTransitionTrigger::Decay,
-        ] {
-            let s = trigger.to_string();
-            let parsed: TierTransitionTrigger = s.parse().unwrap();
-            assert_eq!(&parsed, trigger);
-        }
-    }
-
     // --- MemoryEvent: fact_id -----------------------------------------------
 
     #[test]
@@ -441,12 +358,6 @@ mod tests {
                 field: "tier".into(),
                 old_value: "ShortTerm".into(),
                 new_value: "LongTerm".into(),
-            },
-            MemoryEvent::TierTransitioned {
-                fact_id: "d".into(),
-                from_tier: MemoryTier::ShortTerm,
-                to_tier: MemoryTier::LongTerm,
-                trigger: TierTransitionTrigger::Consolidation,
             },
             MemoryEvent::FactAccessed {
                 fact_id: "e".into(),
@@ -477,7 +388,7 @@ mod tests {
                 snapshot: serde_json::json!({}),
             },
         ];
-        let expected = ["a", "b", "c", "d", "e", "g", "h", "i", "j", "k"];
+        let expected = ["a", "b", "c", "e", "g", "h", "i", "j", "k"];
         for (evt, exp) in events.iter().zip(expected.iter()) {
             assert_eq!(evt.fact_id(), *exp);
         }
@@ -518,15 +429,6 @@ mod tests {
                     new_value: "b".into(),
                 },
                 "FactMetadataUpdated",
-            ),
-            (
-                MemoryEvent::TierTransitioned {
-                    fact_id: "f".into(),
-                    from_tier: MemoryTier::ShortTerm,
-                    to_tier: MemoryTier::LongTerm,
-                    trigger: TierTransitionTrigger::Consolidation,
-                },
-                "TierTransitioned",
             ),
             (
                 MemoryEvent::FactAccessed {
@@ -579,7 +481,7 @@ mod tests {
         for (event, expected_tag) in &cases {
             assert_eq!(event.event_type_tag(), *expected_tag);
         }
-        assert_eq!(cases.len(), 10);
+        assert_eq!(cases.len(), 9);
     }
 
     // --- MemoryEvent: is_skeleton -------------------------------------------
@@ -710,12 +612,6 @@ mod tests {
                 field: "scope".into(),
                 old_value: "global".into(),
                 new_value: "persona".into(),
-            },
-            MemoryEvent::TierTransitioned {
-                fact_id: "f".into(),
-                from_tier: MemoryTier::LongTerm,
-                to_tier: MemoryTier::ShortTerm,
-                trigger: TierTransitionTrigger::Decay,
             },
             MemoryEvent::FactAccessed {
                 fact_id: "f".into(),

@@ -6,7 +6,7 @@
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-use super::{NoteType, MemoryLayer, MemoryScope, MemoryTier};
+use super::{NoteType, MemoryLayer, MemoryScope};
 
 // ============================================================================
 // Strategies
@@ -39,15 +39,6 @@ fn arb_memory_layer() -> impl Strategy<Value = MemoryLayer> {
         Just(MemoryLayer::L0Abstract),
         Just(MemoryLayer::L1Overview),
         Just(MemoryLayer::L2Detail),
-    ]
-}
-
-/// Generate an arbitrary MemoryTier variant.
-fn arb_memory_tier() -> impl Strategy<Value = MemoryTier> {
-    prop_oneof![
-        Just(MemoryTier::Core),
-        Just(MemoryTier::ShortTerm),
-        Just(MemoryTier::LongTerm),
     ]
 }
 
@@ -98,14 +89,6 @@ proptest! {
         let json_str = serde_json::to_string(layer).unwrap();
         let parsed: MemoryLayer = serde_json::from_str(&json_str).unwrap();
         prop_assert_eq!(&parsed, layer);
-    }
-
-    /// MemoryTier: serialize then deserialize preserves the variant.
-    #[test]
-    fn memory_tier_serde_roundtrip(ref tier in arb_memory_tier()) {
-        let json_str = serde_json::to_string(tier).unwrap();
-        let parsed: MemoryTier = serde_json::from_str(&json_str).unwrap();
-        prop_assert_eq!(&parsed, tier);
     }
 
     /// MemoryScope: serialize then deserialize preserves the variant.

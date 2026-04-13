@@ -160,17 +160,6 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
                 field, old_value, new_value
             )
         }
-        MemoryEvent::TierTransitioned {
-            from_tier,
-            to_tier,
-            trigger,
-            ..
-        } => {
-            format!(
-                "Tier changed from {:?} to {:?} (trigger: {})",
-                from_tier, to_tier, trigger
-            )
-        }
         MemoryEvent::FactAccessed {
             query,
             used_in_response,

@@ -7,7 +7,7 @@
 pub mod hybrid;
 
 use crate::error::AlephError;
-use crate::memory::context::{MemoryFact, MemoryScope, MemoryTier, NoteType};
+use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::types::ScoredFact;
