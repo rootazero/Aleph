@@ -6,30 +6,91 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RawMemorySource {
+    // Legacy — keep for backward compatibility.
     SessionCompressed,
     Transcript,
     ToolOutput,
     Attachment,
+
+    // Spec 1 — Memory Capture Hooks.
+    PreCompress,
+    Delegation { child_agent_id: String },
+    SessionEnd { reason: SessionEndReason },
+}
+
+/// Sub-reason for `RawMemorySource::SessionEnd`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    /// Gateway close or idle timeout.
+    Disconnect,
+    /// LLM called the `session_complete` tool.
+    TaskDone,
 }
 
 impl RawMemorySource {
-    pub fn as_str(&self) -> &'static str {
+    /// Split enum into `(token, optional_detail_json)` for SQLite storage.
+    /// Legacy variants return `(token, None)` so existing rows stay unchanged.
+    pub fn to_persisted(&self) -> (&'static str, Option<String>) {
         match self {
-            Self::SessionCompressed => "session_compressed",
-            Self::Transcript => "transcript",
-            Self::ToolOutput => "tool_output",
-            Self::Attachment => "attachment",
+            Self::SessionCompressed => ("session_compressed", None),
+            Self::Transcript => ("transcript", None),
+            Self::ToolOutput => ("tool_output", None),
+            Self::Attachment => ("attachment", None),
+            Self::PreCompress => ("pre_compress", None),
+            Self::Delegation { child_agent_id } => (
+                "delegation",
+                Some(
+                    serde_json::json!({ "child_agent_id": child_agent_id })
+                        .to_string(),
+                ),
+            ),
+            Self::SessionEnd { reason } => (
+                "session_end",
+                Some(serde_json::json!({ "reason": reason }).to_string()),
+            ),
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+    /// Parse `(token, optional_detail_json)` back into the enum.
+    /// Unknown tokens fall through to `ToolOutput` (matches old behaviour).
+    pub fn from_persisted(token: &str, detail: Option<&str>) -> Self {
+        match token {
             "session_compressed" => Self::SessionCompressed,
             "transcript" => Self::Transcript,
             "tool_output" => Self::ToolOutput,
             "attachment" => Self::Attachment,
+            "pre_compress" => Self::PreCompress,
+            "delegation" => {
+                let child_agent_id = detail
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| v.get("child_agent_id").and_then(|x| x.as_str()).map(String::from))
+                    .unwrap_or_default();
+                Self::Delegation { child_agent_id }
+            }
+            "session_end" => {
+                let reason = detail
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| v.get("reason").and_then(|x| x.as_str().map(str::to_string)))
+                    .unwrap_or_else(|| "disconnect".into());
+                let reason = match reason.as_str() {
+                    "task_done" => SessionEndReason::TaskDone,
+                    _ => SessionEndReason::Disconnect,
+                };
+                Self::SessionEnd { reason }
+            }
             _ => Self::ToolOutput,
         }
+    }
+
+    /// Backwards-compat shim — existing callers that only had a token.
+    pub fn as_str(&self) -> &'static str {
+        self.to_persisted().0
+    }
+
+    /// Backwards-compat shim — existing callers that only had a token.
+    pub fn from_str(s: &str) -> Self {
+        Self::from_persisted(s, None)
     }
 }
 
@@ -117,4 +178,49 @@ pub trait RawMemoryStore: Send + Sync {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<RawMemory>, AlephError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_pre_compress() {
+        let src = RawMemorySource::PreCompress;
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "pre_compress");
+        assert!(detail.is_none());
+        let back = RawMemorySource::from_persisted(token, detail.as_deref());
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_delegation_with_detail() {
+        let src = RawMemorySource::Delegation {
+            child_agent_id: "child-42".into(),
+        };
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "delegation");
+        let detail = detail.expect("delegation carries detail JSON");
+        let back = RawMemorySource::from_persisted(token, Some(&detail));
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_session_end_task_done() {
+        let src = RawMemorySource::SessionEnd {
+            reason: SessionEndReason::TaskDone,
+        };
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "session_end");
+        let detail = detail.expect("session_end carries detail JSON");
+        let back = RawMemorySource::from_persisted(token, Some(&detail));
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn legacy_variants_still_parse() {
+        let back = RawMemorySource::from_persisted("session_compressed", None);
+        assert_eq!(back, RawMemorySource::SessionCompressed);
+    }
 }
