@@ -249,11 +249,9 @@ mod tests {
         let config = EmailConfig::default();
         let channel = EmailChannel::new("email", config);
 
-        // First take should succeed
+        // Broadcast semantics: every call subscribes a fresh receiver.
         assert!(channel.take_receiver().is_some());
-
-        // Second take should return None
-        assert!(channel.take_receiver().is_none());
+        assert!(channel.take_receiver().is_some());
     }
 
     #[tokio::test]

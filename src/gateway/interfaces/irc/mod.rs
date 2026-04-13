@@ -241,11 +241,9 @@ mod tests {
         let config = IrcConfig::default();
         let channel = IrcChannel::new("irc", config);
 
-        // First take should succeed
+        // Broadcast semantics: every call subscribes a fresh receiver.
         assert!(channel.state().take_receiver().is_some());
-
-        // Second take should return None
-        assert!(channel.state().take_receiver().is_none());
+        assert!(channel.state().take_receiver().is_some());
     }
 
     #[tokio::test]

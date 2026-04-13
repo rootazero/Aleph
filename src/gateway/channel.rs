@@ -888,10 +888,11 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_take_receiver_once() {
         let state = ChannelState::new(100);
+        // Broadcast semantics: every call subscribes a fresh receiver.
         let rx = state.take_receiver();
         assert!(rx.is_some());
         let rx2 = state.take_receiver();
-        assert!(rx2.is_none());
+        assert!(rx2.is_some());
     }
 
     #[tokio::test]
