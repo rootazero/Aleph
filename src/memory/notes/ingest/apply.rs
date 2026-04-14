@@ -525,4 +525,73 @@ mod tests {
         assert_eq!(body.matches("- fact-a").count(), 1);
         assert_eq!(body.matches("- fact-b").count(), 1);
     }
+
+    use proptest::prelude::*;
+
+    fn op_strategy() -> impl Strategy<Value = PageOp> {
+        let name = "[a-z][a-z0-9-]{0,8}";
+        let path = (name.clone(), name.clone()).prop_map(|(c, n)| format!("{c}/{n}"));
+        prop_oneof![
+            path.clone().prop_flat_map(|p| {
+                let p2 = p.clone();
+                ("[a-z ]{3,20}", "[a-z ]{1,40}").prop_map(move |(t, s)| PageOp::Create {
+                    note_path: p2.clone(),
+                    title: t,
+                    summary: s,
+                    facts: vec![],
+                    links: vec!["seed/link".to_string()],
+                    tags: vec![],
+                })
+            }),
+            path.clone().prop_map(|p| PageOp::Append {
+                note_path: p,
+                new_facts: vec!["f".into()],
+                new_links: vec![],
+            }),
+            (path.clone(), path)
+                .prop_filter("distinct endpoints", |(a, b)| a != b)
+                .prop_map(|(from, to)| PageOp::Link { from, to }),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn apply_commit_produces_files_on_disk(
+            ops in proptest::collection::vec(op_strategy(), 0..6)
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result: std::result::Result<(), proptest::test_runner::TestCaseError> = rt.block_on(async move {
+                let (dir, backend, indexer) = fresh().await;
+                let mut tx = CompoundApplyTx::new(
+                    &indexer,
+                    &backend,
+                    dir.path().join("note"),
+                    "default",
+                );
+                let mut expect_paths: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                for op in &ops {
+                    if tx.stage(op).await.is_err() {
+                        return Ok(());
+                    }
+                    if matches!(op, PageOp::Create { .. } | PageOp::Append { .. }) {
+                        expect_paths.insert(op.primary_path().to_string());
+                    }
+                }
+                let report = tx.commit().await;
+                prop_assert!(report.is_ok(), "commit failed: {:?}", report);
+                for p in expect_paths {
+                    let (cat, name) = p.split_once('/').unwrap();
+                    let safe_name: String = name
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                        .collect();
+                    let file = dir.path().join(format!("note/default/{cat}/{safe_name}.md"));
+                    prop_assert!(file.exists(), "missing file {file:?}");
+                }
+                Ok(())
+            });
+            result?;
+        }
+    }
 }
