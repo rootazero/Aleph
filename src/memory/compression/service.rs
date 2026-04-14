@@ -6,7 +6,6 @@
 //! 3. Detects and resolves conflicts
 //! 4. Stores facts and updates compression state
 
-use super::conflict::{ConflictConfig, ConflictDetector};
 use super::extractor::FactExtractor;
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 use super::signal_detector::{CompressionPriority, SignalDetector};
@@ -28,8 +27,6 @@ pub struct CompressionConfig {
     pub batch_size: u32,
     /// Scheduler configuration
     pub scheduler: SchedulerConfig,
-    /// Conflict detection configuration
-    pub conflict: ConflictConfig,
     /// Background task interval in seconds
     pub background_interval_seconds: u32,
 }
@@ -39,7 +36,6 @@ impl Default for CompressionConfig {
         Self {
             batch_size: 50,
             scheduler: SchedulerConfig::default(),
-            conflict: ConflictConfig::default(),
             background_interval_seconds: 3600, // 1 hour
         }
     }
@@ -51,7 +47,6 @@ impl CompressionConfig {
         Self {
             batch_size: 50,
             scheduler: SchedulerConfig::from_policy(policy),
-            conflict: ConflictConfig::default(),
             background_interval_seconds: policy.background_interval_seconds,
         }
     }
@@ -125,7 +120,6 @@ pub(crate) fn group_by_source<'a>(
 pub struct CompressionService {
     database: MemoryBackend,
     extractor: Arc<FactExtractor>,
-    conflict_detector: Arc<ConflictDetector>,
     scheduler: Arc<CompressionScheduler>,
     config: CompressionConfig,
     provider_name: String,
@@ -159,11 +153,6 @@ impl CompressionService {
     ) -> Self {
         let provider_name = provider.name().to_string();
 
-        let conflict_detector = Arc::new(
-            ConflictDetector::new(database.clone(), config.conflict.clone())
-                .with_provider(Arc::clone(&provider)),
-        );
-
         let extractor = Arc::new(FactExtractor::new(provider, embedder));
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
@@ -171,7 +160,6 @@ impl CompressionService {
         Self {
             database,
             extractor,
-            conflict_detector,
             scheduler,
             config,
             provider_name,

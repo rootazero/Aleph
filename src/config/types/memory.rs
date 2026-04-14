@@ -84,9 +84,6 @@ pub struct MemoryConfig {
     /// Maximum memories to process per compression batch (default: 50)
     #[serde(default = "default_compression_batch_size")]
     pub compression_batch_size: u32,
-    /// Similarity threshold for conflict detection (default: 0.85)
-    #[serde(default = "default_conflict_similarity_threshold")]
-    pub conflict_similarity_threshold: f32,
     /// Maximum facts to include in RAG context (default: 5)
     #[serde(default = "default_max_facts_in_context")]
     pub max_facts_in_context: u32,
@@ -515,10 +512,6 @@ pub fn default_compression_batch_size() -> u32 {
     50
 }
 
-pub fn default_conflict_similarity_threshold() -> f32 {
-    0.85
-}
-
 pub fn default_max_facts_in_context() -> u32 {
     5
 }
@@ -791,7 +784,6 @@ impl Default for MemoryConfig {
             compression_turn_threshold: default_compression_turn_threshold(),
             compression_interval_seconds: default_compression_interval(),
             compression_batch_size: default_compression_batch_size(),
-            conflict_similarity_threshold: default_conflict_similarity_threshold(),
             max_facts_in_context: default_max_facts_in_context(),
             raw_memory_fallback_count: default_raw_memory_fallback_count(),
             // Embedding settings
