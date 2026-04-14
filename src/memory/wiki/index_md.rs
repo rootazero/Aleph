@@ -242,4 +242,55 @@ mod tests {
             .unwrap();
         assert!(body.contains("learning/rust"));
     }
+
+    use proptest::prelude::*;
+
+    fn category_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("preference".to_string()),
+            Just("plan".to_string()),
+            Just("learning".to_string()),
+            Just("project".to_string()),
+            Just("personal".to_string()),
+            Just("tool".to_string()),
+        ]
+    }
+
+    fn filename_strategy() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9-]{0,20}".prop_map(String::from)
+    }
+
+    proptest! {
+        #[test]
+        fn every_note_appears_in_rendered_index(
+            notes in proptest::collection::vec(
+                (category_strategy(), filename_strategy(), 0i64..2_000_000_000_i64),
+                0..30
+            )
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let g = IndexMdGenerator::new(dir.path());
+            let entries: Vec<NoteIndexEntry> = notes
+                .iter()
+                .enumerate()
+                .map(|(i, (cat, name, ts))| NoteIndexEntry {
+                    path: format!("{cat}/{name}-{i}"),
+                    filename: format!("{name}-{i}"),
+                    agent_id: "default".into(),
+                    category: cat.clone(),
+                    tags: vec![],
+                    link_count: 0,
+                    created_at: 0,
+                    updated_at: *ts,
+                    content_hash: "x".into(),
+                })
+                .collect();
+
+            let rendered = rt.block_on(g.render(&entries)).unwrap();
+            for e in &entries {
+                prop_assert!(rendered.contains(&e.path), "missing {}", e.path);
+            }
+        }
+    }
 }
