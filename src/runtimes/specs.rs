@@ -110,7 +110,10 @@ pub const SPECS: &[RuntimeSpec] = &[
                 ),
             },
         ],
-        post_install: &[],
+        post_install: &[PostInstallAction::AssetProbe {
+            path: "$HOME/.aleph/.venv/bin/python",
+            repair: &["venv", "$HOME/.aleph/.venv"],
+        }],
         llm_hint: Some(
             "Python package manager (uv). Run scripts via `uv run <file.py>`; install packages via `uv pip install <pkg>`.",
         ),
@@ -275,5 +278,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_uv_spec_has_venv_post_install() {
+        let spec = find_spec("uv").expect("uv spec must exist");
+        assert_eq!(
+            spec.post_install.len(),
+            1,
+            "uv should have exactly one post-install action"
+        );
+        match spec.post_install[0] {
+            PostInstallAction::AssetProbe { path, repair } => {
+                assert!(
+                    path.contains(".aleph/.venv"),
+                    "uv post-install should probe for ~/.aleph/.venv, got: {path}"
+                );
+                assert!(
+                    path.ends_with("python") || path.ends_with("python.exe"),
+                    "probe path should end at the python binary, got: {path}"
+                );
+                assert_eq!(
+                    repair,
+                    &["venv", "$HOME/.aleph/.venv"],
+                    "repair must be `uv venv $HOME/.aleph/.venv`",
+                );
+            }
+            _ => panic!("expected AssetProbe post-install for uv"),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_uv_post_install_creates_venv_idempotently() {
+        use crate::runtimes::post_install::run;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        // Fake uv: a shell script that responds to `venv <path>` by mkdir-ing the
+        // expected layout, mimicking `uv venv` semantics.
+        let fake_uv = dir.path().join("fake-uv.sh");
+        tokio::fs::write(
+            &fake_uv,
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"venv\" ]; then\n",
+                "  mkdir -p \"$2/bin\"\n",
+                "  : > \"$2/bin/python\"\n",
+                "  chmod +x \"$2/bin/python\"\n",
+                "  exit 0\n",
+                "fi\n",
+                "exit 1\n",
+            ),
+        )
+        .await
+        .unwrap();
+        let mut perms = tokio::fs::metadata(&fake_uv).await.unwrap().permissions();
+        perms.set_mode(0o755);
+        tokio::fs::set_permissions(&fake_uv, perms).await.unwrap();
+
+        let spec = find_spec("uv").unwrap();
+        let action = &spec.post_install[0];
+
+        // Round 1: venv doesn't exist → repair fires.
+        run(action, &fake_uv).await.unwrap();
+        let venv_python = dir.path().join(".aleph/.venv/bin/python");
+        assert!(
+            venv_python.exists(),
+            "venv python should exist after first run"
+        );
+
+        // Round 2: venv exists → repair should be skipped (we detect by
+        // removing the fake uv binary — if run re-invokes it, it will fail).
+        tokio::fs::remove_file(&fake_uv).await.unwrap();
+        run(action, &fake_uv).await.unwrap();
+        assert!(
+            venv_python.exists(),
+            "venv python should still exist after idempotent second run"
+        );
     }
 }
