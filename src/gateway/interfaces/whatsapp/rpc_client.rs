@@ -364,7 +364,9 @@ impl BridgeRpcClient {
 
 use crate::gateway::channel::{ChannelError, ChannelResult, OutboundMessage};
 use crate::gateway::channel_policy::E164Number;
-use crate::gateway::interfaces::whatsapp::baileys_runtime::{ConnectionInfo, SendResponse, WhatsAppRuntime};
+use crate::gateway::interfaces::whatsapp::baileys_runtime::{
+    ConnectionInfo, SendResponse, WhatsAppRuntime,
+};
 use crate::gateway::interfaces::whatsapp::bridge_protocol::{OkResponse, SendReactionRequest};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -393,7 +395,8 @@ impl WhatsAppRuntime for BridgeRpcClient {
     }
 
     async fn send_message(&self, msg: OutboundMessage) -> ChannelResult<SendResponse> {
-        let send_request = crate::gateway::interfaces::whatsapp::message::outbound_to_send_request(&msg);
+        let send_request =
+            crate::gateway::interfaces::whatsapp::message::outbound_to_send_request(&msg);
         let params = serde_json::to_value(&send_request).map_err(|e| {
             ChannelError::SendFailed(format!("Failed to serialize send request: {}", e))
         })?;
@@ -410,8 +413,9 @@ impl WhatsAppRuntime for BridgeRpcClient {
             message_id: msg_id.to_string(),
             reaction: emoji.to_string(),
         };
-        let params = serde_json::to_value(&req)
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to serialize reaction request: {}", e)))?;
+        let params = serde_json::to_value(&req).map_err(|e| {
+            ChannelError::SendFailed(format!("Failed to serialize reaction request: {}", e))
+        })?;
         let _: OkResponse = self
             .call("bridge.send_reaction", Some(params))
             .await

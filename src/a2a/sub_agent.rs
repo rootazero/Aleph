@@ -9,8 +9,8 @@ use crate::a2a::adapter::client::A2AClientPool;
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::service::SmartRouter;
 use crate::agents::sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
-use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::extensions::types::CaptureCtx;
+use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::sync_primitives::Arc;
@@ -56,10 +56,7 @@ impl A2ASubAgent {
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row carrying the delegation prompt + sub-agent summary before returning,
     /// allowing CompressionService to distil durable lessons for the parent agent.
-    pub fn with_raw_memory_writer(
-        mut self,
-        writer: std::sync::Arc<dyn RawMemoryStore>,
-    ) -> Self {
+    pub fn with_raw_memory_writer(mut self, writer: std::sync::Arc<dyn RawMemoryStore>) -> Self {
         self.raw_memory_writer = Some(writer);
         self
     }
@@ -154,11 +151,8 @@ pub(crate) fn emit_delegation_raw_with_registry(
 
     let parent_session_id = request.parent_session_id.clone();
 
-    let mut raw = RawMemory::new(
-        content,
-        RawMemorySource::Delegation { child_agent_id },
-    )
-    .with_agent(parent_agent_id.clone());
+    let mut raw = RawMemory::new(content, RawMemorySource::Delegation { child_agent_id })
+        .with_agent(parent_agent_id.clone());
 
     if let Some(sid) = parent_session_id.clone() {
         raw = raw.with_session(sid);
@@ -575,10 +569,7 @@ mod spec1_tests {
             Ok(vec![])
         }
 
-        async fn mark_raw_as_processed(
-            &self,
-            _ids: &[String],
-        ) -> Result<usize, AlephError> {
+        async fn mark_raw_as_processed(&self, _ids: &[String]) -> Result<usize, AlephError> {
             Ok(0)
         }
 
@@ -649,15 +640,11 @@ mod spec1_tests {
         let writer: Arc<dyn RawMemoryStore> = fake.clone();
 
         use crate::agents::sub_agents::ExecutionContextInfo;
-        let ctx = ExecutionContextInfo::new()
-            .with_metadata("parent_agent_id", "parent-agent-007");
+        let ctx = ExecutionContextInfo::new().with_metadata("parent_agent_id", "parent-agent-007");
         let request = SubAgentRequest::new("Do the thing")
             .with_parent_session("sess-99")
             .with_execution_context(ctx);
-        let result = crate::agents::sub_agents::SubAgentResult::success(
-            request.id.clone(),
-            "Done",
-        );
+        let result = crate::agents::sub_agents::SubAgentResult::success(request.id.clone(), "Done");
 
         emit_delegation_raw(writer, &request, &result, "child-007");
 

@@ -32,10 +32,7 @@ pub trait MemoryExtension: Send + Sync {
     }
 
     /// Produce raw memories on the caller's schedule.
-    async fn produce(
-        &self,
-        _ctx: &ProduceCtx,
-    ) -> Result<Vec<RawMemory>, AlephError> {
+    async fn produce(&self, _ctx: &ProduceCtx) -> Result<Vec<RawMemory>, AlephError> {
         Ok(vec![])
     }
 }

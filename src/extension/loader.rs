@@ -565,7 +565,11 @@ mod tests {
         let registry = Arc::new(MemoryExtensionRegistry::new());
 
         register_memory_extension_if_declared(&manifest, &registry);
-        assert_eq!(registry.len(), 0, "no extension should be registered without [memory] section");
+        assert_eq!(
+            registry.len(),
+            0,
+            "no extension should be registered without [memory] section"
+        );
     }
 
     #[test]

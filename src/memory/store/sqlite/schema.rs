@@ -335,11 +335,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .filter_map(Result::ok)
         .any(|name| name == "source_detail");
     if !has_source_detail {
-        conn.execute(
-            "ALTER TABLE raw_memories ADD COLUMN source_detail TEXT",
-            [],
-        )
-        .map_err(|e| AlephError::config(format!("ALTER TABLE raw_memories failed: {e}")))?;
+        conn.execute("ALTER TABLE raw_memories ADD COLUMN source_detail TEXT", [])
+            .map_err(|e| AlephError::config(format!("ALTER TABLE raw_memories failed: {e}")))?;
     }
 
     conn.execute_batch(NOTES_INDEX_DDL)

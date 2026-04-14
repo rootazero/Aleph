@@ -644,12 +644,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // regardless of whether an AI provider is available.
     // Registers the POC first-party extension (no-op at floor=0.0) to prove
     // end-to-end plumbing. Real floor could be plumbed from config later.
-    let memory_ext_registry: std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry> = {
+    let memory_ext_registry: std::sync::Arc<
+        alephcore::memory::extensions::MemoryExtensionRegistry,
+    > = {
         use alephcore::memory::extensions::{
             EnvelopeRelevanceFloorExtension, MemoryExtensionRegistry,
         };
         let reg = MemoryExtensionRegistry::new();
-        reg.register(std::sync::Arc::new(EnvelopeRelevanceFloorExtension::new(0.0)));
+        reg.register(std::sync::Arc::new(EnvelopeRelevanceFloorExtension::new(
+            0.0,
+        )));
         std::sync::Arc::new(reg)
     };
 
@@ -865,11 +869,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 })
             });
 
-            let reflector = Arc::new(MemoryReflector::new(
-                reflector_assembler,
-                prov,
-                writer,
-            ));
+            let reflector = Arc::new(MemoryReflector::new(reflector_assembler, prov, writer));
             tool_registry.set_memory_reflector(reflector);
         } else if !daemon {
             println!("  memory_reflect tool: MemoryReflector not wired (no embedder or provider)");
@@ -1044,9 +1044,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     compactor = compactor.with_embedder(emb.clone());
                 }
                 // Spec 1 G1: wire pre-compress hook so chunks are captured before summarisation.
-                compactor = compactor.with_raw_memory_writer(
-                    memory_db.clone() as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
-                );
+                compactor = compactor.with_raw_memory_writer(memory_db.clone()
+                    as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>);
                 // Spec 4 Task 11: wire capture-filter registry.
                 compactor = compactor.with_capture_registry(memory_ext_registry.clone());
                 let compactor = std::sync::Arc::new(compactor);
@@ -1626,8 +1625,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // ── Spec 4 Task 11: spawn MemoryProducerScheduler ────────────────────
         {
             use alephcore::memory::extensions::MemoryProducerScheduler;
-            let raw_store: std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
-                memory_db.clone();
+            let raw_store: std::sync::Arc<
+                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+            > = memory_db.clone();
             let scheduler = std::sync::Arc::new(MemoryProducerScheduler::new(
                 memory_ext_registry.clone(),
                 raw_store,

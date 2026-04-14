@@ -40,10 +40,7 @@ impl RawMemorySource {
             Self::PreCompress => ("pre_compress", None),
             Self::Delegation { child_agent_id } => (
                 "delegation",
-                Some(
-                    serde_json::json!({ "child_agent_id": child_agent_id })
-                        .to_string(),
-                ),
+                Some(serde_json::json!({ "child_agent_id": child_agent_id }).to_string()),
             ),
             Self::SessionEnd { reason } => (
                 "session_end",
@@ -64,7 +61,11 @@ impl RawMemorySource {
             "delegation" => {
                 let child_agent_id = detail
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                    .and_then(|v| v.get("child_agent_id").and_then(|x| x.as_str()).map(String::from))
+                    .and_then(|v| {
+                        v.get("child_agent_id")
+                            .and_then(|x| x.as_str())
+                            .map(String::from)
+                    })
                     .unwrap_or_default();
                 Self::Delegation { child_agent_id }
             }

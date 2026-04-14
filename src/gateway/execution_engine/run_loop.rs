@@ -537,9 +537,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .build_memory_user_message(request.session_key.agent_id(), &request.input)
                     .await
                 {
-                    Ok(Some(msg)) => {
-                        prompt_builder.with_memory_user_message(msg.text_content())
-                    }
+                    Ok(Some(msg)) => prompt_builder.with_memory_user_message(msg.text_content()),
                     Ok(None) => prompt_builder,
                     Err(e) => {
                         warn!(error = %e, "memory injection failed; continuing without memory");

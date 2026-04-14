@@ -123,8 +123,7 @@ async fn build_reflector(
     //  the reflector calls the provider for synthesis).
     let mock_provider = RecordingMockProvider::new(canned_synthesis_response.to_string());
     let recorded_prompt = mock_provider.recorded_system_prompt();
-    let provider_arc: Arc<dyn alephcore::providers::AiProvider> =
-        Arc::new(mock_provider);
+    let provider_arc: Arc<dyn alephcore::providers::AiProvider> = Arc::new(mock_provider);
 
     // Reranker wrapping the same provider (never called due to force_fallback).
     let reranker = AiProviderReranker::new(provider_arc.clone());
@@ -186,8 +185,7 @@ async fn reflect_full_pipeline_against_fixture_notes() {
     // The LLM cites "wiki/rust-ownership" — the path we will index.
     let canned = r#"{"text":"Rust uses ownership to enforce memory safety.","sources":[{"path":"wiki/rust-ownership","relevance":0.9}]}"#;
 
-    let (reflector, indexer, backend, _recorded, _tmp) =
-        build_reflector(canned).await;
+    let (reflector, indexer, backend, _recorded, _tmp) = build_reflector(canned).await;
 
     // Seed a note at wiki/rust-ownership so the assembler gather pool includes it.
     // The skeleton fallback will package any gathered candidates into slots.
@@ -221,8 +219,7 @@ async fn reflect_full_pipeline_against_fixture_notes() {
     // For the case where the note DID make it into the envelope:
     if synthesis.text != "No relevant memories found." {
         assert_eq!(
-            synthesis.text,
-            "Rust uses ownership to enforce memory safety.",
+            synthesis.text, "Rust uses ownership to enforce memory safety.",
             "full-pipeline text must match the canned LLM response"
         );
         assert_eq!(synthesis.sources.len(), 1);
@@ -255,8 +252,7 @@ async fn reflect_with_no_matching_notes_short_circuits() {
     // LLM must not be called; this value must never appear in output.
     let canned = "SHOULD NOT BE USED".to_string();
 
-    let (reflector, _indexer, backend, _recorded, _tmp) =
-        build_reflector(&canned).await;
+    let (reflector, _indexer, backend, _recorded, _tmp) = build_reflector(&canned).await;
 
     // Seed ZERO notes and ZERO raw memories → tiny_pool fast-path → empty envelope.
 
@@ -267,8 +263,7 @@ async fn reflect_with_no_matching_notes_short_circuits() {
         .expect("reflect should short-circuit cleanly");
 
     assert_eq!(
-        synthesis.text,
-        "No relevant memories found.",
+        synthesis.text, "No relevant memories found.",
         "empty envelope must return the stub text"
     );
     assert!(synthesis.sources.is_empty(), "stub must have no sources");

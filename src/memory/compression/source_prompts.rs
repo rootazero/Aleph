@@ -37,7 +37,10 @@ mod tests {
 
     #[test]
     fn pre_compress_selects_rescue() {
-        assert_eq!(prompt_for(&RawMemorySource::PreCompress), Some(PROMPT_RESCUE));
+        assert_eq!(
+            prompt_for(&RawMemorySource::PreCompress),
+            Some(PROMPT_RESCUE)
+        );
     }
 
     #[test]
@@ -82,7 +85,10 @@ mod tests {
     fn prompts_have_nonempty_snapshots() {
         for prompt in [PROMPT_RESCUE, PROMPT_LESSON, PROMPT_DIGEST, PROMPT_RETRO] {
             assert!(prompt.len() > 100, "prompt snapshot too short");
-            assert!(prompt.contains("JSON"), "prompt must instruct LLM to emit JSON");
+            assert!(
+                prompt.contains("JSON"),
+                "prompt must instruct LLM to emit JSON"
+            );
         }
     }
 }

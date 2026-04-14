@@ -132,14 +132,26 @@ mod tests {
     #[test]
     fn items_become_tagged_blocks() {
         let items = vec![
-            make_note_item("wiki/rust", "Rust Lang", "Rust is a systems language.", 0.91),
-            make_note_item("wiki/ownership", "Ownership", "Every value has one owner.", 0.73),
+            make_note_item(
+                "wiki/rust",
+                "Rust Lang",
+                "Rust is a systems language.",
+                0.91,
+            ),
+            make_note_item(
+                "wiki/ownership",
+                "Ownership",
+                "Every value has one owner.",
+                0.73,
+            ),
         ];
         let envelope = make_envelope("ownership?", items);
         let ctx = envelope_to_synthesis_context(&envelope);
 
         assert!(ctx.user_prompt.contains("[path=wiki/rust score=0.910]"));
-        assert!(ctx.user_prompt.contains("[path=wiki/ownership score=0.730]"));
+        assert!(ctx
+            .user_prompt
+            .contains("[path=wiki/ownership score=0.730]"));
         assert_eq!(ctx.note_lookup.len(), 2);
         assert_eq!(ctx.note_lookup.get("wiki/rust").unwrap().title, "Rust Lang");
         assert!(

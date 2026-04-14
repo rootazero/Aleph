@@ -14,7 +14,9 @@ pub struct LogMdWriter {
 
 impl LogMdWriter {
     pub fn new(agent_dir: impl Into<PathBuf>) -> Self {
-        Self { agent_dir: agent_dir.into() }
+        Self {
+            agent_dir: agent_dir.into(),
+        }
     }
 
     fn log_path(&self) -> PathBuf {
@@ -38,8 +40,8 @@ impl LogMdWriter {
             buf.push_str("> Append-only activity timeline. Rotates at 2000 lines.\n\n");
         }
 
-        let ts: DateTime<Utc> = DateTime::<Utc>::from_timestamp(entry.timestamp_utc, 0)
-            .unwrap_or_else(Utc::now);
+        let ts: DateTime<Utc> =
+            DateTime::<Utc>::from_timestamp(entry.timestamp_utc, 0).unwrap_or_else(Utc::now);
         buf.push_str(&format!(
             "## [{ts}] {action} | {summary}\n",
             ts = ts.format("%Y-%m-%d %H:%M:%SZ"),
@@ -93,9 +95,7 @@ impl LogMdWriter {
             .await
             .map_err(|e| AlephError::other(format!("rotate log: {e}")))?;
 
-        let header = format!(
-            "# Aleph Wiki Log\n\n<!-- continued from {new_name} -->\n\n"
-        );
+        let header = format!("# Aleph Wiki Log\n\n<!-- continued from {new_name} -->\n\n");
         tokio::fs::write(self.log_path(), header)
             .await
             .map_err(|e| AlephError::other(format!("write new log: {e}")))?;
@@ -122,9 +122,7 @@ impl LogMdWriter {
 
 fn sanitize_single_line(s: &str) -> String {
     // Replace \r\n as a unit first, then lone \r or \n, then collapse runs of spaces.
-    let replaced = s
-        .replace("\r\n", " ")
-        .replace(['\n', '\r'], " ");
+    let replaced = s.replace("\r\n", " ").replace(['\n', '\r'], " ");
     // Collapse multiple spaces into one.
     let mut result = String::with_capacity(replaced.len());
     let mut prev_space = false;
@@ -159,7 +157,9 @@ mod tests {
     async fn first_append_creates_header_and_entry() {
         let dir = tempfile::tempdir().unwrap();
         let w = LogMdWriter::new(dir.path());
-        w.append(&entry(LogAction::Bootstrap, "init")).await.unwrap();
+        w.append(&entry(LogAction::Bootstrap, "init"))
+            .await
+            .unwrap();
         let body = tokio::fs::read_to_string(dir.path().join("log.md"))
             .await
             .unwrap();
@@ -172,7 +172,9 @@ mod tests {
     async fn multiline_summary_sanitised() {
         let dir = tempfile::tempdir().unwrap();
         let w = LogMdWriter::new(dir.path());
-        w.append(&entry(LogAction::Ingest, "a\nb\r\nc")).await.unwrap();
+        w.append(&entry(LogAction::Ingest, "a\nb\r\nc"))
+            .await
+            .unwrap();
         let body = tokio::fs::read_to_string(dir.path().join("log.md"))
             .await
             .unwrap();
@@ -185,7 +187,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let w = LogMdWriter::new(dir.path());
         for i in 0..5 {
-            w.append(&entry(LogAction::Ingest, &format!("#{i}"))).await.unwrap();
+            w.append(&entry(LogAction::Ingest, &format!("#{i}")))
+                .await
+                .unwrap();
         }
         let tail = w.tail(3).await.unwrap();
         assert!(tail.contains("#4"));
@@ -196,7 +200,9 @@ mod tests {
     async fn rotate_when_over_threshold() {
         let dir = tempfile::tempdir().unwrap();
         let big = "line\n".repeat(LOG_ROTATE_LINES + 5);
-        tokio::fs::write(dir.path().join("log.md"), big).await.unwrap();
+        tokio::fs::write(dir.path().join("log.md"), big)
+            .await
+            .unwrap();
         let w = LogMdWriter::new(dir.path());
         let rotated = w.rotate_if_needed().await.unwrap();
         assert!(rotated);

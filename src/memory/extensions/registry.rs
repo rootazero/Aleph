@@ -327,7 +327,10 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(decision, CaptureDecision::Block { .. }));
-        assert_eq!(raw.content, "hi", "content must not be modified after Block");
+        assert_eq!(
+            raw.content, "hi",
+            "content must not be modified after Block"
+        );
     }
 
     #[tokio::test]

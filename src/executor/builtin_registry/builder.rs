@@ -772,8 +772,10 @@ impl BuiltinToolRegistry {
                 .current_agent_id
                 .clone()
                 .unwrap_or_else(|| "main".to_string());
-            let mut tool =
-                crate::builtin_tools::session_complete::SessionCompleteTool::new(db.clone(), agent_id);
+            let mut tool = crate::builtin_tools::session_complete::SessionCompleteTool::new(
+                db.clone(),
+                agent_id,
+            );
             if let Some(ref reg) = config.capture_registry {
                 tool = tool.with_capture_registry(std::sync::Arc::clone(reg));
             }
@@ -809,8 +811,7 @@ impl BuiltinToolRegistry {
                 .current_agent_id
                 .clone()
                 .unwrap_or_else(|| "main".to_string());
-            let tool =
-                crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
+            let tool = crate::builtin_tools::memory_reflect::MemoryReflectTool::new(agent_id);
 
             // Register tool schema only when retrieval tools are exposed
             if expose_retrieval_tools {

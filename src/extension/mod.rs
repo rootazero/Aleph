@@ -170,7 +170,9 @@ pub struct ExtensionManager {
     /// section are auto-registered as `McpMemoryExtension` entries.
     /// Wrapped in RwLock so it can be injected after construction (the manager
     /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
-    memory_registry: std::sync::RwLock<Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>>,
+    memory_registry: std::sync::RwLock<
+        Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    >,
 }
 
 impl ExtensionManager {
@@ -217,7 +219,10 @@ impl ExtensionManager {
         self,
         registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
-        *self.memory_registry.write().unwrap_or_else(|e| e.into_inner()) = Some(registry);
+        *self
+            .memory_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
         self
     }
 
@@ -230,7 +235,10 @@ impl ExtensionManager {
         &self,
         registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) {
-        *self.memory_registry.write().unwrap_or_else(|e| e.into_inner()) = Some(registry);
+        *self
+            .memory_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────

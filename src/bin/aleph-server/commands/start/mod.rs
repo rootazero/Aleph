@@ -351,7 +351,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // Notify user if old LanceDB data directory exists
         let lance_path = data_dir.join("memory.lance");
         if lance_path.exists() {
-            println!("  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}", lance_path, lance_path);
+            println!(
+                "  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}",
+                lance_path, lance_path
+            );
         }
 
         match alephcore::memory::store::SqliteMemoryBackend::new(&db_path) {
@@ -376,8 +379,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Arc::try_unwrap(session_manager)
             .unwrap_or_else(|_| panic!("session_manager has no other owners at this point"))
             .with_raw_memory_writer(
-                memory_db.clone()
-                    as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
             ),
     );
 
@@ -492,10 +494,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Build router from config-driven bindings
     let router = {
-        let mut r = AgentRouter::from_bindings(
-            loaded_app_config.bindings.clone(),
-            &default_agent_id,
-        );
+        let mut r =
+            AgentRouter::from_bindings(loaded_app_config.bindings.clone(), &default_agent_id);
         r.set_session_manager(session_manager.clone());
         Arc::new(r)
     };
@@ -740,8 +740,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let db = memory_db.clone();
         let agent_id = default_agent_id.clone();
         tokio::spawn(async move {
-            let memory_dir = alephcore::utils::paths::get_note_memory_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("aleph").join("memory").join("note"));
+            let memory_dir = alephcore::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+                std::env::temp_dir()
+                    .join("aleph")
+                    .join("memory")
+                    .join("note")
+            });
             tracing::info!(dir = %memory_dir.display(), agent = %agent_id, "Rebuilding note index");
             let indexer = alephcore::memory::notes::NoteIndexer::new(memory_dir, db);
             match indexer.full_rebuild(&agent_id).await {
@@ -839,10 +843,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 9. Create A2ASubAgent and refresh cached names for can_handle
                 // Spec 1 G2: wire raw-memory writer so delegation hook fires when execute() is called.
                 let _a2a_sub_agent = Arc::new(
-                    A2ASubAgent::new(smart_router, client_pool).with_raw_memory_writer(
-                        memory_db.clone()
-                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
-                    ),
+                    A2ASubAgent::new(smart_router, client_pool)
+                        .with_raw_memory_writer(memory_db.clone()
+                            as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
                 );
                 _a2a_sub_agent.refresh_agent_names().await;
 

@@ -1034,10 +1034,7 @@ mod spec1_tests {
 
     #[async_trait::async_trait]
     impl RawMemoryStore for FakeWriter {
-        async fn insert_raw_memory(
-            &self,
-            raw: &RawMemory,
-        ) -> Result<(), crate::error::AlephError> {
+        async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), crate::error::AlephError> {
             self.0.lock().unwrap().push(raw.clone());
             Ok(())
         }

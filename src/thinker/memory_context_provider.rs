@@ -292,7 +292,6 @@ impl MemoryContextProvider {
         }
         Ok(Some(UnifiedMessage::user(rendered)))
     }
-
 }
 
 #[cfg(test)]
@@ -302,9 +301,8 @@ mod spec3_tests {
 
     #[tokio::test]
     async fn tools_mode_returns_none_regardless_of_envelope() {
-        let provider = MemoryContextProvider::new_for_test_empty_envelope(
-            MemoryInjectionMode::Tools,
-        );
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
         let msg = provider
             .build_memory_user_message("agent-1", "any query")
             .await
@@ -314,9 +312,8 @@ mod spec3_tests {
 
     #[tokio::test]
     async fn context_mode_with_empty_envelope_returns_none() {
-        let provider = MemoryContextProvider::new_for_test_empty_envelope(
-            MemoryInjectionMode::Context,
-        );
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context);
         let msg = provider
             .build_memory_user_message("agent-1", "any query")
             .await
@@ -329,9 +326,8 @@ mod spec3_tests {
 
     #[tokio::test]
     async fn hybrid_mode_with_empty_envelope_returns_none() {
-        let provider = MemoryContextProvider::new_for_test_empty_envelope(
-            MemoryInjectionMode::Hybrid,
-        );
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
         let msg = provider
             .build_memory_user_message("agent-1", "any query")
             .await
@@ -362,19 +358,15 @@ mod spec3_tests {
             }
         }
 
-        let provider = MemoryContextProvider::new_for_test_empty_envelope(
-            MemoryInjectionMode::Hybrid,
-        );
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
         let rec = Arc::new(Recorder(Mutex::new(0)));
         let mut reg = MemoryExtensionRegistry::new();
         reg.register(rec.clone());
         let provider = provider.with_extensions(Arc::new(reg));
 
         // Empty envelope → still invokes on_retrieve before the emptiness check.
-        let _ = provider
-            .build_memory_user_message("a1", "q")
-            .await
-            .unwrap();
+        let _ = provider.build_memory_user_message("a1", "q").await.unwrap();
         assert_eq!(*rec.0.lock().unwrap(), 1, "on_retrieve must be dispatched");
     }
 
@@ -402,18 +394,14 @@ mod spec3_tests {
             }
         }
 
-        let provider = MemoryContextProvider::new_for_test_empty_envelope(
-            MemoryInjectionMode::Tools,
-        );
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
         let rec = Arc::new(Recorder(Mutex::new(0)));
         let mut reg = MemoryExtensionRegistry::new();
         reg.register(rec.clone());
         let provider = provider.with_extensions(Arc::new(reg));
 
-        let out = provider
-            .build_memory_user_message("a1", "q")
-            .await
-            .unwrap();
+        let out = provider.build_memory_user_message("a1", "q").await.unwrap();
         assert!(out.is_none());
         assert_eq!(
             *rec.0.lock().unwrap(),
@@ -422,4 +410,3 @@ mod spec3_tests {
         );
     }
 }
-

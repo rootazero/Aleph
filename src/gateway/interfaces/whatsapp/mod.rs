@@ -434,16 +434,18 @@ impl Channel for WhatsAppChannel {
             }
 
             // 6. Create reaction handler if enabled
-            let reaction_handler = if !matches!(self.config.reactions.level, reactions::ReactionLevel::Off) {
-                let runtime: Arc<dyn WhatsAppRuntime> = rpc_client.clone() as Arc<dyn WhatsAppRuntime>;
-                Some(ReactionHandler::new(
-                    self.config.reactions.level,
-                    self.config.reactions.ack.clone(),
-                    runtime,
-                ))
-            } else {
-                None
-            };
+            let reaction_handler =
+                if !matches!(self.config.reactions.level, reactions::ReactionLevel::Off) {
+                    let runtime: Arc<dyn WhatsAppRuntime> =
+                        rpc_client.clone() as Arc<dyn WhatsAppRuntime>;
+                    Some(ReactionHandler::new(
+                        self.config.reactions.level,
+                        self.config.reactions.ack.clone(),
+                        runtime,
+                    ))
+                } else {
+                    None
+                };
 
             // 7. Spawn event loop
             let (shutdown_tx, shutdown_rx) = oneshot::channel();

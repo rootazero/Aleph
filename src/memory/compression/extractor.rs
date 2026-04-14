@@ -262,9 +262,7 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
             .process(RequestPayload::new(&msgs).with_system(Some(&system_prompt)))
             .await
             .map_err(|e| {
-                AlephError::other(format!(
-                    "Source-aware note extraction LLM call failed: {e}"
-                ))
+                AlephError::other(format!("Source-aware note extraction LLM call failed: {e}"))
             })?;
 
         let text = response.text_content();
@@ -283,9 +281,7 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
 
         serde_json::from_value(json_value).map_err(|e| {
             warn!("Failed to parse source-aware note extraction JSON: {e}");
-            AlephError::other(format!(
-                "Failed to parse source-aware note extraction: {e}"
-            ))
+            AlephError::other(format!("Failed to parse source-aware note extraction: {e}"))
         })
     }
 

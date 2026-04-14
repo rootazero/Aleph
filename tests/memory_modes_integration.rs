@@ -19,7 +19,6 @@
 use std::sync::Arc;
 
 use alephcore::executor::{BuiltinToolConfig, BuiltinToolRegistry};
-use alephcore::MemoryInjectionMode;
 use alephcore::memory::assembler::{HybridAssembler, UserProfileLoader};
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::{KnowledgeNote, NoteIndexer};
@@ -27,6 +26,7 @@ use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::store::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::memory::EmbeddingProvider;
 use alephcore::thinker::memory_context_provider::{MemoryContextConfig, MemoryContextProvider};
+use alephcore::MemoryInjectionMode;
 use alephcore::{AlephError, AssemblerConfig};
 use tempfile::tempdir;
 
@@ -86,7 +86,11 @@ fn test_assembler_config() -> AssemblerConfig {
 
 async fn build_pipeline(
     mode: MemoryInjectionMode,
-) -> (MemoryContextProvider, BuiltinToolRegistry, tempfile::TempDir) {
+) -> (
+    MemoryContextProvider,
+    BuiltinToolRegistry,
+    tempfile::TempDir,
+) {
     let tmp = tempdir().unwrap();
 
     // Single DB file for all memory tables.
@@ -130,7 +134,8 @@ async fn build_pipeline(
             Err(AlephError::config("NoopReranker".to_string()))
         }
     }
-    let reranker = Arc::new(NoopReranker) as Arc<dyn alephcore::memory::assembler::hybrid::LlmReranker>;
+    let reranker =
+        Arc::new(NoopReranker) as Arc<dyn alephcore::memory::assembler::hybrid::LlmReranker>;
 
     // HybridAssembler.
     let assembler: Arc<dyn alephcore::memory::assembler::WorkingMemoryAssembler> =
@@ -154,7 +159,10 @@ async fn build_pipeline(
         updated_at: 1_700_000_000,
         content_hash: String::new(),
     };
-    indexer.write_note("agent-test", "wiki", &note).await.unwrap();
+    indexer
+        .write_note("agent-test", "wiki", &note)
+        .await
+        .unwrap();
     // Full-rebuild so the note enters the SQLite FTS + vec index.
     indexer.full_rebuild("agent-test").await.unwrap();
 

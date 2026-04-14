@@ -12,12 +12,12 @@
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::types::{AuthorInfo, ConfigUiHint, PluginManifest};
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
-use crate::memory::extensions::manifest::MemoryManifestSection;
 use crate::extension::runtime::wasm::{
     CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
     SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
 };
 use crate::extension::types::PluginKind;
+use crate::memory::extensions::manifest::MemoryManifestSection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -630,7 +630,10 @@ hooks = ["on_retrieve"]
 priority = 50
 "#;
         let parsed: AlephPluginToml = toml::from_str(toml_str).unwrap();
-        let mem = parsed.memory.as_ref().expect("memory section should be present");
+        let mem = parsed
+            .memory
+            .as_ref()
+            .expect("memory section should be present");
         assert_eq!(mem.hooks.len(), 1);
         assert_eq!(mem.hooks[0], MemoryHook::OnRetrieve);
         assert_eq!(mem.priority, 50);

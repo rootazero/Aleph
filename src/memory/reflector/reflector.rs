@@ -22,9 +22,7 @@ const DEFAULT_BUDGET_TOKENS: u32 = 4096;
 /// Async callable that takes a [`SignalRow`] and persists it. The reflector
 /// stays decoupled from concrete storage via this type.
 pub type RecallWriter = Arc<
-    dyn Fn(SignalRow) -> Pin<Box<dyn Future<Output = Result<(), AlephError>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(SignalRow) -> Pin<Box<dyn Future<Output = Result<(), AlephError>> + Send>> + Send + Sync,
 >;
 
 // ---------------------------------------------------------------------------
@@ -78,11 +76,7 @@ impl MemoryReflector {
     ///
     /// Returns immediately with a stub when no relevant memories are found (empty-packet
     /// short-circuit). For non-empty envelopes the full LLM synthesis path runs.
-    pub async fn reflect(
-        &self,
-        query: &str,
-        opts: ReflectOpts,
-    ) -> Result<Synthesis, AlephError> {
+    pub async fn reflect(&self, query: &str, opts: ReflectOpts) -> Result<Synthesis, AlephError> {
         let budget = AssemblyBudget {
             total_tokens: opts
                 .max_tokens
@@ -92,12 +86,7 @@ impl MemoryReflector {
 
         let envelope = self
             .assembler
-            .assemble(
-                query,
-                &opts.agent_id,
-                opts.session_id.as_deref(),
-                budget,
-            )
+            .assemble(query, &opts.agent_id, opts.session_id.as_deref(), budget)
             .await?;
 
         // Check emptiness: all slots must have zero items.
@@ -120,9 +109,7 @@ impl MemoryReflector {
             let writer = writer.clone();
             async move { writer(row).await }
         };
-        if let Err(e) =
-            record_reflect_signals(record, query, &ctx.note_lookup, &opts).await
-        {
+        if let Err(e) = record_reflect_signals(record, query, &ctx.note_lookup, &opts).await {
             tracing::warn!("reflector: failed to write recall_signals: {e}");
         }
 
@@ -148,8 +135,8 @@ impl MemoryReflector {
         let text = response.text_content();
 
         // Parse JSON → LlmSynthesis; on failure fall back to text-only.
-        let parsed: Option<LlmSynthesis> = extract_json_robust(&text)
-            .and_then(|v| serde_json::from_value::<LlmSynthesis>(v).ok());
+        let parsed: Option<LlmSynthesis> =
+            extract_json_robust(&text).and_then(|v| serde_json::from_value::<LlmSynthesis>(v).ok());
 
         let Some(llm) = parsed else {
             warn!("reflector: LLM response was not parseable JSON; returning text-only synthesis");
@@ -242,8 +229,7 @@ mod llm_path_tests {
         assert_eq!(synthesis.sources.len(), 1);
         assert_eq!(synthesis.sources[0].path, "wiki/rust");
         assert_eq!(
-            synthesis.sources[0].title,
-            "Rust Lang",
+            synthesis.sources[0].title, "Rust Lang",
             "title must be overlaid from lookup, not from LLM"
         );
         assert!((synthesis.sources[0].relevance - 0.91).abs() < 1e-6);

@@ -67,10 +67,7 @@ impl MemoryReflectTool {
     }
 
     /// Attach a shared session-id handle (written by the execution engine).
-    pub fn with_session_handle(
-        mut self,
-        handle: Arc<tokio::sync::RwLock<String>>,
-    ) -> Self {
+    pub fn with_session_handle(mut self, handle: Arc<tokio::sync::RwLock<String>>) -> Self {
         self.session_id = Some(handle);
         self
     }
@@ -93,8 +90,7 @@ impl MemoryReflectTool {
 #[async_trait]
 impl AlephTool for MemoryReflectTool {
     const NAME: &'static str = "memory_reflect";
-    const DESCRIPTION: &'static str =
-        "Synthesise a coherent answer from your long-term memory. \
+    const DESCRIPTION: &'static str = "Synthesise a coherent answer from your long-term memory. \
          Use this when you want a distilled response (vs memory_search, which returns raw hits). \
          Returns answer text + cited note paths.";
 
@@ -151,7 +147,9 @@ mod tests {
 
     #[test]
     fn tool_description_mentions_synthesis() {
-        assert!(MemoryReflectTool::DESCRIPTION.to_lowercase().contains("synthesi"));
+        assert!(MemoryReflectTool::DESCRIPTION
+            .to_lowercase()
+            .contains("synthesi"));
         assert!(MemoryReflectTool::DESCRIPTION.contains("memory_search"));
     }
 

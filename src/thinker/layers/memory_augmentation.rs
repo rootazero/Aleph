@@ -122,10 +122,8 @@ mod tests {
         fn injects_new_path_xml() {
             let layer = MemoryAugmentationLayer;
             let config = PromptConfig::default();
-            let xml =
-                "<memory><fact>User prefers Rust</fact></memory>".to_string();
-            let input =
-                LayerInput::basic(&config, &[]).with_memory_user_message(xml.clone());
+            let xml = "<memory><fact>User prefers Rust</fact></memory>".to_string();
+            let input = LayerInput::basic(&config, &[]).with_memory_user_message(xml.clone());
             let mut out = String::new();
             layer.inject(&mut out, &input);
             assert_eq!(out, xml);

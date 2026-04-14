@@ -9,12 +9,12 @@
 
 #![cfg(feature = "test-helpers")]
 
+use alephcore::memory::extensions::traits::MemoryExtension;
+use alephcore::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx};
 use alephcore::memory::extensions::{
     insert_with_capture_filter, EnvelopeRelevanceFloorExtension, MemoryExtensionRegistry,
     MemoryProducerScheduler,
 };
-use alephcore::memory::extensions::traits::MemoryExtension;
-use alephcore::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx};
 use alephcore::memory::namespace::NamespaceScope;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::AlephError;
@@ -53,8 +53,7 @@ impl MemoryExtension for StubProducer {
     async fn produce(&self, _ctx: &ProduceCtx) -> Result<Vec<RawMemory>, AlephError> {
         Ok((0..self.0)
             .map(|i| {
-                RawMemory::new(format!("p{i}"), RawMemorySource::Transcript)
-                    .with_agent("int-agent")
+                RawMemory::new(format!("p{i}"), RawMemorySource::Transcript).with_agent("int-agent")
             })
             .collect())
     }

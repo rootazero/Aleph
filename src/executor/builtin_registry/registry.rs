@@ -209,8 +209,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_complete_tool:
         Option<crate::builtin_tools::session_complete::SessionCompleteTool>,
     /// Memory-reflect tool (optional - requires MemoryReflector, injected by Task 8)
-    pub(crate) memory_reflect_tool:
-        Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
+    pub(crate) memory_reflect_tool: Option<crate::builtin_tools::memory_reflect::MemoryReflectTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,

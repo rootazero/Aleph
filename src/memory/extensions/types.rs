@@ -55,7 +55,9 @@ mod tests {
     #[test]
     fn capture_decision_round_trips_json() {
         let allow = CaptureDecision::Allow;
-        let blk = CaptureDecision::Block { reason: "pii".into() };
+        let blk = CaptureDecision::Block {
+            reason: "pii".into(),
+        };
         for d in [allow, blk] {
             let s = serde_json::to_string(&d).unwrap();
             let back: CaptureDecision = serde_json::from_str(&s).unwrap();

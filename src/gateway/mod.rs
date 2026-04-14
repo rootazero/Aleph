@@ -83,6 +83,7 @@ pub mod execution_adapter;
 pub mod hello_snapshot;
 pub mod i18n;
 pub mod idempotency;
+pub mod identity_loader;
 pub mod inter_agent_policy;
 pub mod lane;
 pub mod media;
@@ -97,7 +98,6 @@ pub mod tailscale;
 pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
-pub mod identity_loader;
 pub use event_bus::GatewayEventBus;
 pub use event_emitter::{
     DynEventEmitter, EventEmitter, GatewayEventEmitter, NoOpEventEmitter, OutputMode, StreamEvent,

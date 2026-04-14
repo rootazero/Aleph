@@ -34,8 +34,8 @@ pub mod note_retrieval;
 pub mod notes;
 pub mod query_expander;
 pub mod reembed;
-pub mod rerank;
 pub mod reflector;
+pub mod rerank;
 pub mod reranker;
 pub mod retrieval;
 pub mod ripple;
@@ -44,8 +44,8 @@ pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_resume;
 pub mod store;
-pub mod wiki;
 pub mod transcript_indexer;
+pub mod wiki;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]

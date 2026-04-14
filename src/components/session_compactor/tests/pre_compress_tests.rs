@@ -1,7 +1,9 @@
 //! Tests for G1 pre-compress hook: RawMemory emission before session drain.
 
 use crate::components::session_compactor::SessionCompactor;
-use crate::components::types::{ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart};
+use crate::components::types::{
+    ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart,
+};
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use async_trait::async_trait;
 use serde_json::json;
@@ -36,10 +38,7 @@ impl RawMemoryStore for FakeWriter {
         Ok(0)
     }
 
-    async fn count_unprocessed(
-        &self,
-        _agent_id: &str,
-    ) -> Result<usize, crate::error::AlephError> {
+    async fn count_unprocessed(&self, _agent_id: &str) -> Result<usize, crate::error::AlephError> {
         Ok(0)
     }
 

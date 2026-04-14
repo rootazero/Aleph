@@ -169,7 +169,9 @@ mod tests {
             for (k, v) in canned {
                 m.insert(k.to_string(), v);
             }
-            Self { canned: Mutex::new(m) }
+            Self {
+                canned: Mutex::new(m),
+            }
         }
     }
 
@@ -237,10 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_capture_empty_response_allows() {
-        let caller = Arc::new(CannedCaller::new(vec![(
-            "memory.on_capture",
-            json!({}),
-        )]));
+        let caller = Arc::new(CannedCaller::new(vec![("memory.on_capture", json!({}))]));
         let ext = McpMemoryExtension::new("t", caller);
         let mut r = raw();
         let ctx = CaptureCtx {
@@ -255,10 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_empty_response_returns_empty() {
-        let caller = Arc::new(CannedCaller::new(vec![(
-            "memory.produce",
-            json!({}),
-        )]));
+        let caller = Arc::new(CannedCaller::new(vec![("memory.produce", json!({}))]));
         let ext = McpMemoryExtension::new("t", caller);
         let ctx = ProduceCtx {
             agent_id: "a".into(),
@@ -272,10 +268,7 @@ mod tests {
     #[tokio::test]
     async fn on_retrieve_empty_additions_is_noop() {
         let mut env = empty_envelope();
-        let caller = Arc::new(CannedCaller::new(vec![(
-            "memory.on_retrieve",
-            json!({}),
-        )]));
+        let caller = Arc::new(CannedCaller::new(vec![("memory.on_retrieve", json!({}))]));
         let ext = McpMemoryExtension::new("t", caller);
         let ctx = RetrieveCtx {
             agent_id: "a".into(),

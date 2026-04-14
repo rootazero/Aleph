@@ -19,7 +19,9 @@ pub struct EnvelopeRelevanceFloorExtension {
 
 impl EnvelopeRelevanceFloorExtension {
     pub fn new(floor: f32) -> Self {
-        Self { floor: floor.clamp(0.0, 1.0) }
+        Self {
+            floor: floor.clamp(0.0, 1.0),
+        }
     }
 }
 

@@ -24,10 +24,7 @@ pub struct MemoryProducerScheduler {
 }
 
 impl MemoryProducerScheduler {
-    pub fn new(
-        registry: Arc<MemoryExtensionRegistry>,
-        raw_store: Arc<dyn RawMemoryStore>,
-    ) -> Self {
+    pub fn new(registry: Arc<MemoryExtensionRegistry>, raw_store: Arc<dyn RawMemoryStore>) -> Self {
         Self {
             registry,
             raw_store,
@@ -148,8 +145,7 @@ mod tests {
         async fn produce(&self, _ctx: &ProduceCtx) -> Result<Vec<RawMemory>, AlephError> {
             Ok((0..self.0)
                 .map(|i| {
-                    RawMemory::new(format!("m{i}"), RawMemorySource::Transcript)
-                        .with_agent("a1")
+                    RawMemory::new(format!("m{i}"), RawMemorySource::Transcript).with_agent("a1")
                 })
                 .collect())
         }

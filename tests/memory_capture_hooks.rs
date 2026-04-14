@@ -35,10 +35,7 @@ impl EmbeddingProvider for NoopEmbeddingProvider {
         Ok(vec![0.0; 256])
     }
 
-    async fn embed_batch(
-        &self,
-        texts: &[&str],
-    ) -> Result<Vec<Vec<f32>>, AlephError> {
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
         Ok(texts.iter().map(|_| vec![0.0; 256]).collect())
     }
 
@@ -76,7 +73,8 @@ async fn build_service_with_recording_provider(
     let database: Arc<SqliteMemoryBackend> = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
 
     let notes_db_path = temp_dir.path().join("notes.db");
-    let notes_backend: Arc<SqliteMemoryBackend> = Arc::new(SqliteMemoryBackend::new(&notes_db_path).unwrap());
+    let notes_backend: Arc<SqliteMemoryBackend> =
+        Arc::new(SqliteMemoryBackend::new(&notes_db_path).unwrap());
     let memory_dir = temp_dir.path().join("memory");
     let indexer: NoteIndexer<SqliteMemoryBackend> = NoteIndexer::new(memory_dir, notes_backend);
 
@@ -88,12 +86,8 @@ async fn build_service_with_recording_provider(
 
     let config = CompressionConfig::default();
 
-    let service = CompressionService::new(
-        database.clone(),
-        Arc::new(mock_provider),
-        embedder,
-        config,
-    );
+    let service =
+        CompressionService::new(database.clone(), Arc::new(mock_provider), embedder, config);
 
     (service, recorded_prompt, database, indexer, temp_dir)
 }
@@ -131,7 +125,8 @@ async fn pre_compress_source_uses_rescue_prompt() {
 
 #[tokio::test]
 async fn delegation_source_uses_lesson_prompt() {
-    let canned = r#"{"updates":[{"note_path":"lesson/x","action":"create","new_facts":["f"],"links":[]}]}"#;
+    let canned =
+        r#"{"updates":[{"note_path":"lesson/x","action":"create","new_facts":["f"],"links":[]}]}"#;
     let (svc, recorded_prompt, raw_store, indexer, _temp_dir) =
         build_service_with_recording_provider(canned).await;
 
@@ -181,7 +176,8 @@ async fn session_end_disconnect_uses_digest_prompt() {
 
 #[tokio::test]
 async fn session_end_task_done_uses_retro_prompt() {
-    let canned = r#"{"updates":[{"note_path":"lesson/x","action":"create","new_facts":["f"],"links":[]}]}"#;
+    let canned =
+        r#"{"updates":[{"note_path":"lesson/x","action":"create","new_facts":["f"],"links":[]}]}"#;
     let (svc, recorded_prompt, raw_store, indexer, _temp_dir) =
         build_service_with_recording_provider(canned).await;
 

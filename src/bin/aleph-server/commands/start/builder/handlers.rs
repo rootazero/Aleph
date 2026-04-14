@@ -773,7 +773,13 @@ pub(in crate::commands::start) fn init_memory_context_provider(
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
-    init_memory_context_provider_with_extensions(memory_db, embedder, provider, assembler_config, None)
+    init_memory_context_provider_with_extensions(
+        memory_db,
+        embedder,
+        provider,
+        assembler_config,
+        None,
+    )
 }
 
 /// Like `init_memory_context_provider` but wires an optional extension registry.

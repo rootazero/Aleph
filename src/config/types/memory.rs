@@ -832,9 +832,18 @@ mod spec3_tests {
 
     #[test]
     fn injection_mode_serialises_lowercase() {
-        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Context).unwrap(), "\"context\"");
-        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Tools).unwrap(), "\"tools\"");
-        assert_eq!(serde_json::to_string(&MemoryInjectionMode::Hybrid).unwrap(), "\"hybrid\"");
+        assert_eq!(
+            serde_json::to_string(&MemoryInjectionMode::Context).unwrap(),
+            "\"context\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryInjectionMode::Tools).unwrap(),
+            "\"tools\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MemoryInjectionMode::Hybrid).unwrap(),
+            "\"hybrid\""
+        );
     }
 
     #[test]

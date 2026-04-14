@@ -10,7 +10,9 @@ use crate::error::{AlephError, Result};
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason};
+use crate::memory::store::raw_memory::{
+    RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
+};
 use crate::memory::store::MemoryBackend;
 use crate::tools::AlephTool;
 
@@ -70,10 +72,7 @@ impl SessionCompleteTool {
     }
 
     /// Attach a shared session-id handle (written by the execution engine).
-    pub fn with_session_handle(
-        mut self,
-        handle: Arc<tokio::sync::RwLock<String>>,
-    ) -> Self {
+    pub fn with_session_handle(mut self, handle: Arc<tokio::sync::RwLock<String>>) -> Self {
         self.session_id = Some(handle);
         self
     }
@@ -91,7 +90,10 @@ impl SessionCompleteTool {
     /// Read the current session id (non-blocking best-effort).
     fn current_session_id(&self) -> Option<String> {
         self.session_id.as_ref().and_then(|h| {
-            h.try_read().ok().map(|g| g.clone()).filter(|s| !s.is_empty())
+            h.try_read()
+                .ok()
+                .map(|g| g.clone())
+                .filter(|s| !s.is_empty())
         })
     }
 }
