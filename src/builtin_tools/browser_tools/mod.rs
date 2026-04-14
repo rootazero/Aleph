@@ -40,7 +40,7 @@ async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserE
                     return Some(id_str.to_string());
                 }
             }
-            // Playwright MCP format: "Tab N: URL"
+            // Playwright CLI format: "Tab N: URL"
             if let Some(rest) = line.strip_prefix("Tab ") {
                 if let Some(colon_pos) = rest.find(": ") {
                     let id_str = rest.get(..colon_pos)?.trim();

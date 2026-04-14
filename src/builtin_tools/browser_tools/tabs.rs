@@ -108,7 +108,7 @@ impl AlephTool for BrowserTabsTool {
                                     });
                                 }
                             }
-                            // Playwright MCP: "Tab N: URL"
+                            // Playwright CLI: "Tab N: URL"
                             if let Some(rest) = line.strip_prefix("Tab ") {
                                 if let Some(colon_pos) = rest.find(": ") {
                                     let id_str = rest.get(..colon_pos)?.trim();
@@ -137,7 +137,7 @@ impl AlephTool for BrowserTabsTool {
                 }),
             },
             TabAction::Switch { tab_id } => {
-                // Neither Chrome MCP nor Playwright MCP has explicit tab switch.
+                // Neither Chrome DevTools MCP nor Playwright CLI has explicit tab switch.
                 // Return success as a no-op acknowledgement.
                 Ok(BrowserTabsOutput {
                     success: true,

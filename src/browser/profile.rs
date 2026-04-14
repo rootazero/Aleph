@@ -22,7 +22,7 @@ pub enum BrowserType {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserDriver {
-    /// Aleph launches and manages a dedicated browser instance (chromiumoxide).
+    /// Aleph launches and manages a dedicated browser instance (Playwright CLI managed via fnm).
     #[default]
     Managed,
     /// Attach to user's running Chrome via Chrome DevTools MCP.
