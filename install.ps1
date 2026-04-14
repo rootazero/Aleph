@@ -1,5 +1,8 @@
 # One-line installer: irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
 # With version:       $env:ALEPH_VERSION="v0.2.10"; irm ... | iex
+param(
+    [switch]$SkipRuntime
+)
 $ErrorActionPreference = "Stop"
 
 $Repo = "rootazero/Aleph"
@@ -150,6 +153,30 @@ function Install-AlephService {
     Write-Host "  Stop:    Stop-ScheduledTask -TaskName $TaskName"
     Write-Host "  Start:   Start-ScheduledTask -TaskName $TaskName"
     Write-Host "  Remove:  Unregister-ScheduledTask -TaskName $TaskName"
+}
+
+# ── Bootstrap runtime dependencies ───────────────────────────────
+
+$RuntimeSkip = $SkipRuntime.IsPresent -or ($env:ALEPH_SKIP_RUNTIME -eq "1")
+
+if ($RuntimeSkip) {
+    Write-Host ""
+    Write-Host "Skipping runtime bootstrap (-SkipRuntime or `$env:ALEPH_SKIP_RUNTIME=1)."
+    Write-Host "Run 'aleph-server bootstrap-runtime' later, or use Panel -> Settings -> Runtime."
+} else {
+    Write-Host ""
+    Write-Host "Bootstrapping runtime dependencies (fnm -> Node LTS -> uv -> @playwright/cli + Chromium)..."
+    Write-Host "(Pass -SkipRuntime or set `$env:ALEPH_SKIP_RUNTIME='1' to skip.)"
+    Write-Host ""
+    $proc = Start-Process -FilePath $InstalledPath `
+        -ArgumentList "bootstrap-runtime", "--best-effort" `
+        -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        Write-Host ""
+        Write-Host "Runtime bootstrap hit errors. Aleph will still install." -ForegroundColor Yellow
+        Write-Host "   Fix and retry via: aleph-server bootstrap-runtime"
+        Write-Host "   Or open Panel -> Settings -> Runtime for GUI."
+    }
 }
 
 # On upgrade: always reinstall service (picks up new binary + start arg)
