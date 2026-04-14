@@ -19,13 +19,23 @@ pub enum PostInstallError {
     RepairFailed,
 }
 
-/// Expand `$HOME` in a template path.
+/// Expand `$HOME` or `%USERPROFILE%` in a template path. On Windows also
+/// rewrites Unix `/bin/python` → `\Scripts\python.exe` and converts forward
+/// slashes to backslashes, so a single template string like
+/// `"$HOME/.aleph/.venv/bin/python"` works cross-platform.
 fn expand_home(template: &str) -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        template.replace("$HOME", &home)
-    } else {
-        template.to_string()
-    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let s = template.replacen("$HOME", &home, 1).replacen("%USERPROFILE%", &home, 1);
+
+    #[cfg(target_os = "windows")]
+    let s = s
+        .replace("/bin/python", r"\Scripts\python.exe")
+        .replace("/bin/", r"\Scripts\")
+        .replace('/', r"\");
+
+    s
 }
 
 /// Run a single post-install action. `bin_path` is the just-installed
@@ -95,7 +105,8 @@ async fn verify_or_repair(
     if expanded.exists() {
         return Ok(());
     }
-    let output = Command::new(bin_path).args(repair).output().await?;
+    let expanded_repair: Vec<String> = repair.iter().map(|a| expand_home(a)).collect();
+    let output = Command::new(bin_path).args(&expanded_repair).output().await?;
     if !output.status.success() {
         return Err(PostInstallError::RepairFailed);
     }
@@ -117,5 +128,72 @@ mod tests {
     fn test_expand_home_no_placeholder() {
         let out = expand_home("/absolute/no/expansion");
         assert_eq!(out, "/absolute/no/expansion");
+    }
+
+    #[test]
+    fn test_expand_home_multiple_placeholders() {
+        std::env::set_var("HOME", "/tmp/fake-home");
+        let out = expand_home("$HOME/a/$HOME/b");
+        assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
+        // Only the first occurrence is replaced — caller should pass templates
+        // with a single $HOME placeholder per arg. Document this contract.
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_verify_or_repair_expands_home_in_repair_args() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        // Write a tiny shell script that creates a file at its first arg.
+        let script_path = dir.path().join("touchit.sh");
+        tokio::fs::write(
+            &script_path,
+            "#!/bin/sh\nmkdir -p \"$(dirname \"$1\")\" && : > \"$1\"\n",
+        )
+        .await
+        .unwrap();
+        let mut perms = tokio::fs::metadata(&script_path).await.unwrap().permissions();
+        perms.set_mode(0o755);
+        tokio::fs::set_permissions(&script_path, perms).await.unwrap();
+
+        // Probe a non-existent path so the repair fires.
+        // repair[0] is the script to run (bin_path), repair[1] is the output
+        // file path passed as $1 to touchit.sh.
+        let action = PostInstallAction::AssetProbe {
+            path: "$HOME/never/exists",
+            repair: &["$HOME/expected_output_file"],
+        };
+
+        // Use touchit.sh as bin_path directly. run() will invoke it with the
+        // $HOME-expanded repair args — so touchit.sh receives the expanded
+        // output path as $1 and creates the file there.
+        let bin = dir.path().join("touchit.sh");
+        let result = run(&action, &bin).await;
+        assert!(result.is_ok(), "repair must succeed: {result:?}");
+
+        let expected_out = dir.path().join("expected_output_file");
+        assert!(
+            tokio::fs::try_exists(&expected_out).await.unwrap(),
+            "expansion should have produced {}",
+            expected_out.display()
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_verify_or_repair_skips_when_path_exists() {
+        // Use /tmp which is guaranteed to exist on Unix — no env-var mutation
+        // needed, so this test is free of HOME races with the other async test.
+        let action = PostInstallAction::AssetProbe {
+            path: "/tmp",
+            repair: &["false"], // would fail if it ran
+        };
+        let sh = PathBuf::from("/bin/sh");
+        let result = run(&action, &sh).await;
+        assert!(result.is_ok());
     }
 }
