@@ -211,6 +211,11 @@ impl<S: NoteStore> NoteIndexer<S> {
                 suggestion: None,
             })?;
 
+        // Sync to SQLite immediately so callers don't have to wait for full_rebuild.
+        let reparsed = KnowledgeNote::from_markdown(&safe_title, &content)
+            .map_err(|e| AlephError::other(format!("reparse after write: {e}")))?;
+        self.store.index_note(&reparsed, agent_id, category).await?;
+
         self.notify_orientation(agent_id, category, &safe_title);
         Ok(path)
     }
@@ -784,5 +789,52 @@ mod wiki_hook_tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "default");
         assert_eq!(calls[0].1, "learning/rust");
+    }
+
+    #[tokio::test]
+    async fn write_note_also_indexes_to_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        let note = KnowledgeNote {
+            title: "rust-async".into(),
+            category: "learning".into(),
+            tags: vec!["rust".into()],
+            facts: vec!["Tokio is the async runtime".into()],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+            content_hash: String::new(),
+        };
+        indexer
+            .write_note("default", "learning", &note)
+            .await
+            .unwrap();
+
+        // Without the fix, list_notes returns [] until full_rebuild runs.
+        let listed = backend.list_notes("default").await.unwrap();
+        assert_eq!(listed.len(), 1, "write_note must also index to SQLite");
+        assert_eq!(listed[0].path, "learning/rust-async");
+    }
+
+    #[tokio::test]
+    async fn append_to_note_also_indexes_to_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        indexer
+            .append_to_note(
+                "default",
+                "learning/rust-async",
+                &vec!["new fact".into()],
+                &vec![],
+            )
+            .await
+            .unwrap();
+        let listed = backend.list_notes("default").await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].path == "learning/rust-async");
     }
 }
