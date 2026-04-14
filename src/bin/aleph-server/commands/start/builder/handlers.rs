@@ -725,6 +725,9 @@ pub(in crate::commands::start) fn init_compression_service(
     command_handler: Option<
         std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
     >,
+    compound_ingestor: Option<
+        std::sync::Arc<dyn alephcore::memory::notes::ingest::CompoundIngestor>,
+    >,
 ) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
@@ -732,6 +735,9 @@ pub(in crate::commands::start) fn init_compression_service(
     let mut service = CompressionService::new(memory_db.clone(), provider, embedder, config);
     if let Some(handler) = command_handler {
         service = service.with_command_handler(handler);
+    }
+    if let Some(ing) = compound_ingestor {
+        service = service.with_compound_ingestor(ing);
     }
     let service = std::sync::Arc::new(service);
 

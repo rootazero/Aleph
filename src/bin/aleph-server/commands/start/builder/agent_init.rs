@@ -1008,6 +1008,40 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             std::sync::Arc<alephcore::memory::compression::CompressionService>,
         > = if let Some(ref emb) = embedder_out {
             default_prov.as_ref().map(|prov| {
+                // Spec 6 T10: construct DefaultCompoundIngestor and inject into CompressionService.
+                let compound_ingestor: Option<
+                    std::sync::Arc<dyn alephcore::memory::notes::ingest::CompoundIngestor>,
+                > = if app_config.memory.compound_ingest.enabled {
+                    use alephcore::memory::notes::ingest::{
+                        ingestor::DefaultCompoundIngestor, retrieve::RelatedBudget,
+                    };
+                    use alephcore::memory::notes::NoteIndexer;
+
+                    let cfg = &app_config.memory.compound_ingest;
+                    let budget = RelatedBudget {
+                        max_related_pages: cfg.max_related_pages,
+                        preview_char_cap: cfg.related_preview_char_cap,
+                        total_byte_cap: cfg.related_total_byte_cap,
+                    };
+                    let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
+                        alephcore::utils::paths::get_note_memory_dir()
+                            .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
+                    });
+                    let indexer =
+                        std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
+                    Some(std::sync::Arc::new(DefaultCompoundIngestor {
+                        store: memory_db.clone(),
+                        indexer,
+                        provider: prov.clone(),
+                        embedder: emb.clone(),
+                        orientation: orientation.clone(),
+                        memory_dir: note_dir,
+                        budget,
+                    }))
+                } else {
+                    None
+                };
+
                 super::init_compression_service(
                     memory_db,
                     prov.clone(),
@@ -1015,6 +1049,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     &app_config.policies.memory.compression,
                     daemon,
                     command_handler.clone(),
+                    compound_ingestor,
                 )
             })
         } else {
