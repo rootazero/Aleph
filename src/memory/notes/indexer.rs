@@ -47,6 +47,7 @@ pub struct IndexStats {
 pub struct NoteIndexer<S: NoteStore> {
     memory_dir: PathBuf,
     store: Arc<S>,
+    wiki: Option<std::sync::Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
@@ -55,7 +56,27 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `memory_dir` should point to `~/.aleph/data/memory/` (the parent of
     /// all agent directories).
     pub fn new(memory_dir: PathBuf, store: Arc<S>) -> Self {
-        Self { memory_dir, store }
+        Self {
+            memory_dir,
+            store,
+            wiki: None,
+        }
+    }
+
+    /// Attach a `WikiOrientation` hook. After every successful disk write,
+    /// `WikiOrientation::invalidate` is called with the affected note path.
+    pub fn with_wiki(
+        mut self,
+        wiki: std::sync::Arc<dyn crate::memory::wiki::orientation::WikiOrientation>,
+    ) -> Self {
+        self.wiki = Some(wiki);
+        self
+    }
+
+    fn notify_wiki(&self, agent_id: &str, category: &str, filename: &str) {
+        if let Some(w) = &self.wiki {
+            w.invalidate(agent_id, &format!("{category}/{filename}"));
+        }
     }
 
     /// Getter for the memory directory.
@@ -190,6 +211,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 suggestion: None,
             })?;
 
+        self.notify_wiki(agent_id, category, &safe_title);
         Ok(path)
     }
 
@@ -273,6 +295,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             })?;
         self.store.index_note(&note, agent_id, category).await?;
 
+        self.notify_wiki(agent_id, category, filename);
         Ok(())
     }
 
@@ -356,6 +379,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         // Index the renamed file
         let _ = self.index_file(agent_id, &category, &new_path).await;
 
+        self.notify_wiki(agent_id, &category, &safe_old);
+        self.notify_wiki(agent_id, &category, &safe_new);
         Ok(())
     }
 }
@@ -665,5 +690,97 @@ mod tests {
         let out = db.get_outgoing_links("other/Linker", AGENT).await.unwrap();
         assert!(out.contains(&"New Name".to_string()));
         assert!(!out.contains(&"Old Name".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod wiki_hook_tests {
+    use super::*;
+    use crate::memory::notes::note::KnowledgeNote;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::memory::wiki::orientation::WikiOrientation;
+    use crate::memory::wiki::types::{IndexStats, LogEntry, OrientationSnapshot, TokenBudget};
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    struct CountingOrient {
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl WikiOrientation for CountingOrient {
+        async fn bootstrap(&self, _a: &str) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn read_snapshot(
+            &self,
+            _a: &str,
+            _b: TokenBudget,
+        ) -> Result<OrientationSnapshot, AlephError> {
+            Ok(OrientationSnapshot {
+                schema_text: String::new(),
+                index_text: String::new(),
+                recent_log_tail: String::new(),
+            })
+        }
+        async fn record_ingest(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_query(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_lint(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_session_end(&self, _a: &str, _e: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn rebuild_index(&self, _a: &str) -> Result<IndexStats, AlephError> {
+            Ok(IndexStats::default())
+        }
+        async fn rotate_log_if_needed(&self, _a: &str) -> Result<bool, AlephError> {
+            Ok(false)
+        }
+        fn invalidate(&self, agent_id: &str, note_path: &str) {
+            self.calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((agent_id.to_string(), note_path.to_string()));
+        }
+    }
+
+    #[tokio::test]
+    async fn write_note_invalidates_wiki() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let orient = Arc::new(CountingOrient {
+            calls: Mutex::new(vec![]),
+        });
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone())
+            .with_wiki(orient.clone() as Arc<dyn WikiOrientation>);
+
+        let note = KnowledgeNote {
+            title: "rust".into(),
+            category: "learning".into(),
+            tags: vec![],
+            facts: vec!["f1".into()],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+            content_hash: String::new(),
+        };
+        indexer
+            .write_note("default", "learning", &note)
+            .await
+            .unwrap();
+
+        let calls = orient
+            .calls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "default");
+        assert_eq!(calls[0].1, "learning/rust");
     }
 }
