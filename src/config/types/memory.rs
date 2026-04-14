@@ -186,6 +186,13 @@ pub struct MemoryConfig {
     /// Wiki orientation injection configuration.
     #[serde(default)]
     pub orientation: OrientationConfig,
+
+    // ========================================
+    // Compound Ingest (Spec 6)
+    // ========================================
+    /// Compound ingest pipeline configuration.
+    #[serde(default)]
+    pub compound_ingest: CompoundIngestConfig,
 }
 
 // =============================================================================
@@ -813,8 +820,69 @@ impl Default for MemoryConfig {
             injection_mode: MemoryInjectionMode::Hybrid,
             // Wiki orientation (Spec 5)
             orientation: OrientationConfig::default(),
+            // Compound ingest (Spec 6)
+            compound_ingest: CompoundIngestConfig::default(),
         }
     }
+}
+
+// =============================================================================
+// CompoundIngestConfig (Memory Evolution Spec 6)
+// =============================================================================
+
+/// Configuration for the compound ingest pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CompoundIngestConfig {
+    #[serde(default = "default_compound_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_max_related_pages")]
+    pub max_related_pages: usize,
+    #[serde(default = "default_related_preview_char_cap")]
+    pub related_preview_char_cap: usize,
+    #[serde(default = "default_related_total_byte_cap")]
+    pub related_total_byte_cap: usize,
+    #[serde(default = "default_replan_on_hash_conflict")]
+    pub replan_on_hash_conflict: u32,
+    #[serde(default = "default_failure_cooldown_seconds")]
+    pub failure_cooldown_seconds: u64,
+    #[serde(default = "default_tx_residue_gc_seconds")]
+    pub tx_residue_gc_seconds: u64,
+}
+
+impl Default for CompoundIngestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_related_pages: 15,
+            related_preview_char_cap: 800,
+            related_total_byte_cap: 12 * 1024,
+            replan_on_hash_conflict: 1,
+            failure_cooldown_seconds: 300,
+            tx_residue_gc_seconds: 3600,
+        }
+    }
+}
+
+fn default_compound_enabled() -> bool {
+    true
+}
+fn default_max_related_pages() -> usize {
+    15
+}
+fn default_related_preview_char_cap() -> usize {
+    800
+}
+fn default_related_total_byte_cap() -> usize {
+    12 * 1024
+}
+fn default_replan_on_hash_conflict() -> u32 {
+    1
+}
+fn default_failure_cooldown_seconds() -> u64 {
+    300
+}
+fn default_tx_residue_gc_seconds() -> u64 {
+    3600
 }
 
 // =============================================================================

@@ -131,6 +131,8 @@ pub struct CompressionService {
     provider_name: String,
     signal_detector: SignalDetector,
     command_handler: Option<Arc<MemoryCommandHandler>>,
+    compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
+    compound_enabled: bool,
 }
 
 impl CompressionService {
@@ -175,6 +177,8 @@ impl CompressionService {
             provider_name,
             signal_detector: SignalDetector::new(),
             command_handler: None,
+            compound_ingestor: None,
+            compound_enabled: false,
         }
     }
 
@@ -184,6 +188,20 @@ impl CompressionService {
     /// event sourcing pipeline instead of direct `insert_fact`.
     pub fn with_command_handler(mut self, handler: Arc<MemoryCommandHandler>) -> Self {
         self.command_handler = Some(handler);
+        self
+    }
+
+    /// Attach a `CompoundIngestor` and enable the compound ingest path.
+    ///
+    /// When set, `compress_to_notes` routes each per-source batch through
+    /// `CompoundIngestor::ingest_batch` instead of the legacy
+    /// `extract_note_updates_for_source` call chain.
+    pub fn with_compound_ingestor(
+        mut self,
+        ing: Arc<dyn crate::memory::notes::ingest::CompoundIngestor>,
+    ) -> Self {
+        self.compound_enabled = true;
+        self.compound_ingestor = Some(ing);
         self
     }
 
@@ -277,6 +295,49 @@ impl CompressionService {
         }
 
         // 4. Extract note updates via LLM — one call per source group (Spec 1).
+        //    When compound_enabled, delegate each source batch to CompoundIngestor
+        //    and skip the legacy accumulation path.
+        if self.compound_enabled {
+            if let Some(ing) = self.compound_ingestor.clone() {
+                match ing.ingest_batch(workspace_id, raw_memories.clone()).await {
+                    Ok(_report) => {
+                        // Fall through to mark_raw_as_processed below.
+                    }
+                    Err(e) => {
+                        tracing::warn!("compound ingest failed: {e}");
+                        // Leave this batch unprocessed; retry next tick.
+                        return Ok(CompressionResult::empty());
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "compound ingest enabled but no ingestor configured; skipping batch"
+                );
+                return Ok(CompressionResult::empty());
+            }
+
+            // Mark raw memories as processed (compound path).
+            let consumed_ids: Vec<String> = raw_memories.iter().map(|r| r.id.clone()).collect();
+            match self.database.mark_raw_as_processed(&consumed_ids).await {
+                Ok(n) => tracing::info!(marked = n, "Marked raw memories as processed (compound)"),
+                Err(e) => tracing::warn!(error = %e, "Failed to mark raw memories as processed"),
+            }
+
+            // Update compression timestamp.
+            let latest_timestamp = raw_memories.iter().map(|r| r.created_at).max().unwrap_or(0);
+            self.database
+                .set_last_compression_timestamp(latest_timestamp)
+                .await?;
+
+            let duration_ms = start.elapsed().as_millis() as u64;
+            tracing::info!(duration_ms, "Compound ingest compression complete");
+            return Ok(CompressionResult {
+                duration_ms,
+                ..CompressionResult::default()
+            });
+        }
+
+        // Legacy path — kept for fallback. Will be removed in Task 12.
         let valid_categories = [
             "preference",
             "plan",
