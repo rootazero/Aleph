@@ -145,6 +145,7 @@ pub async fn handle_install(
                 status: "started".into(),
                 log_line: None,
                 error: None,
+                stderr: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
             },
         ));
@@ -156,15 +157,26 @@ pub async fn handle_install(
                 status: "done".into(),
                 log_line: None,
                 error: None,
+                stderr: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
             },
-            Err(e) => RuntimeInstallProgressEvent {
-                step: cap_for_event,
-                status: "failed".into(),
-                log_line: None,
-                error: Some(e.to_string()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-            },
+            Err(e) => {
+                let err_str = e.to_string();
+                // Task 4 will emit "Stderr tail: <tail>" as part of the error string.
+                // Extract that tail if present; otherwise fall back to the whole error.
+                let stderr = err_str
+                    .split_once("Stderr tail: ")
+                    .map(|(_, tail)| tail.to_string())
+                    .or_else(|| Some(err_str.clone()));
+                RuntimeInstallProgressEvent {
+                    step: cap_for_event,
+                    status: "failed".into(),
+                    log_line: None,
+                    error: Some(err_str),
+                    stderr,
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                }
+            }
         };
         let _ = bus2.publish_json(&GatewayEvent::RuntimeInstallProgress(event));
     });
@@ -201,5 +213,65 @@ mod tests {
         assert!(names.contains(&"uv".to_string()));
         assert!(names.contains(&"playwright-cli".to_string()));
         assert!(names.contains(&"cargo".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_install_failed_event_carries_stderr_field() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let ledger = Arc::new(RwLock::new(CapabilityLedger::load_or_create(
+            dir.path().join("ledger.json"),
+        )));
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+
+        // cargo has `install: &[]` → Unsupported → ensure_capability Err path
+        // (on machines where cargo is already installed, probe succeeds and we
+        // get a "done" event instead — both paths must carry the `stderr` field).
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "runtimes.install".into(),
+            params: Some(serde_json::json!({ "capability": "cargo" })),
+            id: Some(serde_json::json!(1)),
+        };
+        let _ = handle_install(req, ledger, bus.clone()).await;
+
+        // Collect events until we see the terminal event (done or failed).
+        // Every event must carry the `stderr` key (null is fine for non-failed).
+        let mut saw_terminal = false;
+        for _ in 0..20 {
+            if let Ok(Ok(json_str)) =
+                tokio::time::timeout(std::time::Duration::from_millis(250), rx.recv()).await
+            {
+                let evt_json: serde_json::Value =
+                    serde_json::from_str(&json_str).expect("event must be valid JSON");
+                let status = evt_json["status"].as_str().unwrap_or("");
+                assert!(
+                    evt_json.get("stderr").is_some(),
+                    "event must have a `stderr` key (null allowed), got: {evt_json}",
+                );
+                if status == "failed" {
+                    // On the failure path stderr must be a non-null string.
+                    assert!(
+                        evt_json["stderr"].is_string(),
+                        "failed event `stderr` must be a string, got: {evt_json}",
+                    );
+                    saw_terminal = true;
+                    break;
+                }
+                if status == "done" {
+                    saw_terminal = true;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        assert!(
+            saw_terminal,
+            "expected at least one terminal (done or failed) event"
+        );
     }
 }

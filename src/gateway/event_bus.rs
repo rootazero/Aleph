@@ -45,6 +45,10 @@ pub struct RuntimeInstallProgressEvent {
     pub log_line: Option<String>,
     /// Error message (present when status == "failed")
     pub error: Option<String>,
+    /// Raw stderr captured from the failing install command. Populated only
+    /// when `status == "failed"` and upstream error carried stderr context.
+    #[serde(default)]
+    pub stderr: Option<String>,
     /// Milliseconds since Unix epoch
     pub timestamp: i64,
 }
