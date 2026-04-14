@@ -258,6 +258,7 @@ aleph-protocol = { path = "shared/protocol" }
 proptest = "1.4"
 http-body-util = "0.1"
 wiremock = "0.6"
+insta = "1"
 
 [[bench]]
 name = "memory_benchmarks_simple"

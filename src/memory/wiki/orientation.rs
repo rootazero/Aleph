@@ -8,6 +8,7 @@ use crate::memory::wiki::schema::{SchemaStore, DEFAULT_SCHEMA};
 use crate::memory::wiki::types::{
     IndexStats, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
 };
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -41,6 +42,7 @@ pub struct FsWikiOrientation<S: NoteStore + Send + Sync + 'static> {
     memory_dir: PathBuf,
     store: Arc<S>,
     dirty: Mutex<HashSet<String>>, // "agent_id|path"
+    provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl<S: NoteStore + Send + Sync + 'static> FsWikiOrientation<S> {
@@ -49,7 +51,13 @@ impl<S: NoteStore + Send + Sync + 'static> FsWikiOrientation<S> {
             memory_dir: memory_dir.into(),
             store,
             dirty: Mutex::new(HashSet::new()),
+            provider: None,
         }
+    }
+
+    pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.provider = Some(provider);
+        self
     }
 
     fn agent_dir(&self, agent_id: &str) -> PathBuf {
@@ -74,7 +82,15 @@ impl<S: NoteStore + Send + Sync + 'static> WikiOrientation for FsWikiOrientation
 
         let ss = SchemaStore::new(&dir);
         if ss.read().await?.is_none() {
-            ss.write(DEFAULT_SCHEMA, None).await?;
+            let body = if let Some(p) = &self.provider {
+                match crate::memory::wiki::prompts::schema_via_llm(p, "").await {
+                    Ok(s) if s.contains("# Memory Schema") => s,
+                    Ok(_) | Err(_) => DEFAULT_SCHEMA.to_string(),
+                }
+            } else {
+                DEFAULT_SCHEMA.to_string()
+            };
+            ss.write(&body, None).await?;
         }
 
         self.rebuild_index(agent_id).await?;
