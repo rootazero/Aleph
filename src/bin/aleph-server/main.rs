@@ -146,6 +146,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
         }
+        Some(Command::BootstrapRuntime(br_args)) => {
+            let code = commands::bootstrap_runtime::run(br_args).await;
+            std::process::exit(code);
+        }
         Some(Command::Start) | None => {
             // Continue with start logic
         }

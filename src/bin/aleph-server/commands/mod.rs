@@ -3,6 +3,7 @@
 //! This module organizes all subcommand implementations.
 
 pub mod audit;
+pub mod bootstrap_runtime;
 pub mod devices;
 pub mod gateway;
 pub mod pairing;

@@ -112,6 +112,8 @@ pub enum Command {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// Bootstrap runtime dependencies (fnm, node, uv, playwright-cli, chromium, venv)
+    BootstrapRuntime(BootstrapRuntimeArgs),
 }
 
 /// Pairing subcommands
@@ -277,6 +279,34 @@ pub enum PluginAction {
         #[command(subcommand)]
         action: MarketplaceAction,
     },
+}
+
+/// `bootstrap-runtime` subcommand flags.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct BootstrapRuntimeArgs {
+    /// Install only the given capability (repeatable). Default set: uv, playwright-cli.
+    #[arg(long)]
+    pub only: Vec<String>,
+
+    /// Skip the given capability (repeatable).
+    #[arg(long)]
+    pub skip: Vec<String>,
+
+    /// Reinstall even if the ledger says Ready.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Exit 0 regardless of failures (install.sh / install.ps1 use this).
+    #[arg(long)]
+    pub best_effort: bool,
+
+    /// Emit NDJSON progress events to stderr instead of pretty output.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Suppress per-step output; only errors.
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 /// Marketplace subcommands
@@ -514,6 +544,52 @@ mod tests {
                 }
             }
             _ => panic!("Expected Secret command with Verify action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_bootstrap_runtime_default() {
+        let args = Args::try_parse_from(["aleph", "bootstrap-runtime"]).unwrap();
+        match args.command {
+            Some(Command::BootstrapRuntime(a)) => {
+                assert!(a.only.is_empty());
+                assert!(a.skip.is_empty());
+                assert!(!a.force);
+                assert!(!a.best_effort);
+                assert!(!a.json);
+                assert!(!a.quiet);
+            }
+            _ => panic!("Expected BootstrapRuntime variant"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_bootstrap_runtime_all_flags() {
+        let args = Args::try_parse_from([
+            "aleph",
+            "bootstrap-runtime",
+            "--only",
+            "uv",
+            "--only",
+            "playwright-cli",
+            "--skip",
+            "cargo",
+            "--force",
+            "--best-effort",
+            "--json",
+            "--quiet",
+        ])
+        .unwrap();
+        match args.command {
+            Some(Command::BootstrapRuntime(a)) => {
+                assert_eq!(a.only, vec!["uv", "playwright-cli"]);
+                assert_eq!(a.skip, vec!["cargo"]);
+                assert!(a.force);
+                assert!(a.best_effort);
+                assert!(a.json);
+                assert!(a.quiet);
+            }
+            _ => panic!("Expected BootstrapRuntime variant"),
         }
     }
 }
