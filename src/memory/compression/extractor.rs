@@ -144,6 +144,9 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
     ///
     /// `existing_facts` contains content strings of related facts already in the database,
     /// injected to prevent re-extraction (C-layer deduplication).
+    #[deprecated(
+        note = "replaced by CompoundIngestor in Spec 6; will be removed 2 weeks after Spec 6 lands"
+    )]
     pub async fn extract_unified(
         &self,
         memories: &[MemoryEntry],
@@ -184,6 +187,9 @@ OUTPUT FORMAT (JSON only, no markdown code blocks):
     }
 
     /// Extract facts from a batch of memories
+    #[deprecated(
+        note = "replaced by CompoundIngestor in Spec 6; will be removed 2 weeks after Spec 6 lands"
+    )]
     pub async fn extract_facts(
         &self,
         memories: &[MemoryEntry],
