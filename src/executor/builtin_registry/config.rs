@@ -97,4 +97,10 @@ pub struct BuiltinToolConfig {
     /// `Tools` / `Hybrid` → register all six retrieval tools.
     /// Defaults to `Hybrid` (same behaviour as before this field existed).
     pub injection_mode: crate::config::types::memory::MemoryInjectionMode,
+
+    /// Capture-filter registry (Spec 4 Task 11).
+    /// When set, the `session_complete` tool's raw-memory writes go through
+    /// `insert_with_capture_filter` so extensions can mutate or block them.
+    pub capture_registry:
+        Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
 }

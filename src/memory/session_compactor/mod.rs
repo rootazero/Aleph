@@ -190,12 +190,17 @@ impl SessionCompactor {
         self
     }
 
-    /// Attach a capture-filter registry (Spec 4 Task 6).
+    /// Attach a capture-filter registry (Spec 4 Task 6 / Task 11).
     ///
     /// When set, raw-memory writes go through `insert_with_capture_filter` so
-    /// extensions can mutate or block rows. Task 11 wires the real registry at
-    /// server startup; leave `None` for unchanged behaviour in the interim.
+    /// extensions can mutate or block rows. Also threads the registry into the
+    /// embedded `TranscriptIndexer` (if already wired via `with_embedder`) so
+    /// transcript rows are equally filtered.
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
+        // Also thread into the TranscriptIndexer if it was already built.
+        if let Some(indexer) = self.indexer.take() {
+            self.indexer = Some(indexer.with_capture_registry(registry.clone()));
+        }
         self.capture_registry = Some(registry);
         self
     }

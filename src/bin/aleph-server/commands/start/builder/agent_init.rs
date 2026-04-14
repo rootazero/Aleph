@@ -639,6 +639,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>,
     > = Arc::new(tokio::sync::RwLock::new(None));
 
+    // ── Spec 4 Task 11: construct MemoryExtensionRegistry ────────────────────
+    // Built once here (outer scope) so it can be threaded into all subsystems
+    // regardless of whether an AI provider is available.
+    // Registers the POC first-party extension (no-op at floor=0.0) to prove
+    // end-to-end plumbing. Real floor could be plumbed from config later.
+    let memory_ext_registry: std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry> = {
+        use alephcore::memory::extensions::{
+            EnvelopeRelevanceFloorExtension, MemoryExtensionRegistry,
+        };
+        let reg = MemoryExtensionRegistry::new();
+        reg.register(std::sync::Arc::new(EnvelopeRelevanceFloorExtension::new(0.0)));
+        std::sync::Arc::new(reg)
+    };
+
     if let Some(provider_registry) = provider_registry {
         // Wire AI provider into SwarmCoordinator's IntelligenceLayer (deferred injection).
         // The coordinator was initialized before the provider was resolved; now that we
@@ -725,6 +739,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     app_config.general.browser.clone(),
                 ),
             )),
+            // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
+            capture_registry: Some(memory_ext_registry.clone()),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
@@ -1031,6 +1047,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 compactor = compactor.with_raw_memory_writer(
                     memory_db.clone() as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
                 );
+                // Spec 4 Task 11: wire capture-filter registry.
+                compactor = compactor.with_capture_registry(memory_ext_registry.clone());
                 let compactor = std::sync::Arc::new(compactor);
                 engine = engine.with_session_compactor(compactor);
                 if !daemon {
@@ -1044,12 +1062,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire memory context provider for SQLite-backed prompt augmentation.
         // When an AiProvider is available the assembler drives its LLM re-rank
         // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
+        // Spec 4 Task 11: extension registry threaded in for on_retrieve dispatch.
         if let Some(ref emb) = embedder_out {
-            let mcp = super::init_memory_context_provider(
+            let mcp = super::init_memory_context_provider_with_extensions(
                 memory_db,
                 emb.clone(),
                 default_prov.clone(),
                 app_config.memory.assembler.clone(),
+                Some(memory_ext_registry.clone()),
             );
             engine = engine.with_memory_context_provider(mcp);
         }
@@ -1602,6 +1622,39 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
 
         dispatch_reg = Some(dispatch_registry);
+
+        // ── Spec 4 Task 11: spawn MemoryProducerScheduler ────────────────────
+        {
+            use alephcore::memory::extensions::MemoryProducerScheduler;
+            let raw_store: std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
+                memory_db.clone();
+            let scheduler = std::sync::Arc::new(MemoryProducerScheduler::new(
+                memory_ext_registry.clone(),
+                raw_store,
+            ));
+            let _scheduler_handle = scheduler.spawn();
+            // JoinHandle intentionally leaked here — the task runs for the
+            // server lifetime. Shutdown via process exit.
+            if !daemon {
+                println!("  MemoryProducerScheduler: spawned");
+            }
+        }
+
+        // ── Spec 4 Task 11: wire memory_registry into ExtensionManager ───────
+        // After the registry is constructed we inject it into the global
+        // ExtensionManager so any plugin loaded at runtime via
+        // `load_runtime_plugin` / `ensure_plugin_loaded` also gets
+        // `load_plugin_with_memory` (MCP memory extension auto-registration).
+        {
+            use alephcore::gateway::handlers::plugins::get_extension_manager;
+            if let Ok(ext_manager) = get_extension_manager() {
+                // ExtensionManager is stored behind Arc; we can only thread the
+                // registry through the methods that take `&self`.
+                // Inject via set_memory_registry if available (no-op if the
+                // Arc is already shared across threads).
+                ext_manager.set_memory_registry(memory_ext_registry.clone());
+            }
+        }
     }
 
     // Register status/cancel (work for both real and simulated modes)

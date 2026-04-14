@@ -772,8 +772,11 @@ impl BuiltinToolRegistry {
                 .current_agent_id
                 .clone()
                 .unwrap_or_else(|| "main".to_string());
-            let tool =
+            let mut tool =
                 crate::builtin_tools::session_complete::SessionCompleteTool::new(db.clone(), agent_id);
+            if let Some(ref reg) = config.capture_registry {
+                tool = tool.with_capture_registry(std::sync::Arc::clone(reg));
+            }
 
             // Register tool schema
             {

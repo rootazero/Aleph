@@ -49,7 +49,16 @@ impl ExtensionManager {
             return Ok(()); // another task loaded it while we waited
         }
         let mut registry = self.plugin_registry.write().await;
-        loader.load_plugin(&manifest, &mut registry)?;
+        let mem_reg_snapshot = self
+            .memory_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(ref mem_reg) = mem_reg_snapshot {
+            loader.load_plugin_with_memory(&manifest, &mut registry, mem_reg)?;
+        } else {
+            loader.load_plugin(&manifest, &mut registry)?;
+        }
         tracing::info!(
             plugin_id = plugin_id,
             "Auto-loaded plugin for tool execution"
@@ -107,7 +116,16 @@ impl ExtensionManager {
     ) -> ExtensionResult<()> {
         let mut loader = self.plugin_loader.write().await;
         let mut registry = self.plugin_registry.write().await;
-        let result = loader.load_plugin(manifest, &mut registry);
+        let mem_reg_snapshot = self
+            .memory_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let result = if let Some(ref mem_reg) = mem_reg_snapshot {
+            loader.load_plugin_with_memory(manifest, &mut registry, mem_reg)
+        } else {
+            loader.load_plugin(manifest, &mut registry)
+        };
         drop(registry);
         drop(loader);
 

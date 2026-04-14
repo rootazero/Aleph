@@ -163,6 +163,14 @@ pub struct ExtensionManager {
 
     /// Guard to serialize concurrent load_all() calls
     load_guard: Mutex<()>,
+
+    /// Memory extension registry (Spec 4 Task 11).
+    /// When set, `load_runtime_plugin` / `ensure_plugin_loaded` call
+    /// `load_plugin_with_memory` so that plugins declaring a `[memory]`
+    /// section are auto-registered as `McpMemoryExtension` entries.
+    /// Wrapped in RwLock so it can be injected after construction (the manager
+    /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
+    memory_registry: std::sync::RwLock<Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>>,
 }
 
 impl ExtensionManager {
@@ -192,12 +200,37 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
+            memory_registry: std::sync::RwLock::new(None),
         })
     }
 
     /// Create with default configuration
     pub async fn with_defaults() -> ExtensionResult<Self> {
         Self::new(ExtensionConfig::default()).await
+    }
+
+    /// Builder-style setter for the memory extension registry (Spec 4 Task 11).
+    ///
+    /// For use before the manager is shared behind an `Arc`. If you already have
+    /// `Arc<ExtensionManager>`, use `set_memory_registry` instead.
+    pub fn with_memory_registry(
+        self,
+        registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
+        *self.memory_registry.write().unwrap_or_else(|e| e.into_inner()) = Some(registry);
+        self
+    }
+
+    /// Inject the memory extension registry after construction (Spec 4 Task 11).
+    ///
+    /// Safe to call on `&Arc<ExtensionManager>`. Subsequent plugin loads will
+    /// use `load_plugin_with_memory` so that manifests declaring a `[memory]`
+    /// section are auto-registered as `McpMemoryExtension` entries.
+    pub fn set_memory_registry(
+        &self,
+        registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) {
+        *self.memory_registry.write().unwrap_or_else(|e| e.into_inner()) = Some(registry);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────

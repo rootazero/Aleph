@@ -773,6 +773,17 @@ pub(in crate::commands::start) fn init_memory_context_provider(
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
+    init_memory_context_provider_with_extensions(memory_db, embedder, provider, assembler_config, None)
+}
+
+/// Like `init_memory_context_provider` but wires an optional extension registry.
+pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
+    memory_db: &MemoryBackend,
+    embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
+    provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
+    assembler_config: alephcore::AssemblerConfig,
+    extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
+) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     let mcp = match provider {
         Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
             memory_db.clone(),
@@ -782,6 +793,11 @@ pub(in crate::commands::start) fn init_memory_context_provider(
             alephcore::thinker::MemoryContextConfig::default(),
         ),
         None => alephcore::thinker::MemoryContextProvider::new(memory_db.clone(), embedder),
+    };
+    let mcp = if let Some(ext) = extensions {
+        mcp.with_extensions(ext)
+    } else {
+        mcp
     };
     std::sync::Arc::new(mcp)
 }
