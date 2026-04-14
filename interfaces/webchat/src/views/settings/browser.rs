@@ -5,6 +5,7 @@
 
 use crate::api::{BrowserConfig, BrowserConfigApi};
 use crate::context::DashboardState;
+use crate::views::settings::browser_runtime_banner::RuntimeSummaryBanner;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -89,6 +90,8 @@ pub fn BrowserView() -> impl IntoView {
                     "Configure browser automation for web browsing tools."
                 </p>
             </div>
+
+            <RuntimeSummaryBanner />
 
             {move || {
                 if loading.get() {

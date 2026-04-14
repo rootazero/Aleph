@@ -41,7 +41,7 @@ pub struct GeneralConfig {
     /// Only used when queue_mode = "collect". Default: 3000ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collect_window_ms: Option<u64>,
-    /// Browser system configuration (profiles, SSRF policy, Playwright MCP).
+    /// Browser system configuration (profiles, SSRF policy, Playwright CLI).
     #[serde(default)]
     pub browser: crate::browser::profile::BrowserSystemConfig,
     /// Global fallback provider chain.
