@@ -3,7 +3,7 @@
 use crate::error::AlephError;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const SCHEMA_FILENAME: &str = "SCHEMA.md";
 

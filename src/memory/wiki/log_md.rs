@@ -1,9 +1,9 @@
 //! Append-only log writer for `log.md`. Rotates at 2000 lines.
 
 use crate::error::AlephError;
-use crate::memory::wiki::types::{LogAction, LogEntry};
+use crate::memory::wiki::types::LogEntry;
 use chrono::{DateTime, Utc};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const LOG_FILENAME: &str = "log.md";
 pub const LOG_ROTATE_LINES: usize = 2000;
@@ -143,6 +143,7 @@ fn sanitize_single_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::wiki::types::LogAction;
 
     fn entry(action: LogAction, summary: &str) -> LogEntry {
         LogEntry {
