@@ -14,4 +14,4 @@ pub use prompts::{build_compound_system_prompt, PROMPT_COMPOUND_PLAN};
 pub use retrieve::{gather_related, RelatedBudget, RelatedPage};
 
 pub mod ingestor;
-pub use ingestor::CompoundIngestor;
+pub use ingestor::{CompoundIngestor, DefaultCompoundIngestor};

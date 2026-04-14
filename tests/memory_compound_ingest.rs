@@ -1,16 +1,16 @@
 //! End-to-end: a RecordingMockProvider emits a multi-op plan; CompoundIngestor
 //! applies it; assert files on disk + SQLite reflect the plan.
 
-use alephcore::error::AlephError;
-use alephcore::memory::notes::indexer::NoteIndexer;
-use alephcore::memory::notes::ingest::{
-    retrieve::RelatedBudget, CompoundIngestor, DefaultCompoundIngestor,
-};
+#![cfg(feature = "test-helpers")]
+
+use alephcore::memory::notes::ingest::{CompoundIngestor, DefaultCompoundIngestor, RelatedBudget};
+use alephcore::memory::notes::store::NoteStore;
+use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource};
-use alephcore::memory::store::sqlite::SqliteMemoryBackend;
-use alephcore::memory::EmbeddingProvider;
+use alephcore::memory::{EmbeddingProvider, SqliteMemoryBackend};
 use alephcore::providers::recording_mock::RecordingMockProvider;
 use alephcore::providers::AiProvider;
+use alephcore::AlephError;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,9 @@ async fn compound_ingest_creates_and_links_pages() {
         .join("note/default/learning/rust-async.md")
         .exists());
 
-    let listed = backend.list_notes("default").await.unwrap();
+    let listed = NoteStore::list_notes(backend.as_ref(), "default")
+        .await
+        .unwrap();
     let paths: Vec<String> = listed.iter().map(|e| e.path.clone()).collect();
     assert!(paths.contains(&"learning/tokio".to_string()));
     assert!(paths.contains(&"learning/rust-async".to_string()));
