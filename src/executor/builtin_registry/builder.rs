@@ -237,6 +237,20 @@ impl BuiltinToolRegistry {
             crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
         });
 
+        // Build wiki tools (Spec 5 Task 12)
+        let wiki_orient_tool = config.wiki.as_ref().map(|wiki| {
+            use crate::memory::wiki::types::TokenBudget;
+            crate::builtin_tools::wiki_orient::WikiOrientTool::new(
+                Arc::clone(wiki),
+                TokenBudget::default(),
+            )
+        });
+
+        let wiki_schema_tool = config
+            .wiki_memory_dir
+            .as_ref()
+            .map(|dir| crate::builtin_tools::wiki_schema::WikiSchemaTool::new(dir.clone()));
+
         // Build tool metadata
         let mut tools = HashMap::new();
 
@@ -290,6 +304,8 @@ impl BuiltinToolRegistry {
             &vault_store_tool,
             &config,
             config.injection_mode,
+            &wiki_orient_tool,
+            &wiki_schema_tool,
         );
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
@@ -986,6 +1002,8 @@ impl BuiltinToolRegistry {
             note_manage_tool,
             session_complete_tool,
             memory_reflect_tool,
+            wiki_orient_tool,
+            wiki_schema_tool,
             tools,
         }
     }
@@ -1203,6 +1221,8 @@ impl BuiltinToolRegistry {
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
         injection_mode: crate::config::types::memory::MemoryInjectionMode,
+        wiki_orient_tool: &Option<crate::builtin_tools::wiki_orient::WikiOrientTool>,
+        wiki_schema_tool: &Option<crate::builtin_tools::wiki_schema::WikiSchemaTool>,
     ) {
         use schemars::schema_for;
 
@@ -1551,6 +1571,40 @@ impl BuiltinToolRegistry {
             "Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio. Use when user says 'turn on voice mode', 'switch to voice', 'enable voice replies', etc.",
             serde_json::to_value(schema_for!(crate::builtin_tools::voice_tools::VoiceModeSetArgs)).unwrap_or_default());
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
+
+        // Wiki orientation tools (Spec 5 Task 12).
+        // `wiki_schema` is always registered when a memory dir is available (LLM can always
+        // read/write SCHEMA.md). `wiki_orient` is only exposed in Tools / Hybrid mode so the
+        // LLM can call it on-demand; in Context mode orientation is injected automatically.
+        if wiki_schema_tool.is_some() {
+            reg(
+                tools,
+                "wiki_schema",
+                "Read or write the SCHEMA.md file that describes the structure of the agent's \
+                 long-term memory wiki. Use 'read' to inspect the current schema, 'write' to \
+                 update it (include the expected_hash from your last read to prevent conflicts).",
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::wiki_schema::WikiSchemaArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered wiki_schema tool in BuiltinToolRegistry");
+        }
+
+        if expose_retrieval_tools && wiki_orient_tool.is_some() {
+            reg(
+                tools,
+                "wiki_orient",
+                "Fetch a compact orientation snapshot of the agent's memory wiki: SCHEMA, \
+                 index, and recent log entries. Call this at the start of a task to understand \
+                 what structured memory is available before searching or writing notes.",
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::wiki_orient::WikiOrientArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered wiki_orient tool in BuiltinToolRegistry");
+        }
     }
 }
 

@@ -779,16 +779,18 @@ pub(in crate::commands::start) fn init_memory_context_provider(
         provider,
         assembler_config,
         None,
+        None,
     )
 }
 
-/// Like `init_memory_context_provider` but wires an optional extension registry.
+/// Like `init_memory_context_provider` but wires an optional extension registry and wiki handle.
 pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     memory_db: &MemoryBackend,
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
+    wiki: Option<std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation>>,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     let mcp = match provider {
         Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
@@ -802,6 +804,12 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     };
     let mcp = if let Some(ext) = extensions {
         mcp.with_extensions(ext)
+    } else {
+        mcp
+    };
+    // Spec 5 Task 12: wire wiki orientation for build_orientation_user_message.
+    let mcp = if let Some(w) = wiki {
+        mcp.with_wiki(w)
     } else {
         mcp
     };

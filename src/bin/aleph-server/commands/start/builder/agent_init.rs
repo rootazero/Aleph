@@ -79,6 +79,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     heartbeat_service: Option<alephcore::tasks::heartbeat::SharedHeartbeatService>,
     daemon: bool,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
+    // Spec 5 Task 12: wiki orientation handle for DreamDaemon + MemoryContextProvider + tools.
+    wiki: Option<std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation>>,
+    wiki_memory_dir: Option<std::path::PathBuf>,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
@@ -745,6 +748,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             )),
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
+            // Spec 5 Task 12: wiki orientation tools.
+            wiki: wiki.clone(),
+            wiki_memory_dir: wiki_memory_dir.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
@@ -1021,12 +1027,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         compression_out = compression_svc;
         command_handler_out = command_handler.clone();
 
-        // Start DreamDaemon with command handler so decay mutations are event-sourced
-        alephcore::memory::ensure_dream_daemon(
+        // Start DreamDaemon with command handler so decay mutations are event-sourced.
+        // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
+        alephcore::memory::ensure_dream_daemon_with_wiki(
             memory_db.clone(),
             std::sync::Arc::new(app_config.memory.clone()),
             default_prov.clone(),
             command_handler,
+            wiki.clone(),
         );
 
         // Create session compactor for intra-session context compression
@@ -1062,6 +1070,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // When an AiProvider is available the assembler drives its LLM re-rank
         // path (Spec 1, B strategy); otherwise the deterministic skeleton runs.
         // Spec 4 Task 11: extension registry threaded in for on_retrieve dispatch.
+        // Spec 5 Task 12: wiki handle threaded in for build_orientation_user_message.
         if let Some(ref emb) = embedder_out {
             let mcp = super::init_memory_context_provider_with_extensions(
                 memory_db,
@@ -1069,6 +1078,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 default_prov.clone(),
                 app_config.memory.assembler.clone(),
                 Some(memory_ext_registry.clone()),
+                wiki.clone(),
             );
             engine = engine.with_memory_context_provider(mcp);
         }

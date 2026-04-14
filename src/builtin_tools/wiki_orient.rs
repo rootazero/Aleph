@@ -27,6 +27,15 @@ pub struct WikiOrientTool {
     default_budget: TokenBudget,
 }
 
+impl Clone for WikiOrientTool {
+    fn clone(&self) -> Self {
+        Self {
+            wiki: Arc::clone(&self.wiki),
+            default_budget: self.default_budget,
+        }
+    }
+}
+
 impl WikiOrientTool {
     pub fn new(wiki: Arc<dyn WikiOrientation>, default_budget: TokenBudget) -> Self {
         Self {

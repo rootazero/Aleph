@@ -28,6 +28,7 @@ pub struct WikiSchemaOutput {
     pub conflict: bool,
 }
 
+#[derive(Clone)]
 pub struct WikiSchemaTool {
     memory_dir: PathBuf,
 }

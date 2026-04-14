@@ -103,4 +103,15 @@ pub struct BuiltinToolConfig {
     /// `insert_with_capture_filter` so extensions can mutate or block them.
     pub capture_registry:
         Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+
+    /// Wiki orientation handle (Spec 5 Task 12).
+    /// When set, `wiki_orient` tool is registered and dispatched, and
+    /// `wiki_schema` tool always has its memory_dir resolved.
+    /// `None` → wiki tools unavailable at runtime (schema tool still registered
+    /// but dispatched stateless from memory_dir derived from paths).
+    pub wiki: Option<std::sync::Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+
+    /// Memory dir root for wiki_schema tool (Spec 5 Task 12).
+    /// Points to the `note` subdirectory (e.g. `~/.aleph/memory/note`).
+    pub wiki_memory_dir: Option<std::path::PathBuf>,
 }

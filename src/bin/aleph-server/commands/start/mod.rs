@@ -624,6 +624,32 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    // Construct WikiOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
+    // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
+    // MemoryContextProvider, and the builtin tool registry.
+    let note_memory_dir = alephcore::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join("aleph")
+            .join("memory")
+            .join("note")
+    });
+    let wiki: std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation> = {
+        use alephcore::memory::wiki::orientation::FsWikiOrientation;
+        std::sync::Arc::new(FsWikiOrientation::new(
+            note_memory_dir.clone(),
+            memory_db.clone(),
+        ))
+    };
+    {
+        let wiki_clone = wiki.clone();
+        let agent_id = default_agent_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = wiki_clone.bootstrap(&agent_id).await {
+                tracing::warn!(error = %e, "Wiki orientation bootstrap failed; continuing without it");
+            }
+        });
+    }
+
     let agent_result = register_agent_handlers(
         &mut server,
         session_manager.clone(),
@@ -640,6 +666,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         heartbeat_service.clone(),
         args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        Some(wiki.clone()),
+        Some(note_memory_dir.clone()),
     )
     .await;
 
@@ -739,15 +767,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let db = memory_db.clone();
         let agent_id = default_agent_id.clone();
+        let wiki_for_indexer = wiki.clone();
+        let note_dir_for_indexer = note_memory_dir.clone();
         tokio::spawn(async move {
-            let memory_dir = alephcore::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-                std::env::temp_dir()
-                    .join("aleph")
-                    .join("memory")
-                    .join("note")
-            });
-            tracing::info!(dir = %memory_dir.display(), agent = %agent_id, "Rebuilding note index");
-            let indexer = alephcore::memory::notes::NoteIndexer::new(memory_dir, db);
+            tracing::info!(dir = %note_dir_for_indexer.display(), agent = %agent_id, "Rebuilding note index");
+            let indexer = alephcore::memory::notes::NoteIndexer::new(note_dir_for_indexer, db)
+                .with_wiki(wiki_for_indexer);
             match indexer.full_rebuild(&agent_id).await {
                 Ok(stats) => {
                     tracing::info!(
