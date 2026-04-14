@@ -179,6 +179,13 @@ pub struct MemoryConfig {
     /// How memory is surfaced to the LLM: context / tools / hybrid.
     #[serde(default)]
     pub injection_mode: MemoryInjectionMode,
+
+    // ========================================
+    // Wiki Orientation (Spec 5)
+    // ========================================
+    /// Wiki orientation injection configuration.
+    #[serde(default)]
+    pub orientation: OrientationConfig,
 }
 
 // =============================================================================
@@ -804,8 +811,51 @@ impl Default for MemoryConfig {
             assembler: AssemblerConfig::default(),
             // Memory injection mode (Spec 3)
             injection_mode: MemoryInjectionMode::Hybrid,
+            // Wiki orientation (Spec 5)
+            orientation: OrientationConfig::default(),
         }
     }
+}
+
+// =============================================================================
+// OrientationConfig (Memory Evolution Spec 5)
+// =============================================================================
+
+/// Wiki orientation injection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OrientationConfig {
+    #[serde(default = "default_orientation_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_orientation_max_tokens")]
+    pub max_tokens: usize,
+    #[serde(default = "default_orientation_log_rotate_lines")]
+    pub log_rotate_lines: usize,
+    #[serde(default = "default_orientation_inject_on_agent_switch")]
+    pub inject_on_agent_switch: bool,
+}
+
+impl Default for OrientationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_tokens: 4000,
+            log_rotate_lines: 2000,
+            inject_on_agent_switch: true,
+        }
+    }
+}
+
+fn default_orientation_enabled() -> bool {
+    true
+}
+fn default_orientation_max_tokens() -> usize {
+    4000
+}
+fn default_orientation_log_rotate_lines() -> usize {
+    2000
+}
+fn default_orientation_inject_on_agent_switch() -> bool {
+    true
 }
 
 #[cfg(test)]

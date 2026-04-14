@@ -62,6 +62,10 @@ pub struct MemoryContextProvider {
     /// Plugin-contributed enhancements to the retrieved envelope.
     /// Default-empty registry means no plugins registered = no-op.
     extensions: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    /// Optional wiki orientation provider for injecting structural context.
+    wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    /// Token budget for orientation snapshots.
+    orientation_budget: crate::memory::wiki::types::TokenBudget,
 }
 
 impl MemoryContextProvider {
@@ -117,6 +121,8 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
+            wiki: None,
+            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
         }
     }
 
@@ -180,6 +186,8 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
+            wiki: None,
+            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
         }
     }
 
@@ -242,7 +250,45 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
+            wiki: None,
+            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
         }
+    }
+
+    /// Set the wiki orientation provider (builder-style).
+    pub fn with_wiki(
+        mut self,
+        wiki: Arc<dyn crate::memory::wiki::orientation::WikiOrientation>,
+    ) -> Self {
+        self.wiki = Some(wiki);
+        self
+    }
+
+    /// Build a wiki orientation user-message for injection into the prompt.
+    ///
+    /// Returns `Ok(None)` when:
+    /// - mode is `Tools` (orientation is prompt-only, not tool-gated)
+    /// - no wiki provider is registered
+    ///
+    /// Otherwise returns `Ok(Some(UnifiedMessage::user(xml)))` with the
+    /// orientation envelope XML.
+    pub async fn build_orientation_user_message(
+        &self,
+        agent_id: &str,
+        mode: crate::config::types::memory::MemoryInjectionMode,
+    ) -> Result<Option<crate::providers::message::UnifiedMessage>, crate::error::AlephError> {
+        if matches!(
+            mode,
+            crate::config::types::memory::MemoryInjectionMode::Tools
+        ) {
+            return Ok(None);
+        }
+        let Some(w) = &self.wiki else {
+            return Ok(None);
+        };
+        let snap = w.read_snapshot(agent_id, self.orientation_budget).await?;
+        let xml = render_orientation_envelope(&snap);
+        Ok(Some(crate::providers::message::UnifiedMessage::user(xml)))
     }
 
     /// Build a memory user-message for injection into the prompt.
@@ -292,6 +338,20 @@ impl MemoryContextProvider {
         }
         Ok(Some(UnifiedMessage::user(rendered)))
     }
+}
+
+fn render_orientation_envelope(s: &crate::memory::wiki::types::OrientationSnapshot) -> String {
+    let esc = |t: &str| {
+        t.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    format!(
+        "<WikiOrientation>\n<schema>\n{}\n</schema>\n<index_snapshot>\n{}\n</index_snapshot>\n<recent_log>\n{}\n</recent_log>\n</WikiOrientation>",
+        esc(&s.schema_text),
+        esc(&s.index_text),
+        esc(&s.recent_log_tail)
+    )
 }
 
 #[cfg(test)]
@@ -408,5 +468,124 @@ mod spec3_tests {
             0,
             "Tools mode must not call on_retrieve"
         );
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::error::AlephError;
+    use crate::memory::wiki::orientation::WikiOrientation;
+    use crate::memory::wiki::types::{IndexStats, LogEntry, OrientationSnapshot, TokenBudget};
+    use async_trait::async_trait;
+
+    struct FixedOrient;
+
+    #[async_trait]
+    impl WikiOrientation for FixedOrient {
+        async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn read_snapshot(
+            &self,
+            _: &str,
+            _: TokenBudget,
+        ) -> Result<OrientationSnapshot, AlephError> {
+            Ok(OrientationSnapshot {
+                schema_text: "# Memory Schema\n## Domain\nTest".into(),
+                index_text: "# Index\n## learning (1)\n- [[learning/rust]] — fact".into(),
+                recent_log_tail: "## [2026-04-14] ingest | touched=3".into(),
+            })
+        }
+        async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
+            Ok(IndexStats::default())
+        }
+        async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
+            Ok(false)
+        }
+        fn invalidate(&self, _: &str, _: &str) {}
+    }
+
+    struct NoopOrient;
+
+    #[async_trait]
+    impl WikiOrientation for NoopOrient {
+        async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn read_snapshot(
+            &self,
+            _: &str,
+            _: TokenBudget,
+        ) -> Result<OrientationSnapshot, AlephError> {
+            Ok(OrientationSnapshot {
+                schema_text: "x".into(),
+                index_text: "y".into(),
+                recent_log_tail: "z".into(),
+            })
+        }
+        async fn record_ingest(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_query(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_lint(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn record_session_end(&self, _: &str, _: LogEntry) -> Result<(), AlephError> {
+            Ok(())
+        }
+        async fn rebuild_index(&self, _: &str) -> Result<IndexStats, AlephError> {
+            Ok(IndexStats::default())
+        }
+        async fn rotate_log_if_needed(&self, _: &str) -> Result<bool, AlephError> {
+            Ok(false)
+        }
+        fn invalidate(&self, _: &str, _: &str) {}
+    }
+
+    #[tokio::test]
+    async fn orientation_message_injected_in_context_mode() {
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_wiki(Arc::new(FixedOrient));
+
+        let msg = provider
+            .build_orientation_user_message("default", MemoryInjectionMode::Context)
+            .await
+            .unwrap();
+        let m = msg.expect("context mode should inject");
+        let text = format!("{m:?}");
+        assert!(text.contains("WikiOrientation"));
+        assert!(text.contains("# Memory Schema"));
+        assert!(text.contains("# Index"));
+        assert!(text.contains("touched=3"));
+    }
+
+    #[tokio::test]
+    async fn orientation_skipped_in_tools_mode() {
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
+                .with_wiki(Arc::new(NoopOrient));
+
+        let msg = provider
+            .build_orientation_user_message("default", MemoryInjectionMode::Tools)
+            .await
+            .unwrap();
+        assert!(msg.is_none());
     }
 }
