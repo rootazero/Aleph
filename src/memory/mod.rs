@@ -44,6 +44,7 @@ pub mod scratchpad;
 pub mod session_compactor;
 pub mod session_resume;
 pub mod store;
+pub mod wiki;
 pub mod transcript_indexer;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
