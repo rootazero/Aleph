@@ -12,8 +12,8 @@ use crate::views::cron::CronView;
 use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory::Memory;
-use crate::views::settings::*;
 use crate::views::runtimes::RuntimesView;
+use crate::views::settings::*;
 use crate::views::tasks::TasksView;
 use crate::views::teams::TeamsView;
 // Layout components
@@ -162,6 +162,7 @@ fn SettingsRouter() -> impl IntoView {
 
             // Browser
             "/settings/browser" => view! { <BrowserView /> }.into_any(),
+            "/settings/runtime" => view! { <RuntimeView /> }.into_any(),
 
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
