@@ -95,12 +95,10 @@ pub async fn ensure_capability(
     if !bootstrap::has_spec(capability) {
         let mut guard = ledger.write().await;
         guard.update_status(capability, CapabilityStatus::Missing);
-        return Err(AlephError::runtime(
+        return Err(runtime_error(
             capability,
-            format!(
-                "Capability '{}' not found and no bootstrap available",
-                capability
-            ),
+            "not found on PATH and no bootstrap spec available",
+            None,
         ));
     }
 
@@ -143,20 +141,19 @@ pub async fn ensure_capability(
         BootstrapResult::PathNotFound { expected } => {
             let mut guard = ledger.write().await;
             guard.update_status(capability, CapabilityStatus::Missing);
-            Err(AlephError::runtime(
+            Err(runtime_error(
                 capability,
-                format!("Bootstrap completed but binary not found at: {}", expected),
+                &format!("installed but binary not found at {expected}"),
+                None,
             ))
         }
         BootstrapResult::Failed { stderr } => {
             let mut guard = ledger.write().await;
             guard.update_status(capability, CapabilityStatus::Missing);
-            Err(AlephError::runtime(
+            Err(runtime_error(
                 capability,
-                format!(
-                    "Failed to bootstrap {}. Error: {}. Please install manually.",
-                    capability, stderr
-                ),
+                "bootstrap command returned a non-zero exit code",
+                Some(&stderr),
             ))
         }
         BootstrapResult::Unsupported {
@@ -165,20 +162,61 @@ pub async fn ensure_capability(
         } => {
             let mut guard = ledger.write().await;
             guard.update_status(capability, CapabilityStatus::Missing);
-            Err(AlephError::runtime(
+            Err(runtime_error(
                 capability,
-                format!("Capability '{}' is not supported: {}", cap, reason),
+                &format!("{cap} is not supported on this platform: {reason}"),
+                None,
             ))
         }
         BootstrapResult::UnknownCapability { capability: cap } => {
             let mut guard = ledger.write().await;
             guard.update_status(capability, CapabilityStatus::Missing);
-            Err(AlephError::runtime(
+            Err(runtime_error(
                 capability,
-                format!("Capability '{}' not found and no bootstrap available", cap),
+                &format!("{cap} has no bootstrap spec registered"),
+                None,
             ))
         }
     }
+}
+
+/// Build a multi-line actionable error message for a failed
+/// `ensure_capability` call. Includes the three canonical fix options
+/// (CLI, Panel, manual) plus the upstream stderr tail when available.
+fn runtime_error(capability: &str, reason: &str, stderr: Option<&str>) -> AlephError {
+    use crate::runtimes::find_spec;
+
+    let hint = find_spec(capability)
+        .and_then(|s| s.llm_hint)
+        .unwrap_or("(no hint available — check the runtime's documentation)");
+
+    let stderr_block = stderr
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| {
+            let tail = if s.len() > 400 {
+                // Safe char-boundary truncation: walk back from len-400 to a valid boundary.
+                let mut start = s.len().saturating_sub(400);
+                while start > 0 && !s.is_char_boundary(start) {
+                    start -= 1;
+                }
+                &s[start..]
+            } else {
+                s
+            };
+            format!("\nStderr tail: {}", tail.trim())
+        })
+        .unwrap_or_default();
+
+    AlephError::runtime(
+        capability,
+        format!(
+            "Runtime '{capability}' is not available: {reason}{stderr_block}\n\n\
+             Fix options:\n  \
+               1. Run: aleph-server bootstrap-runtime --only {capability}\n  \
+               2. Open Panel → Settings → Runtime and click 'Install'.\n  \
+               3. Install manually — {hint}",
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -223,5 +261,32 @@ mod tests {
 
         let result = ensure_capability("totally_unknown_thing_xyz", &ledger).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_failure_message_includes_actionable_hints() {
+        let dir = TempDir::new().unwrap();
+        let ledger_path = dir.path().join("ledger.json");
+        let ledger = CapabilityLedger::load_or_create(ledger_path);
+        let ledger = Arc::new(RwLock::new(ledger));
+
+        // Unknown capability takes the no-spec path → actionable error builder.
+        let err = ensure_capability("totally_unknown_xyz_for_test", &ledger)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("aleph-server bootstrap-runtime"),
+            "error should name the CLI remediation, got: {msg}",
+        );
+        assert!(
+            msg.contains("Panel"),
+            "error should mention the Panel remediation, got: {msg}",
+        );
+        assert!(
+            msg.contains("totally_unknown_xyz_for_test"),
+            "error should reference the failing capability, got: {msg}",
+        );
     }
 }
