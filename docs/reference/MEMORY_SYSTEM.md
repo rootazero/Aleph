@@ -178,3 +178,16 @@ Symptom: a note you know exists does not surface in search results.
 3. Enable query expansion: `memory.query_expansion_enabled = true`.
 4. Increase BM25 weight when the target note is a good lexical match: `memory.bm25_bonus_weight = 0.3`.
 5. Use `memory_explore` for multi-hop traversal when single-shot retrieval keeps missing the wikilink neighborhood — see [RETRIEVAL.md](memory/RETRIEVAL.md).
+
+## Orientation layer (Spec 5, shipped 2026-04-14)
+
+Aleph maintains three LLM-readable markdown files per agent —
+`SCHEMA.md`, `index.md`, `log.md` — and a `WikiOrientation` trait that
+projects the live `notes_index` into them. The orientation layer is
+injected into the prompt in Context/Hybrid modes and available as the
+`wiki_orient` tool in Tools/Hybrid modes. Schema mutation goes through
+the always-registered `wiki_schema` tool with optimistic concurrency via
+content hashes. See
+[docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §2](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md)
+for the design; the four new markdown files now live alongside the
+existing per-category note directories.
