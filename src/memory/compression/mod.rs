@@ -1,15 +1,11 @@
 //! Memory Compression Module
 //!
-//! This module provides functionality to compress raw conversation memories
-//! into structured facts using LLM extraction. The dual-layer architecture:
-//!
-//! - **Layer 1 (Raw Logs)**: Original conversation pairs in `memories` table
-//! - **Layer 2 (Compressed Facts)**: LLM-extracted facts in `memory_facts` table
+//! Orchestrates compression of raw conversation memories into Knowledge Notes
+//! via [`CompoundIngestor`](crate::memory::notes::ingest::CompoundIngestor).
 //!
 //! ## Components
 //!
 //! - [`CompressionService`]: Main service that orchestrates compression
-//! - [`FactExtractor`]: Extracts facts from conversations using LLM
 //! - [`CompressionScheduler`]: Determines when to trigger compression
 //! - [`SignalDetector`]: Keyword-based detection for smart compression triggers
 
@@ -20,7 +16,7 @@ pub mod signal_detector;
 pub mod source_prompts;
 mod trigger;
 
-pub use extractor::{ExtractedFact, FactExtractor};
+pub use extractor::FactExtractor;
 pub use scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 pub use service::{CompressionConfig, CompressionService};
 pub use signal_detector::{

@@ -6,7 +6,6 @@
 //! 3. Detects and resolves conflicts
 //! 4. Stores facts and updates compression state
 
-use super::extractor::FactExtractor;
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AlephError;
@@ -52,77 +51,11 @@ impl CompressionConfig {
     }
 }
 
-/// Parse raw memory content into user/assistant parts.
-/// Content may contain "User: ...\nAssistant: ..." format from SessionCompactor,
-/// or plain text summaries.
-fn parse_raw_content(content: &str) -> (String, String) {
-    // Try to split on "Assistant:" marker
-    if let Some(pos) = content.find("\nAssistant:") {
-        let user_part = content[..pos].to_string();
-        let user_part = user_part
-            .strip_prefix("User:")
-            .unwrap_or(&user_part)
-            .trim()
-            .to_string();
-        let ai_part = content[pos..]
-            .trim_start_matches("\nAssistant:")
-            .trim()
-            .to_string();
-        (user_part, ai_part)
-    } else if let Some(pos) = content.find("Assistant:") {
-        let user_part = content[..pos].to_string();
-        let user_part = user_part
-            .strip_prefix("User:")
-            .unwrap_or(&user_part)
-            .trim()
-            .to_string();
-        let ai_part = content[pos..]
-            .trim_start_matches("Assistant:")
-            .trim()
-            .to_string();
-        (user_part, ai_part)
-    } else {
-        (content.to_string(), String::new())
-    }
-}
-
-/// Group raw memories by their source variant (preserving insertion order of first occurrence).
-/// Used by the compression service to run one extractor call per group so each call can
-/// use its source-specific system prompt.
-pub(crate) fn group_by_source<'a>(
-    rows: &'a [crate::memory::store::raw_memory::RawMemory],
-) -> Vec<(
-    crate::memory::store::raw_memory::RawMemorySource,
-    Vec<&'a crate::memory::store::raw_memory::RawMemory>,
-)> {
-    use std::collections::BTreeMap;
-    let mut order: Vec<crate::memory::store::raw_memory::RawMemorySource> = Vec::new();
-    let mut buckets: BTreeMap<String, Vec<&crate::memory::store::raw_memory::RawMemory>> =
-        BTreeMap::new();
-    for r in rows {
-        let key = format!("{:?}", r.source);
-        if !buckets.contains_key(&key) {
-            order.push(r.source.clone());
-        }
-        buckets.entry(key).or_default().push(r);
-    }
-    order
-        .into_iter()
-        .map(|src| {
-            let key = format!("{src:?}");
-            let v = buckets.remove(&key).unwrap_or_default();
-            (src, v)
-        })
-        .collect()
-}
-
 /// Main compression service
 pub struct CompressionService {
     database: MemoryBackend,
-    extractor: Arc<FactExtractor>,
     scheduler: Arc<CompressionScheduler>,
     config: CompressionConfig,
-    provider_name: String,
     signal_detector: SignalDetector,
     command_handler: Option<Arc<MemoryCommandHandler>>,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
@@ -146,23 +79,17 @@ impl CompressionService {
     /// Create a new compression service with an optional MemoryBackend (kept for API compatibility)
     pub fn new_with_backend(
         database: MemoryBackend,
-        provider: Arc<dyn AiProvider>,
-        embedder: Arc<dyn EmbeddingProvider>,
+        _provider: Arc<dyn AiProvider>,
+        _embedder: Arc<dyn EmbeddingProvider>,
         config: CompressionConfig,
         _memory_backend: Option<MemoryBackend>,
     ) -> Self {
-        let provider_name = provider.name().to_string();
-
-        let extractor = Arc::new(FactExtractor::new(provider, embedder));
-
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
         Self {
             database,
-            extractor,
             scheduler,
             config,
-            provider_name,
             signal_detector: SignalDetector::new(),
             command_handler: None,
             compound_ingestor: None,
@@ -325,208 +252,9 @@ impl CompressionService {
             });
         }
 
-        // Legacy path — kept for fallback. Will be removed in Task 12.
-        let valid_categories = [
-            "preference",
-            "plan",
-            "learning",
-            "project",
-            "personal",
-            "tool",
-            "lesson",
-            "skill",
-            "wiki",
-            "transcript",
-            "other",
-            "subagent-run",
-            "subagent-session",
-            "subagent-checkpoint",
-            "subagent-transcript",
-        ];
-
-        use crate::memory::notes::extractor::NoteExtractionResponse;
-
-        // Accumulate updates across all source groups.
-        let mut all_updates: Vec<crate::memory::notes::extractor::NoteUpdate> = Vec::new();
-
-        for (source, group) in group_by_source(&raw_memories) {
-            // Build MemoryEntry slice for this group only.
-            let group_memories: Vec<crate::memory::context::MemoryEntry> = group
-                .iter()
-                .map(|raw| {
-                    let (user_input, ai_output) = parse_raw_content(&raw.content);
-                    let enriched_input = match &raw.attachment_text {
-                        Some(att) if !att.is_empty() => {
-                            let att_preview: String = att.chars().take(2000).collect();
-                            format!("{user_input}\n[Attachment]: {att_preview}")
-                        }
-                        _ => user_input,
-                    };
-                    crate::memory::context::MemoryEntry::new(
-                        raw.id.clone(),
-                        crate::memory::context::ContextAnchor::now("".to_string()),
-                        enriched_input,
-                        ai_output,
-                    )
-                })
-                .collect();
-
-            let group_updates = self
-                .extractor
-                .extract_note_updates_for_source(&group_memories, &existing_note_summaries, &source)
-                .await?;
-
-            all_updates.extend(group_updates.updates);
-        }
-
-        let note_updates = NoteExtractionResponse {
-            updates: all_updates.into_iter().filter(|u| {
-                let has_slash = u.note_path.contains('/');
-                let has_content = !u.new_facts.is_empty()
-                    || u.action == crate::memory::notes::extractor::NoteAction::Update;
-                let category = u.note_path.split('/').next().unwrap_or("");
-                let valid_cat = valid_categories.contains(&category);
-
-                if !has_slash || !has_content || !valid_cat {
-                    tracing::warn!(
-                        note_path = %u.note_path,
-                        "Filtered out invalid note extraction: slash={has_slash} content={has_content} cat={valid_cat}"
-                    );
-                }
-                has_slash && has_content && valid_cat
-            }).collect(),
-        };
-
-        // 5. Ensure directory structure exists
-        let _ = indexer.ensure_dirs(workspace_id).await;
-
-        // 6. Apply note updates
-        let mut notes_created = 0u32;
-        let mut facts_stored = 0u32;
-
-        for update in &note_updates.updates {
-            use crate::memory::notes::extractor::NoteAction;
-
-            // Derive category and filename from note_path ("category/filename")
-            let (category, filename) = match update.note_path.split_once('/') {
-                Some((cat, name)) => (cat, name),
-                None => ("other", update.note_path.as_str()),
-            };
-
-            match update.action {
-                NoteAction::Create => {
-                    let note = crate::memory::notes::KnowledgeNote {
-                        title: filename.to_string(),
-                        category: category.to_string(),
-                        tags: update.tags.clone().unwrap_or_default(),
-                        facts: update.new_facts.clone(),
-                        links: update.links.clone(),
-                        created_at: chrono::Utc::now().timestamp(),
-                        updated_at: chrono::Utc::now().timestamp(),
-                        content_hash: String::new(),
-                    };
-                    if let Err(e) = indexer.write_note(workspace_id, category, &note).await {
-                        tracing::warn!(
-                            error = %e,
-                            note_path = %update.note_path,
-                            "Failed to create note"
-                        );
-                        continue;
-                    }
-                    // Generate embedding for the new note
-                    let body = note.body_text();
-                    if let Ok(embedding) = self.extractor.embedder().embed(&body).await {
-                        let dim = embedding.len() as u32;
-                        let _ = indexer
-                            .store()
-                            .upsert_embedding(&update.note_path, workspace_id, &embedding, dim)
-                            .await;
-                    }
-                    let note_file = indexer
-                        .memory_dir()
-                        .join(workspace_id)
-                        .join(category)
-                        .join(format!("{filename}.md"));
-                    let _ = indexer.index_file(workspace_id, category, &note_file).await;
-                    notes_created += 1;
-                    facts_stored += update.new_facts.len() as u32;
-                }
-                NoteAction::Append | NoteAction::Update => {
-                    if let Err(e) = indexer
-                        .append_to_note(
-                            workspace_id,
-                            &update.note_path,
-                            &update.new_facts,
-                            &update.links,
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            note_path = %update.note_path,
-                            "Failed to append to note"
-                        );
-                        continue;
-                    }
-                    // Re-embed the updated note body (not frontmatter)
-                    let note_file = indexer
-                        .memory_dir()
-                        .join(workspace_id)
-                        .join(category)
-                        .join(format!("{filename}.md"));
-                    if let Ok(content) = tokio::fs::read_to_string(&note_file).await {
-                        if let Ok(parsed) =
-                            crate::memory::notes::KnowledgeNote::from_markdown(filename, &content)
-                        {
-                            if let Ok(embedding) =
-                                self.extractor.embedder().embed(&parsed.body_text()).await
-                            {
-                                let dim = embedding.len() as u32;
-                                let _ = indexer
-                                    .store()
-                                    .upsert_embedding(
-                                        &update.note_path,
-                                        workspace_id,
-                                        &embedding,
-                                        dim,
-                                    )
-                                    .await;
-                            }
-                        }
-                    }
-                    facts_stored += update.new_facts.len() as u32;
-                }
-            }
-        }
-
-        // 7. Mark raw memories as processed
-        let consumed_ids: Vec<String> = raw_memories.iter().map(|r| r.id.clone()).collect();
-        match self.database.mark_raw_as_processed(&consumed_ids).await {
-            Ok(n) => tracing::info!(marked = n, "Marked raw memories as processed"),
-            Err(e) => tracing::warn!(error = %e, "Failed to mark raw memories as processed"),
-        }
-
-        // 8. Update compression timestamp
-        let latest_timestamp = raw_memories.iter().map(|r| r.created_at).max().unwrap_or(0);
-        self.database
-            .set_last_compression_timestamp(latest_timestamp)
-            .await?;
-
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        tracing::info!(
-            notes_created,
-            facts_stored,
-            duration_ms,
-            "Note-based compression complete"
-        );
-
-        Ok(CompressionResult {
-            memories_processed: raw_memories.len() as u32,
-            facts_extracted: facts_stored,
-            facts_invalidated: 0,
-            duration_ms,
-        })
+        // compound_enabled is always required; if ingestor is missing, warn and skip.
+        tracing::warn!("compress_to_notes called without compound ingestor; skipping batch");
+        Ok(CompressionResult::empty())
     }
 
     /// Check if compression should be triggered and execute if needed
@@ -858,162 +586,6 @@ mod tests {
         assert!(result.is_some() || result.is_none());
     }
 
-    // -------------------------------------------------------------------------
-    // E2E Integration Tests: raw_memory → compress → notes pipeline
-    // -------------------------------------------------------------------------
-
-    /// Full pipeline: insert raw_memory → trigger compression → verify it is
-    /// marked as processed.  The mock LLM provider returns empty extraction
-    /// results, so no notes are created — but the state transitions must be correct.
-    #[tokio::test]
-    async fn test_full_pipeline_raw_to_notes() {
-        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
-
-        // 1. Insert a raw memory with session-compressed content
-        let raw = RawMemory::new(
-            "User: I really enjoy programming in Rust\nAssistant: Rust is great for systems programming!".to_string(),
-            RawMemorySource::SessionCompressed,
-        );
-        database.insert_raw_memory(&raw).await.unwrap();
-
-        // 2. Verify it shows up as unprocessed
-        let count = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(count, 1, "Should have 1 unprocessed raw memory");
-
-        // 3. Trigger compression through the notes pipeline
-        let result = service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
-
-        // 4. Pipeline should complete without error and report 1 memory processed
-        assert_eq!(
-            result.memories_processed, 1,
-            "Compression should report 1 memory processed"
-        );
-
-        // 5. Raw memory must be marked as processed
-        let remaining = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(
-            remaining, 0,
-            "Raw memory should be marked as processed after compression"
-        );
-    }
-
-    /// Attachment text flows through the pipeline without errors, and the raw
-    /// memory is still marked processed afterwards.
-    #[tokio::test]
-    async fn test_raw_memory_with_attachment_flows_through() {
-        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
-
-        // Insert raw memory with attachment_text
-        let raw = RawMemory::new(
-            "User: Analyze this document\nAssistant: The document discusses microservices."
-                .to_string(),
-            RawMemorySource::SessionCompressed,
-        )
-        .with_attachment_text(
-            "This is a PDF about microservices architecture with detailed diagrams.",
-        );
-
-        database.insert_raw_memory(&raw).await.unwrap();
-
-        // Trigger compression
-        let result = service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
-
-        // Pipeline should complete without panic
-        assert_eq!(result.memories_processed, 1);
-
-        // Raw memory must be marked as processed
-        let remaining = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(
-            remaining, 0,
-            "Raw memory with attachment should be processed"
-        );
-    }
-
-    /// Transcript-sourced raw memories are filtered out and NOT consumed by the
-    /// notes compression pipeline (they go to the transcript indexer instead).
-    #[tokio::test]
-    async fn test_transcript_raw_memories_are_skipped() {
-        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
-
-        // Insert one transcript memory (should be skipped) and one session memory
-        let transcript = RawMemory::new(
-            "Full session transcript content".to_string(),
-            RawMemorySource::Transcript,
-        );
-        let session = RawMemory::new(
-            "User: Hello\nAssistant: Hi there!".to_string(),
-            RawMemorySource::SessionCompressed,
-        );
-
-        database.insert_raw_memory(&transcript).await.unwrap();
-        database.insert_raw_memory(&session).await.unwrap();
-
-        let count = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(count, 2);
-
-        // compress_to_notes only processes session memories, skipping Transcript
-        let result = service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
-
-        // Only the session memory counts toward memories_processed
-        assert_eq!(
-            result.memories_processed, 1,
-            "Only session memories should be processed (transcript is skipped)"
-        );
-
-        // Both IDs are passed to mark_raw_as_processed; transcript ID is included
-        // because the mark step uses all fetched IDs before the filter.
-        // The session memory is definitely processed.
-        let remaining = database.count_unprocessed("default").await.unwrap();
-        // At most 1 remaining (the transcript, which was filtered pre-extraction
-        // but still in the "consumed_ids" list and thus marked processed too).
-        assert!(
-            remaining <= 1,
-            "At most 1 raw memory (transcript) may remain unprocessed"
-        );
-    }
-
-    /// Multiple raw memories in one batch are all processed together.
-    #[tokio::test]
-    async fn test_multiple_raw_memories_batch_processed() {
-        let (service, database, indexer, _temp_dir) = create_test_service_with_indexer().await;
-
-        // Insert 3 raw memories
-        for i in 0..3u32 {
-            let raw = RawMemory::new(
-                format!("User: Question {i}\nAssistant: Answer {i}"),
-                RawMemorySource::SessionCompressed,
-            );
-            database.insert_raw_memory(&raw).await.unwrap();
-        }
-
-        assert_eq!(database.count_unprocessed("default").await.unwrap(), 3);
-
-        let result = service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            result.memories_processed, 3,
-            "All 3 memories should be processed"
-        );
-
-        let remaining = database.count_unprocessed("default").await.unwrap();
-        assert_eq!(
-            remaining, 0,
-            "All raw memories should be marked as processed"
-        );
-    }
-
     /// Empty database: compression returns an empty result without error.
     #[tokio::test]
     async fn test_compress_to_notes_empty_database() {
@@ -1078,60 +650,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(backend.count_unprocessed("default").await.unwrap(), 0);
-    }
-}
-
-#[cfg(test)]
-mod tests_spec1 {
-    use super::*;
-    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, SessionEndReason};
-
-    #[test]
-    fn group_by_source_separates_specialised_and_legacy() {
-        let mut rows = vec![
-            RawMemory::new("a".into(), RawMemorySource::Transcript),
-            RawMemory::new("b".into(), RawMemorySource::PreCompress),
-            RawMemory::new("c".into(), RawMemorySource::Transcript),
-            RawMemory::new(
-                "d".into(),
-                RawMemorySource::SessionEnd {
-                    reason: SessionEndReason::TaskDone,
-                },
-            ),
-        ];
-        for (i, r) in rows.iter_mut().enumerate() {
-            r.id = format!("id-{i}");
-        }
-
-        let groups = group_by_source(&rows);
-        assert_eq!(groups.len(), 3, "expected 3 source groups");
-        let t_count = groups
-            .iter()
-            .find(|(s, _)| matches!(s, RawMemorySource::Transcript))
-            .unwrap()
-            .1
-            .len();
-        assert_eq!(t_count, 2);
-        let pc_count = groups
-            .iter()
-            .find(|(s, _)| matches!(s, RawMemorySource::PreCompress))
-            .unwrap()
-            .1
-            .len();
-        assert_eq!(pc_count, 1);
-        let se_count = groups
-            .iter()
-            .find(|(s, _)| {
-                matches!(
-                    s,
-                    RawMemorySource::SessionEnd {
-                        reason: SessionEndReason::TaskDone
-                    }
-                )
-            })
-            .unwrap()
-            .1
-            .len();
-        assert_eq!(se_count, 1);
     }
 }
