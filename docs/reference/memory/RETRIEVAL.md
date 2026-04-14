@@ -402,6 +402,10 @@ The legacy `MemoryContext` type, `memory_context_from_envelope` adapter, and `Me
 
 See `docs/superpowers/specs/2026-04-13-memory-evolution-spec3-fencing-modes-design.md`.
 
+## 15. Pluggable Memory Extensions (Spec 4)
+
+The memory pipeline exposes three hook points — `on_retrieve`, `on_capture`, and `produce` — through the `MemoryExtension` trait. First-party Aleph code registers implementations in-process; third-party plugins register over MCP through the existing plugin manifest by declaring a `[memory]` section. Dispatch semantics: `on_retrieve` broadcasts (2s per-plugin timeout); `on_capture` chains with fail-safe Block on error/timeout (3s); `produce` runs per-plugin with 30s timeout under a dedicated scheduler. See `docs/reference/memory/EXTENSIONS.md` for full details.
+
 ## Appendix: Retrieval Tuning Tips
 
 - **Raise `hard_min_score` when noise surfaces.** The default 0.35 is tuned against the current confidence + decay profile; bump to 0.45 if retrieval surfaces marginal matches, lower to 0.25 for sparse knowledge bases.
