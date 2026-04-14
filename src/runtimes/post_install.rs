@@ -27,7 +27,9 @@ fn expand_home(template: &str) -> String {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default();
-    let s = template.replacen("$HOME", &home, 1).replacen("%USERPROFILE%", &home, 1);
+    let s = template
+        .replacen("$HOME", &home, 1)
+        .replacen("%USERPROFILE%", &home, 1);
 
     #[cfg(target_os = "windows")]
     let s = s
@@ -106,7 +108,10 @@ async fn verify_or_repair(
         return Ok(());
     }
     let expanded_repair: Vec<String> = repair.iter().map(|a| expand_home(a)).collect();
-    let output = Command::new(bin_path).args(&expanded_repair).output().await?;
+    let output = Command::new(bin_path)
+        .args(&expanded_repair)
+        .output()
+        .await?;
     if !output.status.success() {
         return Err(PostInstallError::RepairFailed);
     }
@@ -156,9 +161,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut perms = tokio::fs::metadata(&script_path).await.unwrap().permissions();
+        let mut perms = tokio::fs::metadata(&script_path)
+            .await
+            .unwrap()
+            .permissions();
         perms.set_mode(0o755);
-        tokio::fs::set_permissions(&script_path, perms).await.unwrap();
+        tokio::fs::set_permissions(&script_path, perms)
+            .await
+            .unwrap();
 
         // Probe a non-existent path so the repair fires.
         // repair[0] is the script to run (bin_path), repair[1] is the output
