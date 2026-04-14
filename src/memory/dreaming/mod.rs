@@ -71,6 +71,8 @@ pub struct DreamContext {
     pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Run metadata for scheduling and reporting.
     pub run_metadata: DreamRunMetadata,
+    /// Optional wiki orientation — used by `IndexRefresherStage`.
+    pub wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
 }
 
 impl DreamContext {
@@ -111,6 +113,7 @@ impl DreamPipeline {
         Self::new(vec![
             Box::new(stages::NoteConsolidateStage), // merge first to reduce volume
             Box::new(stages::NoteDriftStage),       // detect contradictions
+            Box::new(stages::IndexRefresherStage),  // rebuild index.md + rotate log
             Box::new(stages::NoteLintStage),        // format fixes
             Box::new(stages::NoteDecayStage),       // cleanup low-value
             Box::new(stages::DailyDigestStage),     // generate daily report
@@ -123,6 +126,7 @@ impl DreamPipeline {
             Box::new(stages::NoteConsolidateStage),
             Box::new(stages::NoteDriftStage),
             Box::new(stages::NoteSynthesisStage), // weekly-only: deep synthesis
+            Box::new(stages::IndexRefresherStage), // rebuild index.md + rotate log
             Box::new(stages::NoteLintStage),
             Box::new(stages::NoteDecayStage),
             Box::new(stages::DailyDigestStage),
@@ -583,12 +587,12 @@ mod tests {
     #[test]
     fn test_pipeline_builder_daily() {
         let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 5);
+        assert_eq!(pipeline.stages.len(), 6);
     }
 
     #[test]
     fn test_pipeline_builder_weekly() {
         let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 6);
+        assert_eq!(pipeline.stages.len(), 7);
     }
 }

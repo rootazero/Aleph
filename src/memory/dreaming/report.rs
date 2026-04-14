@@ -53,6 +53,9 @@ pub struct DreamReport {
     /// Overall run status.
     #[serde(skip)]
     pub status: DreamReportStatus,
+    /// Flexible key-value extras populated by individual stages (not serialised).
+    #[serde(skip)]
+    pub extra: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for DreamReportStatus {

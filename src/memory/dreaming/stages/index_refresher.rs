@@ -1,0 +1,45 @@
+//! `IndexRefresherStage` — idempotent full rebuild of `index.md` + log rotation.
+
+use crate::error::AlephError;
+use crate::memory::dreaming::stages::DreamStage;
+use crate::memory::dreaming::DreamContext;
+use async_trait::async_trait;
+
+pub struct IndexRefresherStage;
+
+#[async_trait]
+impl DreamStage for IndexRefresherStage {
+    fn name(&self) -> &'static str {
+        "index_refresher"
+    }
+
+    async fn should_run(&self, _ctx: &DreamContext) -> bool {
+        true
+    }
+
+    async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+        if let Some(w) = ctx.wiki.as_ref() {
+            let stats = w.rebuild_index(&ctx.agent_id).await?;
+            ctx.report
+                .extra
+                .insert("notes_indexed".into(), stats.notes_indexed.to_string());
+            ctx.report
+                .extra
+                .insert("wiki_bytes".into(), stats.bytes_written.to_string());
+            w.rotate_log_if_needed(&ctx.agent_id).await?;
+        }
+        Ok(ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn name_is_stable() {
+        let s = IndexRefresherStage;
+        assert_eq!(s.name(), "index_refresher");
+    }
+    // Behaviour-level integration test lives in tests/memory_wiki_orientation.rs (Task 13).
+}
