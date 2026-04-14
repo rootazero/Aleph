@@ -7,6 +7,7 @@
 pub mod extractor;
 pub mod indexer;
 mod note;
+pub mod orientation;
 pub mod retrieval;
 pub mod search_result;
 pub mod store;

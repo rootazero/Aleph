@@ -1,13 +1,13 @@
-//! `WikiOrientation` trait + `FsWikiOrientation` filesystem implementation.
+//! `NoteOrientation` trait + `FsNoteOrientation` filesystem implementation.
 
 use crate::error::AlephError;
-use crate::memory::notes::store::NoteStore;
-use crate::memory::wiki::index_md::IndexMdGenerator;
-use crate::memory::wiki::log_md::LogMdWriter;
-use crate::memory::wiki::schema::{SchemaStore, DEFAULT_SCHEMA};
-use crate::memory::wiki::types::{
+use crate::memory::notes::orientation::index_md::IndexMdGenerator;
+use crate::memory::notes::orientation::log_md::LogMdWriter;
+use crate::memory::notes::orientation::schema::{SchemaStore, DEFAULT_SCHEMA};
+use crate::memory::notes::orientation::types::{
     IndexStats, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
 };
+use crate::memory::notes::store::NoteStore;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[async_trait]
-pub trait WikiOrientation: Send + Sync {
+pub trait NoteOrientation: Send + Sync {
     async fn bootstrap(&self, agent_id: &str) -> Result<(), AlephError>;
 
     async fn read_snapshot(
@@ -38,14 +38,14 @@ pub trait WikiOrientation: Send + Sync {
 }
 
 /// Production implementation.
-pub struct FsWikiOrientation<S: NoteStore + Send + Sync + 'static> {
+pub struct FsNoteOrientation<S: NoteStore + Send + Sync + 'static> {
     memory_dir: PathBuf,
     store: Arc<S>,
     dirty: Mutex<HashSet<String>>, // "agent_id|path"
     provider: Option<Arc<dyn AiProvider>>,
 }
 
-impl<S: NoteStore + Send + Sync + 'static> FsWikiOrientation<S> {
+impl<S: NoteStore + Send + Sync + 'static> FsNoteOrientation<S> {
     pub fn new(memory_dir: impl Into<PathBuf>, store: Arc<S>) -> Self {
         Self {
             memory_dir: memory_dir.into(),
@@ -73,7 +73,7 @@ impl<S: NoteStore + Send + Sync + 'static> FsWikiOrientation<S> {
 }
 
 #[async_trait]
-impl<S: NoteStore + Send + Sync + 'static> WikiOrientation for FsWikiOrientation<S> {
+impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation<S> {
     async fn bootstrap(&self, agent_id: &str) -> Result<(), AlephError> {
         let dir = self.agent_dir(agent_id);
         tokio::fs::create_dir_all(&dir)
@@ -83,7 +83,7 @@ impl<S: NoteStore + Send + Sync + 'static> WikiOrientation for FsWikiOrientation
         let ss = SchemaStore::new(&dir);
         if ss.read().await?.is_none() {
             let body = if let Some(p) = &self.provider {
-                match crate::memory::wiki::prompts::schema_via_llm(p, "").await {
+                match crate::memory::notes::orientation::prompts::schema_via_llm(p, "").await {
                     Ok(s) if s.contains("# Memory Schema") => s,
                     Ok(_) | Err(_) => DEFAULT_SCHEMA.to_string(),
                 }
@@ -196,7 +196,7 @@ mod tests {
     async fn bootstrap_creates_schema_index_log() {
         let dir = tempfile::tempdir().unwrap();
         let backend = fresh_backend(dir.path());
-        let orient = FsWikiOrientation::new(dir.path().join("note"), backend);
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
         orient.bootstrap("default").await.unwrap();
 
         let base = dir.path().join("note/default");
@@ -209,7 +209,7 @@ mod tests {
     async fn bootstrap_is_idempotent_on_schema() {
         let dir = tempfile::tempdir().unwrap();
         let backend = fresh_backend(dir.path());
-        let orient = FsWikiOrientation::new(dir.path().join("note"), backend);
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
         orient.bootstrap("default").await.unwrap();
         let schema1 = tokio::fs::read_to_string(dir.path().join("note/default/SCHEMA.md"))
             .await
@@ -225,7 +225,7 @@ mod tests {
     async fn read_snapshot_returns_all_three_parts() {
         let dir = tempfile::tempdir().unwrap();
         let backend = fresh_backend(dir.path());
-        let orient = FsWikiOrientation::new(dir.path().join("note"), backend);
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
         orient.bootstrap("default").await.unwrap();
         let snap = orient
             .read_snapshot("default", TokenBudget::default())
@@ -240,7 +240,7 @@ mod tests {
     async fn invalidate_tracked_until_rebuild() {
         let dir = tempfile::tempdir().unwrap();
         let backend = fresh_backend(dir.path());
-        let orient = FsWikiOrientation::new(dir.path().join("note"), backend);
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
         orient.bootstrap("default").await.unwrap();
         orient.invalidate("default", "learning/rust");
         assert_eq!(

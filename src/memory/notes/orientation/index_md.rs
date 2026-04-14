@@ -10,8 +10,8 @@
 //!   3. Filename humanized (hyphens/underscores → spaces)
 
 use crate::error::AlephError;
+use crate::memory::notes::orientation::types::IndexStats;
 use crate::memory::notes::store::NoteIndexEntry;
-use crate::memory::wiki::types::IndexStats;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::path::PathBuf;

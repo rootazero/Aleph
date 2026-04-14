@@ -80,8 +80,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     daemon: bool,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     // Spec 5 Task 12: wiki orientation handle for DreamDaemon + MemoryContextProvider + tools.
-    wiki: Option<std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation>>,
-    wiki_memory_dir: Option<std::path::PathBuf>,
+    orientation: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
+    note_memory_dir: Option<std::path::PathBuf>,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
@@ -749,8 +749,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Spec 4 Task 11: thread capture-filter registry into session_complete tool.
             capture_registry: Some(memory_ext_registry.clone()),
             // Spec 5 Task 12: wiki orientation tools.
-            wiki: wiki.clone(),
-            wiki_memory_dir: wiki_memory_dir.clone(),
+            orientation: orientation.clone(),
+            note_memory_dir: note_memory_dir.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
@@ -1029,12 +1029,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         // Start DreamDaemon with command handler so decay mutations are event-sourced.
         // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
-        alephcore::memory::ensure_dream_daemon_with_wiki(
+        alephcore::memory::ensure_dream_daemon_with_orientation(
             memory_db.clone(),
             std::sync::Arc::new(app_config.memory.clone()),
             default_prov.clone(),
             command_handler,
-            wiki.clone(),
+            orientation.clone(),
         );
 
         // Create session compactor for intra-session context compression
@@ -1078,7 +1078,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 default_prov.clone(),
                 app_config.memory.assembler.clone(),
                 Some(memory_ext_registry.clone()),
-                wiki.clone(),
+                orientation.clone(),
             );
             engine = engine.with_memory_context_provider(mcp);
         }

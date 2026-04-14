@@ -47,7 +47,7 @@ pub struct IndexStats {
 pub struct NoteIndexer<S: NoteStore> {
     memory_dir: PathBuf,
     store: Arc<S>,
-    wiki: Option<std::sync::Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    orientation: Option<std::sync::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
@@ -59,22 +59,22 @@ impl<S: NoteStore> NoteIndexer<S> {
         Self {
             memory_dir,
             store,
-            wiki: None,
+            orientation: None,
         }
     }
 
-    /// Attach a `WikiOrientation` hook. After every successful disk write,
-    /// `WikiOrientation::invalidate` is called with the affected note path.
-    pub fn with_wiki(
+    /// Attach a `NoteOrientation` hook. After every successful disk write,
+    /// `NoteOrientation::invalidate` is called with the affected note path.
+    pub fn with_orientation(
         mut self,
-        wiki: std::sync::Arc<dyn crate::memory::wiki::orientation::WikiOrientation>,
+        orientation: std::sync::Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
     ) -> Self {
-        self.wiki = Some(wiki);
+        self.orientation = Some(orientation);
         self
     }
 
-    fn notify_wiki(&self, agent_id: &str, category: &str, filename: &str) {
-        if let Some(w) = &self.wiki {
+    fn notify_orientation(&self, agent_id: &str, category: &str, filename: &str) {
+        if let Some(w) = &self.orientation {
             w.invalidate(agent_id, &format!("{category}/{filename}"));
         }
     }
@@ -211,7 +211,7 @@ impl<S: NoteStore> NoteIndexer<S> {
                 suggestion: None,
             })?;
 
-        self.notify_wiki(agent_id, category, &safe_title);
+        self.notify_orientation(agent_id, category, &safe_title);
         Ok(path)
     }
 
@@ -295,7 +295,7 @@ impl<S: NoteStore> NoteIndexer<S> {
             })?;
         self.store.index_note(&note, agent_id, category).await?;
 
-        self.notify_wiki(agent_id, category, filename);
+        self.notify_orientation(agent_id, category, filename);
         Ok(())
     }
 
@@ -379,8 +379,8 @@ impl<S: NoteStore> NoteIndexer<S> {
         // Index the renamed file
         let _ = self.index_file(agent_id, &category, &new_path).await;
 
-        self.notify_wiki(agent_id, &category, &safe_old);
-        self.notify_wiki(agent_id, &category, &safe_new);
+        self.notify_orientation(agent_id, &category, &safe_old);
+        self.notify_orientation(agent_id, &category, &safe_new);
         Ok(())
     }
 }
@@ -697,9 +697,11 @@ mod tests {
 mod wiki_hook_tests {
     use super::*;
     use crate::memory::notes::note::KnowledgeNote;
+    use crate::memory::notes::orientation::types::{
+        IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
+    };
+    use crate::memory::notes::orientation::NoteOrientation;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
-    use crate::memory::wiki::orientation::WikiOrientation;
-    use crate::memory::wiki::types::{IndexStats, LogEntry, OrientationSnapshot, TokenBudget};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -708,7 +710,7 @@ mod wiki_hook_tests {
     }
 
     #[async_trait]
-    impl WikiOrientation for CountingOrient {
+    impl NoteOrientation for CountingOrient {
         async fn bootstrap(&self, _a: &str) -> Result<(), AlephError> {
             Ok(())
         }
@@ -750,14 +752,14 @@ mod wiki_hook_tests {
     }
 
     #[tokio::test]
-    async fn write_note_invalidates_wiki() {
+    async fn write_note_invalidates_orientation() {
         let dir = tempfile::tempdir().unwrap();
         let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
         let orient = Arc::new(CountingOrient {
             calls: Mutex::new(vec![]),
         });
         let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone())
-            .with_wiki(orient.clone() as Arc<dyn WikiOrientation>);
+            .with_orientation(orient.clone() as Arc<dyn NoteOrientation>);
 
         let note = KnowledgeNote {
             title: "rust".into(),

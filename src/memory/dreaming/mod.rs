@@ -72,7 +72,7 @@ pub struct DreamContext {
     /// Run metadata for scheduling and reporting.
     pub run_metadata: DreamRunMetadata,
     /// Optional wiki orientation — used by `IndexRefresherStage`.
-    pub wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
 
 impl DreamContext {
@@ -204,16 +204,16 @@ pub fn ensure_dream_daemon(
     provider: Option<Arc<dyn AiProvider>>,
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
 ) {
-    ensure_dream_daemon_with_wiki(database, config, provider, command_handler, None);
+    ensure_dream_daemon_with_orientation(database, config, provider, command_handler, None);
 }
 
-/// Ensure DreamDaemon is running (once) when memory is enabled, with optional wiki handle.
-pub fn ensure_dream_daemon_with_wiki(
+/// Ensure DreamDaemon is running (once) when memory is enabled, with optional orientation handle.
+pub fn ensure_dream_daemon_with_orientation(
     database: MemoryBackend,
     config: Arc<MemoryConfig>,
     provider: Option<Arc<dyn AiProvider>>,
     command_handler: Option<Arc<crate::memory::events::handler::MemoryCommandHandler>>,
-    wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 ) {
     if cfg!(test) {
         return;
@@ -255,8 +255,8 @@ pub fn ensure_dream_daemon_with_wiki(
         daemon_builder
     };
 
-    let daemon = if let Some(w) = wiki {
-        Arc::new(daemon_builder.with_wiki(w))
+    let daemon = if let Some(w) = orientation {
+        Arc::new(daemon_builder.with_orientation(w))
     } else {
         Arc::new(daemon_builder)
     };
@@ -322,7 +322,7 @@ pub struct DreamDaemon {
     /// Optional AI provider for LLM-powered dream stages.
     provider: Option<Arc<dyn AiProvider>>,
     /// Optional wiki orientation — forwarded into DreamContext for IndexRefresherStage.
-    wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
 
 impl DreamDaemon {
@@ -337,7 +337,7 @@ impl DreamDaemon {
             is_running: AtomicBool::new(false),
             command_handler: None,
             provider: None,
-            wiki: None,
+            orientation: None,
         })
     }
 
@@ -357,11 +357,11 @@ impl DreamDaemon {
     }
 
     /// Attach a wiki orientation handle for the IndexRefresher dream stage.
-    pub fn with_wiki(
+    pub fn with_orientation(
         mut self,
-        wiki: Arc<dyn crate::memory::wiki::orientation::WikiOrientation>,
+        orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
     ) -> Self {
-        self.wiki = Some(wiki);
+        self.orientation = Some(orientation);
         self
     }
 

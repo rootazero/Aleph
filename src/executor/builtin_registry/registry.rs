@@ -214,9 +214,9 @@ pub struct BuiltinToolRegistry {
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
     /// Wiki orient tool (Spec 5 Task 12) — optional, requires wiki handle.
-    pub(crate) wiki_orient_tool: Option<crate::builtin_tools::wiki_orient::WikiOrientTool>,
-    /// Wiki schema tool (Spec 5 Task 12) — always Some when wiki_memory_dir is set.
-    pub(crate) wiki_schema_tool: Option<crate::builtin_tools::wiki_schema::WikiSchemaTool>,
+    pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
+    /// Note schema tool (Spec 5 Task 12) — always Some when note_memory_dir is set.
+    pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -994,7 +994,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             // Wiki orientation tools (Spec 5)
-            "wiki_orient" => {
+            "note_orient" => {
                 // Inject the caller's agent_id from session context.
                 let agent_id = self
                     .session_context_handle
@@ -1002,48 +1002,48 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .and_then(|h| h.try_read().ok())
                     .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
                     .unwrap_or_else(|| "default".to_string());
-                if let Some(ref tool) = self.wiki_orient_tool {
+                if let Some(ref tool) = self.note_orient_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
-                        let args: crate::builtin_tools::wiki_orient::WikiOrientArgs =
+                        let args: crate::builtin_tools::note_orient::NoteOrientArgs =
                             serde_json::from_value(arguments).map_err(|e| {
-                                AlephError::tool(format!("wiki_orient: bad args: {e}"))
+                                AlephError::tool(format!("note_orient: bad args: {e}"))
                             })?;
                         let out = tool.call(&agent_id, args).await?;
                         serde_json::to_value(out)
-                            .map_err(|e| AlephError::tool(format!("wiki_orient: serialize: {e}")))
+                            .map_err(|e| AlephError::tool(format!("note_orient: serialize: {e}")))
                     })
                 } else {
                     Box::pin(async move {
                         Err(AlephError::tool(
-                            "wiki_orient not available: WikiOrientation not wired at startup",
+                            "note_orient not available: NoteOrientation not wired at startup",
                         ))
                     })
                 }
             }
 
-            "wiki_schema" => {
+            "note_schema" => {
                 let agent_id = self
                     .session_context_handle
                     .as_ref()
                     .and_then(|h| h.try_read().ok())
                     .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
                     .unwrap_or_else(|| "default".to_string());
-                if let Some(ref tool) = self.wiki_schema_tool {
+                if let Some(ref tool) = self.note_schema_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
-                        let args: crate::builtin_tools::wiki_schema::WikiSchemaArgs =
+                        let args: crate::builtin_tools::note_schema::NoteSchemaArgs =
                             serde_json::from_value(arguments).map_err(|e| {
-                                AlephError::tool(format!("wiki_schema: bad args: {e}"))
+                                AlephError::tool(format!("note_schema: bad args: {e}"))
                             })?;
                         let out = tool.call(&agent_id, args).await?;
                         serde_json::to_value(out)
-                            .map_err(|e| AlephError::tool(format!("wiki_schema: serialize: {e}")))
+                            .map_err(|e| AlephError::tool(format!("note_schema: serialize: {e}")))
                     })
                 } else {
                     Box::pin(async move {
                         Err(AlephError::tool(
-                            "wiki_schema not available: wiki_memory_dir not configured at startup",
+                            "note_schema not available: note_memory_dir not configured at startup",
                         ))
                     })
                 }

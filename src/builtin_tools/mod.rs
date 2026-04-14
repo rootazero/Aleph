@@ -65,6 +65,8 @@ pub mod memory_search;
 pub mod memory_timeline;
 pub mod meta_tools;
 pub mod note_manage;
+pub mod note_orient;
+pub mod note_schema;
 pub mod pdf_generate;
 pub mod permission_tool;
 pub mod pim;
@@ -87,8 +89,6 @@ pub mod vault_store;
 pub mod vision;
 pub mod voice_tools;
 pub mod web_fetch;
-pub mod wiki_orient;
-pub mod wiki_schema;
 
 pub use acp_tools::{
     AcpDelegateArgs, AcpDelegateOutput, AcpDelegateTool, AcpSwitchArgs, AcpSwitchOutput,

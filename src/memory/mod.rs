@@ -45,7 +45,6 @@ pub mod session_compactor;
 pub mod session_resume;
 pub mod store;
 pub mod transcript_indexer;
-pub mod wiki;
 // workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
@@ -75,7 +74,8 @@ pub use context_comptroller::{
     ArbitratedContext, ComptrollerConfig, ContextComptroller, RetentionMode, TokenBudget,
 };
 pub use dreaming::{
-    ensure_dream_daemon, ensure_dream_daemon_with_wiki, record_activity, DailyInsight, DreamStatus,
+    ensure_dream_daemon, ensure_dream_daemon_with_orientation, record_activity, DailyInsight,
+    DreamStatus,
 };
 pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{

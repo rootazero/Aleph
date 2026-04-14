@@ -1,14 +1,14 @@
-//! `wiki_orient` — Tools/Hybrid-mode on-demand fetch of SCHEMA + index + recent log.
+//! `note_orient` — Tools/Hybrid-mode on-demand fetch of SCHEMA + index + recent log.
 
 use crate::error::AlephError;
-use crate::memory::wiki::orientation::WikiOrientation;
-use crate::memory::wiki::types::TokenBudget;
+use crate::memory::notes::orientation::types::TokenBudget;
+use crate::memory::notes::orientation::NoteOrientation;
 use crate::sync_primitives::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct WikiOrientArgs {
+pub struct NoteOrientArgs {
     /// Optional token budget for the snapshot. Defaults to the configured
     /// `memory.orientation.max_tokens`.
     #[serde(default)]
@@ -16,18 +16,18 @@ pub struct WikiOrientArgs {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct WikiOrientOutput {
+pub struct NoteOrientOutput {
     pub schema: String,
     pub index: String,
     pub recent_log: String,
 }
 
-pub struct WikiOrientTool {
-    wiki: Arc<dyn WikiOrientation>,
+pub struct NoteOrientTool {
+    wiki: Arc<dyn NoteOrientation>,
     default_budget: TokenBudget,
 }
 
-impl Clone for WikiOrientTool {
+impl Clone for NoteOrientTool {
     fn clone(&self) -> Self {
         Self {
             wiki: Arc::clone(&self.wiki),
@@ -36,8 +36,8 @@ impl Clone for WikiOrientTool {
     }
 }
 
-impl WikiOrientTool {
-    pub fn new(wiki: Arc<dyn WikiOrientation>, default_budget: TokenBudget) -> Self {
+impl NoteOrientTool {
+    pub fn new(wiki: Arc<dyn NoteOrientation>, default_budget: TokenBudget) -> Self {
         Self {
             wiki,
             default_budget,
@@ -47,13 +47,13 @@ impl WikiOrientTool {
     pub async fn call(
         &self,
         agent_id: &str,
-        args: WikiOrientArgs,
-    ) -> Result<WikiOrientOutput, AlephError> {
+        args: NoteOrientArgs,
+    ) -> Result<NoteOrientOutput, AlephError> {
         let budget = TokenBudget {
             max_tokens: args.max_tokens.unwrap_or(self.default_budget.max_tokens),
         };
         let snap = self.wiki.read_snapshot(agent_id, budget).await?;
-        Ok(WikiOrientOutput {
+        Ok(NoteOrientOutput {
             schema: snap.schema_text,
             index: snap.index_text,
             recent_log: snap.recent_log_tail,
@@ -64,22 +64,22 @@ impl WikiOrientTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::notes::orientation::FsNoteOrientation;
     use crate::memory::store::sqlite::SqliteMemoryBackend;
-    use crate::memory::wiki::orientation::FsWikiOrientation;
 
     #[tokio::test]
     async fn returns_snapshot_parts() {
         let dir = tempfile::tempdir().unwrap();
         let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
-        let orient: Arc<dyn WikiOrientation> =
-            Arc::new(FsWikiOrientation::new(dir.path().join("note"), backend));
+        let orient: Arc<dyn NoteOrientation> =
+            Arc::new(FsNoteOrientation::new(dir.path().join("note"), backend));
         orient.bootstrap("default").await.unwrap();
 
-        let tool = WikiOrientTool::new(orient, TokenBudget::default());
+        let tool = NoteOrientTool::new(orient, TokenBudget::default());
         let out = tool
             .call(
                 "default",
-                WikiOrientArgs {
+                NoteOrientArgs {
                     max_tokens: Some(8000),
                 },
             )

@@ -18,7 +18,7 @@ impl DreamStage for IndexRefresherStage {
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
-        if let Some(w) = ctx.wiki.as_ref() {
+        if let Some(w) = ctx.orientation.as_ref() {
             let stats = w.rebuild_index(&ctx.agent_id).await?;
             ctx.report
                 .extra
@@ -41,5 +41,5 @@ mod tests {
         let s = IndexRefresherStage;
         assert_eq!(s.name(), "index_refresher");
     }
-    // Behaviour-level integration test lives in tests/memory_wiki_orientation.rs (Task 13).
+    // Behaviour-level integration test lives in tests/memory_note_orientation.rs (Task 13).
 }

@@ -624,7 +624,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    // Construct WikiOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
+    // Construct NoteOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
     // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
     // MemoryContextProvider, and the builtin tool registry.
     let note_memory_dir = alephcore::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
@@ -633,9 +633,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .join("memory")
             .join("note")
     });
-    let wiki: std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation> = {
-        use alephcore::memory::wiki::orientation::FsWikiOrientation;
-        std::sync::Arc::new(FsWikiOrientation::new(
+    let wiki: std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation> = {
+        use alephcore::memory::notes::orientation::FsNoteOrientation;
+        std::sync::Arc::new(FsNoteOrientation::new(
             note_memory_dir.clone(),
             memory_db.clone(),
         ))
@@ -772,7 +772,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         tokio::spawn(async move {
             tracing::info!(dir = %note_dir_for_indexer.display(), agent = %agent_id, "Rebuilding note index");
             let indexer = alephcore::memory::notes::NoteIndexer::new(note_dir_for_indexer, db)
-                .with_wiki(wiki_for_indexer);
+                .with_orientation(wiki_for_indexer);
             match indexer.full_rebuild(&agent_id).await {
                 Ok(stats) => {
                     tracing::info!(

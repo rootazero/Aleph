@@ -63,9 +63,9 @@ pub struct MemoryContextProvider {
     /// Default-empty registry means no plugins registered = no-op.
     extensions: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     /// Optional wiki orientation provider for injecting structural context.
-    wiki: Option<Arc<dyn crate::memory::wiki::orientation::WikiOrientation>>,
+    orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Token budget for orientation snapshots.
-    orientation_budget: crate::memory::wiki::types::TokenBudget,
+    orientation_budget: crate::memory::notes::orientation::types::TokenBudget,
 }
 
 impl MemoryContextProvider {
@@ -121,8 +121,8 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
-            wiki: None,
-            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
+            orientation: None,
+            orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
         }
     }
 
@@ -186,8 +186,8 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
-            wiki: None,
-            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
+            orientation: None,
+            orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
         }
     }
 
@@ -250,17 +250,17 @@ impl MemoryContextProvider {
             extensions: std::sync::Arc::new(
                 crate::memory::extensions::MemoryExtensionRegistry::new(),
             ),
-            wiki: None,
-            orientation_budget: crate::memory::wiki::types::TokenBudget::default(),
+            orientation: None,
+            orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
         }
     }
 
     /// Set the wiki orientation provider (builder-style).
-    pub fn with_wiki(
+    pub fn with_orientation(
         mut self,
-        wiki: Arc<dyn crate::memory::wiki::orientation::WikiOrientation>,
+        orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
     ) -> Self {
-        self.wiki = Some(wiki);
+        self.orientation = Some(orientation);
         self
     }
 
@@ -283,7 +283,7 @@ impl MemoryContextProvider {
         ) {
             return Ok(None);
         }
-        let Some(w) = &self.wiki else {
+        let Some(w) = &self.orientation else {
             return Ok(None);
         };
         let snap = w.read_snapshot(agent_id, self.orientation_budget).await?;
@@ -340,14 +340,16 @@ impl MemoryContextProvider {
     }
 }
 
-fn render_orientation_envelope(s: &crate::memory::wiki::types::OrientationSnapshot) -> String {
+fn render_orientation_envelope(
+    s: &crate::memory::notes::orientation::types::OrientationSnapshot,
+) -> String {
     let esc = |t: &str| {
         t.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
     };
     format!(
-        "<WikiOrientation>\n<schema>\n{}\n</schema>\n<index_snapshot>\n{}\n</index_snapshot>\n<recent_log>\n{}\n</recent_log>\n</WikiOrientation>",
+        "<NoteOrientation>\n<schema>\n{}\n</schema>\n<index_snapshot>\n{}\n</index_snapshot>\n<recent_log>\n{}\n</recent_log>\n</NoteOrientation>",
         esc(&s.schema_text),
         esc(&s.index_text),
         esc(&s.recent_log_tail)
@@ -476,14 +478,16 @@ mod orientation_tests {
     use super::*;
     use crate::config::types::memory::MemoryInjectionMode;
     use crate::error::AlephError;
-    use crate::memory::wiki::orientation::WikiOrientation;
-    use crate::memory::wiki::types::{IndexStats, LogEntry, OrientationSnapshot, TokenBudget};
+    use crate::memory::notes::orientation::types::{
+        IndexStats, LogEntry, OrientationSnapshot, TokenBudget,
+    };
+    use crate::memory::notes::orientation::NoteOrientation;
     use async_trait::async_trait;
 
     struct FixedOrient;
 
     #[async_trait]
-    impl WikiOrientation for FixedOrient {
+    impl NoteOrientation for FixedOrient {
         async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
             Ok(())
         }
@@ -522,7 +526,7 @@ mod orientation_tests {
     struct NoopOrient;
 
     #[async_trait]
-    impl WikiOrientation for NoopOrient {
+    impl NoteOrientation for NoopOrient {
         async fn bootstrap(&self, _: &str) -> Result<(), AlephError> {
             Ok(())
         }
@@ -562,7 +566,7 @@ mod orientation_tests {
     async fn orientation_message_injected_in_context_mode() {
         let provider =
             MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
-                .with_wiki(Arc::new(FixedOrient));
+                .with_orientation(Arc::new(FixedOrient));
 
         let msg = provider
             .build_orientation_user_message("default", MemoryInjectionMode::Context)
@@ -570,7 +574,7 @@ mod orientation_tests {
             .unwrap();
         let m = msg.expect("context mode should inject");
         let text = format!("{m:?}");
-        assert!(text.contains("WikiOrientation"));
+        assert!(text.contains("NoteOrientation"));
         assert!(text.contains("# Memory Schema"));
         assert!(text.contains("# Index"));
         assert!(text.contains("touched=3"));
@@ -580,7 +584,7 @@ mod orientation_tests {
     async fn orientation_skipped_in_tools_mode() {
         let provider =
             MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
-                .with_wiki(Arc::new(NoopOrient));
+                .with_orientation(Arc::new(NoopOrient));
 
         let msg = provider
             .build_orientation_user_message("default", MemoryInjectionMode::Tools)

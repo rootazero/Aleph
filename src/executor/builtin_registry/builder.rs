@@ -238,18 +238,18 @@ impl BuiltinToolRegistry {
         });
 
         // Build wiki tools (Spec 5 Task 12)
-        let wiki_orient_tool = config.wiki.as_ref().map(|wiki| {
-            use crate::memory::wiki::types::TokenBudget;
-            crate::builtin_tools::wiki_orient::WikiOrientTool::new(
+        let note_orient_tool = config.orientation.as_ref().map(|wiki| {
+            use crate::memory::notes::orientation::types::TokenBudget;
+            crate::builtin_tools::note_orient::NoteOrientTool::new(
                 Arc::clone(wiki),
                 TokenBudget::default(),
             )
         });
 
-        let wiki_schema_tool = config
-            .wiki_memory_dir
+        let note_schema_tool = config
+            .note_memory_dir
             .as_ref()
-            .map(|dir| crate::builtin_tools::wiki_schema::WikiSchemaTool::new(dir.clone()));
+            .map(|dir| crate::builtin_tools::note_schema::NoteSchemaTool::new(dir.clone()));
 
         // Build tool metadata
         let mut tools = HashMap::new();
@@ -304,8 +304,8 @@ impl BuiltinToolRegistry {
             &vault_store_tool,
             &config,
             config.injection_mode,
-            &wiki_orient_tool,
-            &wiki_schema_tool,
+            &note_orient_tool,
+            &note_schema_tool,
         );
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
@@ -1002,8 +1002,8 @@ impl BuiltinToolRegistry {
             note_manage_tool,
             session_complete_tool,
             memory_reflect_tool,
-            wiki_orient_tool,
-            wiki_schema_tool,
+            note_orient_tool,
+            note_schema_tool,
             tools,
         }
     }
@@ -1221,8 +1221,8 @@ impl BuiltinToolRegistry {
         vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
         injection_mode: crate::config::types::memory::MemoryInjectionMode,
-        wiki_orient_tool: &Option<crate::builtin_tools::wiki_orient::WikiOrientTool>,
-        wiki_schema_tool: &Option<crate::builtin_tools::wiki_schema::WikiSchemaTool>,
+        note_orient_tool: &Option<crate::builtin_tools::note_orient::NoteOrientTool>,
+        note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
     ) {
         use schemars::schema_for;
 
@@ -1573,37 +1573,37 @@ impl BuiltinToolRegistry {
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
         // Wiki orientation tools (Spec 5 Task 12).
-        // `wiki_schema` is always registered when a memory dir is available (LLM can always
-        // read/write SCHEMA.md). `wiki_orient` is only exposed in Tools / Hybrid mode so the
+        // `note_schema` is always registered when a memory dir is available (LLM can always
+        // read/write SCHEMA.md). `note_orient` is only exposed in Tools / Hybrid mode so the
         // LLM can call it on-demand; in Context mode orientation is injected automatically.
-        if wiki_schema_tool.is_some() {
+        if note_schema_tool.is_some() {
             reg(
                 tools,
-                "wiki_schema",
+                "note_schema",
                 "Read or write the SCHEMA.md file that describes the structure of the agent's \
                  long-term memory wiki. Use 'read' to inspect the current schema, 'write' to \
                  update it (include the expected_hash from your last read to prevent conflicts).",
                 serde_json::to_value(schema_for!(
-                    crate::builtin_tools::wiki_schema::WikiSchemaArgs
+                    crate::builtin_tools::note_schema::NoteSchemaArgs
                 ))
                 .unwrap_or_default(),
             );
-            info!("Registered wiki_schema tool in BuiltinToolRegistry");
+            info!("Registered note_schema tool in BuiltinToolRegistry");
         }
 
-        if expose_retrieval_tools && wiki_orient_tool.is_some() {
+        if expose_retrieval_tools && note_orient_tool.is_some() {
             reg(
                 tools,
-                "wiki_orient",
+                "note_orient",
                 "Fetch a compact orientation snapshot of the agent's memory wiki: SCHEMA, \
                  index, and recent log entries. Call this at the start of a task to understand \
                  what structured memory is available before searching or writing notes.",
                 serde_json::to_value(schema_for!(
-                    crate::builtin_tools::wiki_orient::WikiOrientArgs
+                    crate::builtin_tools::note_orient::NoteOrientArgs
                 ))
                 .unwrap_or_default(),
             );
-            info!("Registered wiki_orient tool in BuiltinToolRegistry");
+            info!("Registered note_orient tool in BuiltinToolRegistry");
         }
     }
 }

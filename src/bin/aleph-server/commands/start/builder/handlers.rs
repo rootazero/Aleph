@@ -790,7 +790,7 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     provider: Option<std::sync::Arc<dyn alephcore::providers::AiProvider>>,
     assembler_config: alephcore::AssemblerConfig,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
-    wiki: Option<std::sync::Arc<dyn alephcore::memory::wiki::orientation::WikiOrientation>>,
+    wiki: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     let mcp = match provider {
         Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
@@ -809,7 +809,7 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     };
     // Spec 5 Task 12: wire wiki orientation for build_orientation_user_message.
     let mcp = if let Some(w) = wiki {
-        mcp.with_wiki(w)
+        mcp.with_orientation(w)
     } else {
         mcp
     };

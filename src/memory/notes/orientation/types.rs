@@ -50,7 +50,7 @@ impl Default for TokenBudget {
     }
 }
 
-/// Snapshot returned by `WikiOrientation::read_snapshot`.
+/// Snapshot returned by `NoteOrientation::read_snapshot`.
 #[derive(Debug, Clone)]
 pub struct OrientationSnapshot {
     pub schema_text: String,
