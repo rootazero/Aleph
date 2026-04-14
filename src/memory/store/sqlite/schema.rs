@@ -249,6 +249,48 @@ fn vec_table_ddl(dim: u32, table_name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// One-time migration: drop legacy dream_reports columns via ALTER TABLE.
+// ---------------------------------------------------------------------------
+
+/// Drop the 11 pre-notes-era counter columns from `dream_reports` using
+/// `ALTER TABLE … DROP COLUMN` statements.
+///
+/// Checks column existence first, so it is safe to call on fresh or already-
+/// migrated databases (i.e. fully idempotent).
+pub(crate) fn migrate_dream_reports_drop_legacy_cols(conn: &Connection) -> Result<(), AlephError> {
+    let legacy_cols = [
+        "facts_collected",
+        "clusters_found",
+        "drift_detected",
+        "drift_summary",
+        "candidates_evaluated",
+        "facts_promoted",
+        "promotion_details",
+        "facts_decayed",
+        "facts_pruned",
+        "nodes_decayed",
+        "edges_decayed",
+    ];
+    let existing: std::collections::BTreeSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .map_err(|e| AlephError::other(format!("pragma: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| AlephError::other(format!("pragma rows: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for col in legacy_cols {
+        if existing.contains(col) {
+            let sql = format!("ALTER TABLE dream_reports DROP COLUMN {col}");
+            conn.execute(&sql, [])
+                .map_err(|e| AlephError::other(format!("drop col {col}: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // One-time migration: drop obsolete facts tables from existing databases.
 // ---------------------------------------------------------------------------
 
@@ -311,6 +353,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(DREAM_REPORTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_reports table: {e}")))?;
+    migrate_dream_reports_drop_legacy_cols(conn)?;
 
     conn.execute_batch(DREAM_STATUS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create dream_status table: {e}")))?;
@@ -565,5 +608,38 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM dream_reports", [], |r| r.get(0))
             .unwrap();
         assert_eq!(row_count_after, 2);
+    }
+
+    #[test]
+    fn migrate_dream_reports_drop_legacy_cols_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE dream_reports (
+                id TEXT PRIMARY KEY,
+                pipeline_type TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                facts_collected INTEGER NOT NULL DEFAULT 0,
+                facts_promoted INTEGER NOT NULL DEFAULT 0,
+                synthesis_count INTEGER NOT NULL DEFAULT 0,
+                errors TEXT,
+                namespace TEXT NOT NULL DEFAULT 'owner'
+            )",
+        )
+        .unwrap();
+        super::migrate_dream_reports_drop_legacy_cols(&conn).unwrap();
+        super::migrate_dream_reports_drop_legacy_cols(&conn).unwrap(); // idempotent
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(dream_reports)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(!cols.contains(&"facts_collected".to_string()));
+        assert!(!cols.contains(&"facts_promoted".to_string()));
+        assert!(cols.contains(&"pipeline_type".to_string()));
+        assert!(cols.contains(&"synthesis_count".to_string()));
     }
 }
