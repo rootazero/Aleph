@@ -4,7 +4,9 @@
 //! is added in Spec 6 T7+T8.
 
 use crate::error::AlephError;
+use crate::memory::notes::ingest::apply::{ApplyError, CompoundApplyTx};
 use crate::memory::notes::ingest::plan::ApplyReport;
+use crate::memory::notes::ingest::retrieve::gather_related;
 use crate::memory::store::raw_memory::RawMemory;
 use async_trait::async_trait;
 
@@ -78,6 +80,102 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
 
         plan.ops.retain(valid_op);
         Ok(plan)
+    }
+}
+
+#[async_trait]
+impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundIngestor<S> {
+    async fn ingest_batch(
+        &self,
+        agent_id: &str,
+        raws: Vec<crate::memory::store::raw_memory::RawMemory>,
+    ) -> Result<ApplyReport, AlephError> {
+        if raws.is_empty() {
+            return Ok(ApplyReport::default());
+        }
+        let source = raws[0].source.clone();
+        let related = gather_related(
+            self.store.clone(),
+            self.embedder.clone(),
+            &raws,
+            agent_id,
+            &self.budget,
+        )
+        .await?;
+
+        let plan = self.plan(agent_id, &raws, &related, &source).await?;
+        if plan.ops.is_empty() {
+            return Ok(ApplyReport::default());
+        }
+
+        let report = match self.try_apply(agent_id, &plan).await {
+            Ok(r) => r,
+            Err(ApplyError::HashConflict { path, actual, .. }) => {
+                warn!("compound ingest: hash conflict on {path}; re-planning");
+                let mut augmented = raws.clone();
+                if let Some(last) = augmented.last_mut() {
+                    last.content.push_str(&format!(
+                        "\n\n[system] previous plan referenced {path} with a stale hash; actual hash is {actual}. Re-plan using fresh data."
+                    ));
+                }
+                let plan2 = self.plan(agent_id, &augmented, &related, &source).await?;
+                if plan2.ops.is_empty() {
+                    return Ok(ApplyReport::default());
+                }
+                self.try_apply(agent_id, &plan2)
+                    .await
+                    .map_err(|e| match e {
+                        ApplyError::Other(inner) => inner,
+                        other => AlephError::other(format!("apply after re-plan: {other}")),
+                    })?
+            }
+            Err(ApplyError::Other(e)) => return Err(e),
+        };
+
+        if let Some(orient) = &self.orientation {
+            let reasoning_preview: String = plan.reasoning.chars().take(80).collect();
+            let detail: Vec<String> = report
+                .touched_paths
+                .iter()
+                .take(15)
+                .map(|p| format!("touched {p}"))
+                .collect();
+            let entry = crate::memory::notes::orientation::types::LogEntry {
+                timestamp_utc: chrono::Utc::now().timestamp(),
+                action: crate::memory::notes::orientation::types::LogAction::Ingest,
+                summary: format!(
+                    "{} pages touched | tx={} | {}",
+                    report.touched_paths.len(),
+                    report.tx_id,
+                    reasoning_preview
+                ),
+                detail_lines: detail,
+            };
+            if let Err(e) = orient.record_ingest(agent_id, entry).await {
+                warn!("compound ingest: log record failed: {e}");
+            }
+        }
+
+        Ok(report)
+    }
+}
+
+impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
+    async fn try_apply(
+        &self,
+        agent_id: &str,
+        plan: &IngestPlan,
+    ) -> Result<ApplyReport, ApplyError> {
+        let mut tx = CompoundApplyTx::new(
+            &self.indexer,
+            &self.store,
+            self.memory_dir.clone(),
+            agent_id,
+        );
+        for op in &plan.ops {
+            tx.stage(op).await?;
+        }
+        tx.commit().await
     }
 }
 
@@ -276,5 +374,78 @@ mod plan_tests {
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn end_to_end_append_on_existing() {
+        use crate::memory::notes::ingest::plan::PageOp;
+
+        let (dir, backend, indexer) = mk().await;
+
+        // Seed: create learning/rust-async first
+        let provider_seed: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"create","note_path":"learning/rust-async","title":"rust-async",
+                 "summary":"async primitives","facts":["Futures are lazy"],
+                 "links":["learning/tokio"],"tags":["rust","async"]}
+            ]}"#
+            .into(),
+        ));
+        let ing_seed = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer: indexer.clone(),
+            provider: provider_seed,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+        };
+        let r1 = ing_seed
+            .ingest_batch(
+                "default",
+                vec![RawMemory::new(
+                    "seed".to_string(),
+                    RawMemorySource::Transcript,
+                )],
+            )
+            .await
+            .unwrap();
+        assert_eq!(r1.created, 1);
+
+        // Second batch: append
+        let provider2: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"append","note_path":"learning/rust-async",
+                 "new_facts":["tokio is the runtime"],"new_links":[]}
+            ]}"#
+            .into(),
+        ));
+        let ing2 = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer: indexer.clone(),
+            provider: provider2,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+        };
+        let r2 = ing2
+            .ingest_batch(
+                "default",
+                vec![RawMemory::new(
+                    "body2".to_string(),
+                    RawMemorySource::Transcript,
+                )],
+            )
+            .await
+            .unwrap();
+        assert_eq!(r2.appended, 1);
+
+        let body =
+            tokio::fs::read_to_string(dir.path().join("note/default/learning/rust-async.md"))
+                .await
+                .unwrap();
+        assert!(body.contains("Futures are lazy"));
+        assert!(body.contains("tokio is the runtime"));
     }
 }
