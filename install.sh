@@ -156,6 +156,30 @@ if [ "$PLATFORM" = "darwin" ] && [ -f "$HOME/.aleph/bin/aleph-bridge" ]; then
 fi
 echo "  Config:  ~/.aleph/"
 
+# ── Bootstrap runtime dependencies ───────────────────────────────
+
+ALEPH_SKIP_RUNTIME="${ALEPH_SKIP_RUNTIME:-0}"
+for arg in "$@"; do
+    [ "$arg" = "--skip-runtime" ] && ALEPH_SKIP_RUNTIME=1
+done
+
+if [ "$ALEPH_SKIP_RUNTIME" = "1" ]; then
+    echo ""
+    echo "Skipping runtime bootstrap (--skip-runtime or \$ALEPH_SKIP_RUNTIME=1)."
+    echo "Run 'aleph-server bootstrap-runtime' later, or use Panel → Settings → Runtime."
+else
+    echo ""
+    echo "Bootstrapping runtime dependencies (fnm → Node LTS → uv → @playwright/cli + Chromium)..."
+    echo "(Pass --skip-runtime or set ALEPH_SKIP_RUNTIME=1 to skip.)"
+    echo ""
+    if ! "$INSTALL_DIR/$BINARY_NAME" bootstrap-runtime --best-effort; then
+        echo ""
+        echo "Runtime bootstrap hit errors. Aleph will still install."
+        echo "   Fix and retry via: aleph-server bootstrap-runtime"
+        echo "   Or open Panel → Settings → Runtime for GUI."
+    fi
+fi
+
 # ── System service (auto-start on login) ─────────────────────────
 
 install_service() {
