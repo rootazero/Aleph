@@ -100,3 +100,4 @@ archive/
 graphify-out/
 **/graphify-out/
 .worktrees/
+.worktrees
