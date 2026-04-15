@@ -60,6 +60,7 @@ mod tests {
             access: Default::default(),
             delivery: Default::default(),
             reactions: Default::default(),
+            media: Default::default(),
         };
         let proc = MediaProcessor::preprocess(&att, &config).unwrap();
         assert_eq!(proc.mime_type, "audio/ogg; codecs=opus");

@@ -58,7 +58,7 @@ use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{oneshot, RwLock};
 
 use pairing::PairingState;
@@ -153,24 +153,55 @@ impl Channel for WhatsAppChannel {
             .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {}", e)))?;
         runtime.start().await?;
 
-        let _connected = Arc::clone(&self.connected);
-        let _pairing_state = Arc::clone(&self.pairing_state);
+        let connected = Arc::clone(&self.connected);
+        let pairing_state = Arc::clone(&self.pairing_state);
         let inbound_tx = self.channel_state.sender();
-        let _channel_id = self.info.id.clone();
+        let channel_id = self.info.id.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let access = AccessConfig {
+            dm_policy: self.config.access.dm_policy.clone(),
+            allow_from: self.config.access.allow_from.clone(),
+            group_policy: self.config.access.group_policy.clone(),
+            group_allow_from: self.config.access.group_allow_from.clone(),
+            groups: self.config.access.groups.clone(),
+        };
+        let policy = crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicy::new(
+            access,
+            vec![],
+        );
+        let history_buffer = crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer::new(
+            self.config.history.clone(),
+        );
 
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    Some(_event) = event_rx.recv() => {
-                        // TODO: map event and apply policy before sending inbound
-                        // For now we just keep the loop alive.
-                        let _ = inbound_tx.clone();
+                    Some(event) = event_rx.recv() => {
+                        if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
+                            match policy.evaluate(&msg) {
+                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                    history_buffer.add(&msg).await;
+                                    if inbound_tx.send(msg).is_err() {
+                                        break;
+                                    }
+                                }
+                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
+                                    tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
+                                }
+                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
+                                    tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
+                                }
+                            }
+                        }
                     }
                     _ = &mut shutdown_rx => break,
                 }
             }
+            connected.store(false, Ordering::SeqCst);
+            let mut state = pairing_state.write().await;
+            *state = PairingState::Idle;
         });
 
         self.runtime = Some(runtime);
