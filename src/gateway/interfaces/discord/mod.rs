@@ -31,6 +31,7 @@ pub mod config;
 pub mod handlers;
 pub mod permissions;
 pub mod resolver;
+pub mod security;
 
 pub use account_pool::DiscordAccountPool;
 pub use config::{DiscordChannelConfig, DiscordChannelSettings, DiscordConfig, IntentsConfig};
@@ -42,6 +43,10 @@ pub use handlers::{
 pub use resolver::{
     AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,
     ResolvedChannel, ResolvedChannelSettings,
+};
+pub use security::{
+    AuditError, AuditEventType, AuditEvents, AuditMetadata, ContentRetention, DiscordAuditEvent,
+    DiscordAuditLogger, DiscordSecurityConfig,
 };
 
 use crate::gateway::channel::{
