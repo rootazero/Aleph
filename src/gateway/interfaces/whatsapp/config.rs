@@ -130,4 +130,19 @@ pub struct WhatsAppAccountConfig {
     pub delivery: DeliveryConfig,
     #[serde(default)]
     pub reactions: ReactionConfig,
+    #[serde(default)]
+    pub media: MediaConfig,
+}
+
+impl Default for WhatsAppAccountConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            phone_number: None,
+            access: Default::default(),
+            delivery: Default::default(),
+            reactions: Default::default(),
+            media: Default::default(),
+        }
+    }
 }
