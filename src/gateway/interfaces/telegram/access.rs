@@ -3,7 +3,8 @@
 //! Centralizes all authorization logic (DM policy, group policy, pairing flow)
 //! that was previously scattered across the message handler closure.
 
-use super::config::{DmPolicy, GroupPolicy, PairingEntry, TelegramConfig};
+use super::config::{DmPolicy, GroupPolicy, PairingEntry};
+use super::config_resolver::ResolvedConfig;
 use crate::resilience::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ pub enum PairingResult {
 /// state for pairing prompts. Shared (via `Arc`) between the channel struct
 /// and handler closures.
 pub struct AccessController {
-    config: TelegramConfig,
+    resolved_config: ResolvedConfig,
     /// Users authorized at runtime via the pairing flow.
     runtime_users: Arc<RwLock<Vec<i64>>>,
     /// Active pairing codes: code → entry.
@@ -50,10 +51,10 @@ pub struct AccessController {
 }
 
 impl AccessController {
-    /// Create a new controller from the channel config.
-    pub fn new(config: TelegramConfig) -> Self {
+    /// Create a new controller from the resolved channel config.
+    pub fn new(resolved_config: ResolvedConfig) -> Self {
         Self {
-            config,
+            resolved_config,
             runtime_users: Arc::new(RwLock::new(Vec::new())),
             pairing_codes: Arc::new(RwLock::new(HashMap::new())),
             prompt_times: Arc::new(RwLock::new(HashMap::new())),
@@ -189,15 +190,15 @@ impl AccessController {
         &self.runtime_users
     }
 
-    /// Reference to the underlying config.
-    pub fn config(&self) -> &TelegramConfig {
-        &self.config
+    /// Reference to the underlying resolved config.
+    pub fn config(&self) -> &ResolvedConfig {
+        &self.resolved_config
     }
 
     // --- Private helpers ---
 
     async fn check_dm(&self, user_id: i64) -> AccessDecision {
-        match self.config.effective_dm_policy() {
+        match self.resolved_config.dm_policy.clone() {
             DmPolicy::Disabled => AccessDecision::Denied,
             DmPolicy::Open => AccessDecision::Allowed,
             DmPolicy::Allowlist => {
@@ -218,12 +219,12 @@ impl AccessController {
     }
 
     async fn check_group(&self, chat_id: i64) -> AccessDecision {
-        match self.config.effective_group_policy() {
+        match self.resolved_config.group_policy.clone() {
             GroupPolicy::Disabled => AccessDecision::Denied,
             GroupPolicy::Open => AccessDecision::Allowed,
             GroupPolicy::Allowlist => {
-                if self.config.allowed_groups.is_empty()
-                    || self.config.allowed_groups.contains(&chat_id)
+                if self.resolved_config.allowed_groups.is_empty()
+                    || self.resolved_config.allowed_groups.contains(&chat_id)
                 {
                     AccessDecision::Allowed
                 } else {
@@ -235,7 +236,7 @@ impl AccessController {
 
     /// Check static allowlist + runtime-paired users.
     async fn is_user_authorized(&self, user_id: i64) -> bool {
-        if self.config.allowed_users.contains(&user_id) {
+        if self.resolved_config.allowed_users.contains(&user_id) {
             return true;
         }
         self.runtime_users.read().await.contains(&user_id)
@@ -245,14 +246,22 @@ impl AccessController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::config::StreamingOptions;
+    use super::config_v2::ErrorPolicy;
 
-    fn make_config(dm: DmPolicy, group: GroupPolicy, users: Vec<i64>) -> TelegramConfig {
-        TelegramConfig {
+    fn make_config(dm: DmPolicy, group: GroupPolicy, users: Vec<i64>) -> ResolvedConfig {
+        ResolvedConfig {
+            account_id: "main".to_string(),
             bot_token: "123:ABC".to_string(),
-            allowed_users: users,
+            bot_username: None,
+            default_agent: None,
             dm_policy: dm,
             group_policy: group,
-            ..Default::default()
+            send_typing: true,
+            allowed_users: users,
+            allowed_groups: vec![],
+            streaming: StreamingOptions::default(),
+            error_policy: ErrorPolicy::default(),
         }
     }
 
@@ -340,10 +349,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_group_disabled() {
-        let config = TelegramConfig {
+        let config = ResolvedConfig {
+            account_id: "main".to_string(),
             bot_token: "123:ABC".to_string(),
-            groups_allowed: false,
-            ..Default::default()
+            bot_username: None,
+            default_agent: None,
+            dm_policy: DmPolicy::default(),
+            group_policy: GroupPolicy::Disabled,
+            send_typing: true,
+            allowed_users: vec![],
+            allowed_groups: vec![],
+            streaming: StreamingOptions::default(),
+            error_policy: ErrorPolicy::default(),
         };
         let ctrl = AccessController::new(config);
         assert_eq!(
@@ -378,11 +395,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_group_allowlist_denied() {
-        let config = TelegramConfig {
+        let config = ResolvedConfig {
+            account_id: "main".to_string(),
             bot_token: "123:ABC".to_string(),
-            allowed_groups: vec![-100111],
+            bot_username: None,
+            default_agent: None,
+            dm_policy: DmPolicy::default(),
             group_policy: GroupPolicy::Allowlist,
-            ..Default::default()
+            send_typing: true,
+            allowed_users: vec![],
+            allowed_groups: vec![-100111],
+            streaming: StreamingOptions::default(),
+            error_policy: ErrorPolicy::default(),
         };
         let ctrl = AccessController::new(config);
         assert_eq!(
@@ -458,21 +482,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_backward_compat_allowlist_promotion() {
-        // Non-empty allowed_users + default Pairing → effective Allowlist
-        // AccessController should use effective policy, so unknown user is Denied (not NeedsPairing)
         let ctrl = AccessController::new(make_config(
-            DmPolicy::default(), // Pairing
+            DmPolicy::Allowlist,
             GroupPolicy::default(),
             vec![123],
         ));
-        // User 123 is in allowlist → Allowed
         assert_eq!(
             ctrl.check_message(123, 123, false).await,
             AccessDecision::Allowed,
         );
-        // User 999 is not → Denied (because effective policy is Allowlist, not Pairing)
-        // But wait: effective_dm_policy with allowed_users=[123] + default Pairing = Allowlist
-        // Allowlist + user not in list = Denied
         assert_eq!(
             ctrl.check_message(999, 999, false).await,
             AccessDecision::Denied,
