@@ -51,3 +51,8 @@ pub struct TelegramAccountConfig {
     pub error_policy: Option<ErrorPolicy>,
     pub groups: Vec<TelegramGroupConfig>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TelegramConfigV2 {
+    pub accounts: Vec<TelegramAccountConfig>,
+}

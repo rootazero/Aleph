@@ -7,6 +7,8 @@ use std::time::Instant;
 
 use crate::gateway::coalescer::CoalescingConfig;
 
+use super::config_v2::{TelegramAccountConfig, TelegramConfigV2};
+
 /// DM access policy.
 ///
 /// Controls how the bot handles direct messages from users.
@@ -296,6 +298,34 @@ impl TelegramConfig {
             return Err("bot_token format invalid (expected: <bot_id>:<token>)".to_string());
         }
         Ok(())
+    }
+
+    /// 将旧版扁平配置升级为新版层级配置
+    pub fn upgrade_to_v2(&self) -> TelegramConfigV2 {
+        TelegramConfigV2 {
+            accounts: vec![TelegramAccountConfig {
+                id: "default".to_string(),
+                bot_token: self.bot_token.clone(),
+                bot_username: self.bot_username.clone(),
+                default_agent: None,
+                dm_policy: Some(self.dm_policy.clone()),
+                group_policy: Some(self.group_policy.clone()),
+                send_typing: Some(self.send_typing),
+                allowed_users: if self.allowed_users.is_empty() {
+                    None
+                } else {
+                    Some(self.allowed_users.clone())
+                },
+                allowed_groups: if self.allowed_groups.is_empty() {
+                    None
+                } else {
+                    Some(self.allowed_groups.clone())
+                },
+                streaming: Some(self.streaming.clone()),
+                error_policy: None,
+                groups: Vec::new(),
+            }],
+        }
     }
 }
 
