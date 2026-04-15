@@ -27,8 +27,12 @@ pub mod group_chat;
 pub mod handlers;
 pub mod offset;
 mod polling;
+pub mod bot_instance;
 
 pub use access::AccessController;
+pub use bot_instance::BotInstance;
+pub use config_v2::TelegramConfigV2;
+pub use config_resolver::ConfigResolver;
 pub use config::{PairingEntry, StreamingOptions, TelegramConfig, WebhookConfig};
 
 use crate::gateway::channel::{
@@ -49,18 +53,16 @@ use teloxide::{prelude::*, types::CallbackQuery as TgCallbackQuery};
 pub struct TelegramChannel {
     /// Channel information
     info: ChannelInfo,
-    /// Configuration
-    config: TelegramConfig,
+    /// Configuration (multi-account v2)
+    config_v2: TelegramConfigV2,
     /// Unified channel state (status + inbound sender/receiver)
     channel_state: ChannelState,
     /// Callback query sender
     callback_tx: mpsc::Sender<CallbackQuery>,
     /// Callback query receiver (taken on first call)
     callback_rx: Option<mpsc::Receiver<CallbackQuery>>,
-    /// Shutdown signal sender
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Teloxide bot instance
-    bot: Option<Bot>,
+    /// Active bot instances (one per account)
+    bot_instances: Vec<bot_instance::BotInstance>,
     /// ToolRegistry for building slash commands at startup
     tool_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
     /// Centralized access controller (pairing, allowlists, policies).
@@ -71,11 +73,13 @@ pub struct TelegramChannel {
     offset_tracker: Option<Arc<offset::OffsetTracker>>,
     /// State database for pairing persistence (set via `set_state_database`).
     state_db: Option<Arc<crate::resilience::StateDatabase>>,
+    /// Multi-account config resolver
+    config_resolver: ConfigResolver,
 }
 
 impl TelegramChannel {
     /// Create a new Telegram channel
-    pub fn new(id: impl Into<String>, config: TelegramConfig) -> Self {
+    pub fn new(id: impl Into<String>, config_v2: TelegramConfigV2) -> Self {
         let (callback_tx, callback_rx) = mpsc::channel(100);
 
         let info = ChannelInfo {
@@ -86,21 +90,33 @@ impl TelegramChannel {
             capabilities: Self::capabilities(),
         };
 
-        let access = Arc::new(AccessController::new(config.clone()));
+        let dummy_config = if let Some(first) = config_v2.accounts.first() {
+            TelegramConfig {
+                bot_token: first.bot_token.clone(),
+                bot_username: first.bot_username.clone(),
+                allowed_users: first.allowed_users.clone().unwrap_or_default(),
+                allowed_groups: first.allowed_groups.clone().unwrap_or_default(),
+                ..Default::default()
+            }
+        } else {
+            TelegramConfig::default()
+        };
+        let access = Arc::new(AccessController::new(dummy_config));
+        let resolver = ConfigResolver::from_v2(&config_v2);
 
         Self {
             info,
-            config,
+            config_v2,
             channel_state: ChannelState::new(100),
             callback_tx,
             callback_rx: Some(callback_rx),
-            shutdown_tx: None,
-            bot: None,
+            bot_instances: Vec::new(),
             tool_registry: None,
             access,
             error_cooldown: Arc::new(ErrorCooldown::new()),
             offset_tracker: None,
             state_db: None,
+            config_resolver: resolver,
         }
     }
 
@@ -635,10 +651,8 @@ impl ChannelFactory for TelegramChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: TelegramConfig = serde_json::from_value(config)
+        let config: TelegramConfigV2 = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {}", e)))?;
-
-        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(TelegramChannel::new("telegram", config)))
     }
@@ -669,8 +683,12 @@ mod tests {
 
     #[test]
     fn test_channel_creation() {
-        let config = TelegramConfig {
-            bot_token: "123:ABC".to_string(),
+        let config = TelegramConfigV2 {
+            accounts: vec![crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
+                id: "default".to_string(),
+                bot_token: "123:ABC".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let channel = TelegramChannel::new("telegram-test", config);
