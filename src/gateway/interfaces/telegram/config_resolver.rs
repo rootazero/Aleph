@@ -28,17 +28,13 @@ impl ConfigResolver {
         let mut lookup = HashMap::new();
         for account in &config.accounts {
             let account_default = Self::resolve_account_defaults(account);
-            if account.groups.is_empty() {
-                lookup.insert((account.id.clone(), 0, None), account_default.clone());
-            }
+            lookup.insert((account.id.clone(), 0, None), account_default.clone());
             for group in &account.groups {
                 let group_resolved = Self::merge_group(&account_default, group);
-                if group.topics.is_empty() {
-                    lookup.insert(
-                        (account.id.clone(), group.chat_id, None),
-                        group_resolved.clone(),
-                    );
-                }
+                lookup.insert(
+                    (account.id.clone(), group.chat_id, None),
+                    group_resolved.clone(),
+                );
                 for topic in &group.topics {
                     let topic_resolved = Self::merge_topic(&group_resolved, topic);
                     lookup.insert(
@@ -130,5 +126,84 @@ impl ConfigResolver {
                 .clone()
                 .unwrap_or_else(|| base.error_policy.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_account_default_inheritance() {
+        let v2 = TelegramConfigV2 {
+            accounts: vec![TelegramAccountConfig {
+                id: "main".to_string(),
+                bot_token: "tok".to_string(),
+                bot_username: None,
+                default_agent: Some("default".to_string()),
+                dm_policy: Some(DmPolicy::Pairing),
+                group_policy: Some(GroupPolicy::Allowlist),
+                send_typing: Some(false),
+                allowed_users: Some(vec![1]),
+                allowed_groups: Some(vec![-1]),
+                streaming: None,
+                error_policy: Some(ErrorPolicy::Silent),
+                groups: vec![],
+            }],
+        };
+        let resolver = ConfigResolver::from_v2(&v2);
+        let resolved = resolver.resolve("main", 0, None).unwrap();
+        assert_eq!(resolved.default_agent, Some("default".to_string()));
+        assert_eq!(resolved.error_policy, ErrorPolicy::Silent);
+        assert!(!resolved.send_typing);
+    }
+
+    #[test]
+    fn test_topic_overrides_group() {
+        let v2 = TelegramConfigV2 {
+            accounts: vec![TelegramAccountConfig {
+                id: "main".to_string(),
+                bot_token: "tok".to_string(),
+                bot_username: None,
+                default_agent: Some("default".to_string()),
+                dm_policy: Some(DmPolicy::Pairing),
+                group_policy: Some(GroupPolicy::Allowlist),
+                send_typing: Some(true),
+                allowed_users: None,
+                allowed_groups: None,
+                streaming: None,
+                error_policy: Some(ErrorPolicy::Reply),
+                groups: vec![TelegramGroupConfig {
+                    id: "g1".to_string(),
+                    chat_id: -1001,
+                    agent: Some("group_agent".to_string()),
+                    block_streaming: None,
+                    error_policy: Some(ErrorPolicy::Once),
+                    group_policy: None,
+                    send_typing: None,
+                    allowed_users: None,
+                    topics: vec![TelegramTopicConfig {
+                        id: "t1".to_string(),
+                        thread_id: 42,
+                        agent: Some("topic_agent".to_string()),
+                        block_streaming: None,
+                        error_policy: Some(ErrorPolicy::Silent),
+                        dm_policy: None,
+                        group_policy: None,
+                        send_typing: None,
+                        allowed_users: None,
+                    }],
+                }],
+            }],
+        };
+        let resolver = ConfigResolver::from_v2(&v2);
+        let topic = resolver.resolve("main", -1001, Some(42)).unwrap();
+        assert_eq!(topic.default_agent, Some("topic_agent".to_string()));
+        assert_eq!(topic.error_policy, ErrorPolicy::Silent);
+        assert!(topic.send_typing); // inherited from account
+
+        let group = resolver.resolve("main", -1001, None).unwrap();
+        assert_eq!(group.default_agent, Some("group_agent".to_string()));
+        assert_eq!(group.error_policy, ErrorPolicy::Once);
     }
 }
