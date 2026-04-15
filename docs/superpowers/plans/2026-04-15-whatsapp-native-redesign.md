@@ -1385,7 +1385,7 @@ git commit -m "feat(whatsapp): implement DM and group policy engines"
 - Modify: `src/gateway/interfaces/whatsapp/wa_outbound/mod.rs`
 - Test: inline unit tests
 
-- [ ] **Step 1: Implement `media.rs` — media preprocessing**
+- [x] **Step 1: Implement `media.rs` — media preprocessing**
 
 ```rust
 use crate::gateway::channel::Attachment;
@@ -1457,7 +1457,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement `sender.rs` — outbound send wrapper**
+- [x] **Step 2: Implement `sender.rs` — outbound send wrapper**
 
 ```rust
 use crate::gateway::channel::{ChannelError, ChannelResult, MessageId, OutboundMessage};
@@ -1519,7 +1519,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Update `wa_outbound/mod.rs` to export `WaOutbound` and `MediaProcessor`**
+- [x] **Step 3: Update `wa_outbound/mod.rs` to export `WaOutbound` and `MediaProcessor`**
 
 ```rust
 pub mod media;
@@ -1529,12 +1529,12 @@ pub use media::MediaProcessor;
 pub use sender::WaOutbound;
 ```
 
-- [ ] **Step 4: Verify compilation**
+- [x] **Step 4: Verify compilation**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/gateway/interfaces/whatsapp/wa_outbound/
@@ -1551,7 +1551,7 @@ git commit -m "feat(whatsapp): add outbound sender and media preprocessor"
 - Modify: `src/gateway/interfaces/whatsapp/config.rs`
 - Test: `cargo test -p alephcore --lib whatsapp`
 
-- [ ] **Step 1: Implement `wa_inbound/policy.rs`**
+- [x] **Step 1: Implement `wa_inbound/policy.rs`**
 
 ```rust
 use crate::gateway::channel::InboundMessage;
@@ -1598,7 +1598,7 @@ impl InboundPolicy {
 }
 ```
 
-- [ ] **Step 2: Update `config.rs` — ensure `Default` for `WhatsAppAccountConfig`**
+- [x] **Step 2: Update `config.rs` — ensure `Default` for `WhatsAppAccountConfig`**
 
 Add to `WhatsAppAccountConfig`:
 ```rust
@@ -1615,7 +1615,7 @@ impl Default for WhatsAppAccountConfig {
 }
 ```
 
-- [ ] **Step 3: Update `WhatsAppChannel` event loop in `mod.rs` to apply policy**
+- [x] **Step 3: Update `WhatsAppChannel` event loop in `mod.rs` to apply policy**
 
 In `start()`, replace the placeholder event-loop body with:
 
@@ -1657,7 +1657,7 @@ In `start()`, replace the placeholder event-loop body with:
         });
 ```
 
-- [ ] **Step 4: Verify compilation and run unit tests**
+- [x] **Step 4: Verify compilation and run unit tests**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
@@ -1665,7 +1665,7 @@ Expected: PASS
 Run: `cargo test -p alephcore --lib whatsapp`
 Expected: All existing and new tests PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/gateway/interfaces/whatsapp/mod.rs
@@ -1691,7 +1691,7 @@ git commit -m "feat(whatsapp): wire policy engine into channel event loop"
 - `src/gateway/interfaces/whatsapp/mod.rs` — remove bridge module declarations and `#[cfg(unix)]` gating
 - Build files (`justfile`, CI configs) — remove bridge compilation steps
 
-- [ ] **Step 1: Delete files and directories**
+- [x] **Step 1: Delete files and directories**
 
 ```bash
 rm -rf interfaces/whatsapp-bridge/
@@ -1703,7 +1703,7 @@ rm -f src/gateway/interfaces/whatsapp/baileys_runtime.rs
 rm -rf src/gateway/interfaces/whatsapp/native_baileys/
 ```
 
-- [ ] **Step 2: Clean up `whatsapp/mod.rs` — remove bridge declarations**
+- [x] **Step 2: Clean up `whatsapp/mod.rs` — remove bridge declarations**
 
 Remove these lines from the top of `mod.rs`:
 ```rust
@@ -1717,7 +1717,7 @@ pub mod baileys_runtime;
 
 Also remove any remaining `use` statements referencing deleted bridge types (e.g., `BridgeManager`, `BridgeRpcClient`, `BridgeEvent`, `bridge_manager`, `rpc_client`, `bridge_protocol`).
 
-- [ ] **Step 3: Check for build script references**
+- [x] **Step 3: Check for build script references**
 
 Run a grep for `whatsapp-bridge` across the repo:
 ```bash
@@ -1726,12 +1726,12 @@ grep -r "whatsapp-bridge" --include="*.rs" --include="*.toml" --include="*.yaml"
 
 For any matches in CI or build scripts, remove the corresponding build/packaging steps.
 
-- [ ] **Step 4: Verify compilation after deletions**
+- [x] **Step 4: Verify compilation after deletions**
 
 Run: `cargo check -p alephcore`
 Expected: PASS with zero bridge-related errors
 
-- [ ] **Step 5: Run full unit test suite for WhatsApp**
+- [x] **Step 5: Run full unit test suite for WhatsApp**
 
 Run: `cargo test -p alephcore --lib whatsapp`
 Expected: PASS
@@ -1751,19 +1751,19 @@ git commit -m "cleanup(whatsapp): remove Go bridge and all bridge glue"
 - Modify: `docs/superpowers/specs/2026-04-12-whatsapp-native-design.md` — mark as superseded
 - Modify: `docs/superpowers/plans/2026-04-12-whatsapp-native-implementation.md` — mark as superseded
 
-- [ ] **Step 1: Mark old design docs as superseded**
+- [x] **Step 1: Mark old design docs as superseded**
 
 Add to the top of both old docs:
 ```markdown
 > **SUPERSEDED** by `docs/superpowers/specs/2026-04-15-whatsapp-native-redesign-design.md` and `docs/superpowers/plans/2026-04-15-whatsapp-native-redesign.md`.
 ```
 
-- [ ] **Step 2: Run clippy**
+- [x] **Step 2: Run clippy**
 
 Run: `cargo clippy -p alephcore -- -D warnings`
 Expected: PASS (or only pre-existing warnings unrelated to WhatsApp)
 
-- [ ] **Step 3: Final commit**
+- [x] **Step 3: Final commit**
 
 ```bash
 git add docs/superpowers/specs/2026-04-12-whatsapp-native-design.md
