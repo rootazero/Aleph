@@ -2,7 +2,8 @@
 //!
 //! Handles button clicks and select menu interactions.
 
-use serde::{Deserialize, Serialize};
+use crate::gateway::interfaces::discord::handlers::approval::ApprovalQueue;
+use serde::Deserialize;
 use std::sync::Arc;
 
 /// Message component interaction
@@ -59,12 +60,16 @@ impl InteractionHandler {
     async fn handle_button(&self, custom_id: &str) -> InteractionResult {
         if let Some(approval_id) = custom_id.strip_prefix("exec_approve:") {
             if let Some(queue) = &self.approval_queue {
-                queue.approve(approval_id).await
+                queue
+                    .approve(approval_id)
+                    .await
                     .map_err(|e| InteractionError::HandlerError(e.to_string()))?;
             }
         } else if let Some(approval_id) = custom_id.strip_prefix("exec_deny:") {
             if let Some(queue) = &self.approval_queue {
-                queue.deny(approval_id).await
+                queue
+                    .deny(approval_id)
+                    .await
                     .map_err(|e| InteractionError::HandlerError(e.to_string()))?;
             }
         }
@@ -85,16 +90,3 @@ impl Default for InteractionHandler {
 /// Placeholder for Interaction enum ( serenity provides this)
 #[derive(Debug, Clone)]
 pub enum Interaction {}
-
-/// Approval queue placeholder (实现见 handlers/approval.rs)
-#[derive(Clone)]
-pub struct ApprovalQueue;
-
-impl ApprovalQueue {
-    pub async fn approve(&self, _id: &str) -> Result<(), String> {
-        Ok(())
-    }
-    pub async fn deny(&self, _id: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
