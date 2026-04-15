@@ -28,11 +28,16 @@
 pub mod account_pool;
 pub mod api;
 pub mod config;
+pub mod handlers;
 pub mod permissions;
 pub mod resolver;
 
 pub use account_pool::DiscordAccountPool;
 pub use config::{DiscordChannelConfig, DiscordChannelSettings, DiscordConfig, IntentsConfig};
+pub use handlers::{
+    AgentId, InteractionError, InteractionHandler, InteractionResult, StreamingError, StreamingHandler,
+    StreamingPreview, ThreadBindingError, ThreadBindingHandler, ThreadInfo,
+};
 pub use resolver::{
     AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,
     ResolvedChannel, ResolvedChannelSettings,
