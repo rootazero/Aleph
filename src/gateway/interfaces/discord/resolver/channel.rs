@@ -138,6 +138,7 @@ impl ChannelSettingsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::interfaces::discord::config::{AccountConfig, DiscordGuildSettings};
     use std::collections::HashMap;
 
     fn create_test_config() -> DiscordChannelConfig {
@@ -248,8 +249,8 @@ mod tests {
 
         // Should use guild-level settings
         assert_eq!(resolved.settings.allowlist, vec![10, 11]);
-        assert!(resolved.guild_id, Some(100));
-        assert!(resolved.channel_id, Some(999));
+        assert_eq!(resolved.guild_id, Some(100));
+        assert_eq!(resolved.channel_id, Some(999));
     }
 
     #[test]
