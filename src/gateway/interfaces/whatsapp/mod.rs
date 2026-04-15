@@ -36,6 +36,12 @@ pub mod baileys_runtime;
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
+pub mod wa_runtime;
+pub mod wa_auth;
+pub mod wa_outbound;
+pub mod wa_inbound;
+pub mod wa_policy;
+pub mod types;
 
 #[cfg(feature = "native-whatsapp")]
 pub mod native_baileys;
