@@ -101,7 +101,7 @@ pub struct DiscordAuditLogger {
     http_client: Arc<DiscordClient>,
 }
 
-struct DiscordClient;
+pub struct DiscordClient;
 
 impl DiscordAuditLogger {
     /// Create a new audit logger
