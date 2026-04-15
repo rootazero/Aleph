@@ -21,18 +21,12 @@
 //! phone_number = "+1234567890"
 //! ```
 
-pub mod bridge_fallback;
-pub mod bridge_manager;
-pub mod bridge_protocol;
 pub mod config;
 pub mod message;
 pub mod pairing;
-#[cfg(unix)]
-pub mod rpc_client;
 
 pub mod account;
 pub mod account_registry;
-pub mod baileys_runtime;
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
@@ -42,9 +36,6 @@ pub mod wa_inbound;
 pub mod wa_outbound;
 pub mod wa_policy;
 pub mod wa_runtime;
-
-#[cfg(feature = "native-whatsapp")]
-pub mod native_baileys;
 
 pub use config::{
     AccessConfig, DeliveryConfig, ReactionConfig, WhatsAppAccountConfig, WhatsAppConfig,
