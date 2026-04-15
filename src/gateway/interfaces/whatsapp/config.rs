@@ -21,9 +21,7 @@ pub struct WhatsAppConfig {
     #[serde(default)]
     pub allowed_chats: Vec<String>,
     #[serde(default)]
-    pub bridge_binary: Option<String>,
-    #[serde(default = "default_max_restarts")]
-    pub max_restarts: u32,
+    pub default_account_id: Option<String>,
     #[serde(default)]
     pub accounts: Option<HashMap<String, WhatsAppAccountConfig>>,
     #[serde(default)]
@@ -40,10 +38,6 @@ pub struct WhatsAppConfig {
 
 fn default_true() -> bool {
     true
-}
-
-fn default_max_restarts() -> u32 {
-    5
 }
 
 impl WhatsAppConfig {
@@ -136,4 +130,19 @@ pub struct WhatsAppAccountConfig {
     pub delivery: DeliveryConfig,
     #[serde(default)]
     pub reactions: ReactionConfig,
+    #[serde(default)]
+    pub media: MediaConfig,
+}
+
+impl Default for WhatsAppAccountConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            phone_number: None,
+            access: Default::default(),
+            delivery: Default::default(),
+            reactions: Default::default(),
+            media: Default::default(),
+        }
+    }
 }

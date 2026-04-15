@@ -1,5 +1,7 @@
 # WhatsApp Native Rust Baileys 实现计划
 
+> **SUPERSEDED** by `docs/superpowers/specs/2026-04-15-whatsapp-native-redesign-design.md` and `docs/superpowers/plans/2026-04-15-whatsapp-native-redesign.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 实现原生 Rust Baileys 客户端，替换现有 Go bridge，支持消息收发核心功能

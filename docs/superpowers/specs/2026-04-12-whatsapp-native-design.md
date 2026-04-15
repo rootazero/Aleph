@@ -1,5 +1,7 @@
 # WhatsApp Native Rust Baileys 实现设计
 
+> **SUPERSEDED** by `docs/superpowers/specs/2026-04-15-whatsapp-native-redesign-design.md` and `docs/superpowers/plans/2026-04-15-whatsapp-native-redesign.md`.
+
 **状态**: 已批准
 **日期**: 2026-04-12
 **范围**: 消息核心 (消息收发、基本事件处理、媒体处理)

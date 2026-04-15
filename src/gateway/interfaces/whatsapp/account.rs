@@ -30,6 +30,7 @@ pub struct WhatsAppAccount {
     pub state: Arc<RwLock<AccountState>>,
     pub pairing: Arc<RwLock<PairingState>>,
     pub health: Arc<RwLock<ChannelHealth>>,
+    pub auth_key: String,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -46,6 +47,7 @@ impl AccountId {
 
 impl WhatsAppAccount {
     pub fn new(id: AccountId) -> Self {
+        let auth_key = id.as_str().to_string();
         Self {
             id,
             phone_number: None,
@@ -53,6 +55,7 @@ impl WhatsAppAccount {
             state: Arc::new(RwLock::new(AccountState::Disconnected)),
             pairing: Arc::new(RwLock::new(PairingState::Idle)),
             health: Arc::new(RwLock::new(ChannelHealth::new())),
+            auth_key,
         }
     }
 
