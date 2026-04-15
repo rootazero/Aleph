@@ -33,7 +33,8 @@ pub use access::AccessController;
 pub use bot_instance::BotInstance;
 pub use config_v2::TelegramConfigV2;
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
-pub use config::{PairingEntry, StreamingOptions, TelegramConfig, WebhookConfig};
+pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
+pub use config_v2::{DmPolicy, GroupPolicy, StreamingOptions};
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,

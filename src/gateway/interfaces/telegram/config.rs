@@ -7,39 +7,9 @@ use std::time::Instant;
 
 use crate::gateway::coalescer::CoalescingConfig;
 
-use super::config_v2::{TelegramAccountConfig, TelegramConfigV2};
-
-/// DM access policy.
-///
-/// Controls how the bot handles direct messages from users.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum DmPolicy {
-    /// Reject all DMs.
-    Disabled,
-    /// Require a pairing code before accepting messages (safe default).
-    #[default]
-    Pairing,
-    /// Only accept messages from users in the allowlist.
-    Allowlist,
-    /// Accept messages from any user.
-    Open,
-}
-
-/// Group access policy.
-///
-/// Controls how the bot handles group/supergroup messages.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum GroupPolicy {
-    /// Reject all group messages.
-    Disabled,
-    /// Only accept messages from allowed groups (default).
-    #[default]
-    Allowlist,
-    /// Accept messages from any group.
-    Open,
-}
+use super::config_v2::{
+    DmPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig, TelegramConfigV2,
+};
 
 /// A pending pairing entry: code + creation time + TTL.
 #[derive(Debug, Clone)]
@@ -60,36 +30,6 @@ impl PairingEntry {
 
     pub fn is_expired(&self) -> bool {
         self.created_at.elapsed().as_secs() > self.ttl_secs
-    }
-}
-
-/// Streaming delivery options for Telegram's edit-based streaming.
-///
-/// When enabled, LLM responses are delivered progressively via
-/// `editMessageText` instead of buffering until completion.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StreamingOptions {
-    /// Whether edit-based streaming is enabled (default: true).
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Minimum interval between edits in milliseconds (default: 800).
-    /// Telegram's edit API is more strictly rate-limited than send.
-    #[serde(default = "default_debounce_ms")]
-    pub debounce_ms: u64,
-
-    /// Minimum characters before sending the initial message (default: 30).
-    #[serde(default = "default_min_initial_chars")]
-    pub min_initial_chars: usize,
-}
-
-impl Default for StreamingOptions {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            debounce_ms: 800,
-            min_initial_chars: 30,
-        }
     }
 }
 
@@ -197,14 +137,6 @@ fn default_webhook_path() -> String {
 
 fn default_coalescing() -> Option<CoalescingConfig> {
     Some(CoalescingConfig::default())
-}
-
-fn default_debounce_ms() -> u64 {
-    800
-}
-
-fn default_min_initial_chars() -> usize {
-    30
 }
 
 impl Default for TelegramConfig {

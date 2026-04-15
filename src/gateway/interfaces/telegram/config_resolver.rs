@@ -1,6 +1,6 @@
-use super::config::{DmPolicy, GroupPolicy, StreamingOptions};
 use super::config_v2::{
-    ErrorPolicy, TelegramAccountConfig, TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig, TelegramConfigV2,
+    TelegramGroupConfig, TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -141,6 +141,7 @@ mod tests {
     #[test]
     fn test_account_default_inheritance() {
         let v2 = TelegramConfigV2 {
+            coalescing: None,
             accounts: vec![TelegramAccountConfig {
                 id: "main".to_string(),
                 bot_token: "tok".to_string(),
@@ -166,6 +167,7 @@ mod tests {
     #[test]
     fn test_topic_overrides_group() {
         let v2 = TelegramConfigV2 {
+            coalescing: None,
             accounts: vec![TelegramAccountConfig {
                 id: "main".to_string(),
                 bot_token: "tok".to_string(),

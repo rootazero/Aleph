@@ -3,8 +3,9 @@
 //! Centralizes all authorization logic (DM policy, group policy, pairing flow)
 //! that was previously scattered across the message handler closure.
 
-use super::config::{DmPolicy, GroupPolicy, PairingEntry};
+use super::config::PairingEntry;
 use super::config_resolver::ResolvedConfig;
+use super::config_v2::{DmPolicy, GroupPolicy};
 use crate::resilience::StateDatabase;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -246,8 +247,7 @@ impl AccessController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::config::StreamingOptions;
-    use super::config_v2::ErrorPolicy;
+    use crate::gateway::interfaces::telegram::config_v2::{ErrorPolicy, StreamingOptions};
 
     fn make_config(dm: DmPolicy, group: GroupPolicy, users: Vec<i64>) -> ResolvedConfig {
         ResolvedConfig {
@@ -258,6 +258,7 @@ mod tests {
             dm_policy: dm,
             group_policy: group,
             send_typing: true,
+            max_retries: 3,
             allowed_users: users,
             allowed_groups: vec![],
             streaming: StreamingOptions::default(),
@@ -357,6 +358,7 @@ mod tests {
             dm_policy: DmPolicy::default(),
             group_policy: GroupPolicy::Disabled,
             send_typing: true,
+            max_retries: 3,
             allowed_users: vec![],
             allowed_groups: vec![],
             streaming: StreamingOptions::default(),
@@ -403,6 +405,7 @@ mod tests {
             dm_policy: DmPolicy::default(),
             group_policy: GroupPolicy::Allowlist,
             send_typing: true,
+            max_retries: 3,
             allowed_users: vec![],
             allowed_groups: vec![-100111],
             streaming: StreamingOptions::default(),
