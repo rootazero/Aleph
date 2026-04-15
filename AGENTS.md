@@ -4,6 +4,12 @@
 
 ---
 
+## Language
+
+使用中文进行对话
+
+---
+
 ## Build & Test
 
 ```bash
