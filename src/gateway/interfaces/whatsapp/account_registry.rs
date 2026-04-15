@@ -56,6 +56,10 @@ impl WhatsAppAccountRegistry {
         }
     }
 
+    pub async fn resolve_default_account_id(&self) -> Option<String> {
+        self.default_id.read().await.as_ref().map(|id| id.as_str().to_string())
+    }
+
     pub async fn list_accounts(&self) -> Vec<Arc<WhatsAppAccount>> {
         self.accounts.read().await.values().cloned().collect()
     }

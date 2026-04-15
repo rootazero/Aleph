@@ -3,7 +3,6 @@
 //! Provides reaction handling with configurable levels and ack reactions.
 
 use crate::gateway::channel::InboundMessage;
-use crate::gateway::interfaces::whatsapp::baileys_runtime::WhatsAppRuntime;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,7 +16,6 @@ pub enum ReactionLevel {
     Extensive,
 }
 
-/// Acknowledgment reaction configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckReactionConfig {
     pub emoji: char,
@@ -44,22 +42,27 @@ pub enum GroupReactionMode {
     Always,
 }
 
+#[async_trait::async_trait]
+pub trait ReactionSender: Send + Sync {
+    async fn send_reaction(&self, jid: &str, msg_id: &str, emoji: &str) -> Result<(), String>;
+}
+
 pub struct ReactionHandler {
     level: ReactionLevel,
     ack_config: Option<AckReactionConfig>,
-    runtime: Arc<dyn WhatsAppRuntime>,
+    sender: Arc<dyn ReactionSender>,
 }
 
 impl ReactionHandler {
     pub fn new(
         level: ReactionLevel,
         ack_config: Option<AckReactionConfig>,
-        runtime: Arc<dyn WhatsAppRuntime>,
+        sender: Arc<dyn ReactionSender>,
     ) -> Self {
         Self {
             level,
             ack_config,
-            runtime,
+            sender,
         }
     }
 
@@ -70,11 +73,9 @@ impl ReactionHandler {
         ) {
             return Ok(());
         }
-
         let Some(config) = &self.ack_config else {
             return Ok(());
         };
-
         if msg.is_group {
             if !matches!(config.group, GroupReactionMode::Always) {
                 return Ok(());
@@ -82,28 +83,16 @@ impl ReactionHandler {
         } else if !config.direct {
             return Ok(());
         }
-
-        self.runtime
+        self.sender
             .send_reaction(
                 msg.conversation_id.as_str(),
                 msg.id.as_str(),
                 &config.emoji.to_string(),
             )
             .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(())
     }
 
-    pub fn should_agent_react(&self, msg: &InboundMessage) -> bool {
-        match self.level {
-            ReactionLevel::Off | ReactionLevel::Ack => false,
-            ReactionLevel::Minimal => self.should_minimal_react(msg),
-            ReactionLevel::Extensive => true,
-        }
-    }
-
-    fn should_minimal_react(&self, _msg: &InboundMessage) -> bool {
-        false
+    pub fn should_agent_react(&self, _msg: &InboundMessage) -> bool {
+        matches!(self.level, ReactionLevel::Minimal | ReactionLevel::Extensive)
     }
 }

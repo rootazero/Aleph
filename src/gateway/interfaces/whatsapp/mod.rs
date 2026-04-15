@@ -1,6 +1,6 @@
 //! WhatsApp Channel Implementation
 //!
-//! Integration with WhatsApp using a bridge or native Rust library.
+//! Native Rust integration with WhatsApp using whatsapp-rust.
 //!
 //! # Features
 //!
@@ -36,12 +36,12 @@ pub mod baileys_runtime;
 pub mod history_buffer;
 pub mod media;
 pub mod reactions;
-pub mod wa_runtime;
-pub mod wa_auth;
-pub mod wa_outbound;
-pub mod wa_inbound;
-pub mod wa_policy;
 pub mod types;
+pub mod wa_auth;
+pub mod wa_inbound;
+pub mod wa_outbound;
+pub mod wa_policy;
+pub mod wa_runtime;
 
 #[cfg(feature = "native-whatsapp")]
 pub mod native_baileys;
@@ -52,44 +52,29 @@ pub use config::{
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessageSender, MessageId, OutboundMessage,
-    PairingData, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, PairingData, SendResult,
 };
-use crate::gateway::interfaces::whatsapp::baileys_runtime::WhatsAppRuntime;
+use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
+use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use chrono::Utc;
-use std::path::PathBuf;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use std::sync::atomic::AtomicBool;
+use tokio::sync::{oneshot, RwLock};
 
-use bridge_manager::{BridgeManager, BridgeManagerConfig};
-use bridge_protocol::BridgeEvent;
 use pairing::PairingState;
-use reactions::ReactionHandler;
-#[cfg(unix)]
-use rpc_client::BridgeRpcClient;
 
-/// WhatsApp channel implementation backed by a Go bridge process.
+/// WhatsApp channel implementation backed by native Rust runtime.
 pub struct WhatsAppChannel {
-    /// Channel information
     info: ChannelInfo,
-    /// Configuration
     config: WhatsAppConfig,
-    /// Shared mutable state (status + inbound channel)
     channel_state: ChannelState,
-    /// Bridge process manager
-    bridge_manager: BridgeManager,
-    /// JSON-RPC client for communicating with the bridge (Unix only)
-    #[cfg(unix)]
-    rpc_client: Option<Arc<BridgeRpcClient>>,
-    /// Fine-grained pairing state
+    runtime: Option<WaRuntime>,
     pairing_state: Arc<RwLock<PairingState>>,
-    /// Shutdown signal sender for the event loop
     shutdown_tx: Option<oneshot::Sender<()>>,
+    connected: Arc<AtomicBool>,
 }
 
 impl WhatsAppChannel {
-    /// Create a new WhatsApp channel
     pub fn new(id: impl Into<String>, config: WhatsAppConfig) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
@@ -99,22 +84,17 @@ impl WhatsAppChannel {
             capabilities: Self::capabilities(),
         };
 
-        let bridge_config = Self::build_bridge_config(&config);
-        let bridge_manager = BridgeManager::new(bridge_config);
-
         Self {
             info,
             config,
             channel_state: ChannelState::new(100),
-            bridge_manager,
-            #[cfg(unix)]
-            rpc_client: None,
+            runtime: None,
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
             shutdown_tx: None,
+            connected: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Get WhatsApp-specific capabilities
     fn capabilities() -> ChannelCapabilities {
         ChannelCapabilities {
             attachments: true,
@@ -123,235 +103,14 @@ impl WhatsAppChannel {
             video: true,
             reactions: true,
             replies: true,
-            editing: false, // WhatsApp editing is limited
+            editing: false,
             deletion: true,
             typing_indicator: true,
             read_receipts: true,
             rich_text: true,
             max_message_length: 65536,
-            max_attachment_size: 100 * 1024 * 1024, // 100MB
+            max_attachment_size: 100 * 1024 * 1024,
             stream_protocol: Default::default(),
-        }
-    }
-
-    /// Build a BridgeManagerConfig from the WhatsAppConfig.
-    fn build_bridge_config(config: &WhatsAppConfig) -> BridgeManagerConfig {
-        let base_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph")
-            .join("channels")
-            .join("whatsapp");
-
-        let binary_path = config
-            .bridge_binary
-            .as_ref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("whatsapp-bridge"));
-
-        BridgeManagerConfig {
-            binary_path,
-            socket_path: base_dir.join("bridge.sock"),
-            data_dir: base_dir.join("data"),
-            max_restarts: config.max_restarts,
-            restart_delay_secs: 3,
-        }
-    }
-}
-
-/// Validates and applies a pairing state transition.
-///
-/// If the transition is valid per the state machine, it is applied silently.
-/// If invalid, a warning is logged but the transition is still applied,
-/// since bridge events reflect the actual WhatsApp connection state and
-/// take priority over the local state machine model.
-#[cfg(unix)]
-async fn transition_state(
-    pairing_state: &RwLock<PairingState>,
-    new_state: PairingState,
-    channel_id: &ChannelId,
-) {
-    let mut guard = pairing_state.write().await;
-    if let Err(err) = pairing::validate_transition(&guard, &new_state) {
-        tracing::warn!(
-            channel = %channel_id,
-            from = pairing::state_tag(&guard),
-            to = pairing::state_tag(&new_state),
-            "{}; applying anyway (bridge event reflects actual state)",
-            err
-        );
-    }
-    *guard = new_state;
-}
-
-/// Background event loop that processes BridgeEvents.
-///
-/// Updates pairing state (with transition validation) and forwards inbound
-/// messages to the channel's inbound_tx sender.
-#[cfg(unix)]
-async fn event_loop(
-    mut event_rx: mpsc::Receiver<BridgeEvent>,
-    pairing_state: Arc<RwLock<PairingState>>,
-    inbound_tx: InboundMessageSender,
-    channel_id: ChannelId,
-    mut shutdown_rx: oneshot::Receiver<()>,
-    reaction_handler: Option<ReactionHandler>,
-) {
-    loop {
-        tokio::select! {
-            Some(event) = event_rx.recv() => {
-                match event {
-                    BridgeEvent::Ready => {
-                        tracing::info!(channel = %channel_id, "WhatsApp bridge ready");
-                    }
-                    BridgeEvent::Qr { qr_data, expires_in_secs } => {
-                        tracing::info!(
-                            channel = %channel_id,
-                            expires_in_secs,
-                            "QR code received for pairing"
-                        );
-                        transition_state(
-                            &pairing_state,
-                            PairingState::WaitingQr {
-                                qr_data,
-                                expires_at: Utc::now() + chrono::Duration::seconds(expires_in_secs as i64),
-                            },
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::QrExpired => {
-                        tracing::info!(channel = %channel_id, "QR code expired");
-                        transition_state(
-                            &pairing_state,
-                            PairingState::QrExpired,
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::Scanned => {
-                        tracing::info!(channel = %channel_id, "QR code scanned");
-                        transition_state(
-                            &pairing_state,
-                            PairingState::Scanned,
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::Syncing { progress } => {
-                        // HistorySync events can arrive after Connected in whatsmeow;
-                        // don't regress from Connected back to Syncing.
-                        let is_connected = pairing_state.read().await.is_connected();
-                        if is_connected {
-                            tracing::debug!(
-                                channel = %channel_id,
-                                progress,
-                                "Ignoring syncing event (already connected)"
-                            );
-                        } else {
-                            tracing::debug!(
-                                channel = %channel_id,
-                                progress,
-                                "Syncing in progress"
-                            );
-                            transition_state(
-                                &pairing_state,
-                                PairingState::Syncing { progress },
-                                &channel_id,
-                            ).await;
-                        }
-                    }
-                    BridgeEvent::Connected { device_name, phone_number } => {
-                        tracing::info!(
-                            channel = %channel_id,
-                            device_name = %device_name,
-                            phone_number = %phone_number,
-                            "WhatsApp connected"
-                        );
-                        transition_state(
-                            &pairing_state,
-                            PairingState::Connected {
-                                device_name,
-                                phone_number,
-                            },
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::Disconnected { reason } => {
-                        tracing::warn!(
-                            channel = %channel_id,
-                            reason = %reason,
-                            "WhatsApp disconnected"
-                        );
-                        transition_state(
-                            &pairing_state,
-                            PairingState::Disconnected { reason },
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::Error { message: msg } => {
-                        tracing::error!(
-                            channel = %channel_id,
-                            error = %msg,
-                            "WhatsApp bridge error"
-                        );
-                        transition_state(
-                            &pairing_state,
-                            PairingState::Failed { error: msg },
-                            &channel_id,
-                        ).await;
-                    }
-                    BridgeEvent::Message { .. } => {
-                        if let Some(msg) = message::bridge_message_to_inbound(&event, &channel_id) {
-                            if let Some(ref handler) = reaction_handler {
-                                if let Err(e) = handler.send_ack(&msg).await {
-                                    tracing::warn!(
-                                        channel = %channel_id,
-                                        error = %e,
-                                        "Failed to send ack reaction"
-                                    );
-                                }
-                            }
-                            if inbound_tx.send(msg).is_err() {
-                                tracing::debug!(
-                                    channel = %channel_id,
-                                    "Inbound receiver dropped, stopping event loop"
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    BridgeEvent::Receipt { message_id, receipt_type } => {
-                        tracing::debug!(
-                            channel = %channel_id,
-                            message_id = %message_id,
-                            receipt_type = %receipt_type,
-                            "Receipt received"
-                        );
-                    }
-                    BridgeEvent::Reaction { from, from_name, chat_id, message_id, text, timestamp, has_reaction } => {
-                        tracing::debug!(
-                            channel = %channel_id,
-                            from = %from,
-                            from_name = ?from_name,
-                            chat_id = %chat_id,
-                            message_id = %message_id,
-                            text = %text,
-                            timestamp = %timestamp,
-                            has_reaction = %has_reaction,
-                            "Reaction received"
-                        );
-                    }
-                    BridgeEvent::Presence { jid, presence } => {
-                        tracing::debug!(
-                            channel = %channel_id,
-                            jid = %jid,
-                            presence = %presence,
-                            "Presence update"
-                        );
-                    }
-                }
-            }
-            _ = &mut shutdown_rx => {
-                tracing::info!(channel = %channel_id, "Event loop shutdown requested");
-                break;
-            }
         }
     }
 }
@@ -367,13 +126,11 @@ impl Channel for WhatsAppChannel {
     }
 
     fn status(&self) -> ChannelStatus {
-        // Override the trait default: WhatsApp maps its fine-grained PairingState
-        // to ChannelStatus. status() is sync but pairing_state uses tokio::sync::RwLock.
-        // Use try_read() which is non-blocking; fall back to Connecting
-        // if the lock is contended (likely during state transitions).
-        match self.pairing_state.try_read() {
-            Ok(state) => state.to_channel_status(),
-            Err(_) => ChannelStatus::Connecting,
+        match self.runtime.as_ref().map(|r| r.connection_state()) {
+            Some(ConnectionState::Connected) => ChannelStatus::Connected,
+            Some(ConnectionState::Connecting) => ChannelStatus::Connecting,
+            Some(ConnectionState::Error) => ChannelStatus::Error,
+            _ => ChannelStatus::Disconnected,
         }
     }
 
@@ -386,169 +143,90 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        #[cfg(not(unix))]
-        {
-            return Err(ChannelError::Internal(
-                "WhatsApp bridge requires Unix domain sockets (not available on this platform)"
-                    .to_string(),
-            ));
-        }
+        self.config.validate().map_err(ChannelError::ConfigError)?;
+        *self.pairing_state.write().await = PairingState::Initializing;
 
-        #[cfg(unix)]
-        {
-            self.config.validate().map_err(ChannelError::ConfigError)?;
+        let auth = WaAuthManager::new("default");
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
+        let mut runtime = WaRuntime::new(auth, event_tx)
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to create runtime: {}", e)))?;
+        runtime.start().await?;
 
-            // 1. Set pairing state to Initializing
-            *self.pairing_state.write().await = PairingState::Initializing;
-            tracing::info!("Starting WhatsApp channel...");
+        let _connected = Arc::clone(&self.connected);
+        let _pairing_state = Arc::clone(&self.pairing_state);
+        let inbound_tx = self.channel_state.sender();
+        let _channel_id = self.info.id.clone();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-            // 2. Start the bridge process
-            if let Err(e) = self.bridge_manager.start().await {
-                *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!(
-                    "Failed to start bridge: {}",
-                    e
-                )));
+        let mut shutdown_rx = shutdown_rx;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(_event) = event_rx.recv() => {
+                        // TODO: map event and apply policy before sending inbound
+                        // For now we just keep the loop alive.
+                        let _ = inbound_tx.clone();
+                    }
+                    _ = &mut shutdown_rx => break,
+                }
             }
+        });
 
-            // 3. Create event channel and RPC client
-            let (event_tx, event_rx) = mpsc::channel(64);
-            let socket_path = self.bridge_manager.socket_path().clone();
-            let rpc_client = Arc::new(BridgeRpcClient::new(&socket_path, event_tx));
-
-            // 4. Connect RPC client with retries
-            if let Err(e) = rpc_client.connect(5, 500).await {
-                let _ = self.bridge_manager.stop().await;
-                *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!(
-                    "Failed to connect to bridge RPC: {}",
-                    e
-                )));
-            }
-
-            // 5. Tell the bridge to connect to WhatsApp
-            let connect_result: Result<serde_json::Value, _> =
-                rpc_client.call("bridge.connect", None).await;
-            if let Err(e) = connect_result {
-                rpc_client.disconnect().await;
-                let _ = self.bridge_manager.stop().await;
-                *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!(
-                    "bridge.connect RPC failed: {}",
-                    e
-                )));
-            }
-
-            // 6. Create reaction handler if enabled
-            let reaction_handler =
-                if !matches!(self.config.reactions.level, reactions::ReactionLevel::Off) {
-                    let runtime: Arc<dyn WhatsAppRuntime> =
-                        rpc_client.clone() as Arc<dyn WhatsAppRuntime>;
-                    Some(ReactionHandler::new(
-                        self.config.reactions.level,
-                        self.config.reactions.ack.clone(),
-                        runtime,
-                    ))
-                } else {
-                    None
-                };
-
-            // 7. Spawn event loop
-            let (shutdown_tx, shutdown_rx) = oneshot::channel();
-            let pairing_state = Arc::clone(&self.pairing_state);
-            let inbound_tx = self.channel_state.sender();
-            let channel_id = self.info.id.clone();
-
-            tokio::spawn(event_loop(
-                event_rx,
-                pairing_state,
-                inbound_tx,
-                channel_id,
-                shutdown_rx,
-                reaction_handler,
-            ));
-
-            self.rpc_client = Some(rpc_client);
-            self.shutdown_tx = Some(shutdown_tx);
-
-            Ok(())
-        }
+        self.runtime = Some(runtime);
+        self.shutdown_tx = Some(shutdown_tx);
+        Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
-        tracing::info!("Stopping WhatsApp channel...");
-
-        // 1. Send shutdown signal to event loop
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
-
-        // 2. Disconnect RPC client (Unix only)
-        #[cfg(unix)]
-        {
-            if let Some(ref rpc_client) = self.rpc_client {
-                rpc_client.disconnect().await;
-            }
-            self.rpc_client = None;
+        if let Some(mut runtime) = self.runtime.take() {
+            runtime.shutdown().await;
         }
-
-        // 3. Stop bridge process
-        self.bridge_manager
-            .stop()
-            .await
-            .map_err(|e| ChannelError::Internal(format!("Failed to stop bridge: {}", e)))?;
-
-        // 4. Set pairing state to Idle
         *self.pairing_state.write().await = PairingState::Idle;
-
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        // Check if connected
-        let state = self.pairing_state.read().await;
-        if !state.is_connected() {
-            return Err(ChannelError::NotConnected(format!(
-                "WhatsApp not connected (state: {})",
-                state.description()
-            )));
-        }
-        drop(state);
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+        let message_id = runtime.send_message(message).await?;
+        Ok(SendResult {
+            message_id,
+            timestamp: chrono::Utc::now(),
+        })
+    }
 
-        #[cfg(not(unix))]
-        {
-            let _ = message;
-            return Err(ChannelError::Internal(
-                "WhatsApp bridge requires Unix domain sockets (not available on this platform)"
-                    .to_string(),
-            ));
-        }
+    async fn send_typing(&self, conversation_id: &crate::gateway::channel::ConversationId) -> ChannelResult<()> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+        runtime.send_typing(conversation_id.as_str()).await
+    }
 
-        #[cfg(unix)]
-        {
-            // Get the RPC client
-            let rpc_client = self
-                .rpc_client
-                .as_ref()
-                .ok_or_else(|| ChannelError::Internal("RPC client not initialized".to_string()))?;
+    async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
+        let _ = message_id;
+        Ok(())
+    }
 
-            // Convert outbound message to bridge SendRequest
-            let send_request = message::outbound_to_send_request(&message);
-            let params = serde_json::to_value(&send_request).map_err(|e| {
-                ChannelError::SendFailed(format!("Failed to serialize send request: {}", e))
-            })?;
-
-            // Call bridge.send RPC
-            let response: bridge_protocol::SendResponse = rpc_client
-                .call("bridge.send", Some(params))
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("bridge.send RPC failed: {}", e)))?;
-
-            Ok(SendResult {
-                message_id: MessageId::new(response.id),
-                timestamp: Utc::now(),
-            })
-        }
+    async fn react(
+        &self,
+        conversation_id: &crate::gateway::channel::ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+        runtime
+            .send_reaction(conversation_id.as_str(), message_id.as_str(), reaction)
+            .await
     }
 }
 
@@ -567,3 +245,5 @@ impl ChannelFactory for WhatsAppChannelFactory {
         Ok(Box::new(WhatsAppChannel::new("whatsapp", config)))
     }
 }
+
+
