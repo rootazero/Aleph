@@ -3,7 +3,6 @@
 //! Manages multiple Discord bot instances with pooled creation and reuse.
 
 use crate::gateway::interfaces::discord::config::{AccountConfig, DiscordChannelConfig};
-use crate::gateway::interfaces::discord::api::DiscordClient;
 use serenity::all::Http;
 use std::collections::HashMap;
 use std::sync::Arc;

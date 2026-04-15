@@ -5,8 +5,23 @@
 //! panel action in the Discord management UI.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::permissions::{self, PermissionAudit};
+
+/// Discord HTTP client wrapper
+pub struct DiscordClient {
+    pub http: Arc<serenity::http::Http>,
+}
+
+impl DiscordClient {
+    pub fn new(token: &str) -> Result<Self, serenity::Error> {
+        let http = serenity::http::Http::new(token);
+        Ok(Self {
+            http: Arc::new(http),
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Types
