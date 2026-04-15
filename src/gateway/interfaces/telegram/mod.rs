@@ -19,6 +19,7 @@ pub mod access;
 pub mod approval;
 pub mod chunking;
 pub mod config;
+pub mod config_v2;
 pub mod delivery;
 pub mod error_cooldown;
 pub mod group_chat;

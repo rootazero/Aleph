@@ -65,7 +65,7 @@ impl PairingEntry {
 ///
 /// When enabled, LLM responses are delivered progressively via
 /// `editMessageText` instead of buffering until completion.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StreamingOptions {
     /// Whether edit-based streaming is enabled (default: true).
     #[serde(default = "default_true")]
