@@ -26,9 +26,8 @@ impl InboundPolicy {
     }
 
     pub fn evaluate(&self, msg: &InboundMessage) -> InboundPolicyResult {
-        match self.group.evaluate(msg) {
-            GroupPolicyResult::Block(reason) => return InboundPolicyResult::Block(reason),
-            _ => {}
+        if let GroupPolicyResult::Block(reason) = self.group.evaluate(msg) {
+            return InboundPolicyResult::Block(reason);
         }
 
         match self.dm.evaluate(msg) {

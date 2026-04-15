@@ -1,5 +1,6 @@
 use tokio::sync::mpsc;
 
+#[allow(clippy::never_loop)]
 pub async fn run_event_loop(
     _event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
     mut shutdown_rx: mpsc::Receiver<()>,

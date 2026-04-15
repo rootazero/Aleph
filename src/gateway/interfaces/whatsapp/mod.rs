@@ -151,9 +151,9 @@ impl Channel for WhatsAppChannel {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let access = AccessConfig {
-            dm_policy: self.config.access.dm_policy.clone(),
+            dm_policy: self.config.access.dm_policy,
             allow_from: self.config.access.allow_from.clone(),
-            group_policy: self.config.access.group_policy.clone(),
+            group_policy: self.config.access.group_policy,
             group_allow_from: self.config.access.group_allow_from.clone(),
             groups: self.config.access.groups.clone(),
         };

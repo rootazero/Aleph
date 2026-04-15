@@ -5,6 +5,7 @@
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
 use chrono::TimeZone;
 
+#[allow(clippy::too_many_arguments)]
 pub fn wa_message_to_inbound(
     from: &str,
     from_name: Option<&str>,

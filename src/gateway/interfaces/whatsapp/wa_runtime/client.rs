@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 pub struct WaRuntime {
     state: Arc<AtomicConnectionState>,
-    event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
+    _event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
     shutdown_tx: Option<mpsc::Sender<()>>,
     auth: WaAuthManager,
 }
@@ -18,7 +18,7 @@ impl WaRuntime {
     ) -> ChannelResult<Self> {
         Ok(Self {
             state: Arc::new(AtomicConnectionState::new(ConnectionState::Disconnected)),
-            event_tx,
+            _event_tx: event_tx,
             shutdown_tx: None,
             auth,
         })
@@ -52,7 +52,11 @@ impl WaRuntime {
         Ok(MessageId::new("wa-msg-id"))
     }
 
-    pub async fn send_reaction(&self, _jid: &str, _msg_id: &str, _emoji: &str) -> ChannelResult<()> {
+    pub async fn send_reaction(&self,
+        _jid: &str,
+        _msg_id: &str,
+        _emoji: &str,
+    ) -> ChannelResult<()> {
         if self.state.get() != ConnectionState::Connected {
             return Err(ChannelError::NotConnected("WhatsApp not connected".into()));
         }

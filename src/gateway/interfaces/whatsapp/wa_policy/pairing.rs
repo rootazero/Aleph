@@ -12,6 +12,12 @@ pub struct PairingTracker {
     ttl_secs: u64,
 }
 
+impl Default for PairingTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PairingTracker {
     pub fn new() -> Self {
         Self {
