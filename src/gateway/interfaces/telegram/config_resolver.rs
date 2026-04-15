@@ -17,8 +17,10 @@ pub struct ResolvedConfig {
     pub allowed_groups: Vec<i64>,
     pub streaming: StreamingOptions,
     pub error_policy: ErrorPolicy,
+    pub max_retries: u32,
 }
 
+#[derive(Debug, Clone)]
 pub struct ConfigResolver {
     lookup: HashMap<(String, i64, Option<i32>), ResolvedConfig>,
 }
@@ -72,6 +74,7 @@ impl ConfigResolver {
             allowed_groups: account.allowed_groups.clone().unwrap_or_default(),
             streaming: account.streaming.clone().unwrap_or_default(),
             error_policy: account.error_policy.clone().unwrap_or_default(),
+            max_retries: 3,
         }
     }
 
@@ -97,6 +100,7 @@ impl ConfigResolver {
                 .error_policy
                 .clone()
                 .unwrap_or_else(|| base.error_policy.clone()),
+            max_retries: base.max_retries,
         }
     }
 
@@ -125,6 +129,7 @@ impl ConfigResolver {
                 .error_policy
                 .clone()
                 .unwrap_or_else(|| base.error_policy.clone()),
+            max_retries: base.max_retries,
         }
     }
 }

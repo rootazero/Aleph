@@ -1,4 +1,5 @@
 use super::config::{DmPolicy, GroupPolicy, StreamingOptions};
+use crate::gateway::coalescer::CoalescingConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -55,4 +56,6 @@ pub struct TelegramAccountConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TelegramConfigV2 {
     pub accounts: Vec<TelegramAccountConfig>,
+    #[serde(default)]
+    pub coalescing: Option<CoalescingConfig>,
 }

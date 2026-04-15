@@ -15,7 +15,7 @@ use teloxide::{
 };
 
 use super::chunking::split_html_safe;
-use super::config::TelegramConfig;
+use super::config_resolver::ResolvedConfig;
 use super::error_cooldown::{ErrorCooldown, ErrorKind};
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@ fn is_benign_edit_error(err: &teloxide::RequestError) -> bool {
 /// This is the extracted body of `Channel::send()`.
 pub(crate) async fn send_message(
     bot: &Bot,
-    config: &TelegramConfig,
+    config: &ResolvedConfig,
     message: &OutboundMessage,
     cooldown: &ErrorCooldown,
 ) -> ChannelResult<SendResult> {
@@ -369,6 +369,7 @@ pub(crate) async fn send_message(
 pub(crate) async fn send_typing(
     bot: &Bot,
     conversation_id: &str,
+    _config: &ResolvedConfig,
     cooldown: &ErrorCooldown,
 ) -> ChannelResult<()> {
     // Skip if typing circuit breaker has tripped

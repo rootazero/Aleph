@@ -15,7 +15,8 @@ use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
-use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
+use alephcore::gateway::interfaces::telegram::TelegramConfigV2;
+use alephcore::gateway::interfaces::TelegramChannel;
 use alephcore::gateway::security::{PairingManager, TokenManager};
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
@@ -258,8 +259,8 @@ pub(in crate::commands::start) async fn initialize_channels(
         {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-                if let Ok(tg_config) =
-                    serde_json::from_value::<TelegramConfig>(config_with_secrets.clone())
+            if let Ok(tg_config) =
+                serde_json::from_value::<TelegramConfigV2>(config_with_secrets.clone())
                 {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
@@ -399,7 +400,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             cfg.channels
                 .iter()
                 .find_map(|(_, val)| {
-                    serde_json::from_value::<TelegramConfig>(val.clone())
+                    serde_json::from_value::<TelegramConfigV2>(val.clone())
                         .ok()
                         .and_then(|tc| tc.coalescing)
                 })

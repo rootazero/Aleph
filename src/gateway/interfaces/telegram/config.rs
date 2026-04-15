@@ -325,6 +325,7 @@ impl TelegramConfig {
                 error_policy: None,
                 groups: Vec::new(),
             }],
+            coalescing: self.coalescing.clone(),
         }
     }
 }

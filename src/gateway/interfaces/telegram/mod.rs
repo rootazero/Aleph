@@ -104,6 +104,7 @@ impl TelegramChannel {
                 allowed_groups: first.allowed_groups.clone().unwrap_or_default(),
                 streaming: first.streaming.clone().unwrap_or_default(),
                 error_policy: first.error_policy.clone().unwrap_or_default(),
+                max_retries: 3,
             })
         } else {
             ResolvedConfig {
@@ -118,6 +119,7 @@ impl TelegramChannel {
                 allowed_groups: vec![],
                 streaming: Default::default(),
                 error_policy: Default::default(),
+                max_retries: 3,
             }
         };
         let access = Arc::new(AccessController::new(access_config));
@@ -244,6 +246,7 @@ impl Channel for TelegramChannel {
                     allowed_groups: account.allowed_groups.clone().unwrap_or_default(),
                     streaming: account.streaming.clone().unwrap_or_default(),
                     error_policy: account.error_policy.clone().unwrap_or_default(),
+                    max_retries: 3,
                 });
 
             let mut instance =
@@ -572,19 +575,29 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let bot = self
-            .bot
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::send_message(bot, &self.config, &message, &self.error_cooldown).await
+        let instance = self.bot_instances.first().ok_or_else(|| {
+            ChannelError::NotConnected("No bot instances".to_string())
+        })?;
+        delivery::send_message(
+            &instance.bot,
+            &instance.resolved_config,
+            &message,
+            &self.error_cooldown,
+        )
+        .await
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        let bot = self
-            .bot
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::send_typing(bot, conversation_id.as_str(), &self.error_cooldown).await
+        let instance = self.bot_instances.first().ok_or_else(|| {
+            ChannelError::NotConnected("No bot instances".to_string())
+        })?;
+        delivery::send_typing(
+            &instance.bot,
+            conversation_id.as_str(),
+            &instance.resolved_config,
+            &self.error_cooldown,
+        )
+        .await
     }
 
     async fn react(
@@ -593,11 +606,16 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        let bot = self
-            .bot
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::send_reaction(bot, conversation_id.as_str(), message_id, reaction).await
+        let instance = self.bot_instances.first().ok_or_else(|| {
+            ChannelError::NotConnected("No bot instances".to_string())
+        })?;
+        delivery::send_reaction(
+            &instance.bot,
+            conversation_id.as_str(),
+            message_id,
+            reaction,
+        )
+        .await
     }
 
     async fn edit(
@@ -606,12 +624,11 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        let bot = self
-            .bot
-            .as_ref()
-            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
+        let instance = self.bot_instances.first().ok_or_else(|| {
+            ChannelError::NotConnected("No bot instances".to_string())
+        })?;
         delivery::edit_message(
-            bot,
+            &instance.bot,
             conversation_id.as_str(),
             message_id,
             Some(new_text),
@@ -635,21 +652,31 @@ impl Channel for TelegramChannel {
     fn approval_capability(
         &self,
     ) -> Option<Arc<dyn crate::gateway::channel_approval::ChannelApprovalCapability>> {
+        let first = self.bot_instances.first()?;
+        let instance = bot_instance::BotInstance {
+            account_id: first.account_id.clone(),
+            bot: first.bot.clone(),
+            resolved_config: first.resolved_config.clone(),
+            callback_tx: first.callback_tx.clone(),
+            channel_state: ChannelState::new(100),
+            offset_tracker: first.offset_tracker.clone(),
+            shutdown_tx: None,
+        };
         Some(Arc::new(
             crate::gateway::interfaces::telegram::approval::TelegramChannelApprovalCapability::new(
                 Arc::new(TelegramChannel {
                     info: self.info.clone(),
-                    config: self.config.clone(),
+                    config_v2: self.config_v2.clone(),
                     channel_state: ChannelState::new(100),
                     callback_tx: self.callback_tx.clone(),
                     callback_rx: None,
-                    shutdown_tx: None,
-                    bot: self.bot.clone(),
+                    bot_instances: vec![instance],
                     tool_registry: self.tool_registry.clone(),
                     access: self.access.clone(),
                     error_cooldown: self.error_cooldown.clone(),
                     offset_tracker: self.offset_tracker.clone(),
                     state_db: self.state_db.clone(),
+                    config_resolver: self.config_resolver.clone(),
                 }),
                 self.access.clone(),
             ),

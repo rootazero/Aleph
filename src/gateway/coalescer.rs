@@ -22,7 +22,7 @@ use super::channel::InboundMessage;
 // ---------------------------------------------------------------------------
 
 /// Tuning knobs for the coalescing window.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CoalescingConfig {
     /// Default debounce window for regular messages (ms).
     pub debounce_ms: u64,
