@@ -121,6 +121,8 @@ test-helpers = []
 control-plane = []
 # Disabled test modules awaiting rewrite
 disabled-tests = []
+# Experimental Telegram Draft API support
+telegram-draft-api = []
 [dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
 tokio-util = { version = "0.7", features = ["rt", "compat"] }

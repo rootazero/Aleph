@@ -644,6 +644,122 @@ pub(crate) async fn edit_message(
 }
 
 // ---------------------------------------------------------------------------
+// Orchestrator delivery wrapper
+// ---------------------------------------------------------------------------
+
+use crate::gateway::event_emitter::StreamEvent;
+use crate::sync_primitives::Arc;
+use tokio::sync::mpsc;
+
+/// Cloneable wrapper around Telegram delivery primitives for the streaming orchestrator.
+#[derive(Clone)]
+pub struct TelegramDelivery {
+    pub bot: Bot,
+    pub config: ResolvedConfig,
+    pub cooldown: Arc<ErrorCooldown>,
+    pub conversation_id: String,
+}
+
+impl TelegramDelivery {
+    pub fn new(
+        bot: Bot,
+        config: ResolvedConfig,
+        cooldown: Arc<ErrorCooldown>,
+        conversation_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            bot,
+            config,
+            cooldown,
+            conversation_id: conversation_id.into(),
+        }
+    }
+
+    /// Send a plain text message and return its Telegram message ID.
+    pub async fn send_text_message(
+        &self,
+        text: &str,
+    ) -> ChannelResult<i64> {
+        let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id);
+        let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
+        let req = with_thread!(
+            self.bot.send_message(chat_id, &html_text)
+                .parse_mode(ParseMode::Html),
+            thread_id
+        );
+        match req.await {
+            Ok(msg) => Ok(msg.id.0 as i64),
+            Err(e) => {
+                let cls = classify_error(&e);
+                self.cooldown
+                    .record_failure(&self.conversation_id, error_class_to_kind(&cls));
+                Err(ChannelError::SendFailed(e.to_string()))
+            }
+        }
+    }
+
+    /// Edit an existing message.
+    pub async fn edit_text_message(
+        &self,
+        message_id: i64,
+        text: &str,
+    ) -> ChannelResult<()> {
+        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
+        let msg_id = teloxide::types::MessageId(message_id as i32);
+        let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
+        let request = self
+            .bot
+            .edit_message_text(chat_id, msg_id, &html_text)
+            .parse_mode(ParseMode::Html);
+        match request.await {
+            Ok(_) => Ok(()),
+            Err(ref e) if is_benign_edit_error(e) => {
+                tracing::debug!("edit_text_message: benign error ignored: {}", e);
+                Ok(())
+            }
+            Err(e) => Err(ChannelError::SendFailed(e.to_string())),
+        }
+    }
+
+    /// Set a reaction on a message.
+    pub async fn set_reaction(
+        &self,
+        message_id: i64,
+        emoji: &str,
+    ) -> ChannelResult<()> {
+        let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
+        let msg_id = teloxide::types::MessageId(message_id as i32);
+        let reactions = if emoji.is_empty() {
+            vec![]
+        } else {
+            vec![teloxide::types::ReactionType::Emoji {
+                emoji: emoji.to_string(),
+            }]
+        };
+        match self
+            .bot
+            .set_message_reaction(chat_id, msg_id)
+            .reaction(reactions)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::debug!("Failed to set reaction (non-critical): {}", e);
+                Ok(())
+            }
+        }
+    }
+
+    /// Create a streaming orchestrator for this conversation.
+    pub fn send_streaming_orchestrated(
+        &self,
+        config: &super::config_v2::StreamingOptions,
+    ) -> (super::streaming::StreamOrchestrator, mpsc::Sender<StreamEvent>) {
+        super::streaming::StreamOrchestrator::new(self.clone(), config.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

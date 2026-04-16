@@ -31,13 +31,14 @@ pub mod bot_instance;
 pub mod poll;
 pub mod reaction_handler;
 pub mod sticker;
+pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
 pub use config_v2::TelegramConfigV2;
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
-pub use config_v2::{DmPolicy, GroupPolicy, StreamingOptions};
+pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
