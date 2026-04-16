@@ -279,6 +279,153 @@ fn strip_trailing_incomplete(text: &str) -> String {
     s
 }
 
+/// Split text into (reasoning, answer) by extracting `<think>…</think>` blocks.
+///
+/// Code-block aware: tags inside backtick spans or fenced code blocks are
+/// preserved, preventing accidental extraction from example code.
+pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
+    static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)<(?:think|thinking|thought|antthinking)[\s/>]")
+            .expect("quick probe regex")
+    });
+
+    if !QUICK_PROBE.is_match(text) {
+        return (None, text.to_string());
+    }
+
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut reasoning_parts: Vec<String> = Vec::new();
+    let mut answer = String::with_capacity(len);
+    let mut i = 0;
+    let mut in_fenced_code = false;
+    let mut inline_backtick_count: usize = 0;
+
+    while i < len {
+        // Track fenced code blocks
+        if inline_backtick_count == 0
+            && i + 2 < len
+            && bytes[i] == b'`'
+            && bytes[i + 1] == b'`'
+            && bytes[i + 2] == b'`'
+        {
+            let fence_start = i;
+            while i < len && bytes[i] == b'`' {
+                i += 1;
+            }
+            answer.push_str(&text[fence_start..i]);
+            in_fenced_code = !in_fenced_code;
+            continue;
+        }
+
+        // Track inline code spans
+        if !in_fenced_code && bytes[i] == b'`' {
+            let bt_start = i;
+            let mut bt_count = 0;
+            while i < len && bytes[i] == b'`' && bt_count < 3 {
+                bt_count += 1;
+                i += 1;
+            }
+            answer.push_str(&text[bt_start..i]);
+            if inline_backtick_count == 0 {
+                inline_backtick_count = bt_count;
+            } else if bt_count == inline_backtick_count {
+                inline_backtick_count = 0;
+            }
+            continue;
+        }
+
+        // Inside code — pass through to answer
+        if in_fenced_code || inline_backtick_count > 0 {
+            let start = i;
+            while i < len && bytes[i] != b'`' {
+                i += 1;
+            }
+            answer.push_str(&text[start..i]);
+            continue;
+        }
+
+        // Outside code — check for thinking tags to extract
+        if bytes[i] == b'<' {
+            for tag in THINKING_TAGS.iter() {
+                if let Some((content, end)) =
+                    try_extract_paired_tag_bytes(bytes, i, tag.as_bytes())
+                {
+                    if !content.is_empty() {
+                        reasoning_parts.push(content);
+                    }
+                    i = end;
+                    break;
+                }
+            }
+            // If we matched a tag, continue; otherwise copy the '<'
+            if i < len && bytes[i] == b'<' {
+                // No match — copy '<' and continue normally
+                answer.push('<');
+                i += 1;
+                continue;
+            }
+            if i >= len {
+                break;
+            }
+            continue;
+        }
+
+        // Copy one UTF-8 character
+        let ch_len = utf8_char_len(bytes[i]);
+        let end = (i + ch_len).min(len);
+        answer.push_str(&text[i..end]);
+        i = end;
+    }
+
+    let reasoning = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join("\n\n"))
+    };
+
+    (reasoning, answer)
+}
+
+/// Try to extract `<tag_name>…</tag_name>` at byte position `pos`.
+/// Returns the extracted content and the byte position after the closing tag.
+fn try_extract_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<(String, usize)> {
+    let open_len = 1 + tag.len() + 1; // < + tag + >
+    if pos + open_len > bytes.len() || bytes[pos] != b'<' {
+        return None;
+    }
+    // Match opening tag (case-insensitive)
+    if !bytes[pos + 1..pos + 1 + tag.len()]
+        .iter()
+        .zip(tag.iter())
+        .all(|(a, b)| a.to_ascii_lowercase() == *b)
+    {
+        return None;
+    }
+    if bytes[pos + 1 + tag.len()] != b'>' {
+        return None;
+    }
+
+    // Find closing </tag>
+    let close_tag_len = 2 + tag.len() + 1; // </ + tag + >
+    let search_start = pos + open_len;
+    for k in search_start..bytes.len().saturating_sub(close_tag_len - 1) {
+        if bytes[k] == b'<'
+            && bytes[k + 1] == b'/'
+            && k + close_tag_len <= bytes.len()
+            && bytes[k + 2..k + 2 + tag.len()]
+                .iter()
+                .zip(tag.iter())
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+            && bytes[k + 2 + tag.len()] == b'>'
+        {
+            let content = String::from_utf8_lossy(&bytes[search_start..k]).trim().to_string();
+            return Some((content, k + close_tag_len));
+        }
+    }
+    None
+}
+
 /// Configuration for ReplyEmitter behavior
 #[derive(Debug, Clone)]
 pub struct ReplyEmitterConfig {
@@ -382,6 +529,9 @@ pub struct ReplyEmitter {
     /// Fallback model info — stored when ModelResolved fires with is_fallback=true.
     /// Appended as a notice line to non-Panel channel replies.
     fallback_info: Mutex<Option<crate::providers::health::ModelInfo>>,
+
+    /// Accumulated reasoning text from StreamEvent::Reasoning / ReasoningBlock.
+    reasoning_buffer: Mutex<String>,
 }
 
 /// Tracks the state of an active native stream (e.g., Teams streaming info).
@@ -422,6 +572,7 @@ impl ReplyEmitter {
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
             fallback_info: Mutex::new(None),
+            reasoning_buffer: Mutex::new(String::new()),
         }
     }
 
@@ -459,6 +610,7 @@ impl ReplyEmitter {
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
             fallback_info: Mutex::new(None),
+            reasoning_buffer: Mutex::new(String::new()),
         }
     }
 
@@ -637,6 +789,17 @@ impl ReplyEmitter {
         self.send_media_standalone(media_attachments).await;
     }
 
+    /// Drain accumulated explicit reasoning text, returning None if empty.
+    async fn take_reasoning_buffer(&self) -> Option<String> {
+        let mut buf = self.reasoning_buffer.lock().await;
+        let content = std::mem::take(&mut *buf);
+        if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        }
+    }
+
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
     async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
         let pending_count = self
@@ -726,15 +889,37 @@ impl ReplyEmitter {
         }
 
         let content = sanitize_llm_output(content);
-        self.send_to_channel_sanitized(&content).await;
+        self.send_to_channel_sanitized(&content, None).await;
+    }
+
+    /// Send content to the channel, extracting embedded reasoning, sanitizing,
+    /// and splitting into chunks if too long.
+    async fn send_to_channel_with_reasoning(&self, content: &str, reasoning: Option<&str>) {
+        if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
+            return;
+        }
+
+        let (embedded_reasoning, answer) = split_reasoning(content);
+        let final_reasoning = match (reasoning, embedded_reasoning) {
+            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => {
+                Some(format!("{}\n\n{}", r, e))
+            }
+            (Some(r), _) if !r.is_empty() => Some(r.to_string()),
+            (None, Some(e)) => Some(e),
+            _ => None,
+        };
+
+        let sanitized = sanitize_llm_output(&answer);
+        self.send_to_channel_sanitized(&sanitized, final_reasoning.as_deref())
+            .await;
     }
 
     /// Send pre-sanitized content to the channel, splitting into chunks if too long.
     ///
     /// Callers that have already called `sanitize_llm_output` should use this
     /// to avoid redundant sanitization passes.
-    async fn send_to_channel_sanitized(&self, content: &str) {
-        if content.is_empty() {
+    async fn send_to_channel_sanitized(&self, content: &str, reasoning: Option<&str>) {
+        if content.is_empty() && reasoning.is_none_or(|r| r.is_empty()) {
             return;
         }
 
@@ -745,6 +930,15 @@ impl ReplyEmitter {
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();
+
+        let metadata = reasoning
+            .filter(|r| !r.is_empty())
+            .map(|r| {
+                let mut m = std::collections::HashMap::new();
+                m.insert("reasoning".to_string(), r.to_string());
+                m
+            })
+            .unwrap_or_default();
 
         for (i, chunk) in chunks.into_iter().enumerate() {
             let message = OutboundMessage {
@@ -757,7 +951,7 @@ impl ReplyEmitter {
                     None
                 },
                 inline_keyboard: None,
-                metadata: Default::default(),
+                metadata: metadata.clone(),
             };
 
             match self
@@ -1206,10 +1400,15 @@ impl EventEmitter for ReplyEmitter {
                         if !buffer.is_empty() {
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
+                            let reasoning = self.take_reasoning_buffer().await;
                             if self.should_voice().await {
                                 self.send_as_voice(&text).await;
                             } else {
-                                self.send_to_channel(&text).await;
+                                self.send_to_channel_with_reasoning(
+                                    &text,
+                                    reasoning.as_deref(),
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1279,11 +1478,16 @@ impl EventEmitter for ReplyEmitter {
                     let mut buffer = self.buffer.lock().await;
                     std::mem::take(&mut *buffer)
                 };
+                let reasoning = self.take_reasoning_buffer().await;
 
                 if !text.is_empty() {
                     if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else if self.config.stream_enabled {
+                        // Send explicit reasoning first if available
+                        if let Some(ref r) = reasoning {
+                            self.send_to_channel(r).await;
+                        }
                         // Finalize the streaming controller
                         let mut ctrl = self.streaming.lock().await;
                         match ctrl.finalize() {
@@ -1321,7 +1525,8 @@ impl EventEmitter for ReplyEmitter {
                         let media = self.drain_and_send_media().await;
                         self.send_media_standalone(media).await;
                     } else {
-                        self.send_to_channel(&text).await;
+                        self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
+                            .await;
                     }
                 }
 
@@ -1338,7 +1543,11 @@ impl EventEmitter for ReplyEmitter {
                             if self.should_voice().await {
                                 self.send_as_voice(final_response).await;
                             } else {
-                                self.send_to_channel(final_response).await;
+                                self.send_to_channel_with_reasoning(
+                                    final_response,
+                                    reasoning.as_deref(),
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1362,11 +1571,13 @@ impl EventEmitter for ReplyEmitter {
                     let mut buffer = self.buffer.lock().await;
                     std::mem::take(&mut *buffer)
                 };
+                let reasoning = self.take_reasoning_buffer().await;
                 if !text.is_empty() {
                     if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else {
-                        self.send_to_channel(&text).await;
+                        self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
+                            .await;
                     }
                 }
 
@@ -1387,11 +1598,13 @@ impl EventEmitter for ReplyEmitter {
                     let mut buffer = self.buffer.lock().await;
                     std::mem::take(&mut *buffer)
                 };
+                let reasoning = self.take_reasoning_buffer().await;
                 if !text.is_empty() {
                     if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else {
-                        self.send_to_channel(&text).await;
+                        self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
+                            .await;
                     }
                 }
 
@@ -1402,6 +1615,23 @@ impl EventEmitter for ReplyEmitter {
                 }
             }
 
+            // Accumulate explicit reasoning chunks for separate delivery
+            StreamEvent::Reasoning { content, .. } => {
+                if !content.is_empty() {
+                    self.reasoning_buffer.lock().await.push_str(&content);
+                }
+            }
+
+            StreamEvent::ReasoningBlock { content, .. } => {
+                if !content.is_empty() {
+                    let mut buf = self.reasoning_buffer.lock().await;
+                    if !buf.is_empty() {
+                        buf.push_str("\n\n");
+                    }
+                    buf.push_str(&content);
+                }
+            }
+
             // Store fallback info for non-Panel notification
             StreamEvent::ModelResolved { model_info, .. } => {
                 if model_info.is_fallback {
@@ -1409,14 +1639,20 @@ impl EventEmitter for ReplyEmitter {
                 }
             }
 
+            StreamEvent::ToolStart { tool_name, .. } => {
+                self.react_on_inbound("🔧").await;
+                debug!(target: "multimodal", probe = "P7_reaction", run_id = %self.run_id, tool = %tool_name, "Tool started — reaction set");
+            }
+
+            StreamEvent::ToolEnd { .. } => {
+                // Tool finished — back to thinking state
+                self.react_on_inbound("👀").await;
+            }
+
             // Other events are not routed to channels
             StreamEvent::RunAccepted { .. }
-            | StreamEvent::Reasoning { .. }
-            | StreamEvent::ToolStart { .. }
             | StreamEvent::ToolUpdate { .. }
-            | StreamEvent::ToolEnd { .. }
             | StreamEvent::AgentTrace { .. }
-            | StreamEvent::ReasoningBlock { .. }
             | StreamEvent::UncertaintySignal { .. }
             | StreamEvent::SessionUpdated { .. } => {
                 debug!("Ignoring event for channel routing: {:?}", event);
@@ -1742,5 +1978,47 @@ mod tests {
         let input = "if x < 10 then stop";
         let result = sanitize_llm_output(input);
         assert_eq!(&*result, "if x < 10 then stop");
+    }
+
+    // ── split_reasoning tests ─────────────────────────────────────────
+
+    #[test]
+    fn split_reasoning_no_tags() {
+        let input = "Hello, world!";
+        let (reasoning, answer) = split_reasoning(input);
+        assert!(reasoning.is_none());
+        assert_eq!(answer, "Hello, world!");
+    }
+
+    #[test]
+    fn split_reasoning_extracts_think_block() {
+        let input = "<think>Let me think...</think>\nAnswer is 42.";
+        let (reasoning, answer) = split_reasoning(input);
+        assert_eq!(reasoning.as_deref(), Some("Let me think..."));
+        assert_eq!(answer, "\nAnswer is 42.");
+    }
+
+    #[test]
+    fn split_reasoning_extracts_multiple_thinking_tags() {
+        let input = "<think>first</think>\n<thinking>second</thinking>\nFinal.";
+        let (reasoning, answer) = split_reasoning(input);
+        assert_eq!(reasoning.as_deref(), Some("first\n\nsecond"));
+        assert_eq!(answer, "\n\nFinal.");
+    }
+
+    #[test]
+    fn split_reasoning_preserves_think_in_code() {
+        let input = "<think>reasoning</think>\n```\n<think>code</think>\n```\nDone.";
+        let (reasoning, answer) = split_reasoning(input);
+        assert_eq!(reasoning.as_deref(), Some("reasoning"));
+        assert!(answer.contains("<think>code</think>"));
+    }
+
+    #[test]
+    fn split_reasoning_case_insensitive() {
+        let input = "<THINK>caps</THINK>Answer.";
+        let (reasoning, answer) = split_reasoning(input);
+        assert_eq!(reasoning.as_deref(), Some("caps"));
+        assert_eq!(answer, "Answer.");
     }
 }

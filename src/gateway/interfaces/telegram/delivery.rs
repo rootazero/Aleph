@@ -159,10 +159,11 @@ pub(crate) async fn send_message(
             remaining_secs = cd.remaining.as_secs_f64(),
             "skipping send — conversation in cooldown",
         );
-        return Err(ChannelError::SendFailed(format!(
-            "conversation in cooldown: {}",
-            cd
-        )));
+        let err = ChannelError::SendFailed(format!("conversation in cooldown: {}", cd));
+        if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+            return Err(ChannelError::SendFailed("Error suppressed by policy".to_string()));
+        }
+        return Err(err);
     }
 
     // Send typing indicator if enabled and typing breaker allows it
@@ -238,6 +239,23 @@ pub(crate) async fn send_message(
         req
     };
 
+    // Send reasoning first if present in metadata
+    if let Some(reasoning) = message.metadata.get("reasoning") {
+        if !reasoning.is_empty() {
+            let reasoning_text = format!("🤔 {}", reasoning);
+            let reasoning_html =
+                MessageFormatter::format(&reasoning_text, MarkupFormat::TelegramHtml);
+            let reasoning_chunks = split_html_safe(&reasoning_html, 4000);
+            for chunk in &reasoning_chunks {
+                let req = build_request(Some(ParseMode::Html), chunk, None, None);
+                if let Err(e) = req.await {
+                    tracing::warn!("Failed to send reasoning message: {}", e);
+                    // Non-fatal: continue to main message
+                }
+            }
+        }
+    }
+
     // Send each chunk with retry logic. Only the first chunk carries
     // reply_to and inline_keyboard; subsequent chunks are plain continuations.
     let max_retries = config.max_retries;
@@ -278,16 +296,27 @@ pub(crate) async fn send_message(
                                 Err(fallback_err) => {
                                     let cls = classify_error(&fallback_err);
                                     cooldown.record_failure(conv_id, error_class_to_kind(&cls));
-                                    return Err(ChannelError::SendFailed(format!(
+                                    let err = ChannelError::SendFailed(format!(
                                         "Telegram send error: {}",
                                         fallback_err
-                                    )));
+                                    ));
+                                    if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                        return Err(ChannelError::SendFailed(
+                                            "Error suppressed by policy".to_string(),
+                                        ));
+                                    }
+                                    return Err(err);
                                 }
                             }
                         }
                         ErrorClass::RateLimited(secs) => {
                             if attempts > max_retries {
                                 cooldown.record_failure(conv_id, ErrorKind::Retryable);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
                                 return Err(ChannelError::RateLimited {
                                     retry_after_secs: secs,
                                 });
@@ -304,6 +333,11 @@ pub(crate) async fn send_message(
                             // DNS/TCP failure — data never sent, safe to retry aggressively
                             if attempts > max_retries {
                                 cooldown.record_failure(conv_id, ErrorKind::Retryable);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
                             let backoff_ms = 500 * attempts as u64;
@@ -321,6 +355,11 @@ pub(crate) async fn send_message(
                             let post_connect_max = max_retries.min(2);
                             if attempts > post_connect_max {
                                 cooldown.record_failure(conv_id, ErrorKind::Retryable);
+                                if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    return Err(ChannelError::SendFailed(
+                                        "Error suppressed by policy".to_string(),
+                                    ));
+                                }
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
                             let backoff_ms = 1000 * attempts as u64;
@@ -343,9 +382,17 @@ pub(crate) async fn send_message(
         }
     }
 
-    let sent = first_msg.ok_or_else(|| {
-        ChannelError::SendFailed("No message chunks to send (empty formatted text)".into())
-    })?;
+    let sent = match first_msg {
+        Some(msg) => msg,
+        None => {
+            let err =
+                ChannelError::SendFailed("No message chunks to send (empty formatted text)".into());
+            if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                return Err(ChannelError::SendFailed("Error suppressed by policy".to_string()));
+            }
+            return Err(err);
+        }
+    };
 
     // Send attachments if any
     for attachment in &message.attachments {

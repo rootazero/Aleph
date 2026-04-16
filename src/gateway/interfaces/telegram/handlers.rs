@@ -7,6 +7,7 @@
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
+use super::sticker::StickerPipeline;
 use chrono::{TimeZone, Utc};
 use std::time::Duration;
 use teloxide::prelude::*;
@@ -21,6 +22,7 @@ pub(crate) async fn convert_message(
     msg: &teloxide::types::Message,
     bot: &Bot,
     channel_id: &ChannelId,
+    sticker_pipeline: &StickerPipeline,
 ) -> Option<InboundMessage> {
     // Get sender info
     let (sender_id, sender_name) = if let Some(from) = &msg.from {
@@ -51,7 +53,13 @@ pub(crate) async fn convert_message(
             MediaKind::Video(video) => video.caption.clone().unwrap_or_default(),
             MediaKind::Voice(voice) => voice.caption.clone().unwrap_or_default(),
             MediaKind::Sticker(s) => {
-                format!("[Sticker: {}]", s.sticker.emoji.as_deref().unwrap_or("?"))
+                let emoji = s.sticker.emoji.as_deref().unwrap_or("?");
+                let file_unique_id = &s.sticker.file.unique_id;
+                let desc = sticker_pipeline.resolve_description(file_unique_id, "").await;
+                match desc {
+                    Some(d) => format!("[Sticker: {} | {}]", emoji, d),
+                    None => format!("[Sticker: {}]", emoji),
+                }
             }
             _ => String::new(),
         },

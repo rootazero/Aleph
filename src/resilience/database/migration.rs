@@ -386,6 +386,68 @@ pub fn migrate_add_paired_users(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Migrate to add sticker_descriptions table for Telegram sticker cache.
+///
+/// Stores LLM-generated descriptions of stickers so they can be reused
+/// without re-running vision inference.
+///
+/// # Safety
+/// - Uses IF NOT EXISTS for idempotent table creation
+/// - Uses savepoint for atomic migration
+pub fn migrate_add_sticker_descriptions(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_sticker_descriptions")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin sticker_descriptions migration: {}",
+                e
+            ))
+        })?;
+
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sticker_descriptions'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_sticker_descriptions");
+            AlephError::config(format!("Failed to check sticker_descriptions table: {}", e))
+        })?;
+
+    if table_exists == 0 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sticker_descriptions (
+                file_unique_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                cached_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .map_err(|e| {
+            let _ = conn.execute_batch("ROLLBACK TO migration_sticker_descriptions");
+            AlephError::config(format!(
+                "Failed to create sticker_descriptions table: {}",
+                e
+            ))
+        })?;
+
+        tracing::info!("Created sticker_descriptions table");
+    } else {
+        tracing::debug!("sticker_descriptions table already exists, skipping creation");
+    }
+
+    conn.execute_batch("RELEASE migration_sticker_descriptions")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit sticker_descriptions migration: {}",
+                e
+            ))
+        })?;
+
+    Ok(())
+}
+
 fn legacy_trace_to_agent_trace(step_index: u32, role: &str, content_json: &str) -> AgentTraceEvent {
     let iteration = step_index as usize;
     let text = extract_legacy_trace_text(content_json);

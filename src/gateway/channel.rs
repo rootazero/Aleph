@@ -231,6 +231,10 @@ pub enum MessageMeta {
     },
     /// Matrix thread root event ID — message is part of a thread.
     ThreadRoot(MessageId),
+    /// Telegram poll answer — user selected options in a poll.
+    PollAnswer { poll_id: String, option_ids: Vec<u8> },
+    /// Telegram message reaction — user reacted with these emojis.
+    Reaction { emojis: Vec<String> },
 }
 
 /// Message received from a channel

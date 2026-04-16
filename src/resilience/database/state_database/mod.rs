@@ -76,6 +76,7 @@ impl StateDatabase {
         // Run migrations (same as new()) so in-memory DBs have full schema
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
+        migration::migrate_add_sticker_descriptions(&conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -133,6 +134,9 @@ impl StateDatabase {
 
         // Migrate to add paired_users table for pairing persistence (idempotent)
         migration::migrate_add_paired_users(&conn)?;
+
+        // Migrate to add sticker_descriptions table for Telegram sticker cache (idempotent)
+        migration::migrate_add_sticker_descriptions(&conn)?;
 
         // Migrate existing data to vec0 tables (for upgrades from old schema)
         Self::migrate_to_vec0(&conn)?;
@@ -198,6 +202,7 @@ impl StateDatabase {
         migration::migrate_task_traces_to_agent_trace(&conn)?;
         migration::migrate_add_channel_offsets(&conn)?;
         migration::migrate_add_paired_users(&conn)?;
+        migration::migrate_add_sticker_descriptions(&conn)?;
 
         if !dim_changed {
             Self::migrate_to_vec0(&conn)?;
@@ -340,6 +345,57 @@ impl StateDatabase {
     /// Serialize embedding vector to bytes (f32 array -> bytes)
     pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
+
+    /// Store or update a sticker description in the cache.
+    pub fn store_sticker_description(
+        &self,
+        file_unique_id: &str,
+        description: &str,
+    ) -> Result<(), crate::error::AlephError> {
+        let conn = self.conn.lock().map_err(|e| {
+            crate::error::AlephError::config(format!("Database lock poisoned: {}", e))
+        })?;
+        conn.execute(
+            "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
+            [file_unique_id, description],
+        )
+        .map_err(|e| crate::error::AlephError::config(format!("Failed to store sticker description: {}", e)))?;
+        Ok(())
+    }
+
+    /// Load a cached sticker description by its unique file id.
+    pub fn load_sticker_description(
+        &self,
+        file_unique_id: &str,
+    ) -> Result<Option<String>, crate::error::AlephError> {
+        let conn = self.conn.lock().map_err(|e| {
+            crate::error::AlephError::config(format!("Database lock poisoned: {}", e))
+        })?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
+            )
+            .map_err(|e| {
+                crate::error::AlephError::config(format!("Failed to prepare sticker query: {}", e))
+            })?;
+        let mut rows = stmt.query([file_unique_id]).map_err(|e| {
+            crate::error::AlephError::config(format!("Failed to query sticker description: {}", e))
+        })?;
+        if let Some(row) = rows.next().map_err(|e| {
+            crate::error::AlephError::config(format!("Failed to read sticker row: {}", e))
+        })? {
+            row.get(0)
+                .map_err(|e| {
+                    crate::error::AlephError::config(format!(
+                        "Failed to deserialize sticker description: {}",
+                        e
+                    ))
+                })
+                .map(Some)
+        } else {
+            Ok(None)
+        }
     }
 }
 

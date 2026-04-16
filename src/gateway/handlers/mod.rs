@@ -46,7 +46,6 @@ pub mod activity;
 pub mod agent;
 pub mod agent_config;
 pub mod agents;
-pub mod approval_bridge;
 pub mod arena;
 pub mod auth;
 pub mod auth_tools;
@@ -113,7 +112,7 @@ pub mod version;
 pub mod wizard;
 pub mod workspace;
 
-pub use approval_bridge::{get_forward_targets, parse_session_target, ForwardMode};
+
 pub use config::{handle_get_full_config, handle_patch_config};
 pub use guests::SharedInvitationManager;
 pub use identity::SharedIdentityResolver;

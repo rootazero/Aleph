@@ -28,6 +28,11 @@ pub mod handlers;
 pub mod offset;
 mod polling;
 pub mod bot_instance;
+pub mod poll;
+pub mod reasoning_lane;
+pub mod reaction_handler;
+pub mod status_reaction;
+pub mod sticker;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
@@ -39,7 +44,7 @@ pub use config_v2::{DmPolicy, GroupPolicy, StreamingOptions};
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, PairingData, SendResult, UserId,
+    MessageId, MessageMeta, OutboundMessage, PairingData, SendResult, UserId,
 };
 use access::AccessDecision;
 use async_trait::async_trait;
@@ -414,11 +419,14 @@ impl Channel for TelegramChannel {
             let access_clone = self.access.clone();
             let access_for_cb = self.access.clone();
 
+            let state_db_for_sticker = self.state_db.clone();
+
             let message_handler =
                 Update::filter_message().endpoint(move |bot: Bot, msg: teloxide::types::Message| {
                     let inbound_tx = inbound_tx.clone();
                     let channel_id = channel_id.clone();
                     let access = access_clone.clone();
+                    let sticker_pipeline = sticker::StickerPipeline::new(state_db_for_sticker.clone());
                     async move {
                         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
@@ -427,7 +435,7 @@ impl Channel for TelegramChannel {
                         match access.check_message(user_id, chat_id, is_group).await {
                             AccessDecision::Allowed | AccessDecision::NeedsPairing => {
                                 if let Some(inbound) =
-                                    handlers::convert_message(&msg, &bot, &channel_id).await
+                                    handlers::convert_message(&msg, &bot, &channel_id, &sticker_pipeline).await
                                 {
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
@@ -534,9 +542,71 @@ impl Channel for TelegramChannel {
                     }
                 });
 
+            let inbound_tx_for_poll = self.channel_state.sender();
+            let channel_id_for_poll = self.info.id.clone();
+            let poll_handler = Update::filter_poll_answer().endpoint(
+                move |q: teloxide::types::PollAnswer| {
+                    let inbound_tx = inbound_tx_for_poll.clone();
+                    let channel_id = channel_id_for_poll.clone();
+                    async move {
+                        let (conversation_id, sender_id, sender_name) = match &q.voter {
+                            teloxide::types::Voter::User(user) => (
+                                ConversationId::new(user.id.to_string()),
+                                UserId::new(user.id.to_string()),
+                                user.username.clone().or_else(|| Some(user.first_name.clone())),
+                            ),
+                            teloxide::types::Voter::Chat(chat) => (
+                                ConversationId::new(chat.id.0.to_string()),
+                                UserId::new(chat.id.0.to_string()),
+                                chat.title().map(|t| t.to_string()),
+                            ),
+                        };
+
+                        let inbound = InboundMessage {
+                            id: MessageId::new(format!("poll_{}", q.poll_id)),
+                            channel_id,
+                            conversation_id,
+                            sender_id,
+                            sender_name,
+                            text: format!("Poll answer: {:?}", q.option_ids),
+                            attachments: Vec::new(),
+                            timestamp: chrono::Utc::now(),
+                            reply_to: None,
+                            is_group: false,
+                            raw: None,
+                            metadata: vec![MessageMeta::PollAnswer {
+                                poll_id: q.poll_id,
+                                option_ids: q.option_ids,
+                            }],
+                        };
+                        let _ = inbound_tx.send(inbound);
+                        Ok::<(), std::convert::Infallible>(())
+                    }
+                },
+            );
+
+            let inbound_tx_for_reaction = self.channel_state.sender();
+            let channel_id_for_reaction = self.info.id.clone();
+            let reaction_handler = Update::filter_message_reaction_updated().endpoint(
+                move |update: teloxide::types::MessageReactionUpdated| {
+                    let inbound_tx = inbound_tx_for_reaction.clone();
+                    let channel_id = channel_id_for_reaction.clone();
+                    async move {
+                        if let Some(inbound) =
+                            reaction_handler::convert_reaction(&update, channel_id.as_str())
+                        {
+                            let _ = inbound_tx.send(inbound);
+                        }
+                        Ok::<(), std::convert::Infallible>(())
+                    }
+                },
+            );
+
             let handler = dptree::entry()
                 .branch(message_handler)
-                .branch(callback_handler);
+                .branch(callback_handler)
+                .branch(poll_handler)
+                .branch(reaction_handler);
 
             let status = self.channel_state.status_handle();
             let offset = instance.offset_tracker.clone();
