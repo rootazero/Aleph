@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Chat Types ──
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChatType {
     P2p,
     Group,
@@ -10,7 +10,7 @@ pub enum ChatType {
 
 // ── Mentions ──
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct Mention {
     /// Placeholder key in message text (e.g., "@_user_1")
@@ -27,7 +27,7 @@ pub struct Mention {
 
 /// Feishu event types parsed from WebSocket frames.
 /// These cover the full set of events that Aleph can handle.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum FeishuEvent {
     /// Incoming message in a chat
@@ -339,7 +339,7 @@ pub struct CardCreateData {
 
 // ── Typing State ──
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypingState {
     pub message_id: String,
     pub reaction_id: String,

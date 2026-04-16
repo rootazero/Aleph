@@ -11,8 +11,8 @@ use crate::gateway::inbound_context::ReplyRoute;
 use crate::gateway::reply_emitter::ReplyEmitter;
 use crate::sync_primitives::Arc;
 
-use super::api::FeishuApi;
-use super::types::TypingState;
+use crate::gateway::interfaces::feishu::api::FeishuApi;
+use crate::gateway::interfaces::feishu::types::TypingState;
 
 const STREAM_THROTTLE_MS: u64 = 100;
 

@@ -1,4 +1,4 @@
-use super::types::*;
+use crate::gateway::interfaces::feishu::types::*;
 use serde::Deserialize;
 
 /// Parse a raw WebSocket text frame into a FeishuEvent.

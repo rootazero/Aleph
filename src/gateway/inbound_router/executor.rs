@@ -311,10 +311,10 @@ impl InboundMessageRouter {
         run_id: &str,
         reply_config: ReplyEmitterConfig,
         pending_media: crate::gateway::media::PendingMedia,
-    ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
+    ) -> Option<crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter> {
         use crate::gateway::interfaces::feishu::api::FeishuApi;
         use crate::gateway::interfaces::feishu::auth::TokenManager;
-        use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
+        use crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter;
         use crate::gateway::interfaces::feishu::FeishuConfig;
 
         // Read feishu config from app config
