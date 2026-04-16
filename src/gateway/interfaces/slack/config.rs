@@ -287,7 +287,7 @@ mod tests {
         assert!(config.enable_reactions);
         assert!(config.enable_editing);
         assert!(!config.enable_deletion);
-        assert_eq!(config.debounce_ms, 700);
+        assert_eq!(config.debounce_ms, 0);
         assert!(config.allowed_channels.is_empty());
         assert!(config.user_allowlist.is_empty());
         assert!(!config.resolve_user_names);

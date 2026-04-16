@@ -25,9 +25,11 @@
 //! ```
 
 pub mod config;
+pub mod directory;
 pub mod message_ops;
 
 pub use config::SlackConfig;
+pub use directory::UserDirectory;
 pub use message_ops::SlackMessageOps;
 
 use crate::gateway::channel::{

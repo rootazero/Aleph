@@ -661,6 +661,14 @@ impl SlackMessageOps {
             return None;
         }
 
+        if !config.is_user_allowed(user_id) {
+            tracing::debug!(
+                "Slack: user {} not in user_allowlist, filtering mention",
+                user_id
+            );
+            return None;
+        }
+
         let slack_channel = event["channel"].as_str()?;
         if !config.is_channel_allowed(slack_channel) {
             return None;
@@ -734,6 +742,15 @@ impl SlackMessageOps {
 
         // Filter out bot's own messages
         if user_id == bot_user_id {
+            return None;
+        }
+
+        // Filter by user allowlist
+        if !config.is_user_allowed(user_id) {
+            tracing::debug!(
+                "Slack: user {} not in user_allowlist, filtering",
+                user_id
+            );
             return None;
         }
 
@@ -1333,5 +1350,104 @@ mod tests {
         let msg =
             SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_filters_user_not_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U456",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_allows_user_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U123",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
+    }
+
+    #[test]
+    fn test_convert_allowlist_empty_allows_all() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U456",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig::default();
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
+    }
+
+    #[test]
+    fn test_convert_mention_filters_user_not_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "app_mention",
+            "user": "U456",
+            "channel": "C789",
+            "text": "<@B123> Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg =
+            SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_mention_allows_user_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "app_mention",
+            "user": "U123",
+            "channel": "C789",
+            "text": "<@B123> Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg =
+            SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
     }
 }
