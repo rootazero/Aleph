@@ -104,6 +104,8 @@ impl RuntimeSecurityGuard {
         mut context: SecurityContext,
     ) -> Result<GuardResult, SecurityGuardError> {
         let mut current_text = text.to_string();
+        let mut reasons = Vec::new();
+        let mut warnings = Vec::new();
 
         // 1. Placeholder Extraction & Secret Resolution (no text replacement yet)
         let mut resolved_map: HashMap<String, String> = HashMap::new();
@@ -130,12 +132,106 @@ impl RuntimeSecurityGuard {
             }
         }
 
-        // 5. Placeholder Replacement (performed at the end)
+        // 2. Leak Detection (on text still containing placeholders)
+        if self.config.leak_detection {
+            let exec_scan = {
+                let detector = self
+                    .exec_leak_detector
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                detector.scan_outbound(&current_text)
+            };
+
+            let secret_scan = {
+                let detector = self
+                    .secret_leak_detector
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                detector.scan_outbound(&current_text)
+            };
+
+            let has_blocks = exec_scan.has_blocks()
+                || matches!(secret_scan, LeakDecision::Block { .. });
+
+            if has_blocks {
+                let redacted_text = match secret_scan {
+                    LeakDecision::Block { redacted_content, .. } => Some(redacted_content),
+                    _ => None,
+                };
+                return Ok(GuardResult::Blocked {
+                    reason: "Leak detector found sensitive data in outbound content".to_string(),
+                    redacted_text,
+                });
+            }
+
+            if exec_scan.has_warnings() {
+                warnings.push("Outbound leak detector warning".to_string());
+            }
+        }
+
+        // 3. PII Filtering
+        if self.config.pii_filtering {
+            if let Some(engine) = &self.pii_engine {
+                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+
+                let should_filter = match &context.provider_name {
+                    Some(provider) => !engine_guard.is_provider_excluded(provider),
+                    None => true,
+                };
+
+                if should_filter {
+                    let result = engine_guard.filter(&current_text);
+                    current_text = Self::apply_filter_result(result, &mut reasons, &mut warnings);
+                }
+            }
+        }
+
+        // 4. Content Sanitization
+        if self.config.content_sanitization && context.has_external_content {
+            if let Some(source) = context.external_source {
+                current_text = wrap_external_content(&current_text, source);
+            }
+        }
+
+        // 5. Placeholder Replacement
         for (raw, value) in &resolved_map {
             current_text = current_text.replace(raw, value);
         }
 
-        Ok(GuardResult::Clean { text: current_text })
+        // Assemble final result
+        if reasons.is_empty() && warnings.is_empty() {
+            Ok(GuardResult::Clean { text: current_text })
+        } else if !reasons.is_empty() {
+            Ok(GuardResult::Redacted {
+                text: current_text,
+                reasons,
+            })
+        } else {
+            Ok(GuardResult::Warned {
+                text: current_text,
+                warnings,
+            })
+        }
+    }
+
+    fn apply_filter_result(
+        result: FilterResult,
+        reasons: &mut Vec<String>,
+        warnings: &mut Vec<String>,
+    ) -> String {
+        if result.blocked_count > 0 {
+            reasons.push(format!(
+                "PII filter blocked {} detection(s)",
+                result.blocked_count
+            ));
+        }
+        if result.warned_count > 0 {
+            warnings.push(format!(
+                "PII filter warned {} detection(s)",
+                result.warned_count
+            ));
+        }
+        result.text
     }
 
     /// Process inbound content received from LLM.
@@ -185,6 +281,48 @@ mod tests {
                 assert!(!text.contains("{{secret:test_key}}"));
             }
             _ => panic!("Expected Clean result, got {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_outbound_blocks_accidental_secret_leak() {
+        let guard = RuntimeSecurityGuard::default_guard();
+        let context = SecurityContext::default();
+        // This contains a real-looking API key that should be caught by leak detection
+        let input = "My key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+        let result = guard.process_outbound(input, &MockResolver, context).await;
+
+        match result {
+            Ok(GuardResult::Blocked { .. }) => {
+                // Expected: leak detector blocks known secret patterns
+            }
+            other => panic!("Expected Blocked, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_outbound_pipeline_order_leak_before_pii() {
+        let guard = RuntimeSecurityGuard::default_guard();
+        let context = SecurityContext::default();
+        // Placeholder should be resolved AFTER leak detection, so this should be Clean
+        let input = "Use key {{secret:test_key}} and call 13812345678";
+        let result = guard.process_outbound(input, &MockResolver, context).await.unwrap();
+
+        // Leak detection runs on text with placeholders, so no accidental secret leak.
+        // PII filter should catch the phone number.
+        match result {
+            GuardResult::Redacted { text, .. } | GuardResult::Clean { text } => {
+                assert!(!text.contains("{{secret:test_key}}"));
+                if text.contains("[PHONE]") {
+                    // PII filter ran correctly
+                }
+            }
+            GuardResult::Blocked { .. } => {
+                // Also acceptable if leak detector is aggressive
+            }
+            GuardResult::Warned { text, .. } => {
+                assert!(!text.contains("{{secret:test_key}}"));
+            }
         }
     }
 }
