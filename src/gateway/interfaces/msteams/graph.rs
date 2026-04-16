@@ -11,6 +11,7 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -239,6 +240,26 @@ pub struct GraphErrorDetail {
     pub message: Option<String>,
 }
 
+// ── Graph Token Source ──────────────────────────────────────────────────────
+
+/// Trait for Graph API token providers.
+///
+/// Abstracts over different authentication methods:
+/// - `GraphTokenCache`: ClientSecret authentication
+/// - `GraphTokenManager`: Federated authentication
+#[async_trait]
+pub trait GraphTokenSource: Send + Sync {
+    /// Get a valid Graph API access token, refreshing if necessary.
+    async fn get_token(&self) -> Result<String, ChannelError>;
+}
+
+#[async_trait]
+impl GraphTokenSource for GraphTokenCache {
+    async fn get_token(&self) -> Result<String, ChannelError> {
+        GraphTokenCache::get_token(self).await
+    }
+}
+
 // ── Graph Client ─────────────────────────────────────────────────────────────
 
 const GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
@@ -249,16 +270,57 @@ const GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
 /// team/channel management, and message operations.
 pub struct GraphClient {
     http: Client,
-    token_cache: Arc<GraphTokenCache>,
+    token_source: Arc<dyn GraphTokenSource>,
 }
 
 impl GraphClient {
-    /// Create a new `GraphClient`.
+    /// Create a new `GraphClient` with a ClientSecret token source.
     pub fn new(token_cache: Arc<GraphTokenCache>) -> Self {
         Self {
             http: Client::new(),
-            token_cache,
+            token_source: token_cache,
         }
+    }
+
+    /// Create a new `GraphClient` with a Federated auth token source.
+    pub fn with_federated(token_manager: Arc<impl GraphTokenSource + 'static>) -> Self {
+        Self {
+            http: Client::new(),
+            token_source: token_manager,
+        }
+    }
+
+    // ── Generic Operations ────────────────────────────────────────────────────
+
+    /// Make a generic GET request to the Graph API.
+    pub async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ChannelError> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", GRAPH_BASE_URL, path)
+        };
+
+        let token = self.token_source.get_token().await?;
+        let resp = self
+            .http
+            .get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Graph GET request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status = %status, body = %body, "Graph GET failed");
+            return Err(map_graph_error(status.as_u16(), &body));
+        }
+
+        let result: T = resp.json().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to parse Graph GET response: {e}"))
+        })?;
+
+        Ok(result)
     }
 
     // ── User & Directory Operations ────────────────────────────────────────────
@@ -280,7 +342,7 @@ impl GraphClient {
             top.min(25)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -314,7 +376,7 @@ impl GraphClient {
             encode_uri_component(user_id)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -363,7 +425,7 @@ impl GraphClient {
             top.min(10)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -398,7 +460,7 @@ impl GraphClient {
             encode_uri_component(team_id)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -440,7 +502,7 @@ impl GraphClient {
             encode_uri_component(message_id)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -485,7 +547,7 @@ impl GraphClient {
             top.min(20)
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(&url)
@@ -517,7 +579,7 @@ impl GraphClient {
     /// Used for retrieving file attachments that were uploaded to SharePoint
     /// rather than sent as inline content.
     pub async fn download_media(&self, content_url: &str) -> Result<Vec<u8>, ChannelError> {
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .get(content_url)
@@ -560,7 +622,7 @@ impl GraphClient {
             encode_uri_component(channel_id) // channels use same ID for upload context
         );
 
-        let token = self.token_cache.get_token().await?;
+        let token = self.token_source.get_token().await?;
         let resp = self
             .http
             .post(&url)
@@ -598,6 +660,143 @@ impl GraphClient {
             "https://graph.microsoft.com/v1.0/$sharepoint+upload+placeholder+{}",
             file_name
         ))
+    }
+
+    /// Make a generic POST request to the Graph API.
+    pub async fn post<T: Serialize + Send>(
+        &self,
+        path: &str,
+        payload: T,
+    ) -> Result<(), ChannelError> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", GRAPH_BASE_URL, path)
+        };
+
+        let token = self.token_source.get_token().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Graph POST request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status = %status, body = %body, "Graph POST failed");
+            return Err(map_graph_error(status.as_u16(), &body));
+        }
+
+        Ok(())
+    }
+
+    /// Make a POST request and parse JSON response.
+    pub async fn post_json<T: Serialize + Send, R: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        payload: T,
+    ) -> Result<R, ChannelError> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", GRAPH_BASE_URL, path)
+        };
+
+        let token = self.token_source.get_token().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Graph POST request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status = %status, body = %body, "Graph POST failed");
+            return Err(map_graph_error(status.as_u16(), &body));
+        }
+
+        let body = resp.bytes().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to read POST response body: {e}"))
+        })?;
+
+        serde_json::from_slice(&body)
+            .map_err(|e| ChannelError::Internal(format!("Failed to parse POST response: {e}")))
+    }
+
+    /// Make a PUT request and parse JSON response.
+    pub async fn put_with_empty<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ChannelError> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{}{}", GRAPH_BASE_URL, path)
+        };
+
+        let token = self.token_source.get_token().await?;
+        let resp = self
+            .http
+            .put(&url)
+            .bearer_auth(&token)
+            .header("Content-Type", "application/json")
+            .send()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Graph PUT request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status = %status, body = %body, "Graph PUT failed");
+            return Err(map_graph_error(status.as_u16(), &body));
+        }
+
+        let body = resp.bytes().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to read PUT response body: {e}"))
+        })?;
+
+        serde_json::from_slice(&body)
+            .map_err(|e| ChannelError::Internal(format!("Failed to parse PUT response: {e}")))
+    }
+
+    /// Make a raw PUT request with custom headers and byte body (e.g., for chunked upload).
+    pub async fn put_raw<T: for<'de> Deserialize<'de>>(
+        &self,
+        url: &str,
+        body: &[u8],
+        headers: &[(&str, &str)],
+    ) -> Result<T, ChannelError> {
+        let mut req = self.http.put(url);
+        req = req.header("Content-Type", "application/octet-stream");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let resp = req
+            .body(body.to_vec())
+            .send()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Raw PUT request failed: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status = %status, body = %body, "Raw PUT failed");
+            return Err(map_graph_error(status.as_u16(), &body));
+        }
+
+        let body = resp.bytes().await.map_err(|e| {
+            ChannelError::Internal(format!("Failed to read PUT response body: {e}"))
+        })?;
+
+        serde_json::from_slice(&body)
+            .map_err(|e| ChannelError::Internal(format!("Failed to parse PUT response: {e}")))
     }
 }
 
