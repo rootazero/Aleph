@@ -564,19 +564,19 @@ routing:
     async fn test_scan_bridge_definitions() {
         let tmp = TempDir::new().unwrap();
         let bridges_dir = tmp.path().join("bridges");
-        let whatsapp_dir = bridges_dir.join("whatsapp-go");
-        std::fs::create_dir_all(&whatsapp_dir).unwrap();
+        let signal_dir = bridges_dir.join("signal-bridge");
+        std::fs::create_dir_all(&signal_dir).unwrap();
 
         std::fs::write(
-            whatsapp_dir.join("bridge.yaml"),
+            signal_dir.join("bridge.yaml"),
             r#"
 spec_version: "1.0"
-id: "whatsapp-go"
-name: "WhatsApp"
+id: "signal-bridge"
+name: "Signal"
 version: "1.0.0"
 runtime:
   type: process
-  executable: "./bin/whatsapp-bridge"
+  executable: "./bin/signal-bridge"
   transport: unix-socket
 capabilities:
   messaging:
@@ -587,7 +587,7 @@ capabilities:
 
         let defs = scan_bridge_definitions(&bridges_dir).await.unwrap();
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].id.as_str(), "whatsapp-go");
+        assert_eq!(defs[0].id.as_str(), "signal-bridge");
     }
 
     #[tokio::test]
