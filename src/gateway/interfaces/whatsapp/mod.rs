@@ -249,8 +249,11 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
-        let _ = message_id;
-        Ok(())
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("WhatsApp runtime not started".into()))?;
+        runtime.mark_read(message_id.as_str()).await
     }
 
     async fn react(
