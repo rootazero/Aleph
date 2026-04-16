@@ -48,6 +48,7 @@ pub struct SecurityContext {
     pub has_external_content: bool,
     pub external_source: Option<ContentSource>,
     pub provider_name: Option<String>,
+    pub platform_name: Option<String>,
     pub injected_secrets: Vec<InjectedSecret>,
 }
 
@@ -177,12 +178,15 @@ impl RuntimeSecurityGuard {
                 let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
 
                 let should_filter = match &context.provider_name {
-                    Some(provider) => !engine_guard.is_provider_excluded(provider),
+                    Some(provider) => {
+                        !engine_guard.is_platform_excluded(context.platform_name.as_deref(), provider)
+                    }
                     None => true,
                 };
 
                 if should_filter {
-                    let result = engine_guard.filter(&current_text);
+                    let result = engine_guard
+                        .filter_with_platform(&current_text, context.platform_name.as_deref());
                     current_text = Self::apply_filter_result(result, &mut reasons, &mut warnings);
                 }
             }
