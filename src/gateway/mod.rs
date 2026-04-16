@@ -22,8 +22,7 @@
 //! server.run().await?;
 //! ```
 
-// Social Connectivity: Bridge & Link data models (always compiled)
-pub mod bridge;
+// Social Connectivity: Link data models (always compiled)
 pub mod link;
 pub mod transport;
 

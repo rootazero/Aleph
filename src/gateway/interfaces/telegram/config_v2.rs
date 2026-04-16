@@ -22,6 +22,20 @@ pub enum GroupPolicy {
     Open,
 }
 
+/// Status reaction configuration for streaming lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct StatusReactionConfig {
+    /// Reaction to set when agent starts processing
+    #[serde(default)]
+    pub processing: Option<String>,
+    /// Reaction to set when tools are executing
+    #[serde(default)]
+    pub tool_active: Option<String>,
+    /// Reaction to set when streaming is complete
+    #[serde(default)]
+    pub complete: Option<String>,
+}
+
 /// Streaming delivery options for Telegram's edit-based streaming.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StreamingOptions {
@@ -31,6 +45,15 @@ pub struct StreamingOptions {
     pub debounce_ms: u64,
     #[serde(default = "default_min_initial_chars")]
     pub min_initial_chars: usize,
+    /// Enable experimental Draft API support
+    #[serde(default = "default_false")]
+    pub draft_api_enabled: bool,
+    /// Enable reasoning lane extraction (<think> tags)
+    #[serde(default = "default_false")]
+    pub reasoning_lane_enabled: bool,
+    /// Status reaction configuration
+    #[serde(default)]
+    pub status_reactions: StatusReactionConfig,
 }
 
 impl Default for StreamingOptions {
@@ -39,12 +62,19 @@ impl Default for StreamingOptions {
             enabled: true,
             debounce_ms: 800,
             min_initial_chars: 30,
+            draft_api_enabled: false,
+            reasoning_lane_enabled: false,
+            status_reactions: StatusReactionConfig::default(),
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_debounce_ms() -> u64 {
