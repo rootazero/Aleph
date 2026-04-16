@@ -237,9 +237,68 @@ impl RuntimeSecurityGuard {
     /// Process inbound content received from LLM.
     pub fn process_inbound(
         &self,
-        _text: &str,
+        text: &str,
     ) -> Result<GuardResult, SecurityGuardError> {
-        Ok(GuardResult::Clean { text: _text.to_string() })
+        if !self.config.leak_detection {
+            return Ok(GuardResult::Clean {
+                text: text.to_string(),
+            });
+        }
+
+        let exec_scan = {
+            let detector = self
+                .exec_leak_detector
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            detector.scan_inbound(text)
+        };
+
+        let secret_scan = {
+            let detector = self
+                .secret_leak_detector
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            detector.scan_inbound(text)
+        };
+
+        // Handle secret leak detector block
+        if let LeakDecision::Block {
+            reason,
+            redacted_content,
+        } = secret_scan
+        {
+            return Ok(GuardResult::Blocked {
+                reason: format!("Secret leak detector: {}", reason),
+                redacted_text: Some(redacted_content),
+            });
+        }
+
+        if exec_scan.has_blocks() {
+            return Ok(GuardResult::Blocked {
+                reason: "Leak detector found sensitive data in inbound content".to_string(),
+                redacted_text: Some(text.to_string()),
+            });
+        }
+
+        if exec_scan.has_warnings() {
+            return Ok(GuardResult::Warned {
+                text: text.to_string(),
+                warnings: vec!["Inbound leak detector warning".to_string()],
+            });
+        }
+
+        Ok(GuardResult::Clean {
+            text: text.to_string(),
+        })
+    }
+
+    /// Clear tracked injected secrets (call at end of request/session).
+    pub fn clear_injected_secrets(&self) {
+        let mut detector = self
+            .secret_leak_detector
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        detector.clear();
     }
 }
 
@@ -324,5 +383,39 @@ mod tests {
                 assert!(!text.contains("{{secret:test_key}}"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_inbound_blocks_echoed_injected_secret() {
+        let guard = RuntimeSecurityGuard::default_guard();
+        let context = SecurityContext::default();
+        // First do outbound to register the injected secret
+        let _ = guard
+            .process_outbound("Use {{secret:test_key}}", &MockResolver, context)
+            .await
+            .unwrap();
+
+        // Then simulate LLM echoing the exact secret value back
+        let inbound = "Your API key is sk-ant-test12345678901234567890";
+        let result = guard.process_inbound(inbound).unwrap();
+
+        match result {
+            GuardResult::Blocked { .. } => {
+                // Expected: either exec leak detector (pattern match)
+                // or secret leak detector (exact injected value match)
+            }
+            other => panic!("Expected Blocked for echoed secret, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_inbound_clean_for_normal_text() {
+        let guard = RuntimeSecurityGuard::default_guard();
+        let result = guard.process_inbound("Hello, this is normal text.").unwrap();
+        assert!(
+            matches!(result, GuardResult::Clean { .. }),
+            "Expected Clean, got {:?}",
+            result
+        );
     }
 }
