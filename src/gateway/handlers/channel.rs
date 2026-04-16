@@ -174,6 +174,7 @@ fn status_to_string(status: ChannelStatus) -> String {
         ChannelStatus::Disconnected => "disconnected",
         ChannelStatus::Connecting => "connecting",
         ChannelStatus::Connected => "connected",
+        ChannelStatus::Pairing => "pairing",
         ChannelStatus::Error => "error",
         ChannelStatus::Disabled => "disabled",
     }
@@ -247,6 +248,7 @@ pub async fn handle_list(
                 "total": summary.total,
                 "connected": summary.connected,
                 "connecting": summary.connecting,
+                "pairing": summary.pairing,
                 "disconnected": summary.disconnected,
                 "error": summary.error,
                 "disabled": summary.disabled,

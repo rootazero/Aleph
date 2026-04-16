@@ -24,10 +24,9 @@ impl WaOutbound {
 
     pub async fn mark_read(
         runtime: &WaRuntime,
-        jid: &str,
         msg_id: &str,
     ) -> ChannelResult<()> {
-        runtime.mark_read(jid, msg_id).await
+        runtime.mark_read(msg_id).await
     }
 
     pub async fn send_typing(
@@ -44,7 +43,7 @@ mod tests {
     use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 
     #[tokio::test]
-    async fn test_send_message_placeholder() {
+    async fn test_send_message_without_client_returns_error() {
         let auth = WaAuthManager::new("test");
         let data = crate::gateway::interfaces::whatsapp::wa_auth::WaAuthData {
             creds_blob: vec![1],
@@ -53,10 +52,10 @@ mod tests {
         };
         auth.save(&data).unwrap();
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
-        let mut runtime = WaRuntime::new(auth, tx).await.unwrap();
-        runtime.start().await.unwrap();
+        let runtime = WaRuntime::new(auth, tx).await.unwrap();
+        runtime.state_handle().set(crate::gateway::interfaces::whatsapp::wa_runtime::ConnectionState::Connected);
         let msg = OutboundMessage::text("jid", "hello");
         let result = WaOutbound::send_message(&runtime, msg, &Default::default()).await;
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(crate::gateway::channel::ChannelError::NotConnected(_))));
     }
 }

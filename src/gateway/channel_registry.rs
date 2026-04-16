@@ -439,6 +439,7 @@ impl ChannelRegistry {
             match channel.status() {
                 ChannelStatus::Connected => summary.connected += 1,
                 ChannelStatus::Connecting => summary.connecting += 1,
+                ChannelStatus::Pairing => summary.pairing += 1,
                 ChannelStatus::Disconnected => summary.disconnected += 1,
                 ChannelStatus::Error => summary.error += 1,
                 ChannelStatus::Disabled => summary.disabled += 1,
@@ -479,6 +480,7 @@ pub struct ChannelStatusSummary {
     pub total: usize,
     pub connected: usize,
     pub connecting: usize,
+    pub pairing: usize,
     pub disconnected: usize,
     pub error: usize,
     pub disabled: usize,

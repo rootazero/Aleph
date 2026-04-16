@@ -41,7 +41,7 @@ toml = "0.8"
 thiserror = "2.0"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 # Utilities
 uuid = { version = "1.7", features = ["v4", "serde"] }
@@ -128,7 +128,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 uuid = { version = "1.7", features = ["v4", "serde"] }
 regex = "1.10"
@@ -227,7 +227,7 @@ cron = "0.13"
 extism = "1.7"
 inquire = "0.7"
 loom = { version = "0.7", optional = true }
-whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport"] }
+whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
 whatsapp-rust-tokio-transport = "0.5"
 aleph-logging = { path = "shared/logging" }
 aleph-desktop = { path = "desktop/shared" }
