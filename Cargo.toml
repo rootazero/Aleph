@@ -185,6 +185,8 @@ hex = "0.4"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 siphasher = "1.0"
 aes-gcm = "0.10"
+aes = "0.9"
+cipher = "0.5"
 hkdf = "0.12"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
