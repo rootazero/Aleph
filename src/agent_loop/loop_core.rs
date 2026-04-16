@@ -37,8 +37,10 @@ use crate::extension::hooks::{HookContext, HookExecutor};
 use crate::extension::HookEvent;
 use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
+use crate::security::{GuardResult, RuntimeSecurityGuard, SecurityContext};
+use crate::secrets::injection::AsyncSecretResolver;
 use crate::thinker::prompt_builder::PromptBuilder;
 use futures::stream::BoxStream;
 
@@ -715,6 +717,10 @@ pub struct AgentLoop<P: LoopProvider> {
     approval_gate: Option<crate::agent_loop::exec_approval::ApprovalGate>,
     /// Shared prompt snapshot for fork path. Written once after first prompt assembly.
     shared_snapshot: Option<SharedSnapshot>,
+    /// Runtime security guard for outbound/inbound content filtering.
+    security_guard: RuntimeSecurityGuard,
+    /// Optional secret resolver for placeholder injection.
+    secret_resolver: Option<Arc<dyn AsyncSecretResolver>>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -781,6 +787,8 @@ impl<P: LoopProvider> AgentLoop<P> {
             session_context: None,
             approval_gate: None,
             shared_snapshot: None,
+            security_guard: RuntimeSecurityGuard::default_guard(),
+            secret_resolver: None,
         }
     }
 
@@ -831,6 +839,12 @@ impl<P: LoopProvider> AgentLoop<P> {
         gate: crate::agent_loop::exec_approval::ApprovalGate,
     ) -> Self {
         self.approval_gate = Some(gate);
+        self
+    }
+
+    /// Attach a secret resolver for runtime secret placeholder injection.
+    pub fn with_secret_resolver(mut self, resolver: Arc<dyn AsyncSecretResolver>) -> Self {
+        self.secret_resolver = Some(resolver);
         self
     }
 
@@ -1148,6 +1162,45 @@ impl<P: LoopProvider> AgentLoop<P> {
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<ThinkTurnResult> {
         let mut ptl_attempts: usize = 0;
+        // Apply runtime security guard to outbound messages
+        for msg in messages.iter_mut() {
+            let content_blocks = match msg {
+                UnifiedMessage::User { content } => Some(content),
+                UnifiedMessage::Assistant { content } => Some(content),
+                UnifiedMessage::ToolResult { content, .. } => Some(content),
+            };
+            if let Some(blocks) = content_blocks {
+                for block in blocks.iter_mut() {
+                    if let ContentBlock::Text { text, .. } = block {
+                        let context = SecurityContext::default();
+                        match self
+                            .security_guard
+                            .process_outbound(text, self.secret_resolver.as_deref(), context)
+                            .await
+                        {
+                            Ok(GuardResult::Clean { text: t })
+                            | Ok(GuardResult::Redacted { text: t, .. })
+                            | Ok(GuardResult::Warned { text: t, .. }) => {
+                                *text = t;
+                            }
+                            Ok(GuardResult::Blocked { reason, .. }) => {
+                                return Err(anyhow::anyhow!(
+                                    "Security blocked outbound content: {}",
+                                    reason
+                                ));
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "Security guard outbound error: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let delta_stream = loop {
             let active_provider = progress.active_provider;
             match super::retry::retry_async(
@@ -1288,9 +1341,36 @@ impl<P: LoopProvider> AgentLoop<P> {
         }
         bridge.finish();
 
+        let mut response = collector.finish();
+
+        // Apply runtime security guard to inbound response
+        if let Some(text) = response.text.as_ref() {
+            match self.security_guard.process_inbound(text) {
+                Ok(GuardResult::Clean { text: t })
+                | Ok(GuardResult::Redacted { text: t, .. })
+                | Ok(GuardResult::Warned { text: t, .. }) => {
+                    response.text = Some(t);
+                }
+                Ok(GuardResult::Blocked { reason, .. }) => {
+                    return Err(anyhow::anyhow!(
+                        "Security blocked inbound content: {}",
+                        reason
+                    ));
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Security guard inbound error: {}",
+                        e
+                    ));
+                }
+            }
+        }
+
+        self.security_guard.clear_injected_secrets();
+
         Ok(ThinkTurnResult::Ready(TurnThinkingState {
             budget,
-            response: collector.finish(),
+            response,
             prefetch_handle,
             executor_handle,
         }))

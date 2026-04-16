@@ -100,7 +100,7 @@ impl RuntimeSecurityGuard {
     pub async fn process_outbound(
         &self,
         text: &str,
-        resolver: &dyn AsyncSecretResolver,
+        resolver: Option<&dyn AsyncSecretResolver>,
         mut context: SecurityContext,
     ) -> Result<GuardResult, SecurityGuardError> {
         let mut current_text = text.to_string();
@@ -110,25 +110,27 @@ impl RuntimeSecurityGuard {
         // 1. Placeholder Extraction & Secret Resolution (no text replacement yet)
         let mut resolved_map: HashMap<String, String> = HashMap::new();
         if self.config.secret_injection {
-            let refs = crate::secrets::placeholder::extract_secret_refs(&current_text)?;
-            if !refs.is_empty() {
-                let mut injected = Vec::with_capacity(refs.len());
-                for secret_ref in &refs {
-                    let decrypted = resolver.resolve(&secret_ref.name).await?;
-                    let value = decrypted.expose();
-                    injected.push(InjectedSecret::from_value(&secret_ref.name, value));
-                    resolved_map.insert(secret_ref.raw.clone(), value.to_string());
-                }
-                {
-                    let mut detector = self
-                        .secret_leak_detector
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    for secret in &injected {
-                        detector.register_injected(&[secret.clone()], &[]);
+            if let Some(resolver) = resolver {
+                let refs = crate::secrets::placeholder::extract_secret_refs(&current_text)?;
+                if !refs.is_empty() {
+                    let mut injected = Vec::with_capacity(refs.len());
+                    for secret_ref in &refs {
+                        let decrypted = resolver.resolve(&secret_ref.name).await?;
+                        let value = decrypted.expose();
+                        injected.push(InjectedSecret::from_value(&secret_ref.name, value));
+                        resolved_map.insert(secret_ref.raw.clone(), value.to_string());
                     }
+                    {
+                        let mut detector = self
+                            .secret_leak_detector
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        for secret in &injected {
+                            detector.register_injected(&[secret.clone()], &[]);
+                        }
+                    }
+                    context.injected_secrets.extend(injected);
                 }
-                context.injected_secrets.extend(injected);
             }
         }
 
@@ -330,7 +332,7 @@ mod tests {
         let context = SecurityContext::default();
         let input = "Use key {{secret:test_key}} for API";
         let result = guard
-            .process_outbound(input, &MockResolver, context)
+            .process_outbound(input, Some(&MockResolver), context)
             .await
             .unwrap();
 
@@ -349,7 +351,7 @@ mod tests {
         let context = SecurityContext::default();
         // This contains a real-looking API key that should be caught by leak detection
         let input = "My key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
-        let result = guard.process_outbound(input, &MockResolver, context).await;
+        let result = guard.process_outbound(input, Some(&MockResolver), context).await;
 
         match result {
             Ok(GuardResult::Blocked { .. }) => {
@@ -365,7 +367,7 @@ mod tests {
         let context = SecurityContext::default();
         // Placeholder should be resolved AFTER leak detection, so this should be Clean
         let input = "Use key {{secret:test_key}} and call 13812345678";
-        let result = guard.process_outbound(input, &MockResolver, context).await.unwrap();
+        let result = guard.process_outbound(input, Some(&MockResolver), context).await.unwrap();
 
         // Leak detection runs on text with placeholders, so no accidental secret leak.
         // PII filter should catch the phone number.
