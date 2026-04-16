@@ -231,6 +231,8 @@ inquire = "0.7"
 loom = { version = "0.7", optional = true }
 whatsapp-rust = { version = "0.5", default-features = false, features = ["tokio-runtime", "tokio-transport", "sqlite-storage"] }
 whatsapp-rust-tokio-transport = "0.5"
+matrix-sdk = { version = "0.16", default-features = false, features = ["native-tls", "sqlite"] }
+mime = "0.3"
 aleph-logging = { path = "shared/logging" }
 aleph-desktop = { path = "desktop/shared" }
 aleph-client = { path = "shared/client" }
