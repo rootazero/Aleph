@@ -53,8 +53,8 @@ mod tests {
         };
         auth.save(&data).unwrap();
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
-        let mut runtime = WaRuntime::new(auth, tx).await.unwrap();
-        runtime.start().await.unwrap();
+        let runtime = WaRuntime::new(auth, tx).await.unwrap();
+        runtime.state_handle().set(crate::gateway::interfaces::whatsapp::wa_runtime::ConnectionState::Connected);
         let msg = OutboundMessage::text("jid", "hello");
         let result = WaOutbound::send_message(&runtime, msg, &Default::default()).await;
         assert!(result.is_ok());

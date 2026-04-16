@@ -120,6 +120,7 @@ impl Channel for WhatsAppChannel {
         match self.runtime.as_ref().map(|r| r.connection_state()) {
             Some(ConnectionState::Connected) => ChannelStatus::Connected,
             Some(ConnectionState::Connecting) => ChannelStatus::Connecting,
+            Some(ConnectionState::Pairing) => ChannelStatus::Pairing,
             Some(ConnectionState::Error) => ChannelStatus::Error,
             _ => ChannelStatus::Disconnected,
         }
@@ -170,19 +171,35 @@ impl Channel for WhatsAppChannel {
             loop {
                 tokio::select! {
                     Some(event) = event_rx.recv() => {
-                        if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
-                            match policy.evaluate(&msg) {
-                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
-                                    history_buffer.add(&msg).await;
-                                    if inbound_tx.send(msg).is_err() {
-                                        break;
+                        use whatsapp_rust::types::events::Event;
+                        match event {
+                            Event::PairingQrCode { code, timeout } => {
+                                let expires_at = chrono::Utc::now() + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::seconds(60));
+                                let mut state = pairing_state.write().await;
+                                *state = PairingState::WaitingQr { qr_data: code, expires_at };
+                            }
+                            Event::Connected(_) => {
+                                connected.store(true, Ordering::SeqCst);
+                            }
+                            Event::Disconnected(_) => {
+                                connected.store(false, Ordering::SeqCst);
+                            }
+                            _ => {
+                                if let Some(msg) = crate::gateway::interfaces::whatsapp::wa_inbound::mapper::map_event_to_inbound(&event, &channel_id) {
+                                    match policy.evaluate(&msg) {
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Accept => {
+                                            history_buffer.add(&msg).await;
+                                            if inbound_tx.send(msg).is_err() {
+                                                break;
+                                            }
+                                        }
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
+                                            tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
+                                        }
+                                        crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
+                                            tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
+                                        }
                                     }
-                                }
-                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::Block(reason) => {
-                                    tracing::debug!(channel = %channel_id, sender = msg.sender_id.as_str(), reason, "Inbound message blocked by policy");
-                                }
-                                crate::gateway::interfaces::whatsapp::wa_inbound::policy::InboundPolicyResult::NeedsPairing(sender) => {
-                                    tracing::info!(channel = %channel_id, %sender, "Inbound DM needs pairing");
                                 }
                             }
                         }
