@@ -9,6 +9,7 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::sync_primitives::Arc;
+use super::directory::UserDirectory;
 use chrono::Utc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -826,6 +827,7 @@ impl SlackMessageOps {
         config: SlackConfig,
         inbound_tx: InboundMessageSender,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        user_directory: Option<Arc<UserDirectory>>,
     ) {
         use futures_util::{SinkExt, StreamExt};
 
@@ -955,15 +957,34 @@ impl SlackMessageOps {
                                 };
 
                                 if let Some(inbound) = inbound {
+                                    let resolved_inbound = if config.resolve_user_names {
+                                        if let Some(ref dir) = user_directory {
+                                            if let Some(name) =
+                                                dir.resolve(inbound.sender_id.as_str()).await
+                                            {
+                                                InboundMessage {
+                                                    sender_name: Some(name),
+                                                    ..inbound
+                                                }
+                                            } else {
+                                                inbound
+                                            }
+                                        } else {
+                                            inbound
+                                        }
+                                    } else {
+                                        inbound
+                                    };
+
                                     tracing::debug!(
                                         "Slack {} from {}: {}",
                                         event_type,
-                                        inbound.sender_id.as_str(),
-                                        &inbound.text[..inbound.text.len().min(50)]
+                                        resolved_inbound.sender_id.as_str(),
+                                        &resolved_inbound.text[..resolved_inbound.text.len().min(50)]
                                     );
-                                    let reply_to = inbound.reply_to.clone();
+                                    let reply_to = resolved_inbound.reply_to.clone();
                                     let thread_ts = reply_to.as_ref().map(|id| id.as_str());
-                                    if debouncer.enqueue(inbound, thread_ts).await {
+                                    if debouncer.enqueue(resolved_inbound, thread_ts).await {
                                         tracing::error!("Slack: inbound channel closed");
                                         return;
                                     }
