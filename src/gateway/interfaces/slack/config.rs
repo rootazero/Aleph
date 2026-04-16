@@ -8,6 +8,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_directory_ttl() -> u64 {
+    3600
+}
+
 /// Slack channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
@@ -45,6 +49,19 @@ pub struct SlackConfig {
     /// Set to 0 to disable debouncing
     #[serde(default)]
     pub debounce_ms: u64,
+
+    /// Allowed user IDs (empty = allow all users in allowed channels)
+    #[serde(default)]
+    pub user_allowlist: Vec<String>,
+
+    /// Resolve user IDs to display names via users.info API
+    /// Caches results with TTL to avoid rate limiting
+    #[serde(default)]
+    pub resolve_user_names: bool,
+
+    /// Directory cache TTL in seconds (default: 3600)
+    #[serde(default = "default_directory_ttl")]
+    pub directory_ttl_secs: u64,
 }
 
 impl Default for SlackConfig {
@@ -59,6 +76,9 @@ impl Default for SlackConfig {
             enable_editing: true,
             enable_deletion: false,
             debounce_ms: 700,
+            user_allowlist: Vec::new(),
+            resolve_user_names: false,
+            directory_ttl_secs: 3600,
         }
     }
 }
@@ -100,6 +120,15 @@ impl SlackConfig {
             true
         } else {
             self.allowed_channels.contains(&channel_id.to_string())
+        }
+    }
+
+    /// Check if a user ID is allowed
+    pub fn is_user_allowed(&self, user_id: &str) -> bool {
+        if self.user_allowlist.is_empty() {
+            true
+        } else {
+            self.user_allowlist.contains(&user_id.to_string())
         }
     }
 }
@@ -198,6 +227,23 @@ mod tests {
     }
 
     #[test]
+    fn test_user_allowlist_empty_allows_all() {
+        let config = SlackConfig::default();
+        assert!(config.is_user_allowed("U123"));
+        assert!(config.is_user_allowed("U456"));
+    }
+
+    #[test]
+    fn test_user_allowlist_restricts() {
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+        assert!(config.is_user_allowed("U123"));
+        assert!(!config.is_user_allowed("U456"));
+    }
+
+    #[test]
     fn test_serde_roundtrip() {
         let config = SlackConfig {
             app_token: "xapp-1-ABCDEF".to_string(),
@@ -209,6 +255,9 @@ mod tests {
             enable_editing: false,
             enable_deletion: true,
             debounce_ms: 500,
+            user_allowlist: vec!["U123".to_string(), "U456".to_string()],
+            resolve_user_names: true,
+            directory_ttl_secs: 7200,
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -223,6 +272,9 @@ mod tests {
         assert_eq!(deserialized.enable_editing, config.enable_editing);
         assert_eq!(deserialized.enable_deletion, config.enable_deletion);
         assert_eq!(deserialized.debounce_ms, config.debounce_ms);
+        assert_eq!(deserialized.user_allowlist, config.user_allowlist);
+        assert_eq!(deserialized.resolve_user_names, config.resolve_user_names);
+        assert_eq!(deserialized.directory_ttl_secs, config.directory_ttl_secs);
     }
 
     #[test]
@@ -235,9 +287,10 @@ mod tests {
         assert!(config.enable_reactions);
         assert!(config.enable_editing);
         assert!(!config.enable_deletion);
-        // debounce_ms defaults to 0 (disabled) when not specified in JSON
-        // because #[serde(default)] uses the type's default (0 for u64)
-        assert_eq!(config.debounce_ms, 0);
+        assert_eq!(config.debounce_ms, 700);
         assert!(config.allowed_channels.is_empty());
+        assert!(config.user_allowlist.is_empty());
+        assert!(!config.resolve_user_names);
+        assert_eq!(config.directory_ttl_secs, 3600);
     }
 }
