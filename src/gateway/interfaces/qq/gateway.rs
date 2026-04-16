@@ -62,7 +62,7 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                         "shard": [0, 1],
                     }
                 });
-                if write.send(WsMessage::Text(identify.to_string())).await.is_err() {
+                if write.send(WsMessage::Text(identify.to_string().into())).await.is_err() {
                     tracing::warn!("Failed to send QQ Identify");
                     continue;
                 }
@@ -106,7 +106,7 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                         }
                         _ = tokio::time::sleep(heartbeat_interval) => {
                             let heartbeat = serde_json::json!({"op": 1});
-                            if write.send(WsMessage::Text(heartbeat.to_string())).await.is_err() {
+                            if write.send(WsMessage::Text(heartbeat.to_string().into())).await.is_err() {
                                 break;
                             }
                         }
