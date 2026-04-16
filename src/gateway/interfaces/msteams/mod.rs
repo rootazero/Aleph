@@ -6,11 +6,26 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod graph;
-pub mod polls;
+pub mod health;
+pub mod history;
+pub mod pairing;
+pub mod policy;
+pub mod rsc;
+pub mod sharepoint;
 pub mod streaming;
+pub mod token;
 pub mod types;
 
+pub use auth::{AuthFlow, FederatedCredential};
 pub use config::MsTeamsConfig;
+pub use graph::GraphClient;
+pub use health::{ChannelHealthMonitor, HealthStatus, HealthyChannel};
+pub use history::{GraphMessage, HistoryFetcher};
+pub use pairing::{DirectLine, PairingInfo, PairingManager, PairingState};
+pub use policy::TeamPolicy;
+pub use rsc::{RscPermissionManager, RscPermissions};
+pub use sharepoint::{ShareLink, SharePointClient};
+pub use token::GraphTokenManager;
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -33,6 +48,7 @@ use crate::sync_primitives::Arc;
 use self::api::BotFrameworkClient;
 use self::auth::{validate_service_url, JwtValidator, TokenCache};
 use self::graph::{GraphChannel, GraphClient, GraphGroup, GraphUser};
+use self::token::GraphTokenManager;
 use self::types::*;
 
 // ── ConversationReference ────────────────────────────────────────────────────
@@ -68,18 +84,6 @@ pub struct MsTeamsChannel {
 impl MsTeamsChannel {
     /// Create a new Teams channel instance.
     pub fn new(id: &str, config: MsTeamsConfig) -> Self {
-        let token_cache = Arc::new(TokenCache::new(
-            config.app_id.clone(),
-            config.app_password.clone(),
-            config.tenant_id.clone(),
-        ));
-
-        let graph_token_cache = Arc::new(self::graph::GraphTokenCache::new(
-            config.app_id.clone(),
-            config.app_password.clone(),
-            config.tenant_id.clone(),
-        ));
-
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Microsoft Teams".to_string(),
@@ -88,16 +92,48 @@ impl MsTeamsChannel {
             capabilities: Self::capabilities(),
         };
 
+        let (client, graph_client) = if let Some(ref fed_cred) = config.federated_identity {
+            let graph_token_manager = Arc::new(GraphTokenManager::with_federated(
+                config.app_id.clone(),
+                config.tenant_id.clone(),
+                fed_cred.clone(),
+            ));
+            let gc = GraphClient::with_federated(graph_token_manager);
+            (Self::build_bot_client(&config), Arc::new(gc))
+        } else {
+            let token_cache = Arc::new(TokenCache::new(
+                config.app_id.clone(),
+                config.app_password.clone(),
+                config.tenant_id.clone(),
+            ));
+            let graph_token_cache = Arc::new(self::graph::GraphTokenCache::new(
+                config.app_id.clone(),
+                config.app_password.clone(),
+                config.tenant_id.clone(),
+            ));
+            let gc = GraphClient::new(graph_token_cache);
+            (Arc::new(BotFrameworkClient::new(token_cache)), Arc::new(gc))
+        };
+
         Self {
             info,
             state: ChannelState::new(100),
-            client: Arc::new(BotFrameworkClient::new(token_cache)),
+            client,
             jwt_validator: Arc::new(JwtValidator::new(config.app_id.clone())),
-            graph_client: Arc::new(GraphClient::new(graph_token_cache)),
+            graph_client,
             config,
             conversation_refs: Arc::new(RwLock::new(HashMap::new())),
             sent_messages: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    fn build_bot_client(config: &MsTeamsConfig) -> Arc<BotFrameworkClient> {
+        let token_cache = Arc::new(TokenCache::new(
+            config.app_id.clone(),
+            config.app_password.clone(),
+            config.tenant_id.clone(),
+        ));
+        Arc::new(BotFrameworkClient::new(token_cache))
     }
 
     fn capabilities() -> ChannelCapabilities {

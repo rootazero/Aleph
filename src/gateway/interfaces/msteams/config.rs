@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::interfaces::msteams::auth::FederatedCredential;
+
 /// Reply style for group messages.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -60,24 +62,40 @@ pub struct TeamOverride {
 /// Add these under **API permissions** in the Azure portal (App registrations).
 /// The `ChannelMessage.Read.All` permission requires admin consent.
 ///
+/// ## Authentication Methods
+///
+/// Two authentication methods are supported:
+/// 1. **Client Secret** (deprecated): `app_password` field
+/// 2. **Federated Identity** (recommended): `federated_identity` field
+///
+/// Federated identity uses certificate-based auth or Azure Managed Identity.
+///
 /// ## Example Configuration
 ///
 /// ```toml
 /// [channels.msteams]
 /// enabled = true
 /// app_id = "YOUR-BOT-APP-ID"
-/// app_password = "YOUR-CLIENT-SECRET"
+/// app_password = "YOUR-CLIENT-SECRET"  # deprecated
 /// tenant_id = "common"
 /// groups_allowed = true
 /// require_mention = false
 /// reply_style = "thread"
+///
+/// [channels.msteams.federated_identity]  # recommended
+/// certificate_path = "/path/to/cert.pem"
+/// authority_url = "https://login.microsoftonline.com/{tenant}"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MsTeamsConfig {
     /// Azure Bot App ID
     pub app_id: String,
-    /// Azure Bot App Password (client secret)
+    /// Azure Bot App Password (client secret) - deprecated, use federated_identity instead
+    #[deprecated(since = "2026.06.01", note = "use federated_identity instead")]
     pub app_password: String,
+    /// Federated identity configuration (recommended alternative to app_password)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub federated_identity: Option<FederatedCredential>,
     /// Azure AD Tenant ID (default: "common")
     #[serde(default = "default_tenant")]
     pub tenant_id: String,
@@ -118,6 +136,7 @@ impl Default for MsTeamsConfig {
         Self {
             app_id: String::new(),
             app_password: String::new(),
+            federated_identity: None,
             tenant_id: default_tenant(),
             allowed_users: Vec::new(),
             groups_allowed: true,
@@ -135,8 +154,13 @@ impl MsTeamsConfig {
         if self.app_id.is_empty() {
             return Err("app_id is required".into());
         }
-        if self.app_password.is_empty() {
-            return Err("app_password is required".into());
+        if self.app_password.is_empty() && self.federated_identity.is_none() {
+            return Err("either app_password or federated_identity is required".into());
+        }
+        if let Some(ref fed) = self.federated_identity {
+            if let Err(e) = fed.validate() {
+                return Err(format!("federated_identity validation failed: {}", e));
+            }
         }
         if !self.webhook_path.starts_with('/') {
             return Err("webhook_path must start with '/'".into());
