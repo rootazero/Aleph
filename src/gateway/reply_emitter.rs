@@ -1486,7 +1486,7 @@ impl EventEmitter for ReplyEmitter {
                     } else if self.config.stream_enabled {
                         // Send explicit reasoning first if available
                         if let Some(ref r) = reasoning {
-                            self.send_to_channel(r).await;
+                            self.send_to_channel(&format!("🤔 {}", r)).await;
                         }
                         // Finalize the streaming controller
                         let mut ctrl = self.streaming.lock().await;
@@ -1618,7 +1618,11 @@ impl EventEmitter for ReplyEmitter {
             // Accumulate explicit reasoning chunks for separate delivery
             StreamEvent::Reasoning { content, .. } => {
                 if !content.is_empty() {
-                    self.reasoning_buffer.lock().await.push_str(&content);
+                    let mut buf = self.reasoning_buffer.lock().await;
+                    if !buf.is_empty() && !buf.ends_with('\n') {
+                        buf.push('\n');
+                    }
+                    buf.push_str(&content);
                 }
             }
 

@@ -29,9 +29,7 @@ pub mod offset;
 mod polling;
 pub mod bot_instance;
 pub mod poll;
-pub mod reasoning_lane;
 pub mod reaction_handler;
-pub mod status_reaction;
 pub mod sticker;
 
 pub use access::AccessController;
@@ -646,6 +644,11 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.bot_instances.len() > 1 {
+            tracing::warn!(
+                "Multi-account Telegram is configured, but send() currently uses only the first account"
+            );
+        }
         let instance = self.bot_instances.first().ok_or_else(|| {
             ChannelError::NotConnected("No bot instances".to_string())
         })?;
