@@ -199,6 +199,7 @@ const KNOWN_CHANNEL_TYPES: &[&str] = &[
     "xmpp",
     "nostr",
     "feishu",
+    "qq",
 ];
 
 /// A resolved channel instance from the channels config HashMap.

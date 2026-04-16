@@ -44,6 +44,7 @@ pub mod slack;
 pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
+pub mod qq;
 pub mod xmpp;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
@@ -68,6 +69,7 @@ pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
+pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
 
@@ -75,4 +77,5 @@ pub fn register_channel_plugins() {
     line::register_with_plugin();
     telegram::register_with_plugin();
     wechat::register_with_plugin();
+    qq::register_with_plugin();
 }

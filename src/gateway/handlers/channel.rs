@@ -31,6 +31,7 @@ pub const CHANNEL_SECRET_FIELDS: &[&str] = &[
     "private_key",  // nostr
     "secret",       // webhook
     "session_data", // whatsapp
+    "client_secret", // qq
 ];
 
 /// Vault key for a channel secret field.
