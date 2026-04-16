@@ -168,7 +168,7 @@ impl QQApiClient {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
 
-        if status.as_u16() == 429 || status.as_u16() == 304023 || status.as_u16() == 304024 {
+        if status.as_u16() == 429 || body.contains("304023") || body.contains("304024") {
             return Err(QQError::RateLimited { retry_after_secs: 5 });
         }
 

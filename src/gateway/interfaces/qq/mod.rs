@@ -23,6 +23,8 @@ pub struct QQChannel {
     config: QQConfig,
     api_client: Option<Arc<api::QQApiClient>>,
     gateway_handle: Option<tokio::task::JoinHandle<()>>,
+    event_handle: Option<tokio::task::JoinHandle<()>>,
+    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     reply_tracker: Arc<delivery::ReplyTracker>,
 }
 
@@ -42,6 +44,8 @@ impl QQChannel {
             config,
             api_client: None,
             gateway_handle: None,
+            event_handle: None,
+            shutdown_tx: None,
             reply_tracker: Arc::new(delivery::ReplyTracker::new()),
         }
     }
@@ -159,17 +163,23 @@ impl Channel for QQChannel {
         });
 
         self.gateway_handle = Some(gateway_handle);
+        self.event_handle = Some(event_handle);
+        self.shutdown_tx = Some(shutdown_tx);
         self.channel_state
             .set_status(ChannelStatus::Connected)
             .await;
 
-        let _ = event_handle;
-        let _ = shutdown_tx;
         Ok(())
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
         tracing::info!("Stopping QQ channel...");
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(handle) = self.event_handle.take() {
+            handle.abort();
+        }
         if let Some(handle) = self.gateway_handle.take() {
             handle.abort();
         }

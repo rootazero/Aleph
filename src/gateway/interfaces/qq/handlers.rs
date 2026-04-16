@@ -29,7 +29,7 @@ fn convert_c2c(event: &C2CMessageEvent, channel_id: &ChannelId) -> InboundMessag
         reply_to: event
             .message_scene
             .as_ref()
-            .and_then(|s| s.ext.get(0).cloned().map(MessageId::new)),
+            .and_then(|s| s.ext.first().cloned().map(MessageId::new)),
         is_group: false,
         raw: Some(serde_json::to_value(event).unwrap_or_default()),
         metadata: vec![],
@@ -50,7 +50,7 @@ fn convert_group(event: &GroupMessageEvent, channel_id: &ChannelId) -> InboundMe
         reply_to: event
             .message_scene
             .as_ref()
-            .and_then(|s| s.ext.get(0).cloned().map(MessageId::new)),
+            .and_then(|s| s.ext.first().cloned().map(MessageId::new)),
         is_group: true,
         raw: Some(serde_json::to_value(event).unwrap_or_default()),
         metadata: vec![],

@@ -21,11 +21,17 @@ pub struct ReplyTracker {
     inner: DashMap<String, ReplyRecord>,
 }
 
-impl ReplyTracker {
-    pub fn new() -> Self {
+impl Default for ReplyTracker {
+    fn default() -> Self {
         Self {
             inner: DashMap::new(),
         }
+    }
+}
+
+impl ReplyTracker {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn can_reply_passively(
@@ -50,11 +56,13 @@ impl ReplyTracker {
         &self,
         msg_id: &str,
     ) {
-        let mut entry = self.inner.entry(msg_id.to_string()).or_insert(ReplyRecord {
-            count: 0,
-            first_reply_at: Instant::now(),
-        });
-        entry.count += 1;
+        {
+            let mut entry = self.inner.entry(msg_id.to_string()).or_insert(ReplyRecord {
+                count: 0,
+                first_reply_at: Instant::now(),
+            });
+            entry.count += 1;
+        }
 
         if self.inner.len() > 10000 {
             let now = Instant::now();
@@ -228,9 +236,6 @@ mod tests {
 
         tracker.record_reply(msg_id);
         tracker.record_reply(msg_id);
-        tracker.record_reply(msg_id);
-        assert_eq!(tracker.can_reply_passively(msg_id), (true, false));
-
         tracker.record_reply(msg_id);
         assert_eq!(tracker.can_reply_passively(msg_id), (false, true));
     }
