@@ -126,7 +126,7 @@ impl RuntimeSecurityGuard {
                             .lock()
                             .unwrap_or_else(|e| e.into_inner());
                         for secret in &injected {
-                            detector.register_injected(&[secret.clone()], &[]);
+                            detector.register_injected(std::slice::from_ref(secret), &[]);
                         }
                     }
                     context.injected_secrets.extend(injected);
@@ -393,7 +393,7 @@ mod tests {
         let context = SecurityContext::default();
         // First do outbound to register the injected secret
         let _ = guard
-            .process_outbound("Use {{secret:test_key}}", &MockResolver, context)
+            .process_outbound("Use {{secret:test_key}}", Some(&MockResolver), context)
             .await
             .unwrap();
 

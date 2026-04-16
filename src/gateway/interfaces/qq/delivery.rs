@@ -38,7 +38,7 @@ impl ReplyTracker {
             if elapsed > PASSIVE_REPLY_TTL {
                 return (false, true);
             }
-            if record.count >= PASSIVE_REPLY_LIMIT {
+            if record.count > PASSIVE_REPLY_LIMIT {
                 return (false, true);
             }
             return (true, false);
@@ -50,11 +50,13 @@ impl ReplyTracker {
         &self,
         msg_id: &str,
     ) {
-        let mut entry = self.inner.entry(msg_id.to_string()).or_insert(ReplyRecord {
-            count: 0,
-            first_reply_at: Instant::now(),
-        });
-        entry.count += 1;
+        {
+            let mut entry = self.inner.entry(msg_id.to_string()).or_insert(ReplyRecord {
+                count: 0,
+                first_reply_at: Instant::now(),
+            });
+            entry.count += 1;
+        }
 
         if self.inner.len() > 10000 {
             let now = Instant::now();
