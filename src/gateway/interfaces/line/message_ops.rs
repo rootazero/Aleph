@@ -3,7 +3,7 @@
 //! Outbound message builders for LINE Messaging API v2 calls.
 
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// LINE Messaging API client.
 #[derive(Clone)]
@@ -137,6 +137,124 @@ impl LineMessagingApi {
         let payload = LinePushPayload::Template(template);
         self.push(&payload).await
     }
+
+    pub async fn push_image(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        preview_image_url: &str,
+    ) -> Result<String, String> {
+        let payload = LinePushPayload::Image(ImagePayload {
+            to: to.to_string(),
+            messages: vec![PushMessage::Image(ImagePushContent {
+                msg_type: "image".to_string(),
+                original_content_url: original_content_url.to_string(),
+                preview_image_url: preview_image_url.to_string(),
+            })],
+        });
+        self.push(&payload).await
+    }
+
+    pub async fn push_video(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        preview_image_url: &str,
+        duration: Option<u64>,
+    ) -> Result<String, String> {
+        let payload = LinePushPayload::Video(VideoPayload {
+            to: to.to_string(),
+            messages: vec![PushMessage::Video(VideoPushContent {
+                msg_type: "video".to_string(),
+                original_content_url: original_content_url.to_string(),
+                preview_image_url: preview_image_url.to_string(),
+                duration,
+            })],
+        });
+        self.push(&payload).await
+    }
+
+    pub async fn push_audio(
+        &self,
+        to: &str,
+        original_content_url: &str,
+        duration: u64,
+    ) -> Result<String, String> {
+        let payload = LinePushPayload::Audio(AudioPayload {
+            to: to.to_string(),
+            messages: vec![PushMessage::Audio(AudioPushContent {
+                msg_type: "audio".to_string(),
+                original_content_url: original_content_url.to_string(),
+                duration,
+            })],
+        });
+        self.push(&payload).await
+    }
+
+    pub async fn push_location(
+        &self,
+        to: &str,
+        title: &str,
+        address: &str,
+        latitude: f64,
+        longitude: f64,
+    ) -> Result<String, String> {
+        let payload = LinePushPayload::Location(LocationPayload {
+            to: to.to_string(),
+            messages: vec![PushMessage::Location(LocationPushContent {
+                msg_type: "location".to_string(),
+                title: title.to_string(),
+                address: address.to_string(),
+                latitude,
+                longitude,
+            })],
+        });
+        self.push(&payload).await
+    }
+
+    pub async fn delete_message(&self, message_id: &str) -> Result<(), String> {
+        let url = format!("{}/v2/bot/message/{}/delete", self.api_base, message_id);
+        let resp = self
+            .http
+            .post(&url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.channel_access_token),
+            )
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {}", e))?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("LINE API error: {}", resp.status()))
+        }
+    }
+
+    pub async fn get_profile(&self, user_id: &str) -> Result<LineUserProfile, String> {
+        let url = format!("{}/v2/bot/profile/{}", self.api_base, user_id);
+        let resp = self
+            .http
+            .get(&url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.channel_access_token),
+            )
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {}", e))?;
+
+        if resp.status().is_success() {
+            let profile: LineUserProfile = resp
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse profile response: {}", e))?;
+            Ok(profile)
+        } else {
+            Err(format!("LINE API error: {}", resp.status()))
+        }
+    }
 }
 
 // --- Payload types ---
@@ -147,6 +265,10 @@ pub enum LinePushPayload {
     Text(TextPayload),
     Flex(Box<FlexPayload>),
     Template(TemplatePayload),
+    Image(ImagePayload),
+    Video(VideoPayload),
+    Audio(AudioPayload),
+    Location(LocationPayload),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,7 +385,7 @@ impl FlexPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FlexBubbleContents {
     #[serde(rename = "type")]
     pub bubble_type: String,
@@ -283,7 +405,7 @@ impl FlexBubbleContents {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexBox {
     #[serde(rename = "type")]
     pub box_type: String,
@@ -291,7 +413,7 @@ pub struct FlexBox {
     pub contents: Vec<FlexComponent>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FlexComponent {
     Box(FlexBox),
@@ -302,7 +424,7 @@ pub enum FlexComponent {
     Spacer(FlexSpacer),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexText {
     #[serde(rename = "type")]
     pub text_type: String,
@@ -324,7 +446,7 @@ impl FlexText {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexImage {
     #[serde(rename = "type")]
     pub image_type: String,
@@ -342,14 +464,14 @@ impl FlexImage {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexButton {
     #[serde(rename = "type")]
     pub button_type: String,
     pub action: FlexAction,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexSpacer {
     #[serde(rename = "type")]
     pub spacer_type: String,
@@ -365,7 +487,7 @@ impl FlexSpacer {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexIcon {
     #[serde(rename = "type")]
     pub icon_type: String,
@@ -373,7 +495,7 @@ pub struct FlexIcon {
     pub size: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlexAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -404,7 +526,7 @@ impl FlexAction {
 
 // --- Template payloads ---
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplatePayload {
     #[serde(rename = "type")]
     pub template_type: String,
@@ -414,13 +536,13 @@ pub struct TemplatePayload {
     pub template: Box<TemplateContent>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfirmTemplate {
     pub text: String,
     pub actions: Vec<TemplateAction>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ButtonsTemplate {
     pub thumbnail_image_url: Option<String>,
     pub image_size: Option<String>,
@@ -431,7 +553,7 @@ pub struct ButtonsTemplate {
     pub actions: Vec<TemplateAction>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TemplateContent {
     Confirm(ConfirmTemplate),
@@ -439,14 +561,14 @@ pub enum TemplateContent {
     Carousel(CarouselTemplate),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CarouselTemplate {
     pub columns: Vec<CarouselColumn>,
     pub image_aspect_ratio: Option<String>,
     pub image_size: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CarouselColumn {
     pub thumbnail_image_url: Option<String>,
     pub image_background_color: Option<String>,
@@ -456,7 +578,7 @@ pub struct CarouselColumn {
     pub actions: Vec<TemplateAction>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -498,6 +620,32 @@ impl TemplateAction {
     }
 }
 
+// --- Media payloads ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImagePayload {
+    pub to: String,
+    pub messages: Vec<PushMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoPayload {
+    pub to: String,
+    pub messages: Vec<PushMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioPayload {
+    pub to: String,
+    pub messages: Vec<PushMessage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocationPayload {
+    pub to: String,
+    pub messages: Vec<PushMessage>,
+}
+
 // --- Quick Reply ---
 
 #[derive(Debug, Clone, Serialize)]
@@ -510,7 +658,7 @@ pub struct QuickReplyItem {
     pub action: QuickReplyAction,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum QuickReplyAction {
     Message(QuickReplyMessageAction),
@@ -518,7 +666,7 @@ pub enum QuickReplyAction {
     Uri(QuickReplyUriAction),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickReplyMessageAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -536,7 +684,7 @@ impl QuickReplyMessageAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickReplyPostbackAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -545,7 +693,7 @@ pub struct QuickReplyPostbackAction {
     pub display_text: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickReplyUriAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -583,6 +731,18 @@ impl ReplyTextContent {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct LineUserProfile {
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(rename = "userId")]
+    pub user_id: String,
+    #[serde(rename = "pictureUrl")]
+    pub picture_url: Option<String>,
+    #[serde(rename = "statusMessage")]
+    pub status_message: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,5 +768,20 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"type\":\"flex\""));
         assert!(json.contains("\"altText\":\"Flex message\""));
+    }
+
+    #[test]
+    fn test_deserialize_user_profile() {
+        let json = r#"{
+            "displayName": "John Doe",
+            "userId": "U123456",
+            "pictureUrl": "https://example.com/photo.jpg",
+            "statusMessage": "Hello!"
+        }"#;
+        let profile: LineUserProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.display_name, "John Doe");
+        assert_eq!(profile.user_id, "U123456");
+        assert!(profile.picture_url.is_some());
+        assert_eq!(profile.status_message.as_deref(), Some("Hello!"));
     }
 }
