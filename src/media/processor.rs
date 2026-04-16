@@ -13,6 +13,7 @@
 //! fallback text block, never an abort.
 
 use crate::gateway::channel::Attachment;
+use crate::media::placeholder::{MediaPlaceholder, MediaPlaceholderType};
 use crate::providers::message::ContentBlock;
 use crate::sync_primitives::Arc;
 use crate::vision::types::{ImageFormat, ImageInput};
@@ -103,8 +104,6 @@ impl MediaProcessor {
         } else if mime.starts_with("audio/") {
             self.process_audio(attachment, session_id, run_id).await
         } else {
-            // Unsupported media type — emit metadata placeholder
-            let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
             tracing::info!(
                 target: "multimodal",
                 probe = "P4_process",
@@ -115,7 +114,7 @@ impl MediaProcessor {
                 "Attachment processed"
             );
             ContentBlock::Text {
-                text: format!("[Attachment: {} ({})]", name, mime),
+                text: MediaPlaceholder::new(MediaPlaceholderType::File, &attachment.id).to_text(),
                 cache_control: None,
             }
         }
@@ -221,7 +220,7 @@ impl MediaProcessor {
         let Some(ref vision) = self.vision else {
             debug!(attachment_id = %attachment.id, "no vision pipeline, returning placeholder");
             return ContentBlock::Text {
-                text: "[Image: description unavailable (no vision provider)]".to_string(),
+                text: MediaPlaceholder::new(MediaPlaceholderType::Image, &attachment.id).to_text(),
                 cache_control: None,
             };
         };
@@ -261,7 +260,6 @@ impl MediaProcessor {
         run_id: &str,
     ) -> ContentBlock {
         let Some(ref transcription) = self.transcription else {
-            let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
             tracing::info!(
                 target: "multimodal",
                 probe = "P4_process",
@@ -272,10 +270,7 @@ impl MediaProcessor {
                 "Attachment processed"
             );
             return ContentBlock::Text {
-                text: format!(
-                    "[Audio: {} — transcription unavailable (no provider)]",
-                    name
-                ),
+                text: MediaPlaceholder::new(MediaPlaceholderType::Audio, &attachment.id).to_text(),
                 cache_control: None,
             };
         };
@@ -341,9 +336,9 @@ impl MediaProcessor {
                     action = "error_fallback",
                     "Attachment processed"
                 );
-                let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
                 ContentBlock::Text {
-                    text: format!("[Audio: {} — transcription failed]", name),
+                    text: MediaPlaceholder::new(MediaPlaceholderType::Audio, &attachment.id)
+                        .to_text(),
                     cache_control: None,
                 }
             }
@@ -356,10 +351,16 @@ impl MediaProcessor {
 // =============================================================================
 
 /// Build a generic fallback text block for a failed attachment.
-fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
-    let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
+fn fallback_text(attachment: &Attachment, _error: &str) -> ContentBlock {
+    let ty = if attachment.mime_type.starts_with("image/") {
+        MediaPlaceholderType::Image
+    } else if attachment.mime_type.starts_with("audio/") {
+        MediaPlaceholderType::Audio
+    } else {
+        MediaPlaceholderType::File
+    };
     ContentBlock::Text {
-        text: format!("[Attachment: {} — error: {}]", name, error),
+        text: MediaPlaceholder::new(ty, &attachment.id).to_text(),
         cache_control: None,
     }
 }
@@ -412,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_text_with_filename() {
+    fn test_fallback_text_image() {
         let att = Attachment {
             id: "att-1".into(),
             mime_type: "image/png".into(),
@@ -424,15 +425,14 @@ mod tests {
         };
         let block = fallback_text(&att, "network timeout");
         if let ContentBlock::Text { text, .. } = block {
-            assert!(text.contains("photo.png"));
-            assert!(text.contains("network timeout"));
+            assert_eq!(text, "{{media:image:att-1}}");
         } else {
             panic!("expected Text block");
         }
     }
 
     #[test]
-    fn test_fallback_text_without_filename() {
+    fn test_fallback_text_audio() {
         let att = Attachment {
             id: "att-2".into(),
             mime_type: "audio/mp3".into(),
@@ -444,8 +444,7 @@ mod tests {
         };
         let block = fallback_text(&att, "download failed");
         if let ContentBlock::Text { text, .. } = block {
-            assert!(text.contains("att-2"));
-            assert!(text.contains("download failed"));
+            assert_eq!(text, "{{media:audio:att-2}}");
         } else {
             panic!("expected Text block");
         }
@@ -468,8 +467,7 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert!(text.contains("report.pdf"));
-            assert!(text.contains("application/pdf"));
+            assert_eq!(text, "{{media:file:att-3}}");
         } else {
             panic!("expected Text block");
         }
@@ -521,7 +519,7 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert!(text.contains("description unavailable"));
+            assert_eq!(text, "{{media:image:img-2}}");
         } else {
             panic!("expected Text block");
         }
@@ -545,7 +543,7 @@ mod tests {
             .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text, .. } = &blocks[0] {
-            assert!(text.contains("transcription unavailable"));
+            assert_eq!(text, "{{media:audio:aud-1}}");
         } else {
             panic!("expected Text block");
         }
