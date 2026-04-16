@@ -36,10 +36,11 @@ Introduce a unified **Runtime Security Orchestrator** (`RuntimeSecurityGuard`) i
 │                           ▼                                      │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  Security Pipeline (strict order)                         │  │
-│  │  1. Secret Injection  ──▶ replace {{secret:NAME}}         │  │
-│  │  2. PII Filter        ──▶ detect & mask PII               │  │
-│  │  3. Content Sanitizer ──▶ wrap external content           │  │
-│  │  4. Leak Detector     ──▶ scan for leaked secrets/PII     │  │
+│  │  1. Extract & Resolve ──▶ find {{secret:NAME}}, resolve   │  │
+│  │  2. Leak Detector     ──▶ scan before replacement          │  │
+│  │  3. PII Filter        ──▶ detect & mask PII               │  │
+│  │  4. Content Sanitizer ──▶ wrap external content           │  │
+│  │  5. Replace Secrets   ──▶ inject resolved values          │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                           │                                      │
 │                           ▼                                      │
@@ -147,27 +148,32 @@ pub struct SecurityContext {
 
 ### Outbound Pipeline (strict sequence)
 
-1. **Secret Injection**
-   - Call `secrets::injection::render_with_secrets`.
-   - Collect `InjectedSecret`s into `SecurityContext.injected_secrets`.
-   - Register them with `secret_leak_detector`.
+1. **Placeholder Extraction & Secret Resolution**
+   - Extract `{{secret:NAME}}` placeholders via `secrets::placeholder::extract_secret_refs`.
+   - Resolve each secret via `AsyncSecretResolver`.
+   - Build `InjectedSecret` records and register them with `secret_leak_detector` for downstream inbound tracking.
+   - **Do NOT replace text yet** — this prevents leak detectors from flagging intentionally injected secrets.
 
-2. **PII Filtering**
-   - Call `pii::engine::PiiEngine::filter`.
-   - Skip if `provider_name` is in the PII config `exclude_providers` list.
-   - Forward the redacted text to the next stage.
-
-3. **Content Sanitization** (conditional)
-   - If `has_external_content` is true, call `security::content_sanitizer::wrap_external_content`.
-   - Otherwise bypass.
-
-4. **Leak Detection**
-   - Call `exec::leak_detector::LeakDetector::scan_outbound`.
-   - Call `secrets::leak_detector::LeakDetector::scan_outbound`.
+2. **Leak Detection**
+   - Call `exec::leak_detector::LeakDetector::scan_outbound` on the text that still contains placeholders.
+   - Call `secrets::leak_detector::LeakDetector::scan_outbound` on the same text.
    - If leaks are found, apply `default_action_on_leak`:
      - `Block` → return `GuardResult::Blocked`
      - `Redact` → return `GuardResult::Redacted`
      - `Warn` → return `GuardResult::Warned`
+
+3. **PII Filtering**
+   - Call `pii::engine::PiiEngine::filter`.
+   - Skip if `provider_name` is in the PII config `exclude_providers` list.
+   - Forward the redacted text to the next stage.
+
+4. **Content Sanitization** (conditional)
+   - If `has_external_content` is true, call `security::content_sanitizer::wrap_external_content`.
+   - Otherwise bypass.
+
+5. **Placeholder Replacement**
+   - Replace all `{{secret:NAME}}` occurrences with the resolved plaintext values.
+   - This is the final step before the text leaves for the LLM API.
 
 ### Inbound Pipeline
 
