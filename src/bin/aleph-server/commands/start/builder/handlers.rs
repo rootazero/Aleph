@@ -250,6 +250,18 @@ pub(in crate::commands::start) fn register_session_handlers(
         session_handlers::handle_set_topic_db,
         session_manager
     );
+    register_handler!(
+        server,
+        "sessions.patch",
+        session_handlers::handle_patch_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.preview",
+        session_handlers::handle_preview_db,
+        session_manager
+    );
 
     if !daemon {
         println!("Session methods:");
@@ -259,6 +271,8 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - sessions.delete    : Delete a session");
         println!("  - sessions.new       : Close current session and start new one");
         println!("  - sessions.set_topic : Set session topic/title");
+        println!("  - sessions.patch     : Patch session metadata");
+        println!("  - sessions.preview   : Preview session with recent messages");
         println!("  - session.create     : Create a new session");
         println!("  - session.usage      : Get session token/message stats");
         println!("  - session.compact    : Compact session history");

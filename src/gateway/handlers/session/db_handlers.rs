@@ -8,9 +8,65 @@ use serde_json::{json, Value};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
-use crate::gateway::session_manager::{SessionManager, StoredMessage};
+use crate::gateway::session_manager::SessionManager;
 
-use super::store::{HistoryMessage, SessionInfo};
+/// Session information returned by list handlers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionInfo {
+    /// Session key string
+    pub key: String,
+    /// Agent ID
+    pub agent_id: String,
+    /// Session type (main, peer, task, ephemeral)
+    pub session_type: String,
+    /// Message count in session
+    pub message_count: u32,
+    /// Created timestamp (ISO 8601)
+    pub created_at: String,
+    /// Last activity timestamp (ISO 8601)
+    pub last_active_at: String,
+    /// Session topic (extracted from metadata JSON)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// Session status (e.g. "closed")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Current lifecycle state
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// User-facing label
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Input tokens consumed
+    pub input_tokens: u64,
+    /// Output tokens consumed
+    pub output_tokens: u64,
+    /// Model used
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Model provider used
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    /// Parent session key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
+    /// Number of compactions performed
+    pub compaction_count: u64,
+}
+
+/// Session history message.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryMessage {
+    /// Message role (user, assistant, system)
+    pub role: String,
+    /// Message content
+    pub content: String,
+    /// Timestamp (ISO 8601)
+    pub timestamp: String,
+    /// Optional metadata
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
 
 /// Handle sessions.list RPC request with database backend
 pub async fn handle_list_db(
@@ -31,23 +87,15 @@ pub async fn handle_list_db(
                 // that should not appear in user-facing session lists
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
-                    // Extract topic and status from metadata JSON
-                    let (topic, status) = m
-                        .metadata_json
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                        .map(|v| {
-                            let topic = v
-                                .get("topic")
-                                .and_then(|t| t.as_str())
-                                .map(|s| s.to_string());
-                            let status = v
-                                .get("status")
-                                .and_then(|t| t.as_str())
-                                .map(|s| s.to_string());
-                            (topic, status)
-                        })
-                        .unwrap_or((None, None));
+                    let parsed_meta = m.metadata_json.as_deref().and_then(|s| {
+                        serde_json::from_str::<serde_json::Value>(s).ok()
+                    });
+                    let topic = parsed_meta.as_ref().and_then(|v| {
+                        v.get("topic").and_then(|t| t.as_str()).map(|s| s.to_string())
+                    });
+                    let status = parsed_meta.as_ref().and_then(|v| {
+                        v.get("status").and_then(|t| t.as_str()).map(|s| s.to_string())
+                    });
 
                     SessionInfo {
                         key: m.key,
@@ -63,6 +111,13 @@ pub async fn handle_list_db(
                         topic,
                         status,
                         state: m.state.map(|s| s.to_string()),
+                        label: m.label,
+                        input_tokens: m.input_tokens as u64,
+                        output_tokens: m.output_tokens as u64,
+                        model: m.model,
+                        model_provider: m.model_provider,
+                        parent_session_key: m.parent_session_key,
+                        compaction_count: m.compaction_count as u64,
                     }
                 })
                 .collect();
@@ -236,6 +291,160 @@ pub async fn handle_delete_db(
     }
 }
 
+/// Handle sessions.patch RPC request with database backend
+pub async fn handle_patch_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let session_key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    let patch = crate::gateway::session_manager::SessionPatch {
+        label: params.get("label").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        status: params.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        model: params.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        model_provider: params
+            .get("model_provider")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        metadata: params.get("metadata").cloned(),
+    };
+
+    match manager.patch_session(&session_key, &patch).await {
+        Ok(updated) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key_str,
+                "updated": updated,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to patch session: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.preview RPC request with database backend
+pub async fn handle_preview_db(
+    request: JsonRpcRequest,
+    manager: Arc<SessionManager>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(10);
+
+    let session_key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.get_session_preview(&session_key, limit).await {
+        Ok(preview) => {
+            let messages: Vec<Value> = preview
+                .messages
+                .into_iter()
+                .map(|m| {
+                    json!({
+                        "role": m.role,
+                        "content": m.content,
+                        "timestamp": chrono::DateTime::from_timestamp(m.timestamp, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        "metadata": m.metadata.map(|s| {
+                            serde_json::from_str(&s).unwrap_or(Value::Null)
+                        }),
+                    })
+                })
+                .collect();
+
+            let meta_json = preview.meta.map(|m| {
+                json!({
+                    "key": m.key,
+                    "agent_id": m.agent_id,
+                    "session_type": m.session_type,
+                    "message_count": m.message_count,
+                    "total_tokens": m.total_tokens,
+                    "state": m.state.map(|s| s.to_string()),
+                    "label": m.label,
+                    "input_tokens": m.input_tokens,
+                    "output_tokens": m.output_tokens,
+                    "model": m.model,
+                    "model_provider": m.model_provider,
+                    "parent_session_key": m.parent_session_key,
+                    "compaction_count": m.compaction_count,
+                    "created_at": chrono::DateTime::from_timestamp(m.created_at, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                    "last_active_at": chrono::DateTime::from_timestamp(m.last_active_at, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                })
+            });
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "session_key": session_key_str,
+                    "meta": meta_json,
+                    "messages": messages,
+                    "message_count": messages.len(),
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to get session preview: {}", e),
+        ),
+    }
+}
+
 /// Handle session.usage RPC request with database backend
 pub async fn handle_usage_db(
     request: JsonRpcRequest,
@@ -251,26 +460,26 @@ pub async fn handle_usage_db(
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
     };
 
-    let key = match SessionKey::from_key_string(&session_key) {
-        Some(k) => k,
-        None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Invalid session_key format",
-            );
-        }
-    };
-
-    // Get session metadata for timestamps
+    // Get session metadata for usage stats
     match manager.list_sessions(None).await {
         Ok(sessions) => {
             let session_meta = sessions.iter().find(|s| s.key == session_key);
 
-            // Get history for token estimation
-            let messages = manager.get_history(&key, None).await.unwrap_or_default();
-            let (input_tokens, output_tokens) = estimate_db_tokens(&messages);
-            let total = input_tokens + output_tokens;
+            let (input_tokens, output_tokens, total, message_count, created_at, last_active_at) =
+                session_meta
+                    .map(|s| {
+                        (
+                            s.input_tokens as u64,
+                            s.output_tokens as u64,
+                            s.total_tokens as u64,
+                            s.message_count as u64,
+                            chrono::DateTime::from_timestamp(s.created_at, 0)
+                                .map(|dt| dt.to_rfc3339()),
+                            chrono::DateTime::from_timestamp(s.last_active_at, 0)
+                                .map(|dt| dt.to_rfc3339()),
+                        )
+                    })
+                    .unwrap_or((0, 0, 0, 0, None, None));
 
             JsonRpcResponse::success(
                 request.id,
@@ -279,17 +488,9 @@ pub async fn handle_usage_db(
                     "tokens": total,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
-                    "messages": messages.len(),
-                    "created_at": session_meta.map(|s| {
-                        chrono::DateTime::from_timestamp(s.created_at, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default()
-                    }),
-                    "last_active_at": session_meta.map(|s| {
-                        chrono::DateTime::from_timestamp(s.last_active_at, 0)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default()
-                    }),
+                    "messages": message_count,
+                    "created_at": created_at,
+                    "last_active_at": last_active_at,
                 }),
             )
         }
@@ -555,17 +756,4 @@ pub async fn handle_set_topic_db(
     }
 }
 
-/// Estimate tokens from StoredMessage history
-fn estimate_db_tokens(messages: &[StoredMessage]) -> (u64, u64) {
-    let mut input = 0u64;
-    let mut output = 0u64;
-    for msg in messages {
-        let tokens = (msg.content.len() as u64) / 3;
-        match msg.role.as_str() {
-            "user" => input += tokens,
-            "assistant" => output += tokens,
-            _ => input += tokens,
-        }
-    }
-    (input, output)
-}
+
