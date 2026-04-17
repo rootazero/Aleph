@@ -323,6 +323,25 @@ CREATE INDEX IF NOT EXISTS idx_assembly_logs_agent_created
     ON assembly_logs(agent_id, created_at);
 "#;
 
+// ---------------------------------------------------------------------------
+// Query filed table (Memory Evolution Spec 8)
+// ---------------------------------------------------------------------------
+
+/// Tracks which queries have already produced a filed note, enabling the
+/// query-filer to skip re-filing identical queries within the same agent scope.
+pub(crate) const CREATE_QUERY_FILED: &str = r#"
+CREATE TABLE IF NOT EXISTS query_filed (
+    id          TEXT PRIMARY KEY,
+    agent_id    TEXT NOT NULL DEFAULT 'default',
+    query_hash  TEXT NOT NULL,
+    note_path   TEXT NOT NULL,
+    session_id  TEXT,
+    filed_at    INTEGER NOT NULL,
+    UNIQUE(agent_id, query_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_query_filed_agent ON query_filed(agent_id);
+"#;
+
 pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch(
         "DROP TABLE IF EXISTS facts;
@@ -395,6 +414,9 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(ASSEMBLY_LOGS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;
+
+    conn.execute_batch(CREATE_QUERY_FILED)
+        .map_err(|e| AlephError::other(format!("init query_filed: {e}")))?;
 
     // One-time cleanup of obsolete facts tables from existing databases.
     drop_obsolete_facts_tables(conn)?;
@@ -608,6 +630,17 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM dream_reports", [], |r| r.get(0))
             .unwrap();
         assert_eq!(row_count_after, 2);
+    }
+
+    #[test]
+    fn create_query_filed_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(super::CREATE_QUERY_FILED).unwrap();
+        conn.execute_batch(super::CREATE_QUERY_FILED).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM query_filed", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]
