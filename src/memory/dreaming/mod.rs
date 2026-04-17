@@ -145,6 +145,31 @@ impl DreamPipeline {
         ])
     }
 
+    /// Build a pipeline from a DreamStrategy.
+    pub fn from_strategy(strategy: DreamStrategy) -> Self {
+        let stage_list: Vec<Box<dyn DreamStage>> = match strategy {
+            DreamStrategy::Consolidate => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteDriftStage),
+                Box::new(stages::IndexRefresherStage),
+                Box::new(stages::NoteDecayStage),
+            ],
+            DreamStrategy::Synthesize => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteSynthesisStage),
+                Box::new(stages::SkillDistillStage),
+                Box::new(stages::DailyDigestStage),
+            ],
+            DreamStrategy::Conserve => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::IndexRefresherStage),
+            ],
+        };
+        Self::new(stage_list)
+    }
+
     /// Run the pipeline, returning the final `DreamReport`.
     pub async fn run(&self, mut ctx: DreamContext) -> Result<DreamReport, AlephError> {
         let mut executed: Vec<String> = Vec::new();
@@ -635,5 +660,44 @@ mod tests {
     fn test_pipeline_builder_weekly() {
         let pipeline = DreamPipeline::weekly();
         assert_eq!(pipeline.stages.len(), 7);
+    }
+
+    #[test]
+    fn pipeline_from_strategy_consolidate() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_drift",
+                "index_refresher",
+                "note_decay"
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_from_strategy_synthesize() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_synthesis",
+                "skill_distill",
+                "daily_digest"
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_from_strategy_conserve() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(names, vec!["note_lint", "index_refresher"]);
     }
 }
