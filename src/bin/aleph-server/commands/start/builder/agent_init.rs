@@ -841,7 +841,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // On failure we log a warning and continue — memory_reflect will return a clear error.
         if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
             use alephcore::memory::reflector::{
-                recall_signals::SignalRow, fs_reflector::RecallWriter, MemoryReflector,
+                fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector,
             };
             use alephcore::memory::store::sqlite::recall_signals::RecallHit;
 
@@ -879,6 +879,40 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_registry.set_memory_reflector(reflector);
         } else if !daemon {
             println!("  memory_reflect tool: MemoryReflector not wired (no embedder or provider)");
+        }
+
+        // Spec 8 Task 8: construct DefaultQueryFiler and inject into memory_reflect tool.
+        // Requires a default provider (for the LLM novelty gate).
+        // On failure we log and continue — filing is fire-and-forget.
+        if app_config.memory.query_filer.enabled {
+            if let Some(ref prov) = default_prov {
+                use alephcore::memory::notes::query_filer::{DefaultQueryFiler, QueryFiler};
+                use alephcore::memory::notes::NoteIndexer;
+
+                let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
+                    alephcore::utils::paths::get_note_memory_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
+                });
+                let indexer_arc =
+                    std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
+                let query_filer: std::sync::Arc<dyn QueryFiler> =
+                    std::sync::Arc::new(DefaultQueryFiler {
+                        store: memory_db.clone(),
+                        indexer: indexer_arc,
+                        provider: prov.clone(),
+                        orientation: orientation.clone(),
+                        memory_dir: note_dir,
+                        config: app_config.memory.query_filer.clone(),
+                    });
+                tool_registry.set_query_filer(query_filer);
+                if !daemon {
+                    println!("  query_filer: DefaultQueryFiler wired into memory_reflect");
+                }
+            } else if !daemon {
+                println!("  query_filer: skipped (no AI provider available)");
+            }
+        } else if !daemon {
+            println!("  query_filer: disabled in config");
         }
 
         let tool_registry = Arc::new(tool_registry);
