@@ -64,6 +64,8 @@ pub struct MemoryContextProvider {
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Token budget for orientation snapshots.
     orientation_budget: crate::memory::notes::orientation::types::TokenBudget,
+    /// Optional user-profile synthesizer for injecting profile context.
+    profile: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
 }
 
 impl MemoryContextProvider {
@@ -121,6 +123,7 @@ impl MemoryContextProvider {
             ),
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
+            profile: None,
         }
     }
 
@@ -186,6 +189,7 @@ impl MemoryContextProvider {
             ),
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
+            profile: None,
         }
     }
 
@@ -250,6 +254,7 @@ impl MemoryContextProvider {
             ),
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
+            profile: None,
         }
     }
 
@@ -259,6 +264,15 @@ impl MemoryContextProvider {
         orientation: Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
     ) -> Self {
         self.orientation = Some(orientation);
+        self
+    }
+
+    /// Set the user-profile synthesizer (builder-style).
+    pub fn with_profile(
+        mut self,
+        p: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
+    ) -> Self {
+        self.profile = Some(p);
         self
     }
 
@@ -286,6 +300,43 @@ impl MemoryContextProvider {
         };
         let snap = w.read_snapshot(agent_id, self.orientation_budget).await?;
         let xml = render_orientation_envelope(&snap);
+        Ok(Some(crate::providers::message::UnifiedMessage::user(xml)))
+    }
+
+    /// Build a user-profile user-message for injection into the prompt.
+    ///
+    /// Returns `Ok(None)` when:
+    /// - mode is `Tools`
+    /// - no profile synthesizer is registered
+    /// - the synthesizer returns `None` (USER.md absent)
+    ///
+    /// Otherwise returns `Ok(Some(UnifiedMessage::user(xml)))` with the
+    /// profile envelope XML (body truncated to 2 KB).
+    pub async fn build_profile_user_message(
+        &self,
+        agent_id: &str,
+        mode: crate::config::types::memory::MemoryInjectionMode,
+    ) -> Result<Option<crate::providers::message::UnifiedMessage>, crate::error::AlephError> {
+        if matches!(
+            mode,
+            crate::config::types::memory::MemoryInjectionMode::Tools
+        ) {
+            return Ok(None);
+        }
+        let Some(ps) = &self.profile else {
+            return Ok(None);
+        };
+        let Some(profile) = ps.current(agent_id).await? else {
+            return Ok(None);
+        };
+        let body = strip_frontmatter(&profile.raw);
+        let body: String = body.chars().take(2048).collect();
+        let xml = format!(
+            "<UserProfile>\n<revision>{}</revision>\n<confidence>{}</confidence>\n<body>\n{}\n</body>\n</UserProfile>",
+            profile.revision,
+            xml_escape(&profile.confidence),
+            xml_escape(&body)
+        );
         Ok(Some(crate::providers::message::UnifiedMessage::user(xml)))
     }
 
@@ -336,6 +387,24 @@ impl MemoryContextProvider {
         }
         Ok(Some(UnifiedMessage::user(rendered)))
     }
+}
+
+/// Escape `&`, `<`, `>` for XML embedding.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Strip YAML frontmatter (`---\n…\n---\n`) from the start of `raw`.
+/// If no frontmatter is present, returns `raw` unchanged.
+fn strip_frontmatter(raw: &str) -> &str {
+    if let Some(rest) = raw.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---\n") {
+            return &rest[end + 5..]; // skip "\n---\n"
+        }
+    }
+    raw
 }
 
 fn render_orientation_envelope(
@@ -586,6 +655,81 @@ mod orientation_tests {
 
         let msg = provider
             .build_orientation_user_message("default", MemoryInjectionMode::Tools)
+            .await
+            .unwrap();
+        assert!(msg.is_none());
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::error::AlephError;
+    use crate::memory::notes::profile::types::{ProfileSection, UserProfile};
+    use crate::memory::notes::profile::ProfileSynthesizer;
+    use async_trait::async_trait;
+    use std::collections::BTreeMap;
+
+    struct FixedProfile;
+
+    #[async_trait]
+    impl ProfileSynthesizer for FixedProfile {
+        async fn bootstrap(&self, _agent_id: &str) -> Result<UserProfile, AlephError> {
+            unimplemented!()
+        }
+
+        async fn current(&self, _agent_id: &str) -> Result<Option<UserProfile>, AlephError> {
+            let mut sections = BTreeMap::new();
+            sections.insert(
+                ProfileSection::Identity.heading().to_string(),
+                vec!["Software engineer".to_string()],
+            );
+            Ok(Some(UserProfile {
+                schema_version: 1,
+                updated: "2026-04-17".to_string(),
+                revision: 3,
+                last_session: "ses_001".to_string(),
+                confidence: "medium".to_string(),
+                raw: "# User Profile\n## Identity\n- Software engineer\n".to_string(),
+                sections,
+                content_hash: "abc".to_string(),
+            }))
+        }
+
+        async fn update(
+            &self,
+            _agent_id: &str,
+            _signal: crate::memory::notes::profile::types::SessionSignal,
+        ) -> Result<crate::memory::notes::profile::types::UpdateOutcome, AlephError> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn profile_message_injected_in_context_mode() {
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_profile(Arc::new(FixedProfile));
+
+        let msg = provider
+            .build_profile_user_message("default", MemoryInjectionMode::Context)
+            .await
+            .unwrap();
+        let m = msg.expect("context mode should inject profile");
+        let text = format!("{m:?}");
+        assert!(text.contains("<UserProfile>"));
+        assert!(text.contains("</UserProfile>"));
+    }
+
+    #[tokio::test]
+    async fn profile_skipped_in_tools_mode() {
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools)
+                .with_profile(Arc::new(FixedProfile));
+
+        let msg = provider
+            .build_profile_user_message("default", MemoryInjectionMode::Tools)
             .await
             .unwrap();
         assert!(msg.is_none());
