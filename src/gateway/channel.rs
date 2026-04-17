@@ -235,6 +235,7 @@ pub enum MessageMeta {
     PollAnswer { poll_id: String, option_ids: Vec<u8> },
     /// Telegram message reaction — user reacted with these emojis.
     Reaction { emojis: Vec<String> },
+    ThreadId(i64),
 }
 
 /// Message received from a channel

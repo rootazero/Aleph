@@ -437,10 +437,49 @@ impl Channel for TelegramChannel {
                         let chat_id = msg.chat.id.0;
 
                         match access.check_message(user_id, chat_id, is_group).await {
-                            AccessDecision::Allowed | AccessDecision::NeedsPairing => {
+                            AccessDecision::Allowed => {
                                 if let Some(inbound) =
                                     handlers::convert_message(&msg, &bot, &channel_id, &sticker_pipeline).await
                                 {
+                                    let tg_ctx = TelegramInboundContext::from_inbound(
+                                        inbound.clone(),
+                                        &msg,
+                                    );
+                                    let access_level = AccessLevel::Member;
+                                    let _tg_ctx = tg_ctx.with_access_level(access_level);
+
+                                    tracing::debug!(
+                                        channel = "telegram",
+                                        chat_id = %chat_id,
+                                        thread_id = ?_tg_ctx.thread_id,
+                                        access_level = ?access_level,
+                                        "TelegramInboundContext ready for message"
+                                    );
+
+                                    if let Err(e) = inbound_tx.send(inbound) {
+                                        tracing::error!("Failed to send inbound message: {:?}", e);
+                                    }
+                                }
+                            }
+                            AccessDecision::NeedsPairing => {
+                                if let Some(inbound) =
+                                    handlers::convert_message(&msg, &bot, &channel_id, &sticker_pipeline).await
+                                {
+                                    let tg_ctx = TelegramInboundContext::from_inbound(
+                                        inbound.clone(),
+                                        &msg,
+                                    );
+                                    let access_level = AccessLevel::Stranger;
+                                    let _tg_ctx = tg_ctx.with_access_level(access_level);
+
+                                    tracing::debug!(
+                                        channel = "telegram",
+                                        chat_id = %chat_id,
+                                        thread_id = ?_tg_ctx.thread_id,
+                                        access_level = ?access_level,
+                                        "TelegramInboundContext ready for needs-pairing message"
+                                    );
+
                                     if let Err(e) = inbound_tx.send(inbound) {
                                         tracing::error!("Failed to send inbound message: {:?}", e);
                                     }
