@@ -20,3 +20,4 @@ pub use search_result::NoteSearchResult;
 pub use wikilink::{extract_wikilinks, resolve_wikilink, rewrite_wikilinks};
 
 pub mod ingest;
+pub mod query_filer;
