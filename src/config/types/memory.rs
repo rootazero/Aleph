@@ -192,7 +192,7 @@ pub struct MemoryConfig {
     // ========================================
     /// User profile configuration.
     #[serde(default)]
-    pub profile: ProfileConfig,
+    pub profile: UserProfileConfig,
 }
 
 // =============================================================================
@@ -818,7 +818,7 @@ impl Default for MemoryConfig {
             // Compound ingest (Spec 6)
             compound_ingest: CompoundIngestConfig::default(),
             // User profile (Spec 7)
-            profile: ProfileConfig::default(),
+            profile: UserProfileConfig::default(),
         }
     }
 }
@@ -924,12 +924,12 @@ fn default_orientation_inject_on_agent_switch() -> bool {
 }
 
 // =============================================================================
-// ProfileConfig (Memory Evolution Spec 7)
+// UserProfileConfig (Memory Evolution Spec 7)
 // =============================================================================
 
 /// User profile synthesis and injection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileConfig {
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UserProfileConfig {
     #[serde(default = "default_profile_enabled")]
     pub enabled: bool,
     #[serde(default = "default_profile_min_interval_minutes")]
@@ -944,7 +944,7 @@ pub struct ProfileConfig {
     pub bootstrap_on_first_session_end: bool,
 }
 
-impl Default for ProfileConfig {
+impl Default for UserProfileConfig {
     fn default() -> Self {
         Self {
             enabled: true,

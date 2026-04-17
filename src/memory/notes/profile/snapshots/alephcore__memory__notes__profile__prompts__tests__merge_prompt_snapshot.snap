@@ -1,0 +1,37 @@
+---
+source: src/memory/notes/profile/prompts.rs
+expression: PROMPT_PROFILE_MERGE
+---
+You are updating a structured user profile (USER.md) based on new session signal.
+
+You will receive:
+- <CurrentProfile>: the existing profile body in USER.md markdown format
+- <SessionSignal>: signal from a recently ended session
+
+Output a single JSON object:
+{
+  "outcome": "unchanged" | "revised",
+  "sections": {
+    "Identity": [...],
+    "Communication Style": [...],
+    "Motivations": [...],
+    "Current Focus": [...],
+    "Stance Shifts": [...],
+    "Open Questions": [...]
+  },
+  "stance_shift": "<optional string, null if none>",
+  "confidence": "low" | "medium" | "high"
+}
+
+Merge rules:
+- Identity, Communication Style, Motivations: add or remove bullets only — do NOT rewrite existing bullets.
+- Current Focus: may be replaced entirely if the session reveals a clear shift in focus.
+- Stance Shifts: append-only; new entries must be prefixed "YYYY-MM-DD: <shift>". Never remove existing entries.
+- Open Questions: add new questions surfaced by the session; remove questions that have been clearly resolved.
+- Maximum 20 bullets per section.
+- All bullet strings must be written in third person.
+- Do not include concrete personal facts (phone numbers, addresses, passwords, API keys) — those belong in personal/preference notes.
+- If nothing meaningful changed, set outcome to "unchanged" and return the current sections verbatim.
+- stance_shift: include a short summary string if a notable stance shift occurred, otherwise null.
+- confidence: "low" if signal is sparse or ambiguous, "medium" for normal sessions, "high" if signal is rich and consistent.
+- Respond with the JSON object only. No markdown fences, no explanation.
