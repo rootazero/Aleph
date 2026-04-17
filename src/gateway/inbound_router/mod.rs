@@ -99,7 +99,7 @@ pub struct InboundMessageRouter {
     /// Debounce buffer for message merging
     pub(super) debounce_buffer: Option<Arc<crate::gateway::pipeline::DebounceBuffer>>,
     /// Session manager for session lifecycle
-    pub(super) session_manager: Option<Arc<super::session_manager::SessionManager>>,
+    pub(super) session_store: Option<Arc<dyn super::session_store::SessionStore>>,
     /// App config for reading output_mode at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
     /// STT config for voice transcription
@@ -138,7 +138,7 @@ impl InboundMessageRouter {
             llm_provider: None,
             command_parser: None,
             debounce_buffer: None,
-            session_manager: None,
+            session_store: None,
             app_config: None,
             stt_config: None,
             generation_registry: None,
@@ -203,9 +203,9 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set the session manager for session lifecycle operations
-    pub fn with_session_manager(mut self, sm: Arc<super::session_manager::SessionManager>) -> Self {
-        self.session_manager = Some(sm);
+    /// Set the session store for session lifecycle operations
+    pub fn with_session_store(mut self, sm: Arc<dyn super::session_store::SessionStore>) -> Self {
+        self.session_store = Some(sm);
         self
     }
 

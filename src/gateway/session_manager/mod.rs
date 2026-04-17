@@ -91,59 +91,10 @@ impl std::fmt::Display for SessionState {
 }
 
 /// Session metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionMetadata {
-    pub key: String,
-    pub agent_id: String,
-    pub session_type: String,
-    pub created_at: i64,
-    pub last_active_at: i64,
-    pub message_count: i64,
-    pub total_tokens: i64,
-    pub auto_reset_at: Option<i64>,
-    /// Current lifecycle state of the session
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<SessionState>,
-    /// Raw metadata JSON string from the sessions table
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_json: Option<String>,
-    /// User-facing label / title for the session
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    /// Input tokens consumed in this session
-    #[serde(default)]
-    pub input_tokens: i64,
-    /// Output tokens consumed in this session
-    #[serde(default)]
-    pub output_tokens: i64,
-    /// Model used in this session
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Model provider used in this session
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_provider: Option<String>,
-    /// Parent session key (for session branching / lineage)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_session_key: Option<String>,
-    /// Number of times this session has been compacted
-    #[serde(default)]
-    pub compaction_count: i64,
-}
+pub use crate::gateway::session_store::types::SessionMetadata;
 
 /// Patch request for updating session metadata
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SessionPatch {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-}
+pub use crate::gateway::session_store::types::SessionPatch;
 
 /// Preview of a session: metadata plus recent messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,6 +238,7 @@ impl Default for SessionManagerConfig {
 /// Uses `std::sync::Mutex` for the connection because `rusqlite::Connection`
 /// is not `Sync` (it uses `RefCell` internally). This is safe for async use
 /// as long as we don't hold the lock across await points.
+#[derive(Clone)]
 pub struct SessionManager {
     pub(super) config: SessionManagerConfig,
     pub(super) conn: Arc<Mutex<Connection>>,

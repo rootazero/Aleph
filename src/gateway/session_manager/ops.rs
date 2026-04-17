@@ -33,6 +33,7 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         model_provider: row.get(14)?,
         parent_session_key: row.get(15)?,
         compaction_count: row.get(16)?,
+        ..Default::default()
     })
 }
 
@@ -115,6 +116,7 @@ impl SessionManager {
             model_provider: None,
             parent_session_key: None,
             compaction_count: 0,
+            ..Default::default()
         })
     }
 
@@ -130,6 +132,7 @@ impl SessionManager {
     }
 
     /// Add a message to a session with optional metadata and token tracking.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_message_with_meta(
         &self,
         key: &SessionKey,

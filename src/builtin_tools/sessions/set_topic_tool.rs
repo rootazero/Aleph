@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::error::Result;
 use crate::gateway::router::SessionKey as LegacySessionKey;
-use crate::gateway::SessionManager;
+use crate::gateway::session_store::SessionStore;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -37,12 +37,12 @@ pub struct SessionSetTopicOutput {
 /// Tool that renames the current session's topic.
 #[derive(Clone)]
 pub struct SessionSetTopicTool {
-    session_manager: Arc<SessionManager>,
+    session_store: Arc<dyn SessionStore>,
 }
 
 impl SessionSetTopicTool {
-    pub fn new(session_manager: Arc<SessionManager>) -> Self {
-        Self { session_manager }
+    pub fn new(session_store: Arc<dyn SessionStore>) -> Self {
+        Self { session_store }
     }
 }
 
@@ -97,7 +97,7 @@ impl AlephTool for SessionSetTopicTool {
             ))
         })?;
 
-        self.session_manager
+        self.session_store
             .set_topic(&legacy_key, topic)
             .await
             .map_err(|e| {
@@ -124,7 +124,7 @@ impl AlephTool for SessionSetTopicTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::session_manager::SessionManagerConfig;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::tools::AlephTool;
     use tempfile::tempdir;
 
@@ -187,7 +187,7 @@ mod tests {
             main_key: "default".into(),
             epoch: 0,
         };
-        sm.get_or_create(&key).await.unwrap();
+        let _ = SessionStore::get_or_create(&*sm, &key).await.unwrap();
 
         let tool = SessionSetTopicTool::new(sm);
         let result = tool

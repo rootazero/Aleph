@@ -22,7 +22,7 @@ use alephcore::gateway::handlers::session as session_handlers;
 use alephcore::gateway::handlers::workspace as workspace_handlers;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
-    AgentEnvStore, ChannelRegistry, ConfigEvent, ConfigWatcher, ConfigWatcherConfig, SessionManager,
+    AgentEnvStore, ChannelRegistry, ConfigEvent, ConfigWatcher, ConfigWatcherConfig,
 };
 use alephcore::group_chat::GroupChatExecutor;
 use alephcore::memory::store::MemoryBackend;
@@ -193,74 +193,92 @@ pub(in crate::commands::start) fn register_guest_handlers(
 
 pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
-    session_manager: &Arc<SessionManager>,
+    session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
     daemon: bool,
 ) {
     register_handler!(
         server,
         "sessions.list",
         session_handlers::handle_list_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.history",
         session_handlers::handle_history_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.reset",
         session_handlers::handle_reset_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.delete",
         session_handlers::handle_delete_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "session.create",
         session_handlers::handle_create_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "session.usage",
         session_handlers::handle_usage_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "session.compact",
         session_handlers::handle_compact_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.new",
         session_handlers::handle_new_session_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.set_topic",
         session_handlers::handle_set_topic_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.patch",
         session_handlers::handle_patch_db,
-        session_manager
+        session_store
     );
     register_handler!(
         server,
         "sessions.preview",
         session_handlers::handle_preview_db,
-        session_manager
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.list",
+        session_handlers::handle_list_checkpoints_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.restore",
+        session_handlers::handle_restore_checkpoint_db,
+        session_store
+    );
+    register_handler!(
+        server,
+        "sessions.compaction.branch",
+        session_handlers::handle_branch_checkpoint_db,
+        session_store
     );
 
     if !daemon {
@@ -276,6 +294,9 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - session.create     : Create a new session");
         println!("  - session.usage      : Get session token/message stats");
         println!("  - session.compact    : Compact session history");
+        println!("  - sessions.compaction.list    : List compaction checkpoints");
+        println!("  - sessions.compaction.restore : Restore session to checkpoint");
+        println!("  - sessions.compaction.branch  : Branch new session from checkpoint");
         println!();
     }
 }

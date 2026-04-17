@@ -364,7 +364,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
-    session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,
+    session_store: Option<Arc<dyn alephcore::gateway::session_store::SessionStore>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<
         Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>,
@@ -448,9 +448,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire session manager for /new command and session lifecycle
-    if let Some(sm) = session_manager {
-        inbound_router = inbound_router.with_session_manager(sm);
+    // Wire session store for /new command and session lifecycle
+    if let Some(sm) = session_store {
+        inbound_router = inbound_router.with_session_store(sm);
         if !daemon {
             println!("  Inbound router: session management enabled (/new command)");
         }

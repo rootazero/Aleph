@@ -79,7 +79,7 @@ impl SessionSearchTool {
         let fetch_limit = args.max_results * 4;
         let results = self
             .context
-            .session_manager()
+            .session_store()
             .search_messages(&args.query, fetch_limit)
             .await
             .map_err(|e| ToolError::Execution(format!("Session search failed: {}", e)))?;

@@ -52,7 +52,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Session compactor for hierarchical session summarization
     pub(super) session_compactor: Option<Arc<crate::memory::session_compactor::SessionCompactor>>,
     /// Session manager for auto-topic generation
-    pub(super) session_manager: Option<Arc<crate::gateway::SessionManager>>,
+    pub(super) session_manager: Option<Arc<dyn crate::gateway::session_store::SessionStore>>,
     /// Event bus for broadcasting session updates
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Media processor for multimodal attachment handling (images, audio, etc.)
@@ -145,7 +145,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Set session manager and event bus for auto-topic generation.
     pub fn with_session_topic_support(
         mut self,
-        session_manager: Arc<crate::gateway::SessionManager>,
+        session_manager: Arc<dyn crate::gateway::session_store::SessionStore>,
         event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     ) -> Self {
         self.session_manager = Some(session_manager);

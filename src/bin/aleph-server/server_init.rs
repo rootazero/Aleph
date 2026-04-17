@@ -228,7 +228,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     _workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     _provider_registry: Arc<P>,
-    _session_manager: Arc<alephcore::gateway::SessionManager>,
+    _session_manager: Arc<dyn alephcore::gateway::session_store::SessionStore>,
     command_parser: Option<Arc<alephcore::command::CommandParser>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where

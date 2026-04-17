@@ -12,7 +12,8 @@ use tracing::{debug, info};
 use super::helpers::{classify_session_kind, derive_channel, SessionKind};
 use crate::error::Result;
 use crate::gateway::context::GatewayContext;
-use crate::gateway::session_manager::{SessionMetadata, StoredMessage};
+use crate::gateway::session_manager::SessionMetadata;
+use crate::gateway::session_store::types::{CheckpointSummary, MessageRecord};
 use crate::routing::session_key::SessionKey;
 use crate::tools::AlephTool;
 
@@ -57,12 +58,27 @@ pub struct SessionListRow {
     pub message_count: usize,
     /// Recent messages (if message_limit > 0)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub messages: Option<Vec<StoredMessage>>,
+    pub messages: Option<Vec<MessageRecord>>,
     /// Agent that owns this session
     pub agent_id: String,
     /// Session topic (generated from first message)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
+    /// Derived title from first user message (computed lazily on append).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derived_title: Option<String>,
+    /// Preview of the last message content (first N chars, updated on append).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    /// Cumulative runtime in milliseconds (updated on session close).
+    #[serde(default)]
+    pub runtime_ms: i64,
+    /// Estimated cost in USD (updated on session close / usage update).
+    #[serde(default)]
+    pub estimated_cost_usd: f64,
+    /// List of compaction checkpoints (file backend only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<CheckpointSummary>,
 }
 
 /// Output from the sessions_list tool
@@ -132,12 +148,15 @@ impl SessionsListTool {
             (meta.session_type.clone(), "unknown".to_string())
         };
 
-        // Extract topic from metadata_json
         let topic = meta
-            .metadata_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.get("topic").and_then(|t| t.as_str()).map(String::from));
+            .derived_title
+            .clone()
+            .or_else(|| {
+                meta.metadata_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| v.get("topic").and_then(|t| t.as_str()).map(String::from))
+            });
 
         SessionListRow {
             key: meta.key.clone(),
@@ -148,6 +167,11 @@ impl SessionsListTool {
             messages: None,
             agent_id: meta.agent_id.clone(),
             topic,
+            derived_title: meta.derived_title.clone(),
+            last_message_preview: meta.last_message_preview.clone(),
+            runtime_ms: meta.runtime_ms,
+            estimated_cost_usd: meta.estimated_cost_usd,
+            checkpoints: meta.checkpoints.clone(),
         }
     }
 }
@@ -179,11 +203,15 @@ impl AlephTool for SessionsListTool {
             "Listing sessions"
         );
 
-        // 1. Query all sessions from session manager
+        // 1. Query sessions from session store with filter
+        let filter = crate::gateway::session_store::types::SessionFilter {
+            active_minutes: args.active_minutes,
+            ..Default::default()
+        };
         let all_sessions = self
             .context
-            .session_manager()
-            .list_sessions(None)
+            .session_store()
+            .list_sessions(filter)
             .await
             .map_err(|e| {
                 let msg = format!("Failed to list sessions: {}", e);
@@ -234,22 +262,16 @@ impl AlephTool for SessionsListTool {
             "Sessions after kind filtering"
         );
 
-        // 5. Apply active_minutes filter if specified
-        if let Some(active_mins) = args.active_minutes {
-            let threshold = chrono::Utc::now().timestamp() - (active_mins as i64 * 60);
-            rows.retain(|row| row.updated_at.map(|ts| ts >= threshold).unwrap_or(false));
-        }
-
         debug!(
             after_time_filter = rows.len(),
             "Sessions after activity filtering"
         );
 
-        // 6. Apply limit
+        // 5. Apply limit
         let limit = args.limit.unwrap_or(50) as usize;
         rows.truncate(limit);
 
-        // 7. Optionally fetch messages
+        // 6. Optionally fetch messages
         let message_limit = args.message_limit.unwrap_or(0).min(20) as usize;
         if message_limit > 0 {
             for row in &mut rows {
@@ -259,7 +281,7 @@ impl AlephTool for SessionsListTool {
                 {
                     match self
                         .context
-                        .session_manager()
+                        .session_store()
                         .get_history(&legacy_key, Some(message_limit))
                         .await
                     {
@@ -441,7 +463,7 @@ mod tests {
         let context = create_test_context(temp.path().to_path_buf());
 
         // Create some sessions using the legacy SessionKey
-        let session_manager = context.session_manager();
+        let session_manager = context.session_store();
         let key1 = crate::gateway::router::SessionKey::main("main");
         let key2 = crate::gateway::router::SessionKey::task("main", "cron", "daily");
 
@@ -467,7 +489,7 @@ mod tests {
         let context = create_test_context(temp.path().to_path_buf());
 
         // Create sessions of different kinds
-        let session_manager = context.session_manager();
+        let session_manager = context.session_store();
         let key1 = crate::gateway::router::SessionKey::main("main");
         let key2 = crate::gateway::router::SessionKey::task("main", "cron", "daily");
 
@@ -495,7 +517,7 @@ mod tests {
         let context = create_test_context(temp.path().to_path_buf());
 
         // Create multiple sessions
-        let session_manager = context.session_manager();
+        let session_manager = context.session_store();
         for i in 0..5 {
             let key =
                 crate::gateway::router::SessionKey::task("main", "cron", format!("task-{}", i));
@@ -564,15 +586,41 @@ mod tests {
         let context = create_test_context(temp.path().to_path_buf());
 
         // Create a session with messages
-        let session_manager = context.session_manager();
+        let session_store = context.session_store();
         let key = crate::gateway::router::SessionKey::main("main");
-        session_manager.get_or_create(&key).await.unwrap();
-        session_manager
-            .add_message(&key, "user", "Hello")
+        session_store.get_or_create(&key).await.unwrap();
+        session_store
+            .append_message(
+                &key,
+                MessageRecord {
+                    id: "1".into(),
+                    role: "user".into(),
+                    content: "Hello".into(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    metadata: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: None,
+                    model_provider: None,
+                },
+            )
             .await
             .unwrap();
-        session_manager
-            .add_message(&key, "assistant", "Hi there!")
+        session_store
+            .append_message(
+                &key,
+                MessageRecord {
+                    id: "2".into(),
+                    role: "assistant".into(),
+                    content: "Hi there!".into(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    metadata: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: None,
+                    model_provider: None,
+                },
+            )
             .await
             .unwrap();
 

@@ -9,10 +9,8 @@ use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::session_manager::StoredMessage;
-
 use super::router::SessionKey;
-use super::session_manager::SessionManager;
+use super::session_store::SessionStore;
 
 /// Configuration for an agent instance
 #[derive(Debug, Clone)]
@@ -138,8 +136,8 @@ pub struct AgentInstance {
     state: Arc<RwLock<AgentState>>,
     /// Agent directory (contains workspace, config)
     agent_dir: PathBuf,
-    /// Session manager for SQLite persistence
-    session_manager: Arc<SessionManager>,
+    /// Session store for persistence
+    session_store: Arc<dyn SessionStore>,
 }
 
 /// A message in a session
@@ -160,10 +158,10 @@ pub enum MessageRole {
 }
 
 impl AgentInstance {
-    /// Create a new agent instance with SessionManager for SQLite persistence
+    /// Create a new agent instance with a session store
     pub fn new(
         config: AgentInstanceConfig,
-        session_manager: Arc<SessionManager>,
+        session_store: Arc<dyn SessionStore>,
     ) -> Result<Self, AgentInstanceError> {
         let agent_dir = config.agent_dir.clone();
 
@@ -185,7 +183,7 @@ impl AgentInstance {
         }
 
         info!(
-            "Created agent instance '{}' at {:?} (SQLite persistence)",
+            "Created agent instance '{}' at {:?}",
             config.agent_id, agent_dir
         );
 
@@ -193,7 +191,7 @@ impl AgentInstance {
             config,
             state: Arc::new(RwLock::new(AgentState::Idle)),
             agent_dir,
-            session_manager,
+            session_store,
         })
     }
 
@@ -245,9 +243,9 @@ impl AgentInstance {
         *state = new_state;
     }
 
-    /// Get or create a session (delegated to SessionManager / SQLite)
+    /// Get or create a session (delegated to session store)
     pub async fn get_or_create_session(&self, key: &SessionKey) -> SessionInfo {
-        match self.session_manager.get_or_create(key).await {
+        match self.session_store.get_or_create(key).await {
             Ok(meta) => SessionInfo::from_metadata(&meta),
             Err(e) => {
                 warn!("Failed to get_or_create session: {}", e);
@@ -264,14 +262,14 @@ impl AgentInstance {
         }
     }
 
-    /// Ensure a session exists in SQLite.
+    /// Ensure a session exists.
     pub async fn ensure_session(&self, key: &SessionKey) {
-        if let Err(e) = self.session_manager.get_or_create(key).await {
-            warn!("Failed to ensure session in SessionManager: {}", e);
+        if let Err(e) = self.session_store.get_or_create(key).await {
+            warn!("Failed to ensure session in store: {}", e);
         }
     }
 
-    /// Add a message to a session (delegated to SessionManager / SQLite)
+    /// Add a message to a session (delegated to session store)
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
         let key_str = key.to_key_string();
         let role_str = match role {
@@ -282,35 +280,48 @@ impl AgentInstance {
         };
 
         // Ensure session exists, then add message
-        if let Err(e) = self.session_manager.get_or_create(key).await {
-            warn!("Failed to ensure session in SessionManager: {}", e);
+        if let Err(e) = self.session_store.get_or_create(key).await {
+            warn!("Failed to ensure session in store: {}", e);
         }
         if let Err(e) = self
-            .session_manager
-            .add_message(key, role_str, content)
+            .session_store
+            .append_message(
+                key,
+                crate::gateway::session_store::types::MessageRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    role: role_str.to_string(),
+                    content: content.to_string(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    metadata: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: None,
+                    model_provider: None,
+                },
+            )
             .await
         {
-            warn!("Failed to persist message to SQLite '{}': {}", key_str, e);
+            warn!("Failed to persist message to store '{}': {}", key_str, e);
         }
     }
 
-    /// Get session history (delegated to SessionManager / SQLite)
+    /// Get session history (delegated to session store)
     pub async fn get_history(&self, key: &SessionKey, limit: Option<usize>) -> Vec<SessionMessage> {
-        match self.session_manager.get_history(key, limit).await {
+        match self.session_store.get_history(key, limit).await {
             Ok(stored) => stored
                 .into_iter()
-                .map(SessionMessage::from_stored)
+                .map(SessionMessage::from_record)
                 .collect(),
             Err(e) => {
-                warn!("Failed to get history from SessionManager: {}", e);
+                warn!("Failed to get history from store: {}", e);
                 Vec::new()
             }
         }
     }
 
-    /// Reset (clear) a session (delegated to SessionManager / SQLite)
+    /// Reset (clear) a session (delegated to session store)
     pub async fn reset_session(&self, key: &SessionKey) -> bool {
-        match self.session_manager.reset_session(key).await {
+        match self.session_store.reset_session(key).await {
             Ok(deleted) => {
                 debug!("Reset session: {}", key.to_key_string());
                 deleted
@@ -322,11 +333,14 @@ impl AgentInstance {
         }
     }
 
-    /// List all sessions for this agent (delegated to SessionManager / SQLite)
+    /// List all sessions for this agent (delegated to session store)
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         match self
-            .session_manager
-            .list_sessions(Some(&self.config.agent_id))
+            .session_store
+            .list_sessions(crate::gateway::session_store::types::SessionFilter {
+                agent_id: Some(self.config.agent_id.clone()),
+                ..Default::default()
+            })
             .await
         {
             Ok(metas) => metas.iter().map(SessionInfo::from_metadata).collect(),
@@ -373,8 +387,8 @@ pub struct SessionInfo {
 }
 
 impl SessionInfo {
-    /// Construct from SessionMetadata (SQLite)
-    fn from_metadata(meta: &super::session_manager::SessionMetadata) -> Self {
+    /// Construct from SessionMetadata
+    fn from_metadata(meta: &super::session_store::types::SessionMetadata) -> Self {
         Self {
             key: meta.key.clone(),
             agent_id: meta.agent_id.clone(),
@@ -388,9 +402,9 @@ impl SessionInfo {
 }
 
 impl SessionMessage {
-    /// Convert from StoredMessage (SQLite) to SessionMessage
-    fn from_stored(stored: StoredMessage) -> Self {
-        let role = match stored.role.as_str() {
+    /// Convert from MessageRecord to SessionMessage
+    fn from_record(record: super::session_store::types::MessageRecord) -> Self {
+        let role = match record.role.as_str() {
             "user" => MessageRole::User,
             "assistant" => MessageRole::Assistant,
             "system" => MessageRole::System,
@@ -398,13 +412,13 @@ impl SessionMessage {
             _ => MessageRole::User,
         };
         let timestamp =
-            chrono::DateTime::from_timestamp(stored.timestamp, 0).unwrap_or_else(chrono::Utc::now);
-        let metadata = stored
-            .metadata
-            .and_then(|json_str| serde_json::from_str::<HashMap<String, String>>(&json_str).ok());
+            chrono::DateTime::from_timestamp(record.timestamp, 0).unwrap_or_else(chrono::Utc::now);
+        let metadata = record.metadata.and_then(|v| {
+            serde_json::from_value::<HashMap<String, String>>(v).ok()
+        });
         Self {
             role,
-            content: stored.content,
+            content: record.content,
             timestamp,
             metadata,
         }
@@ -433,7 +447,7 @@ enum AgentEntry {
     /// Registered but not yet instantiated
     Config {
         config: AgentInstanceConfig,
-        session_manager: Arc<SessionManager>,
+        session_store: Arc<dyn SessionStore>,
     },
     /// Fully instantiated
     Instance(Arc<AgentInstance>),
@@ -466,7 +480,7 @@ impl AgentRegistry {
     pub async fn register_config(
         &self,
         config: AgentInstanceConfig,
-        session_manager: Arc<SessionManager>,
+        session_store: Arc<dyn SessionStore>,
     ) {
         let id = config.agent_id.clone();
         let mut agents = self.agents.write().await;
@@ -474,7 +488,7 @@ impl AgentRegistry {
             id.clone(),
             AgentEntry::Config {
                 config,
-                session_manager,
+                session_store,
             },
         );
         info!("Registered agent config (lazy): {}", id);
@@ -505,16 +519,16 @@ impl AgentRegistry {
 
         // Take the Config entry out to consume it
         let entry = agents.remove(agent_id)?;
-        let (config, session_manager) = match entry {
+        let (config, session_store) = match entry {
             AgentEntry::Config {
                 config,
-                session_manager,
-            } => (config, session_manager),
+                session_store,
+            } => (config, session_store),
             AgentEntry::Instance(_) => unreachable!("checked above"),
         };
 
         let id = config.agent_id.clone();
-        match AgentInstance::new(config, session_manager) {
+        match AgentInstance::new(config, session_store) {
             Ok(instance) => {
                 let arc = Arc::new(instance);
                 agents.insert(id, AgentEntry::Instance(Arc::clone(&arc)));
@@ -612,7 +626,7 @@ impl AgentRegistry {
         &self,
         id: &str,
         soul_content: &str,
-        session_manager: Arc<super::session_manager::SessionManager>,
+        session_store: Arc<dyn SessionStore>,
     ) -> Result<Arc<AgentInstance>, AgentInstanceError> {
         // Check existence (works for both Config and Instance entries)
         {
@@ -663,7 +677,7 @@ impl AgentRegistry {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config, session_manager)?;
+        let instance = AgentInstance::new(config, session_store)?;
         let arc = Arc::new(instance);
         {
             let mut agents = self.agents.write().await;
@@ -683,22 +697,24 @@ impl Default for AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+    use crate::gateway::session_store::sqlite_backend::{
+        SqliteSessionStore, SqliteSessionStoreConfig,
+    };
     use tempfile::tempdir;
 
-    /// Create a test SessionManager backed by a temporary SQLite database.
-    fn test_session_manager(temp: &tempfile::TempDir) -> Arc<SessionManager> {
-        let config = SessionManagerConfig {
+    /// Create a test session store backed by a temporary SQLite database.
+    fn test_session_store(temp: &tempfile::TempDir) -> Arc<dyn SessionStore> {
+        let config = SqliteSessionStoreConfig {
             db_path: temp.path().join("test_sessions.db"),
             ..Default::default()
         };
-        Arc::new(SessionManager::new(config).expect("test session manager"))
+        Arc::new(SqliteSessionStore::new(config).expect("test session store"))
     }
 
     #[tokio::test]
     async fn test_agent_instance_creation() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
         let config = AgentInstanceConfig {
             agent_id: "test-agent".to_string(),
             workspace: temp.path().join("workspace"),
@@ -714,7 +730,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_management() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
         let config = AgentInstanceConfig {
             agent_id: "test".to_string(),
             workspace: temp.path().join("workspace"),
@@ -747,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_filtering() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
 
         // Test with whitelist
         let config = AgentInstanceConfig {
@@ -779,7 +795,7 @@ mod tests {
     #[tokio::test]
     async fn test_agent_registry() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
 
         let registry = AgentRegistry::new();
 
@@ -804,7 +820,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_dynamic_agent() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
         let registry = AgentRegistry::new();
 
         // Manually create an agent to simulate create_dynamic without polluting ~/.aleph
@@ -825,7 +841,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_dynamic_already_exists() {
         let temp = tempdir().unwrap();
-        let sm = test_session_manager(&temp);
+        let sm = test_session_store(&temp);
         let registry = AgentRegistry::new();
         let config = AgentInstanceConfig {
             agent_id: "main".to_string(),

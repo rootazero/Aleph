@@ -147,20 +147,20 @@ pub struct AgentCreateTool {
     #[allow(dead_code)]
     workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
-    session_manager: Arc<crate::gateway::session_manager::SessionManager>,
+    session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
 }
 
 impl AgentCreateTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<AgentEnvStore>,
-        session_manager: Arc<crate::gateway::session_manager::SessionManager>,
+        session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
     ) -> Self {
         Self {
             registry,
             workspace_mgr,
             agent_manager: None,
-            session_manager,
+            session_store,
         }
     }
 
@@ -331,7 +331,7 @@ impl AlephTool for AgentCreateTool {
         };
 
         let instance =
-            AgentInstance::new(config, Arc::clone(&self.session_manager)).map_err(|e| {
+            AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
                 crate::error::AlephError::other(format!(
                     "Failed to create agent instance '{}': {}",
                     args.id, e

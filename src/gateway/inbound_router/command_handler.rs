@@ -117,7 +117,7 @@ impl InboundMessageRouter {
 
         // Resolve the actual current epoch from DB (old_key may already have it
         // from routing, but query to be safe in case the epoch was advanced externally)
-        let current_epoch = if let Some(ref sm) = self.session_manager {
+        let current_epoch = if let Some(ref sm) = self.session_store {
             let base = old_key.base_key_pattern();
             sm.get_current_epoch(&base).await.unwrap_or(old_key.epoch())
         } else {
@@ -129,15 +129,15 @@ impl InboundMessageRouter {
         let topic = self.generate_session_topic(&old_key_resolved).await;
 
         // Close old session in database
-        if let Some(ref sm) = self.session_manager {
-            if let Err(e) = sm.close_session(&old_key_resolved, topic.clone()).await {
+        if let Some(ref sm) = self.session_store {
+            if let Err(e) = sm.close_session(&old_key_resolved, topic.as_deref()).await {
                 warn!("[Router] Failed to close session: {}", e);
             }
         }
 
         // Create new session with next epoch
         let new_key = old_key.with_epoch(current_epoch + 1);
-        if let Some(ref sm) = self.session_manager {
+        if let Some(ref sm) = self.session_store {
             if let Err(e) = sm.get_or_create(&new_key).await {
                 warn!("[Router] Failed to create new session: {}", e);
             }
@@ -163,7 +163,7 @@ impl InboundMessageRouter {
 
     /// Generate a topic summary for the current session using LLM
     pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
-        let sm = self.session_manager.as_ref()?;
+        let sm = self.session_store.as_ref()?;
         let llm = self.llm_provider.as_ref()?;
 
         // Get recent history

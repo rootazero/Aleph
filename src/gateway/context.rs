@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 use super::agent_instance::AgentRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::inter_agent_policy::AgentToAgentPolicy;
-use super::session_manager::SessionManager;
+use super::session_store::SessionStore;
 
 /// Gateway context containing references to core components.
 ///
@@ -20,14 +20,14 @@ use super::session_manager::SessionManager;
 ///
 /// ```rust,ignore
 /// use alephcore::gateway::{
-///     GatewayContext, SessionManager, AgentRegistry,
+///     GatewayContext, SessionStore, AgentRegistry,
 ///     ExecutionAdapter, AgentToAgentPolicy,
 /// };
 /// use std::sync::Arc;
 ///
 /// // Create context from existing components
 /// let context = GatewayContext::new(
-///     session_manager,
+///     session_store,
 ///     agent_registry,
 ///     execution_adapter,
 ///     a2a_policy,
@@ -38,8 +38,8 @@ use super::session_manager::SessionManager;
 /// ```
 #[derive(Clone)]
 pub struct GatewayContext {
-    /// Session manager for persisting and querying sessions
-    session_manager: Arc<SessionManager>,
+    /// Session store for persisting and querying sessions
+    session_store: Arc<dyn SessionStore>,
 
     /// Registry of all agent instances
     agent_registry: Arc<AgentRegistry>,
@@ -56,27 +56,27 @@ impl GatewayContext {
     ///
     /// # Arguments
     ///
-    /// * `session_manager` - Session manager for session persistence
+    /// * `session_store` - Session store for session persistence
     /// * `agent_registry` - Registry of agent instances
     /// * `execution_adapter` - Adapter for executing agent runs
     /// * `a2a_policy` - Policy for agent-to-agent communication
     pub fn new(
-        session_manager: Arc<SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         agent_registry: Arc<AgentRegistry>,
         execution_adapter: Arc<dyn ExecutionAdapter>,
         a2a_policy: Arc<AgentToAgentPolicy>,
     ) -> Self {
         Self {
-            session_manager,
+            session_store,
             agent_registry,
             execution_adapter,
             a2a_policy,
         }
     }
 
-    /// Get a reference to the session manager.
-    pub fn session_manager(&self) -> &Arc<SessionManager> {
-        &self.session_manager
+    /// Get a reference to the session store.
+    pub fn session_store(&self) -> &Arc<dyn SessionStore> {
+        &self.session_store
     }
 
     /// Get a reference to the agent registry.
@@ -98,7 +98,7 @@ impl GatewayContext {
 impl std::fmt::Debug for GatewayContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayContext")
-            .field("session_manager", &"Arc<SessionManager>")
+            .field("session_store", &"Arc<dyn SessionStore>")
             .field("agent_registry", &"Arc<AgentRegistry>")
             .field("execution_adapter", &"Arc<dyn ExecutionAdapter>")
             .field("a2a_policy", &self.a2a_policy)
@@ -112,7 +112,9 @@ mod tests {
     use crate::gateway::agent_instance::AgentInstance;
     use crate::gateway::event_emitter::EventEmitter;
     use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
-    use crate::gateway::session_manager::SessionManagerConfig;
+    use crate::gateway::session_store::sqlite_backend::{
+        SqliteSessionStore, SqliteSessionStoreConfig,
+    };
     use async_trait::async_trait;
     use tempfile::tempdir;
 
@@ -154,11 +156,12 @@ mod tests {
     async fn test_gateway_context_creation() {
         let temp = tempdir().unwrap();
 
-        let session_config = SessionManagerConfig {
+        let session_config = SqliteSessionStoreConfig {
             db_path: temp.path().join("sessions.db"),
             ..Default::default()
         };
-        let session_manager = Arc::new(SessionManager::new(session_config).unwrap());
+        let session_store: Arc<dyn SessionStore> =
+            Arc::new(SqliteSessionStore::new(session_config).unwrap());
 
         let agent_registry = Arc::new(AgentRegistry::new());
 
@@ -167,14 +170,14 @@ mod tests {
         let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
 
         let context = GatewayContext::new(
-            session_manager.clone(),
+            Arc::clone(&session_store),
             agent_registry.clone(),
             execution_adapter.clone(),
             a2a_policy.clone(),
         );
 
         // Verify getters return the same Arc instances
-        assert!(Arc::ptr_eq(context.session_manager(), &session_manager));
+        assert!(Arc::ptr_eq(context.session_store(), &session_store));
         assert!(Arc::ptr_eq(context.agent_registry(), &agent_registry));
         assert!(Arc::ptr_eq(context.a2a_policy(), &a2a_policy));
     }
@@ -183,17 +186,18 @@ mod tests {
     async fn test_gateway_context_clone() {
         let temp = tempdir().unwrap();
 
-        let session_config = SessionManagerConfig {
+        let session_config = SqliteSessionStoreConfig {
             db_path: temp.path().join("sessions.db"),
             ..Default::default()
         };
-        let session_manager = Arc::new(SessionManager::new(session_config).unwrap());
+        let session_store: Arc<dyn SessionStore> =
+            Arc::new(SqliteSessionStore::new(session_config).unwrap());
         let agent_registry = Arc::new(AgentRegistry::new());
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
 
         let context = GatewayContext::new(
-            session_manager.clone(),
+            Arc::clone(&session_store),
             agent_registry.clone(),
             execution_adapter.clone(),
             a2a_policy.clone(),
@@ -202,10 +206,7 @@ mod tests {
         let cloned = context.clone();
 
         // Both should point to the same underlying resources
-        assert!(Arc::ptr_eq(
-            context.session_manager(),
-            cloned.session_manager()
-        ));
+        assert!(Arc::ptr_eq(context.session_store(), cloned.session_store()));
         assert!(Arc::ptr_eq(
             context.agent_registry(),
             cloned.agent_registry()
@@ -217,17 +218,18 @@ mod tests {
     fn test_gateway_context_debug() {
         let temp = tempdir().unwrap();
 
-        let session_config = SessionManagerConfig {
+        let session_config = SqliteSessionStoreConfig {
             db_path: temp.path().join("sessions.db"),
             ..Default::default()
         };
-        let session_manager = Arc::new(SessionManager::new(session_config).unwrap());
+        let session_store: Arc<dyn SessionStore> =
+            Arc::new(SqliteSessionStore::new(session_config).unwrap());
         let agent_registry = Arc::new(AgentRegistry::new());
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
 
         let context = GatewayContext::new(
-            session_manager,
+            session_store,
             agent_registry,
             execution_adapter,
             a2a_policy,
@@ -235,7 +237,7 @@ mod tests {
 
         let debug_str = format!("{:?}", context);
         assert!(debug_str.contains("GatewayContext"));
-        assert!(debug_str.contains("session_manager"));
+        assert!(debug_str.contains("session_store"));
         assert!(debug_str.contains("agent_registry"));
         assert!(debug_str.contains("execution_adapter"));
         assert!(debug_str.contains("a2a_policy"));

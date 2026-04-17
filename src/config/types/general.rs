@@ -49,6 +49,13 @@ pub struct GeneralConfig {
     /// these providers are tried in order. Names must match keys in [providers].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallback_providers: Vec<String>,
+    /// Session store backend: "sqlite" (default) or "file".
+    #[serde(default = "default_session_store_backend")]
+    pub session_store_backend: String,
+}
+
+fn default_session_store_backend() -> String {
+    "file".to_string()
 }
 
 /// Legacy default hotkey - kept for backward compatibility with old config files

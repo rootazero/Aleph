@@ -124,7 +124,7 @@ impl InboundMessageRouter {
 
         // Resolve current epoch from session manager so messages route to
         // the latest session created by /new
-        let session_key = if let Some(ref sm) = self.session_manager {
+        let session_key = if let Some(ref sm) = self.session_store {
             let base_pattern = base_key.base_key_pattern();
             match sm.get_current_epoch(&base_pattern).await {
                 Ok(epoch) if epoch > 0 => base_key.with_epoch(epoch),

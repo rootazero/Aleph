@@ -1,14 +1,15 @@
-//! Database-backed session handlers using SessionManager.
+//! Session handlers operating against the SessionStore trait.
 //!
-//! All `handle_*_db` functions operate against the SQLite-backed SessionManager
-//! for production use.
+//! All `handle_*_db` functions operate against any `SessionStore` implementation
+//! (SQLite or file backend) for production use.
 
 use crate::sync_primitives::Arc;
 use serde_json::{json, Value};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
-use crate::gateway::session_manager::SessionManager;
+use crate::gateway::session_store::types::SessionFilter;
+use crate::gateway::session_store::SessionStore;
 
 /// Session information returned by list handlers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -71,7 +72,7 @@ pub struct HistoryMessage {
 /// Handle sessions.list RPC request with database backend
 pub async fn handle_list_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let agent_id = request
         .params
@@ -79,7 +80,11 @@ pub async fn handle_list_db(
         .and_then(|p| p.get("agent_id"))
         .and_then(|v| v.as_str());
 
-    match manager.list_sessions(agent_id).await {
+    let filter = SessionFilter {
+        agent_id: agent_id.map(|s| s.to_string()),
+        ..Default::default()
+    };
+    match manager.list_sessions(filter).await {
         Ok(sessions) => {
             let infos: Vec<SessionInfo> = sessions
                 .into_iter()
@@ -141,7 +146,7 @@ pub async fn handle_list_db(
 /// Handle sessions.history RPC request with database backend
 pub async fn handle_history_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -184,9 +189,7 @@ pub async fn handle_history_db(
                     timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
-                    metadata: m
-                        .metadata
-                        .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null)),
+                    metadata: m.metadata,
                 })
                 .collect();
             let count = history.len();
@@ -210,7 +213,7 @@ pub async fn handle_history_db(
 /// Handle sessions.reset RPC request with database backend
 pub async fn handle_reset_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let session_key_str = match &request.params {
         Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
@@ -252,7 +255,7 @@ pub async fn handle_reset_db(
 /// Handle sessions.delete RPC request with database backend
 pub async fn handle_delete_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let session_key_str = match &request.params {
         Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
@@ -273,11 +276,11 @@ pub async fn handle_delete_db(
             };
 
             match manager.delete_session(&session_key).await {
-                Ok(deleted) => JsonRpcResponse::success(
+                Ok(result) => JsonRpcResponse::success(
                     request.id,
                     json!({
                         "session_key": key_str,
-                        "deleted": deleted,
+                        "deleted": result.deleted,
                     }),
                 ),
                 Err(e) => JsonRpcResponse::error(
@@ -294,7 +297,7 @@ pub async fn handle_delete_db(
 /// Handle sessions.patch RPC request with database backend
 pub async fn handle_patch_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -351,7 +354,7 @@ pub async fn handle_patch_db(
 /// Handle sessions.preview RPC request with database backend
 pub async fn handle_preview_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -396,9 +399,7 @@ pub async fn handle_preview_db(
                         "timestamp": chrono::DateTime::from_timestamp(m.timestamp, 0)
                             .map(|dt| dt.to_rfc3339())
                             .unwrap_or_default(),
-                        "metadata": m.metadata.map(|s| {
-                            serde_json::from_str(&s).unwrap_or(Value::Null)
-                        }),
+                        "metadata": m.metadata,
                     })
                 })
                 .collect();
@@ -418,6 +419,18 @@ pub async fn handle_preview_db(
                     "model_provider": m.model_provider,
                     "parent_session_key": m.parent_session_key,
                     "compaction_count": m.compaction_count,
+                    "derived_title": m.derived_title,
+                    "last_message_preview": m.last_message_preview,
+                    "runtime_ms": m.runtime_ms,
+                    "estimated_cost_usd": m.estimated_cost_usd,
+                    "checkpoints": m.checkpoints.into_iter().map(|c| json!({
+                        "checkpoint_id": c.checkpoint_id,
+                        "created_at": chrono::DateTime::from_timestamp(c.created_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        "message_count": c.message_count,
+                        "retained_message_count": c.retained_message_count,
+                    })).collect::<Vec<_>>(),
                     "created_at": chrono::DateTime::from_timestamp(m.created_at, 0)
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
@@ -448,7 +461,7 @@ pub async fn handle_preview_db(
 /// Handle session.usage RPC request with database backend
 pub async fn handle_usage_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let session_key = match request
         .params
@@ -461,7 +474,7 @@ pub async fn handle_usage_db(
     };
 
     // Get session metadata for usage stats
-    match manager.list_sessions(None).await {
+    match manager.list_sessions(SessionFilter::default()).await {
         Ok(sessions) => {
             let session_meta = sessions.iter().find(|s| s.key == session_key);
 
@@ -507,7 +520,7 @@ pub async fn handle_usage_db(
 /// Creates a new session and returns the session key and optional name.
 pub async fn handle_create_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let name = request
         .params
@@ -553,7 +566,7 @@ pub async fn handle_create_db(
 ///   - topic: the topic stored (if any)
 pub async fn handle_new_session_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     use crate::routing::session_key::SessionKey as RoutingKey;
 
@@ -587,7 +600,7 @@ pub async fn handle_new_session_db(
     };
 
     // Close old session
-    if let Err(e) = manager.close_session(&legacy_key, topic.clone()).await {
+    if let Err(e) = manager.close_session(&legacy_key, topic.as_deref()).await {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -633,7 +646,7 @@ pub async fn handle_new_session_db(
 /// Handle session.compact RPC request with database backend
 pub async fn handle_compact_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let session_key = match request
         .params
@@ -663,16 +676,16 @@ pub async fn handle_compact_db(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    match manager.compact_session(&key).await {
-        Ok(deleted) => {
-            let after_msgs = before_msgs.saturating_sub(deleted);
-            let tokens_saved = deleted * 50; // rough estimate per message
+    match manager.compact(&key, crate::gateway::session_store::types::CompactStrategy::KeepLastN { n: 50 }).await {
+        Ok(result) => {
+            let after_msgs = before_msgs.saturating_sub(result.deleted);
+            let tokens_saved = result.deleted * 50; // rough estimate per message
 
             JsonRpcResponse::success(
                 request.id,
                 json!({
-                    "message": if deleted > 0 {
-                        format!("Compacted {} messages.", deleted)
+                    "message": if result.deleted > 0 {
+                        format!("Compacted {} messages.", result.deleted)
                     } else {
                         "Session is already compact.".to_string()
                     },
@@ -695,7 +708,7 @@ pub async fn handle_compact_db(
 ///   - topic (required): new topic string (max 100 chars)
 pub async fn handle_set_topic_db(
     request: JsonRpcRequest,
-    manager: Arc<SessionManager>,
+    manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -752,6 +765,192 @@ pub async fn handle_set_topic_db(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to set topic: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.compaction.list RPC request
+pub async fn handle_list_checkpoints_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let session_key = match request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("session_key"))
+        .and_then(|v| v.as_str())
+    {
+        Some(k) => k.to_string(),
+        None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key"),
+    };
+
+    let key = match SessionKey::from_key_string(&session_key) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.list_checkpoints(&key).await {
+        Ok(checkpoints) => {
+            let items: Vec<Value> = checkpoints
+                .into_iter()
+                .map(|c| {
+                    json!({
+                        "checkpoint_id": c.checkpoint_id,
+                        "created_at": chrono::DateTime::from_timestamp(c.created_at, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_default(),
+                        "message_count": c.message_count,
+                        "retained_message_count": c.retained_message_count,
+                    })
+                })
+                .collect();
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "session_key": session_key,
+                    "checkpoints": items,
+                }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to list checkpoints: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.compaction.restore RPC request
+pub async fn handle_restore_checkpoint_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let checkpoint_id = match params.get("checkpoint_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing checkpoint_id");
+        }
+    };
+
+    let key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    match manager.restore_checkpoint(&key, checkpoint_id).await {
+        Ok(meta) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key_str,
+                "checkpoint_id": checkpoint_id,
+                "message_count": meta.message_count,
+                "updated": true,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to restore checkpoint: {}", e),
+        ),
+    }
+}
+
+/// Handle sessions.compaction.branch RPC request
+pub async fn handle_branch_checkpoint_db(
+    request: JsonRpcRequest,
+    manager: Arc<dyn SessionStore>,
+) -> JsonRpcResponse {
+    let params = match &request.params {
+        Some(Value::Object(map)) => map,
+        _ => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
+        }
+    };
+
+    let session_key_str = match params.get("session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing session_key");
+        }
+    };
+
+    let checkpoint_id = match params.get("checkpoint_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing checkpoint_id");
+        }
+    };
+
+    let new_session_key_str = match params.get("new_session_key").and_then(|v| v.as_str()) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing new_session_key");
+        }
+    };
+
+    let key = match SessionKey::from_key_string(session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
+        }
+    };
+
+    let new_key = match SessionKey::from_key_string(new_session_key_str) {
+        Some(k) => k,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid new_session_key format",
+            );
+        }
+    };
+
+    match manager.branch_from_checkpoint(&key, checkpoint_id, &new_key).await {
+        Ok(meta) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "session_key": session_key_str,
+                "checkpoint_id": checkpoint_id,
+                "new_session_key": new_session_key_str,
+                "message_count": meta.message_count,
+                "created": true,
+            }),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to branch checkpoint: {}", e),
         ),
     }
 }

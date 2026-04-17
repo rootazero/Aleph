@@ -12,7 +12,7 @@ use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::gateway::router::SessionKey as LegacySessionKey;
-use crate::gateway::SessionManager;
+use crate::gateway::session_store::SessionStore;
 use crate::routing::session_key::SessionKey as RoutingSessionKey;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -47,12 +47,12 @@ pub struct SessionNewOutput {
 /// Tool that creates a new conversation session.
 #[derive(Clone)]
 pub struct SessionNewTool {
-    session_manager: Arc<SessionManager>,
+    session_store: Arc<dyn SessionStore>,
 }
 
 impl SessionNewTool {
-    pub fn new(session_manager: Arc<SessionManager>) -> Self {
-        Self { session_manager }
+    pub fn new(session_store: Arc<dyn SessionStore>) -> Self {
+        Self { session_store }
     }
 }
 
@@ -96,8 +96,8 @@ impl AlephTool for SessionNewTool {
         let legacy_key = LegacySessionKey::from_key_string(session_key_str);
         if let Some(ref lk) = legacy_key {
             if let Err(e) = self
-                .session_manager
-                .close_session(lk, args.topic.clone())
+                .session_store
+                .close_session(lk, args.topic.as_deref())
                 .await
             {
                 warn!("session_new: failed to close old session: {}", e);
@@ -108,7 +108,7 @@ impl AlephTool for SessionNewTool {
         let new_routing_key = routing_key.with_next_epoch();
         let new_key_str = new_routing_key.to_key_string();
         let new_legacy = LegacySessionKey::from_new(&new_routing_key);
-        if let Err(e) = self.session_manager.get_or_create(&new_legacy).await {
+        if let Err(e) = self.session_store.get_or_create(&new_legacy).await {
             warn!("session_new: failed to create new session: {}", e);
         }
 
@@ -136,7 +136,7 @@ impl AlephTool for SessionNewTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::session_manager::SessionManagerConfig;
+    use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::tools::AlephTool;
     use tempfile::tempdir;
 

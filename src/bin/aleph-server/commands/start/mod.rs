@@ -156,32 +156,71 @@ fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
     (full_config, final_bind, final_port, final_max_connections)
 }
 
-/// Initialize the SessionManager with SQLite persistence, falling back to a
-/// temporary path on error.
-async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
-    match SessionManager::with_defaults() {
-        Ok(sm) => {
-            if !daemon {
-                println!("Session manager initialized (SQLite persistence)");
-            }
-            Arc::new(sm)
-        }
-        Err(e) => {
-            eprintln!(
-                "Warning: Failed to initialize session manager: {}. Using temp storage.",
-                e
-            );
-            let temp_path = std::env::temp_dir().join("aleph_sessions.db");
-            match SessionManager::new(SessionManagerConfig {
-                db_path: temp_path,
-                ..Default::default()
-            }) {
-                Ok(sm) => Arc::new(sm),
-                Err(e2) => {
-                    eprintln!("Error: Could not create fallback session manager: {}", e2);
+use alephcore::gateway::session_store::SessionStore;
+
+/// Initialize the session store backend based on configuration.
+/// Defaults to SQLite; "file" enables the JSON/JSONL file backend.
+/// Returns the trait object and an optional owned SessionManager for SQLite
+/// so the caller can attach raw-memory writer and event bus before wrapping.
+async fn initialize_session_store(
+    daemon: bool,
+    backend: &str,
+    event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+) -> (Arc<dyn SessionStore>, Option<SessionManager>) {
+    match backend {
+        "file" => {
+            let config = alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
+            match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
+                Ok(mut store) => {
+                    store = store.with_event_bus(event_bus.clone());
+                    if alephcore::gateway::session_store::migration::migration_needed(
+                        &store.config().base_dir,
+                    ) {
+                        if !daemon {
+                            println!("Migrating legacy SQLite sessions to file backend ...");
+                        }
+                        if let Err(e) = alephcore::gateway::session_store::migration::export_legacy_messages(&store).await {
+                            eprintln!("Warning: Session migration failed: {}", e);
+                        }
+                    }
+                    if !daemon {
+                        println!("Session store initialized (file backend)");
+                    }
+                    (Arc::new(store), None)
+                }
+                Err(e) => {
+                    eprintln!("Error: Failed to initialize file session store: {}", e);
                     std::process::exit(1);
                 }
             }
+        }
+        _ => {
+            // SQLite default
+            let sm = match SessionManager::with_defaults() {
+                Ok(sm) => sm,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to initialize SQLite session store: {}. Using temp storage.",
+                        e
+                    );
+                    let temp_path = std::env::temp_dir().join("aleph_sessions.db");
+                    match SessionManager::new(SessionManagerConfig {
+                        db_path: temp_path,
+                        ..Default::default()
+                    }) {
+                        Ok(sm) => sm,
+                        Err(e2) => {
+                            eprintln!("Error: Could not create fallback session store: {}", e2);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            };
+            if !daemon {
+                println!("Session store initialized (SQLite backend)");
+            }
+            let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
+            (dyn_store, Some(sm))
         }
     }
 }
@@ -332,7 +371,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 
-    let session_manager = initialize_session_manager(args.daemon).await;
+    // Load app config early so we can pick the session store backend
+    let mut loaded_app_config = load_app_config();
 
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
@@ -374,18 +414,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let event_bus = server.event_bus().clone();
 
+    let (session_store, sqlite_sm) =
+        initialize_session_store(args.daemon, &loaded_app_config.general.session_store_backend, event_bus.clone()).await;
+
     // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
     // disconnect hook captures session-end events (Task 8).
-    // Attach after memory_db is initialised — session_manager was created earlier
-    // without a writer because memory_db wasn't available yet.
-    let session_manager = Arc::new(
-        Arc::try_unwrap(session_manager)
-            .unwrap_or_else(|_| panic!("session_manager has no other owners at this point"))
-            .with_raw_memory_writer(
-                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
+    // Only applicable for the SQLite backend; file backend skips this step.
+    let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
+        Arc::new(
+            sm.with_raw_memory_writer(
+                memory_db.clone()
+                    as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
             )
             .with_event_bus(event_bus.clone()),
-    );
+        )
+    } else {
+        session_store
+    };
 
     // Auth subsystem construction (early — vault needed for API key resolution)
     let auth_bundle = initialize_auth(
@@ -402,9 +447,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &event_bus,
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
-
-    // Load app config early so agent handlers can use configured providers
-    let mut loaded_app_config = load_app_config();
 
     // Resolve API keys from vault into runtime Config (api_key is #[serde(skip)], never persisted)
     {
@@ -498,7 +540,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let router = {
         let mut r =
             AgentRouter::from_bindings(loaded_app_config.bindings.clone(), &default_agent_id);
-        r.set_session_manager(session_manager.clone());
+        r.set_session_store(session_store.clone());
         Arc::new(r)
     };
 
@@ -654,7 +696,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let agent_result = register_agent_handlers(
         &mut server,
-        session_manager.clone(),
+        session_store.clone(),
         event_bus.clone(),
         router.clone(),
         &full_config,
@@ -720,7 +762,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         acp_manager.clone(),
     );
 
-    register_session_handlers(&mut server, &session_manager, args.daemon);
+    register_session_handlers(&mut server, &session_store, args.daemon);
     register_memory_handlers(
         &mut server,
         &memory_db,
@@ -1163,7 +1205,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         workspace_manager,
         agent_result.default_provider,
         agent_result.dispatch_registry,
-        Some(session_manager.clone()),
+        Some(session_store.clone()),
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),

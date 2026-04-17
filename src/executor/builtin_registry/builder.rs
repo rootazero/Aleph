@@ -318,7 +318,7 @@ impl BuiltinToolRegistry {
                 let sm_for_agents = config
                     .gateway_context
                     .as_ref()
-                    .map(|ctx| Arc::clone(ctx.session_manager()))
+                    .map(|ctx| Arc::clone(ctx.session_store()))
                     .or_else(|| config.session_manager.clone())
                     .unwrap_or_else(|| {
                         Arc::new(
@@ -489,7 +489,7 @@ impl BuiltinToolRegistry {
             let sm_for_teams = config
                 .gateway_context
                 .as_ref()
-                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .unwrap_or_else(|| {
                     Arc::new(
@@ -915,13 +915,13 @@ impl BuiltinToolRegistry {
             session_new_tool: config
                 .gateway_context
                 .as_ref()
-                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .map(crate::builtin_tools::sessions::SessionNewTool::new),
             session_set_topic_tool: config
                 .gateway_context
                 .as_ref()
-                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
                 .map(crate::builtin_tools::sessions::SessionSetTopicTool::new),
             // session_search_tool: removed — now constructed on-the-fly from
@@ -1487,7 +1487,7 @@ impl BuiltinToolRegistry {
         let session_mgr = config
             .gateway_context
             .as_ref()
-            .map(|ctx| Arc::clone(ctx.session_manager()))
+            .map(|ctx| Arc::clone(ctx.session_store()))
             .or_else(|| config.session_manager.clone());
 
         if let Some(ref sm) = session_mgr {

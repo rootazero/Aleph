@@ -17,7 +17,6 @@ use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
     available_provider_from_env, can_create_provider_from_env, create_provider_registry_from_env,
     AgentRegistry, ExecutionEngine, ExecutionEngineConfig, GatewayConfig as FullGatewayConfig,
-    SessionManager,
 };
 use alephcore::ProviderRegistry;
 
@@ -65,7 +64,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn register_agent_handlers(
     server: &mut GatewayServer,
-    session_manager: Arc<SessionManager>,
+    session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     router: Arc<AgentRouter>,
     full_config: &FullGatewayConfig,
@@ -198,7 +197,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Create teams evolution stores (artifact, event log, message, session) sharing the same DB file.
     // These stores power the team messaging, inbox, session coordination, and artifact tools.
     #[allow(clippy::type_complexity)]
-    let (artifact_store, event_store, message_store, session_store): (
+    let (artifact_store, event_store, message_store, team_session_store): (
         Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
         Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
         Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
@@ -312,7 +311,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         };
 
     let session_coordinator: Option<Arc<alephcore::teams::sessions::SessionCoordinator>> = match (
-        session_store.as_ref(),
+        team_session_store.as_ref(),
         message_router.as_ref(),
         event_store.as_ref(),
         artifact_store.as_ref(),
@@ -369,7 +368,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let coordinator = if let (Some(ib), Some(ts)) = (inbox.as_ref(), team_store.as_ref()) {
             use alephcore::teams::context::TeamInboxContextProvider;
             let mut inbox_provider = TeamInboxContextProvider::new(Arc::clone(ib), Arc::clone(ts));
-            if let Some(ref ss) = session_store {
+            if let Some(ref ss) = team_session_store {
                 inbox_provider = inbox_provider.with_session_store(ss.clone());
             }
             match coordinator.with_inbox_provider(Arc::new(inbox_provider)) {
@@ -727,7 +726,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             heartbeat_service: heartbeat_service.clone(),
             generation_registry: Some(generation_registry.clone()),
             tool_context: Some(alephcore::tools::new_tool_context_handle()),
-            session_manager: Some(session_manager.clone()),
+            session_manager: Some(session_store.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             injection_mode: app_config.memory.injection_mode,
@@ -739,7 +738,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             message_store: message_store.clone(),
             message_router: message_router.clone(),
             inbox: inbox.clone(),
-            session_store: session_store.clone(),
+            session_store: team_session_store.clone(),
             session_coordinator: session_coordinator.clone(),
             browser_profile_manager: Some(std::sync::Arc::new(
                 alephcore::browser::manager::ProfileManager::new(
@@ -1119,7 +1118,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
 
         // Wire session manager + event bus for auto-topic generation on first message
-        engine = engine.with_session_topic_support(session_manager.clone(), event_bus.clone());
+        engine = engine.with_session_topic_support(session_store.clone(), event_bus.clone());
 
         // Wire MediaProcessor for multimodal attachment handling (images, audio)
         {
@@ -1230,7 +1229,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let agent_workspace = config.workspace.clone();
                 let agent_model = config.model.clone();
                 agent_registry
-                    .register_config(config, session_manager.clone())
+                    .register_config(config, session_store.clone())
                     .await;
                 // Emit lifecycle event
                 let lifecycle_event =
@@ -1249,7 +1248,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             for agent_config in full_config.get_agent_instance_configs() {
                 let agent_id = agent_config.agent_id.clone();
                 agent_registry
-                    .register_config(agent_config, session_manager.clone())
+                    .register_config(agent_config, session_store.clone())
                     .await;
                 if !daemon {
                     println!("  Registered agent: {} (lazy)", agent_id);
@@ -1292,7 +1291,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let app_config_chat = app_config_arc.clone();
         let wm_chat = workspace_manager.clone();
         let pr_chat = topic_provider_registry.clone();
-        let sm_chat = session_manager.clone();
+        let sm_chat = session_store.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
@@ -1368,7 +1367,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
             let a2a_policy = Arc::new(AgentToAgentPolicy::default());
             let gateway_ctx = Arc::new(GatewayContext::new(
-                session_manager.clone(),
+                session_store.clone(),
                 agent_registry,
                 engine_arc,
                 a2a_policy,
@@ -1722,13 +1721,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         async move { chat_handlers::handle_abort(req, manager).await }
     });
 
-    let sm_history = session_manager.clone();
+    let sm_history = session_store.clone();
     server.handlers_mut().register("chat.history", move |req| {
         let manager = sm_history.clone();
         async move { chat_handlers::handle_history(req, manager).await }
     });
 
-    let sm_clear = session_manager;
+    let sm_clear = session_store;
     server.handlers_mut().register("chat.clear", move |req| {
         let manager = sm_clear.clone();
         async move { chat_handlers::handle_clear(req, manager).await }

@@ -11,12 +11,12 @@
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use tracing::debug;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::SessionKey;
-use super::super::session_manager::SessionManager;
+use super::super::session_store::SessionStore;
 use super::agent::{AgentRunManager, AgentRunParams, Attachment};
 use super::parse_params;
 
@@ -194,7 +194,7 @@ pub async fn handle_abort(
 /// Returns the chat history for a session.
 pub async fn handle_history(
     request: JsonRpcRequest,
-    session_manager: Arc<SessionManager>,
+    session_manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     // Parse params
     let params: HistoryParams = match parse_params(&request) {
@@ -229,9 +229,7 @@ pub async fn handle_history(
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
                     run_id: m.metadata.and_then(|meta| {
-                        serde_json::from_str::<Value>(&meta).ok().and_then(|v| {
-                            v.get("run_id").and_then(|r| r.as_str()).map(String::from)
-                        })
+                        meta.get("run_id").and_then(|r| r.as_str()).map(String::from)
                     }),
                 })
                 .collect();
@@ -259,7 +257,7 @@ pub async fn handle_history(
 /// Clears the chat history for a session.
 pub async fn handle_clear(
     request: JsonRpcRequest,
-    session_manager: Arc<SessionManager>,
+    session_manager: Arc<dyn SessionStore>,
 ) -> JsonRpcResponse {
     // Parse params
     let params: ClearParams = match parse_params(&request) {
