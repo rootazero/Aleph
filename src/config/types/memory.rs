@@ -25,7 +25,6 @@ pub enum MemoryInjectionMode {
     Hybrid,
 }
 
-
 // =============================================================================
 // MemoryConfig
 // =============================================================================
@@ -187,6 +186,13 @@ pub struct MemoryConfig {
     /// Compound ingest pipeline configuration.
     #[serde(default)]
     pub compound_ingest: CompoundIngestConfig,
+
+    // ========================================
+    // Query Filer (Spec 8)
+    // ========================================
+    /// Query filer configuration.
+    #[serde(default)]
+    pub query_filer: QueryFilerConfig,
 }
 
 // =============================================================================
@@ -811,6 +817,8 @@ impl Default for MemoryConfig {
             orientation: OrientationConfig::default(),
             // Compound ingest (Spec 6)
             compound_ingest: CompoundIngestConfig::default(),
+            // Query filer (Spec 8)
+            query_filer: QueryFilerConfig::default(),
         }
     }
 }
@@ -850,6 +858,51 @@ impl Default for CompoundIngestConfig {
             tx_residue_gc_seconds: 3600,
         }
     }
+}
+
+// =============================================================================
+// QueryFilerConfig (Spec 8)
+// =============================================================================
+
+/// Configuration for the query filer pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueryFilerConfig {
+    /// Enable/disable the query filer.
+    #[serde(default = "default_qf_enabled")]
+    pub enabled: bool,
+    /// Minimum number of memory sources required before filing a query answer.
+    #[serde(default = "default_qf_min_sources")]
+    pub min_sources: usize,
+    /// Minimum number of characters in an answer for it to be filed.
+    #[serde(default = "default_qf_min_answer_chars")]
+    pub min_answer_chars: usize,
+    /// Enable LLM gate (secondary LLM check before filing).
+    #[serde(default = "default_qf_llm_gate_enabled")]
+    pub llm_gate_enabled: bool,
+}
+
+impl Default for QueryFilerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_sources: 3,
+            min_answer_chars: 200,
+            llm_gate_enabled: true,
+        }
+    }
+}
+
+fn default_qf_enabled() -> bool {
+    true
+}
+fn default_qf_min_sources() -> usize {
+    3
+}
+fn default_qf_min_answer_chars() -> usize {
+    200
+}
+fn default_qf_llm_gate_enabled() -> bool {
+    true
 }
 
 fn default_compound_enabled() -> bool {
