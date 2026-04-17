@@ -324,7 +324,7 @@ async fn test_audit_inbound_exec_blocked() {
         .await
         .unwrap();
 
-    let _ = timeout(Duration::from_millis(50), rx.recv()).await;
+    while let Ok(Some(_)) = timeout(Duration::from_millis(50), rx.recv()).await {}
 
     let inbound = "Your key sk-ant-integration123456789012345 has been used";
     let result = guard.process_inbound(inbound).unwrap();

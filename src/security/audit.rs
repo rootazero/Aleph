@@ -23,6 +23,7 @@ pub enum AuditEventType {
     PermissionDenied,
     GuestSessionCreated,
     PiiDetected,
+    LeakWarning,
 }
 
 impl fmt::Display for AuditEventType {
@@ -42,6 +43,7 @@ impl fmt::Display for AuditEventType {
             Self::PermissionDenied => "permission_denied",
             Self::GuestSessionCreated => "guest_session_created",
             Self::PiiDetected => "pii_detected",
+            Self::LeakWarning => "leak_warning",
         };
         write!(f, "{}", s)
     }

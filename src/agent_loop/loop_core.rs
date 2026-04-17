@@ -721,6 +721,12 @@ pub struct AgentLoop<P: LoopProvider> {
     security_guard: RuntimeSecurityGuard,
     /// Optional secret resolver for placeholder injection.
     secret_resolver: Option<Arc<dyn AsyncSecretResolver>>,
+    /// Platform name for security context (e.g., "telegram", "discord").
+    platform_name: Option<String>,
+    /// Provider name for security context (e.g., "anthropic", "openai").
+    provider_name: Option<String>,
+    /// Session identifier for security context.
+    session_id: Option<String>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -789,7 +795,28 @@ impl<P: LoopProvider> AgentLoop<P> {
             shared_snapshot: None,
             security_guard: RuntimeSecurityGuard::default_guard(),
             secret_resolver: None,
+            platform_name: None,
+            provider_name: None,
+            session_id: None,
         }
+    }
+
+    /// Attach a platform name to the agent loop for security context.
+    pub fn with_platform_name(mut self, platform_name: Option<String>) -> Self {
+        self.platform_name = platform_name;
+        self
+    }
+
+    /// Attach a provider name to the agent loop for security context.
+    pub fn with_provider_name(mut self, provider_name: impl Into<String>) -> Self {
+        self.provider_name = Some(provider_name.into());
+        self
+    }
+
+    /// Attach a session identifier to the agent loop for security context.
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
     }
 
     /// Attach a [`ContextBudget`](super::context_budget::ContextBudget) for pressure sensing and budget tracking.
@@ -1172,7 +1199,12 @@ impl<P: LoopProvider> AgentLoop<P> {
             if let Some(blocks) = content_blocks {
                 for block in blocks.iter_mut() {
                     if let ContentBlock::Text { text, .. } = block {
-                        let context = SecurityContext::default();
+                        let context = SecurityContext {
+                            provider_name: self.provider_name.clone(),
+                            platform_name: self.platform_name.clone(),
+                            session_id: self.session_id.clone(),
+                            ..Default::default()
+                        };
                         match self
                             .security_guard
                             .process_outbound(text, self.secret_resolver.as_deref(), context)
