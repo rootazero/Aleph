@@ -207,7 +207,7 @@ mod tests {
         let config = create_test_config();
         let resolver = ChannelSettingsResolver::new(config);
 
-        let resolved = resolver.resolve("test_account", None, None);
+        let resolved = resolver.resolve("unknown_account", None, None);
 
         // Should use global default prefix "!"
         assert_eq!(resolved.settings.prefix, Some("!".to_string()));
