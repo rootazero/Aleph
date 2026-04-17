@@ -148,10 +148,154 @@ impl Channel for LineChannel {
 
         let chat_id = message.conversation_id.as_str();
 
-        let msg_id = api
-            .push_text(chat_id, &message.text)
-            .await
-            .map_err(ChannelError::SendFailed)?;
+        let msg_id = match message.metadata.get("line::message_type").map(|s| s.as_str()) {
+            Some("flex") => {
+                let alt_text = message
+                    .metadata
+                    .get("line::flex_alt_text")
+                    .cloned()
+                    .unwrap_or_else(|| "Flex message".to_string());
+                let contents_json = message
+                    .metadata
+                    .get("line::flex_contents")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("flex_contents required for flex messages".to_string())
+                    })?;
+                let contents: message_ops::FlexBubbleContents =
+                    serde_json::from_str(contents_json).map_err(|e| {
+                        ChannelError::ConfigError(format!("Invalid flex_contents: {}", e))
+                    })?;
+                api.push_flex(chat_id, &alt_text, contents)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            Some("template") => {
+                let alt_text = message
+                    .metadata
+                    .get("line::template_alt_text")
+                    .cloned()
+                    .unwrap_or_else(|| "Template message".to_string());
+                let template_json = message
+                    .metadata
+                    .get("line::template")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("template required for template messages".to_string())
+                    })?;
+                let template: message_ops::TemplatePayload =
+                    serde_json::from_str(template_json).map_err(|e| {
+                        ChannelError::ConfigError(format!("Invalid template: {}", e))
+                    })?;
+                api.push_template(chat_id, &alt_text, template)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            Some("image") => {
+                let original_url = message
+                    .metadata
+                    .get("line::image_url")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("image_url required for image messages".to_string())
+                    })?
+                    .clone();
+                let preview_url = message
+                    .metadata
+                    .get("line::preview_url")
+                    .cloned()
+                    .unwrap_or_else(|| original_url.clone());
+                api.push_image(chat_id, &original_url, &preview_url)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            Some("video") => {
+                let video_url = message
+                    .metadata
+                    .get("line::video_url")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("video_url required for video messages".to_string())
+                    })?
+                    .clone();
+                let preview_url = message
+                    .metadata
+                    .get("line::preview_url")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("preview_url required for video messages".to_string())
+                    })?
+                    .clone();
+                let duration = message
+                    .metadata
+                    .get("line::duration")
+                    .and_then(|s| s.parse::<u64>().ok());
+                api.push_video(chat_id, &video_url, &preview_url, duration)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            Some("audio") => {
+                let audio_url = message
+                    .metadata
+                    .get("line::audio_url")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("audio_url required for audio messages".to_string())
+                    })?
+                    .clone();
+                let duration = message.metadata.get("line::duration")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("duration required for audio messages".to_string())
+                    })?
+                    .parse::<u64>()
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid duration: {}", e)))?;
+                api.push_audio(chat_id, &audio_url, duration)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            Some("location") => {
+                let title = message
+                    .metadata
+                    .get("line::location_title")
+                    .cloned()
+                    .unwrap_or_default();
+                let address = message
+                    .metadata
+                    .get("line::location_address")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("location_address required for location messages".to_string())
+                    })?
+                    .clone();
+                let latitude: f64 = message
+                    .metadata
+                    .get("line::latitude")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("latitude required for location messages".to_string())
+                    })?
+                    .parse()
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid latitude: {}", e)))?;
+                let longitude: f64 = message
+                    .metadata
+                    .get("line::longitude")
+                    .ok_or_else(|| {
+                        ChannelError::ConfigError("longitude required for location messages".to_string())
+                    })?
+                    .parse()
+                    .map_err(|e| ChannelError::ConfigError(format!("Invalid longitude: {}", e)))?;
+                api.push_location(chat_id, &title, &address, latitude, longitude)
+                    .await
+                    .map_err(ChannelError::SendFailed)?
+            }
+            _ => {
+                if let Some(quick_reply_json) = message.metadata.get("line::quick_reply_actions") {
+                    let actions: Vec<message_ops::QuickReplyAction> =
+                        serde_json::from_str(quick_reply_json).map_err(|e| {
+                            ChannelError::ConfigError(format!("Invalid quick_reply_actions: {}", e))
+                        })?;
+                    api.push_quick_reply(chat_id, &message.text, actions)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                } else {
+                    api.push_text(chat_id, &message.text)
+                        .await
+                        .map_err(ChannelError::SendFailed)?
+                }
+            }
+        };
 
         Ok(SendResult {
             message_id: MessageId::new(msg_id),
@@ -188,11 +332,17 @@ impl Channel for LineChannel {
     async fn delete(
         &self,
         _conversation_id: &ConversationId,
-        _message_id: &MessageId,
+        message_id: &MessageId,
     ) -> ChannelResult<()> {
-        Err(ChannelError::UnsupportedFeature(
-            "LINE message deletion not yet implemented".to_string(),
-        ))
+        let api = self
+            .api
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+
+        api.delete_message(message_id.as_str())
+            .await
+            .map_err(ChannelError::SendFailed)?;
+        Ok(())
     }
 }
 

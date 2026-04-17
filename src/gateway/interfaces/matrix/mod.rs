@@ -1,33 +1,17 @@
 //! Matrix Channel Implementation
 //!
-//! Integrates with Matrix using the Client-Server API v3 for sending
-//! and receiving messages. Uses `/sync` long-polling for real-time message reception.
-//!
-//! # Protocol
-//!
-//! - **Receiving:** Long-polling via `GET /_matrix/client/v3/sync?timeout=30000&since={token}`
-//! - **Sending:** `PUT /_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}`
-//! - **Auth:** Bearer token in Authorization header
-//!
-//! # Usage
-//!
-//! ```toml
-//! [[channels]]
-//! id = "matrix"
-//! channel_type = "matrix"
-//! enabled = true
-//!
-//! [channels.config]
-//! homeserver_url = "https://matrix.org"
-//! access_token = "syt_..."
-//! allowed_rooms = ["!room:matrix.org"]
-//! ```
+//! Integrates with Matrix using the official `matrix-sdk` Rust crate.
+//! Supports sync token persistence, event deduplication, and extended event coverage.
 
+pub mod client;
 pub mod config;
-pub mod message_ops;
+pub mod dedupe;
+pub mod events;
+pub mod media;
+pub mod outbound;
+pub mod sync;
 
 pub use config::MatrixConfig;
-pub use message_ops::MatrixMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -36,28 +20,19 @@ use crate::gateway::channel::{
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::watch;
 
-/// Matrix channel implementation using the Client-Server API v3.
+/// Matrix channel implementation using the official Rust SDK.
 pub struct MatrixChannel {
-    /// Channel information
     info: ChannelInfo,
-    /// Configuration
     config: MatrixConfig,
-    /// Unified channel state (status + inbound sender/receiver)
     channel_state: ChannelState,
-    /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
-    /// HTTP client for Matrix API calls
-    client: reqwest::Client,
-    /// Own user ID from /whoami (e.g., "@bot:matrix.org")
-    user_id: Arc<RwLock<Option<String>>>,
-    /// Sync pagination token
-    since_token: Arc<RwLock<Option<String>>>,
+    client: Option<Arc<client::MatrixSdkClient>>,
+    deduper: Option<Arc<dedupe::EventDeduper>>,
 }
 
 impl MatrixChannel {
-    /// Create a new Matrix channel
     pub fn new(id: impl Into<String>, config: MatrixConfig) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
@@ -72,9 +47,8 @@ impl MatrixChannel {
             config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
-            client: reqwest::Client::new(),
-            user_id: Arc::new(RwLock::new(None)),
-            since_token: Arc::new(RwLock::new(None)),
+            client: None,
+            deduper: None,
         }
     }
 
@@ -97,166 +71,14 @@ impl MatrixChannel {
         }
     }
 
-    /// Update internal status
     async fn set_status(&self, status: ChannelStatus) {
         self.channel_state.set_status(status).await;
     }
 
-    async fn send_with_attachments(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let room_id = message.conversation_id.as_str();
-        let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
-
-        let mut last_result = None;
-
-        if !message.text.is_empty() {
-            last_result = Some(
-                MatrixMessageOps::send_message(
-                    &self.client,
-                    &self.config.homeserver_url,
-                    &self.config.access_token,
-                    room_id,
-                    &message.text,
-                    reply_to.as_deref(),
-                )
-                .await?,
-            );
-        }
-
-        for attachment in &message.attachments {
-            let (content, mime_type, filename) = self.prepare_attachment(attachment).await?;
-
-            let mxc_uri = MatrixMessageOps::upload_media(
-                &self.client,
-                &self.config.homeserver_url,
-                &self.config.access_token,
-                content,
-                &mime_type,
-                filename.as_deref(),
-            )
-            .await?;
-
-            let msgtype = match mime_type.starts_with("image/") {
-                true => "m.image",
-                false if mime_type.starts_with("audio/") => "m.audio",
-                false if mime_type.starts_with("video/") => "m.video",
-                _ => "m.file",
-            };
-
-            let body = serde_json::json!({
-                "msgtype": msgtype,
-                "body": filename.as_deref().unwrap_or("attachment"),
-                "url": mxc_uri,
-            });
-
-            let txn_id = uuid::Uuid::new_v4().to_string();
-            let url = format!(
-                "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-                self.config.homeserver_url, room_id, txn_id
-            );
-
-            let resp = self
-                .client
-                .put(&url)
-                .bearer_auth(&self.config.access_token)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("Matrix attachment send failed: {e}"))
-                })?;
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let resp_body = resp.text().await.unwrap_or_default();
-                return Err(ChannelError::SendFailed(format!(
-                    "Matrix attachment send failed ({status}): {resp_body}"
-                )));
-            }
-
-            let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
-                ChannelError::SendFailed(format!("Matrix attachment response parse failed: {e}"))
-            })?;
-
-            let event_id = resp_json["event_id"]
-                .as_str()
-                .unwrap_or(&txn_id)
-                .to_string();
-
-            last_result = Some(SendResult {
-                message_id: MessageId::new(event_id),
-                timestamp: chrono::Utc::now(),
-            });
-        }
-
-        last_result.ok_or_else(|| {
-            ChannelError::SendFailed("No message or attachments to send".to_string())
-        })
-    }
-
-    async fn prepare_attachment(
-        &self,
-        attachment: &crate::gateway::channel::Attachment,
-    ) -> ChannelResult<(Vec<u8>, String, Option<String>)> {
-        let filename = attachment
-            .filename
-            .as_deref()
-            .or_else(|| attachment.id.as_str().split('/').next_back())
-            .map(String::from);
-
-        if let Some(data) = &attachment.data {
-            return Ok((data.clone(), attachment.mime_type.clone(), filename));
-        }
-
-        if let Some(url) = &attachment.url {
-            if url.starts_with("http://") || url.starts_with("https://") {
-                let resp = self.client.get(url).send().await.map_err(|e| {
-                    ChannelError::ReceiveFailed(format!("Attachment download failed: {e}"))
-                })?;
-
-                if !resp.status().is_success() {
-                    return Err(ChannelError::ReceiveFailed(format!(
-                        "Attachment download failed: {}",
-                        resp.status()
-                    )));
-                }
-
-                let content_type = resp
-                    .headers()
-                    .get("Content-Type")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(&attachment.mime_type)
-                    .to_string();
-
-                let bytes = resp.bytes().await.map_err(|e| {
-                    ChannelError::ReceiveFailed(format!(
-                        "Attachment download body read failed: {e}"
-                    ))
-                })?;
-
-                return Ok((bytes.to_vec(), content_type, filename));
-            }
-
-            if url.starts_with("mxc://") {
-                let (content, _) = MatrixMessageOps::download_media(
-                    &self.client,
-                    &self.config.homeserver_url,
-                    url,
-                )
-                .await?;
-                return Ok((content, attachment.mime_type.clone(), filename));
-            }
-        }
-
-        if let Some(path) = &attachment.path {
-            let content = tokio::fs::read(path).await.map_err(|e| {
-                ChannelError::ReceiveFailed(format!("Failed to read attachment file: {e}"))
-            })?;
-            return Ok((content, attachment.mime_type.clone(), filename));
-        }
-
-        Err(ChannelError::ReceiveFailed(
-            "Attachment has no content (no data, url, or path)".to_string(),
-        ))
+    fn client(&self) -> ChannelResult<&Arc<client::MatrixSdkClient>> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Matrix client not initialized".to_string()))
     }
 }
 
@@ -271,58 +93,37 @@ impl Channel for MatrixChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
-
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Matrix channel...");
 
-        // Validate access token via /whoami
-        match MatrixMessageOps::validate_token(
-            &self.client,
-            &self.config.homeserver_url,
-            &self.config.access_token,
-        )
-        .await
-        {
-            Ok(uid) => {
-                tracing::info!("Matrix bot authenticated as {uid}");
-                *self.user_id.write().await = Some(uid);
-            }
-            Err(e) => {
-                self.set_status(ChannelStatus::Error).await;
-                return Err(e);
-            }
-        }
+        let sdk_client = Arc::new(client::MatrixSdkClient::connect(&self.config).await?);
+        tracing::info!("Matrix bot authenticated as {}", sdk_client.user_id());
 
-        // Create shutdown channel
+        let deduper = Arc::new(dedupe::EventDeduper::new(&self.config.dedupe_store_path())?);
+
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
+        self.client = Some(sdk_client.clone());
+        self.deduper = Some(deduper.clone());
 
-        // Spawn /sync long-polling loop
-        let client = self.client.clone();
         let config = self.config.clone();
-        let user_id = self.user_id.clone();
-        let since_token = self.since_token.clone();
         let channel_id = self.info.id.clone();
         let inbound_tx = self.channel_state.sender();
         let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
-
-            MatrixMessageOps::run_sync_loop(
-                client,
+            sync::run_sync_loop(
+                sdk_client,
                 config,
-                user_id,
-                since_token,
                 channel_id,
                 inbound_tx,
+                status.clone(),
+                deduper,
                 shutdown_rx,
             )
             .await;
-
-            *status.write().await = ChannelStatus::Disconnected;
         });
 
         self.set_status(ChannelStatus::Connected).await;
@@ -336,54 +137,23 @@ impl Channel for MatrixChannel {
             let _ = shutdown_tx.send(true);
         }
 
+        self.client = None;
+        self.deduper = None;
         self.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        if self.config.send_typing {
-            if let Some(ref uid) = *self.user_id.read().await {
-                let _ = MatrixMessageOps::send_typing(
-                    &self.client,
-                    &self.config.homeserver_url,
-                    &self.config.access_token,
-                    message.conversation_id.as_str(),
-                    uid,
-                    true,
-                )
-                .await;
-            }
-        }
-
-        let reply_to = message.reply_to.as_ref().map(|id| id.as_str().to_string());
-        let room_id = message.conversation_id.as_str();
-
-        if !message.attachments.is_empty() {
-            return self.send_with_attachments(message).await;
-        }
-
-        MatrixMessageOps::send_message(
-            &self.client,
-            &self.config.homeserver_url,
-            &self.config.access_token,
-            room_id,
-            &message.text,
-            reply_to.as_deref(),
-        )
-        .await
+        let client = self.client()?;
+        outbound::send_message(client.inner(), message).await
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        if let Some(ref uid) = *self.user_id.read().await {
-            MatrixMessageOps::send_typing(
-                &self.client,
-                &self.config.homeserver_url,
-                &self.config.access_token,
-                conversation_id.as_str(),
-                uid,
-                true,
-            )
-            .await?;
+        let client = self.client()?;
+        if self.config.send_typing {
+            if let Some(ref c) = self.client {
+                outbound::send_typing(client.inner(), conversation_id, c.user_id(), true).await?;
+            }
         }
         Ok(())
     }
@@ -394,15 +164,8 @@ impl Channel for MatrixChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        MatrixMessageOps::edit_message(
-            &self.client,
-            &self.config.homeserver_url,
-            &self.config.access_token,
-            conversation_id.as_str(),
-            message_id.as_str(),
-            new_text,
-        )
-        .await?;
+        let client = self.client()?;
+        outbound::edit_message(client.inner(), conversation_id, message_id, new_text).await?;
         Ok(())
     }
 
@@ -412,15 +175,8 @@ impl Channel for MatrixChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        MatrixMessageOps::send_reaction(
-            &self.client,
-            &self.config.homeserver_url,
-            &self.config.access_token,
-            conversation_id.as_str(),
-            message_id.as_str(),
-            reaction,
-        )
-        .await?;
+        let client = self.client()?;
+        outbound::send_reaction(client.inner(), conversation_id, message_id, reaction).await?;
         Ok(())
     }
 
@@ -429,19 +185,12 @@ impl Channel for MatrixChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        MatrixMessageOps::delete_message(
-            &self.client,
-            &self.config.homeserver_url,
-            &self.config.access_token,
-            conversation_id.as_str(),
-            message_id.as_str(),
-        )
-        .await?;
+        let client = self.client()?;
+        outbound::delete_message(client.inner(), conversation_id, message_id).await?;
         Ok(())
     }
 }
 
-/// Factory for creating Matrix channels
 pub struct MatrixChannelFactory;
 
 #[async_trait]
@@ -506,8 +255,6 @@ mod tests {
     fn test_take_receiver() {
         let config = MatrixConfig::default();
         let channel = MatrixChannel::new("matrix", config);
-
-        // Broadcast semantics: every call subscribes a fresh receiver.
         assert!(channel.state().take_receiver().is_some());
         assert!(channel.state().take_receiver().is_some());
     }
@@ -532,8 +279,6 @@ mod tests {
     #[tokio::test]
     async fn test_factory_create_invalid_config() {
         let factory = MatrixChannelFactory;
-
-        // Missing required fields
         let config = serde_json::json!({});
         let result = factory.create(config).await;
         assert!(result.is_err());
@@ -542,27 +287,11 @@ mod tests {
     #[tokio::test]
     async fn test_factory_create_invalid_homeserver() {
         let factory = MatrixChannelFactory;
-
         let config = serde_json::json!({
             "homeserver_url": "not-a-url",
             "access_token": "token123"
         });
         let result = factory.create(config).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_start_without_feature() {
-        let config = MatrixConfig {
-            homeserver_url: "https://matrix.org".to_string(),
-            access_token: "token123".to_string(),
-            ..Default::default()
-        };
-        let _channel = MatrixChannel::new("matrix", config);
-
-        // Without the matrix feature, start should return UnsupportedFeature.
-        // When the matrix feature IS enabled, start() requires a live Matrix homeserver
-        // which cannot be tested in unit tests, so this test only validates
-        // construction succeeds.
     }
 }

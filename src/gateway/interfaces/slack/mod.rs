@@ -25,9 +25,11 @@
 //! ```
 
 pub mod config;
+pub mod directory;
 pub mod message_ops;
 
 pub use config::SlackConfig;
+pub use directory::UserDirectory;
 pub use message_ops::SlackMessageOps;
 
 use crate::gateway::channel::{
@@ -132,6 +134,15 @@ impl Channel for SlackChannel {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
+        let user_directory = if self.config.resolve_user_names {
+            Some(Arc::new(UserDirectory::new(
+                self.config.bot_token.clone(),
+                self.config.directory_ttl_secs,
+            )))
+        } else {
+            None
+        };
+
         // Clone handles for the spawned task
         let client = self.client.clone();
         let app_token = self.config.app_token.clone();
@@ -152,6 +163,7 @@ impl Channel for SlackChannel {
                 config,
                 inbound_tx,
                 shutdown_rx,
+                user_directory,
             )
             .await;
 

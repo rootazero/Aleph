@@ -276,6 +276,21 @@ pub(in crate::commands::start) async fn initialize_channels(
                     channel = Box::new(tg_channel);
                 }
             }
+
+            if inst.channel_type == "qq" {
+                if let Ok(qq_config) =
+                    serde_json::from_value::<alephcore::gateway::interfaces::qq::QQConfig>(
+                        config_with_secrets.clone()
+                    )
+                {
+                    let qq_channel = alephcore::gateway::interfaces::qq::QQChannel::new(
+                        &inst.id,
+                        qq_config,
+                    );
+                    channel = Box::new(qq_channel);
+                }
+            }
+
             let channel_id = channel_registry.register(channel).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);

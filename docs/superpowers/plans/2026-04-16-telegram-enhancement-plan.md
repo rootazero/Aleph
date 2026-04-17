@@ -4,9 +4,29 @@
 
 **Goal:** Implement missing Telegram features aligned with OpenClaw: multi-account routing, session state, group policy, command menu, inline keyboard, ACP bindings, update deduplication, and webhook support.
 
-**Architecture:** New `TelegramInboundContext` object as the core context passed through the message processing pipeline. Each feature module (session, group_policy, etc.) is a focused, single-responsibility module.
+**Architecture:** New `TelegramInboundContext` object as the core context passed through the message processing pipeline. Each feature module (session, group_policy, etc.) is a focused, single-responsibility module. Existing modules (delivery, polling, handlers) are extended but not broken.
 
 **Tech Stack:** Rust (teloxide framework), SQLite via existing StateDatabase, async/await with tokio
+
+---
+
+## File Structure
+
+```
+src/gateway/interfaces/telegram/
+├── context.rs           # NEW: TelegramInboundContext, ConversationKey
+├── session.rs          # NEW: SessionStore, SessionState
+├── group_policy.rs     # NEW: GroupPolicy engine, AccessDecision
+├── command_menu.rs     # NEW: CommandMenu, BotCommand
+├── inline_keyboard.rs  # NEW: InlineKeyboardMarkup, InlineButton
+├── acp_binding.rs      # NEW: AcpBinding, AcpBindingStore
+├── mod.rs              # MODIFY: Add exports, refactor TelegramChannel
+├── handlers.rs         # MODIFY: Add deduplication, use context
+├── delivery.rs        # MODIFY: Accept context for routing
+├── polling.rs         # MODIFY: Pass context to handlers
+├── config_v2.rs       # MODIFY: Add session_timeout, webhook mode
+└── bot_instance.rs     # MODIFY: Add set_my_commands support
+```
 
 ---
 
@@ -14,7 +34,7 @@
 
 **Files:**
 - Create: `src/gateway/interfaces/telegram/context.rs`
-- Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Test: `src/gateway/interfaces/telegram/tests/context_test.rs`
 
 - [ ] **Step 1: Create context.rs with TelegramInboundContext struct**
 
@@ -74,7 +94,7 @@ pub enum MediaKind {
 }
 ```
 
-- [ ] **Step 2: Add mod.rs exports**
+- [ ] **Step 2: Create mod.rs export**
 
 Add to `src/gateway/interfaces/telegram/mod.rs`:
 ```rust
@@ -100,6 +120,7 @@ git commit -m "telegram: add TelegramInboundContext and ConversationKey"
 
 **Files:**
 - Create: `src/gateway/interfaces/telegram/session.rs`
+- Create: `src/gateway/interfaces/telegram/tests/session_test.rs`
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
 
 - [ ] **Step 1: Create session.rs with SessionStore**
@@ -166,52 +187,17 @@ impl SessionStore {
     }
 
     pub async fn get(&self, key: &ConversationKey) -> Result<Option<SessionState>> {
-        let result = self.db.query_row(
-            &format!(
-                "SELECT session_id, history_json, last_activity, metadata_json
-                 FROM {} WHERE chat_id = ? AND thread_id IS ?",
-                SESSION_TABLE
-            ),
+        let row = self.db.query_row(
+            &format!("SELECT * FROM {} WHERE chat_id = ? AND thread_id IS ?", SESSION_TABLE),
             rusqlite::params![key.chat_id, key.thread_id],
-        ).await;
-
-        match result {
-            Ok(row) => {
-                let session_id: String = row.get(0)?;
-                let history_json: String = row.get(1)?;
-                let last_activity_ts: i64 = row.get(2)?;
-                let metadata_json: String = row.get(3)?;
-
-                Ok(Some(SessionState {
-                    session_id: uuid::Uuid::parse_str(&session_id)?,
-                    conversation_key: key.clone(),
-                    history: serde_json::from_str(&history_json)?,
-                    last_activity: DateTime::from_timestamp(last_activity_ts, 0)
-                        .unwrap_or_else(Utc::now),
-                    metadata: serde_json::from_str(&metadata_json)?,
-                }))
-            }
-            Err(_) => Ok(None),
-        }
+        ).await.ok();
+        // Parse row into SessionState...
+        todo!()
     }
 
     pub async fn set(&self, state: &SessionState) -> Result<()> {
-        self.db.execute(
-            &format!(
-                "INSERT OR REPLACE INTO {} (chat_id, thread_id, session_id, history_json, last_activity, metadata_json)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                SESSION_TABLE
-            ),
-            rusqlite::params![
-                state.conversation_key.chat_id,
-                state.conversation_key.thread_id,
-                state.session_id.to_string(),
-                serde_json::to_string(&state.history)?,
-                state.last_activity.timestamp(),
-                serde_json::to_string(&state.metadata)?
-            ],
-        ).await?;
-        Ok(())
+        // Upsert session state...
+        todo!()
     }
 
     pub async fn delete(&self, key: &ConversationKey) -> Result<()> {
@@ -221,31 +207,54 @@ impl SessionStore {
         ).await?;
         Ok(())
     }
+}
+```
 
-    pub async fn cleanup_expired(&self, ttl: Duration) -> Result<u64> {
-        let cutoff = (Utc::now() - ttl).timestamp();
-        let result = self.db.execute(
-            &format!("DELETE FROM {} WHERE last_activity < ?", SESSION_TABLE),
-            rusqlite::params![cutoff],
-        ).await?;
-        Ok(result as u64)
+- [ ] **Step 2: Run cargo check to verify compilation**
+
+Run: `cargo check -p alephcore`
+Expected: PASS (with TODO placeholders)
+
+- [ ] **Step 3: Complete SessionStore implementation with actual parsing**
+
+```rust
+pub async fn get(&self, key: &ConversationKey) -> Result<Option<SessionState>> {
+    let result = self.db.query_row(
+        &format!(
+            "SELECT session_id, history_json, last_activity, metadata_json
+             FROM {} WHERE chat_id = ? AND thread_id IS ?",
+            SESSION_TABLE
+        ),
+        rusqlite::params![key.chat_id, key.thread_id],
+    ).await;
+
+    match result {
+        Ok(row) => {
+            let session_id: String = row.get(0)?;
+            let history_json: String = row.get(1)?;
+            let last_activity_ts: i64 = row.get(2)?;
+            let metadata_json: String = row.get(3)?;
+
+            Ok(Some(SessionState {
+                session_id: uuid::Uuid::parse_str(&session_id)?,
+                conversation_key: key.clone(),
+                history: serde_json::from_str(&history_json)?,
+                last_activity: DateTime::from_timestamp(last_activity_ts, 0)
+                    .unwrap_or_else(Utc::now),
+                metadata: serde_json::from_str(&metadata_json)?,
+            }))
+        }
+        Err(_) => Ok(None),
     }
 }
 ```
 
-- [ ] **Step 2: Add mod.rs exports**
-
-```rust
-pub mod session;
-pub use session::{SessionStore, SessionState};
-```
-
-- [ ] **Step 3: Run cargo check to verify compilation**
+- [ ] **Step 4: Run cargo check to verify compilation**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/gateway/interfaces/telegram/session.rs src/gateway/interfaces/telegram/mod.rs
@@ -257,23 +266,22 @@ git commit -m "telegram: add SessionStore for persistent session state"
 ## Task 3: Fix Multi-Account Routing in send()
 
 **Files:**
-- Modify: `src/gateway/interfaces/telegram/config_resolver.rs`
+- Modify: `src/gateway/interfaces/telegram/mod.rs:650` (delivery.rs)
 - Modify: `src/gateway/interfaces/telegram/delivery.rs`
-- Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/bot_instance.rs`
 
 - [ ] **Step 1: Add resolve_account_for_chat to ConfigResolver**
 
-In `config_resolver.rs`, add:
+In `config_resolver.rs`:
 ```rust
 impl ConfigResolver {
-    /// Resolve which account should handle messages for a given chat_id.
-    /// Falls back to first account if no specific match.
     pub fn resolve_account_for_chat(&self, chat_id: i64) -> Result<&ResolvedConfig, ChannelError> {
-        // Check group overrides first
+        // Find account that owns this chat_id
         for account in &self.accounts {
             if let Some(config) = self.resolve(account, 0, None)? {
+                // Check if this account's allowed chats includes chat_id
                 if config.is_chat_allowed(chat_id) {
-                    return Ok(config);
+                    return Ok(&config);
                 }
             }
         }
@@ -285,7 +293,7 @@ impl ConfigResolver {
 }
 ```
 
-- [ ] **Step 2: Update TelegramDelivery::send to accept account context**
+- [ ] **Step 2: Modify TelegramDelivery::send to accept context**
 
 In `delivery.rs`:
 ```rust
@@ -326,7 +334,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "telegram: fix multi-account routing in send()"
+git commit -m "telegram: fix multi-account routing in send()
 ```
 
 ---
@@ -336,6 +344,7 @@ git commit -m "telegram: fix multi-account routing in send()"
 **Files:**
 - Create: `src/gateway/interfaces/telegram/group_policy.rs`
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/config_v2.rs`
 
 - [ ] **Step 1: Create group_policy.rs**
 
@@ -356,13 +365,6 @@ pub struct GroupPolicy {
 }
 
 impl GroupPolicy {
-    pub fn new() -> Self {
-        Self {
-            global_default: AccessDecision::Deny,
-            group_overrides: std::collections::HashMap::new(),
-        }
-    }
-
     pub fn evaluate(&self, ctx: &TelegramInboundContext) -> AccessDecision {
         match ctx.chat_type {
             ChatType::Direct => self.evaluate_dm(ctx),
@@ -372,7 +374,7 @@ impl GroupPolicy {
         }
     }
 
-    fn evaluate_dm(&self, _ctx: &TelegramInboundContext) -> AccessDecision {
+    fn evaluate_dm(&self, ctx: &TelegramInboundContext) -> AccessDecision {
         // DM policy handled by existing pairing/access logic
         AccessDecision::Allow
     }
@@ -396,7 +398,7 @@ impl GroupPolicy {
         }
 
         // Check mention requirement
-        if config.require_mention && !ctx.message_text.contains('@') {
+        if config.require_mention && !ctx.message_text.contains(&format!("@{}", ctx.sender)) {
             return AccessDecision::Challenge;
         }
 
@@ -405,19 +407,12 @@ impl GroupPolicy {
 }
 ```
 
-- [ ] **Step 2: Add mod.rs exports**
-
-```rust
-pub mod group_policy;
-pub use group_policy::{GroupPolicy, AccessDecision};
-```
-
-- [ ] **Step 3: Run cargo check to verify compilation**
+- [ ] **Step 2: Run cargo check to verify compilation**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/gateway/interfaces/telegram/group_policy.rs src/gateway/interfaces/telegram/mod.rs
@@ -438,7 +433,6 @@ git commit -m "telegram: add GroupPolicy engine for access control"
 ```rust
 use teloxide::types::BotCommand;
 use crate::dispatcher::ToolRegistry;
-use super::context::AccessLevel;
 
 pub struct CommandMenu {
     pub commands: Vec<CommandDefinition>,
@@ -447,8 +441,8 @@ pub struct CommandMenu {
 pub struct CommandDefinition {
     pub command: String,
     pub description: String,
-    pub visible_for: AccessLevel,
-    pub usable_for: AccessLevel,
+    pub visible_for: super::context::AccessLevel,
+    pub usable_for: super::context::AccessLevel,
     pub aliases: Vec<String>,
 }
 
@@ -460,8 +454,8 @@ impl CommandMenu {
             commands.push(CommandDefinition {
                 command: tool.name.clone(),
                 description: tool.description.clone(),
-                visible_for: AccessLevel::Member,
-                usable_for: AccessLevel::Member,
+                visible_for: super::context::AccessLevel::Member,
+                usable_for: super::context::AccessLevel::Member,
                 aliases: Vec::new(),
             });
         }
@@ -469,7 +463,7 @@ impl CommandMenu {
         Self { commands }
     }
 
-    pub fn to_bot_commands(&self, access_level: AccessLevel) -> Vec<BotCommand> {
+    pub fn to_bot_commands(&self, access_level: super::context::AccessLevel) -> Vec<BotCommand> {
         self.commands
             .iter()
             .filter(|cmd| cmd.visible_for <= access_level)
@@ -533,6 +527,7 @@ git commit -m "telegram: add native command menu with Bot API integration"
 **Files:**
 - Create: `src/gateway/interfaces/telegram/inline_keyboard.rs`
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/delivery.rs`
 
 - [ ] **Step 1: Create inline_keyboard.rs**
 
@@ -608,22 +603,45 @@ impl InlineKeyboardMarkup {
 }
 ```
 
-- [ ] **Step 2: Add mod.rs exports**
+- [ ] **Step 2: Add inline keyboard support to OutboundMessage**
 
+In `delivery.rs` or a shared types file:
 ```rust
-pub mod inline_keyboard;
-pub use inline_keyboard::{InlineKeyboardMarkup, InlineButton};
+pub struct OutboundMessage {
+    pub text: String,
+    pub keyboard: Option<InlineKeyboardMarkup>,
+    // ... existing fields
+}
 ```
 
-- [ ] **Step 3: Run cargo check to verify compilation**
+- [ ] **Step 3: Update TelegramDelivery::send to include keyboard**
+
+In `delivery.rs`:
+```rust
+pub async fn send_to_chat(&self, chat_id: i64, msg: OutboundMessage) -> SendResult {
+    let mut send_params = teloxide::payloads::SendMessage::new(
+        teloxide::types::ChatId(chat_id),
+        &msg.text,
+    );
+
+    if let Some(keyboard) = &msg.keyboard {
+        send_params.reply_markup(keyboard.to_teloxide());
+    }
+
+    self.bot.send_message(send_params).await?;
+    Ok(())
+}
+```
+
+- [ ] **Step 4: Run cargo check to verify compilation**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/gateway/interfaces/telegram/inline_keyboard.rs src/gateway/interfaces/telegram/mod.rs
+git add src/gateway/interfaces/telegram/inline_keyboard.rs src/gateway/interfaces/telegram/mod.rs src/gateway/interfaces/telegram/delivery.rs
 git commit -m "telegram: add inline keyboard support for message interactions"
 ```
 
@@ -634,6 +652,7 @@ git commit -m "telegram: add inline keyboard support for message interactions"
 **Files:**
 - Create: `src/gateway/interfaces/telegram/acp_binding.rs`
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Modify: `src/gateway/interfaces/telegram/context.rs`
 
 - [ ] **Step 1: Create acp_binding.rs**
 
@@ -682,70 +701,35 @@ impl AcpBindingStore {
     }
 
     pub async fn get(&self, key: &ConversationKey) -> Result<Option<AcpBinding>> {
-        let result = self.db.query_row(
-            &format!(
-                "SELECT aleph_session_id, created_at FROM {} WHERE platform = 'telegram' AND chat_id = ? AND thread_id IS ?",
-                ACP_BINDING_TABLE
-            ),
-            rusqlite::params![key.chat_id, key.thread_id],
-        ).await;
-
-        match result {
-            Ok(row) => {
-                let session_id: String = row.get(0)?;
-                let created_ts: i64 = row.get(1)?;
-                Ok(Some(AcpBinding {
-                    platform: "telegram".to_string(),
-                    chat_id: key.chat_id,
-                    thread_id: key.thread_id,
-                    aleph_session_id: uuid::Uuid::parse_str(&session_id)?,
-                    created_at: DateTime::from_timestamp(created_ts, 0).unwrap_or_else(Utc::now),
-                }))
-            }
-            Err(_) => Ok(None),
-        }
+        // Query and parse...
+        todo!()
     }
 
     pub async fn set(&self, binding: &AcpBinding) -> Result<()> {
-        self.db.execute(
-            &format!(
-                "INSERT OR REPLACE INTO {} (platform, chat_id, thread_id, aleph_session_id, created_at)
-                 VALUES ('telegram', ?, ?, ?, ?)",
-                ACP_BINDING_TABLE
-            ),
-            rusqlite::params![
-                binding.chat_id,
-                binding.thread_id,
-                binding.aleph_session_id.to_string(),
-                binding.created_at.timestamp()
-            ],
-        ).await?;
-        Ok(())
+        // Upsert binding...
+        todo!()
     }
 
     pub async fn delete(&self, key: &ConversationKey) -> Result<()> {
-        self.db.execute(
-            &format!("DELETE FROM {} WHERE platform = 'telegram' AND chat_id = ? AND thread_id IS ?", ACP_BINDING_TABLE),
-            rusqlite::params![key.chat_id, key.thread_id],
-        ).await?;
-        Ok(())
+        // Delete binding...
+        todo!()
     }
 }
 ```
 
-- [ ] **Step 2: Add mod.rs exports**
+- [ ] **Step 2: Run cargo check to verify compilation**
 
-```rust
-pub mod acp_binding;
-pub use acp_binding::{AcpBindingStore, AcpBinding};
-```
+Run: `cargo check -p alephcore`
+Expected: PASS (with TODO placeholders)
 
-- [ ] **Step 3: Run cargo check to verify compilation**
+- [ ] **Step 3: Complete AcpBindingStore implementation**
+
+- [ ] **Step 4: Run cargo check to verify compilation**
 
 Run: `cargo check -p alephcore`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/gateway/interfaces/telegram/acp_binding.rs src/gateway/interfaces/telegram/mod.rs
@@ -808,7 +792,35 @@ impl MessageDeduplicator {
 
 - [ ] **Step 2: Wire deduplicator into handler**
 
-In `handlers.rs`, update `TelegramHandler` to use deduplicator.
+In `handlers.rs`:
+```rust
+pub struct TelegramHandler {
+    deduplicator: Arc<MessageDeduplicator>,
+    // ... existing fields
+}
+
+impl TelegramHandler {
+    pub fn new(deduplicator: Arc<MessageDeduplicator>, ...) -> Self {
+        Self {
+            deduplicator,
+            // ... existing initialization
+        }
+    }
+
+    pub async fn handle_update(&self, update: Update) -> Result<(), HandlerError> {
+        let chat_id = update.chat_id();
+        let message_id = update.message_id();
+
+        // Check for duplicate
+        if self.deduplicator.is_duplicate(chat_id, message_id).await {
+            return Ok(());  // Skip duplicate
+        }
+
+        // Process update...
+        todo!()
+    }
+}
+```
 
 - [ ] **Step 3: Run cargo check to verify compilation**
 
@@ -827,8 +839,8 @@ git commit -m "telegram: add update deduplication to handlers"
 
 **Files:**
 - Modify: `src/gateway/interfaces/telegram/config_v2.rs`
-- Create: `src/gateway/interfaces/telegram/webhook.rs`
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Create: `src/gateway/interfaces/telegram/webhook.rs`
 
 - [ ] **Step 1: Add Webhook mode to config_v2.rs**
 
@@ -841,28 +853,33 @@ pub enum TelegramMode {
         secret: Option<String>,
     },
 }
+
+impl TelegramConfigV2 {
+    pub fn mode(&self) -> &TelegramMode {
+        &self.mode
+    }
+}
 ```
 
 - [ ] **Step 2: Create webhook.rs**
 
 ```rust
-use teloxide::Bot;
+use teloxide::requests::Requester;
 use anyhow::Result;
 
 pub struct WebhookManager {
-    bot: Bot,
+    bot: teloxide::Bot,
     url: String,
     secret: Option<String>,
 }
 
 impl WebhookManager {
-    pub fn new(bot: Bot, url: String, secret: Option<String>) -> Self {
+    pub fn new(bot: teloxide::Bot, url: String, secret: Option<String>) -> Self {
         Self { bot, url, secret }
     }
 
     pub async fn setup(&self) -> Result<()> {
-        use teloxide::requests::Requester;
-        let mut params = teloxide::payloads::SetWebhook::new(&self.url);
+        let mut params = teloxide::requests::SetWebhook::new(&self.url);
         if let Some(ref secret) = self.secret {
             params.secret_token(secret.clone());
         }
@@ -871,7 +888,6 @@ impl WebhookManager {
     }
 
     pub async fn teardown(&self) -> Result<()> {
-        use teloxide::requests::Requester;
         self.bot.delete_webhook().await?;
         Ok(())
     }
@@ -879,6 +895,28 @@ impl WebhookManager {
 ```
 
 - [ ] **Step 3: Update TelegramChannel::start for webhook mode**
+
+In `mod.rs`:
+```rust
+pub async fn start(&mut self) -> Result<(), ChannelError> {
+    match self.config_v2.mode() {
+        TelegramMode::Polling => {
+            self.start_polling().await?;
+        }
+        TelegramMode::Webhook { url, secret } => {
+            let webhook = WebhookManager::new(
+                self.bot_instances[0].bot(),
+                url.clone(),
+                secret.clone(),
+            );
+            webhook.setup().await?;
+            // Start webhook receiver...
+            todo!()
+        }
+    }
+    Ok(())
+}
+```
 
 - [ ] **Step 4: Run cargo check to verify compilation**
 
@@ -894,7 +932,7 @@ git commit -m "telegram: add webhook support as alternative to polling"
 
 ---
 
-## Task 10: Integration - Wire Context Through Pipeline
+## Task 10: Integration and Refactoring - Wire Context Through Pipeline
 
 **Files:**
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
@@ -903,7 +941,29 @@ git commit -m "telegram: add webhook support as alternative to polling"
 
 - [ ] **Step 1: Update polling.rs to build context**
 
+In `polling.rs`:
+```rust
+async fn process_update(&self, update: Update) -> Result<(), PollingError> {
+    let ctx = self.build_context(update)?;
+
+    // Check access via group policy
+    if self.group_policy.evaluate(&ctx) == AccessDecision::Deny {
+        return Ok(());
+    }
+
+    // Check session and get/create session state
+    let session = self.session_store.get_or_create(&ctx.conversation_key).await?;
+
+    // Process message
+    self.handlers.handle(ctx.with_session(session)).await?;
+
+    Ok(())
+}
+```
+
 - [ ] **Step 2: Update handlers to accept context**
+
+Refactor `handlers.rs` to accept `TelegramInboundContext` instead of raw update.
 
 - [ ] **Step 3: Run cargo check and tests**
 
@@ -922,12 +982,15 @@ git commit -m "telegram: wire TelegramInboundContext through message pipeline"
 
 **Files:**
 - Modify: `src/gateway/interfaces/telegram/mod.rs`
+- Delete: (move to deprecated) legacy config handling
 
 - [ ] **Step 1: Remove legacy config.rs complexity**
 
+Consolidate config handling into `config_v2.rs` and `config_resolver.rs`.
+
 - [ ] **Step 2: Clean up mod.rs**
 
-Reduce `mod.rs` size by extracting to submodules.
+Reduce `mod.rs` from ~800 lines to ~200 lines by extracting to submodules.
 
 - [ ] **Step 3: Run cargo check and tests**
 
@@ -944,22 +1007,32 @@ git commit -m "telegram: clean up legacy code, reduce mod.rs complexity"
 
 ## Plan Summary
 
-| Task | Description | Status |
-|------|-------------|--------|
-| 1 | TelegramInboundContext | pending |
-| 2 | Session state management | pending |
-| 3 | Multi-account routing fix | pending |
-| 4 | Group policy engine | pending |
-| 5 | Native command menu | pending |
-| 6 | Inline keyboard | pending |
-| 7 | ACP bindings | pending |
-| 8 | Update deduplication | pending |
-| 9 | Webhook support | pending |
-| 10 | Integration - wire context | pending |
-| 11 | Cleanup legacy code | pending |
+| Task | Description | Files | Status |
+|------|-------------|-------|--------|
+| 1 | TelegramInboundContext | context.rs | pending |
+| 2 | Session state management | session.rs | pending |
+| 3 | Multi-account routing fix | mod.rs, delivery.rs | pending |
+| 4 | Group policy engine | group_policy.rs | pending |
+| 5 | Native command menu | command_menu.rs | pending |
+| 6 | Inline keyboard | inline_keyboard.rs | pending |
+| 7 | ACP bindings | acp_binding.rs | pending |
+| 8 | Update deduplication | handlers.rs | pending |
+| 9 | Webhook support | webhook.rs, config_v2.rs | pending |
+| 10 | Integration - wire context | mod.rs, handlers.rs, polling.rs | pending |
+| 11 | Cleanup legacy code | mod.rs | pending |
+
+---
 
 ## Dependencies
 
 - Task 1 (context.rs) is prerequisite for Tasks 2, 4, 5, 6, 7, 8, 10
 - Task 2 (session.rs) is used by Task 10
+- Task 3 (multi-account) is independent but recommended early
 - Task 10 (integration) requires all prior tasks
+
+## Notes
+
+- Use `cargo check -p alephcore` frequently during implementation
+- Run `cargo clippy -p alephcore -- -D warnings` before commit
+- Tests can be added as inline `#[cfg(test)]` modules in each new file
+- All new modules should have error handling via `thiserror` or `anyhow`

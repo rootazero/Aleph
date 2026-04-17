@@ -107,6 +107,50 @@ pub struct SessionMetadata {
     /// Raw metadata JSON string from the sessions table
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_json: Option<String>,
+    /// User-facing label / title for the session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Input tokens consumed in this session
+    #[serde(default)]
+    pub input_tokens: i64,
+    /// Output tokens consumed in this session
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// Model used in this session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Model provider used in this session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    /// Parent session key (for session branching / lineage)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_key: Option<String>,
+    /// Number of times this session has been compacted
+    #[serde(default)]
+    pub compaction_count: i64,
+}
+
+/// Patch request for updating session metadata
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Preview of a session: metadata plus recent messages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPreview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<SessionMetadata>,
+    pub messages: Vec<StoredMessage>,
 }
 
 /// Session identity metadata stored in database
@@ -248,6 +292,8 @@ pub struct SessionManager {
     pub(super) conn: Arc<Mutex<Connection>>,
     /// Optional writer for Spec 1 memory capture hooks.
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Optional event bus for publishing session lifecycle events.
+    pub(super) event_bus: Option<Arc<super::event_bus::GatewayEventBus>>,
 }
 
 impl SessionManager {
@@ -273,6 +319,7 @@ impl SessionManager {
             config,
             conn: Arc::new(Mutex::new(conn)),
             raw_memory_writer: None,
+            event_bus: None,
         })
     }
 
@@ -282,6 +329,12 @@ impl SessionManager {
         writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
     ) -> Self {
         self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Attach an event bus for publishing session lifecycle events.
+    pub fn with_event_bus(mut self, bus: Arc<super::event_bus::GatewayEventBus>) -> Self {
+        self.event_bus = Some(bus);
         self
     }
 
@@ -305,7 +358,14 @@ impl SessionManager {
                 total_tokens INTEGER DEFAULT 0,
                 auto_reset_at INTEGER,
                 state TEXT DEFAULT 'created',
-                metadata TEXT
+                metadata TEXT,
+                label TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                model TEXT,
+                model_provider TEXT,
+                parent_session_key TEXT,
+                compaction_count INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -315,6 +375,8 @@ impl SessionManager {
                 content TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 metadata TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
                 FOREIGN KEY (session_key) REFERENCES sessions(key) ON DELETE CASCADE
             );
 
@@ -322,6 +384,7 @@ impl SessionManager {
             CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active_at);
             CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state);
+            CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_key);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                 content,
@@ -333,7 +396,6 @@ impl SessionManager {
         .map_err(|e| SessionManagerError::DatabaseError(format!("Schema init failed: {}", e)))?;
 
         // Backfill FTS5 index for any existing messages not yet indexed.
-        // External-content FTS5 tables do not auto-populate from the content table.
         let backfill_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM messages WHERE id NOT IN (SELECT rowid FROM messages_fts)",
@@ -356,44 +418,62 @@ impl SessionManager {
             );
         }
 
-        // Migrate existing sessions to add state column if missing
-        Self::migrate_add_state_column(conn)?;
+        Self::run_migrations(conn)?;
 
         Ok(())
     }
 
-    /// Migrate existing sessions table to add state column
-    fn migrate_add_state_column(conn: &Connection) -> Result<(), SessionManagerError> {
-        let has_state: Result<bool, _> = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM pragma_table_info('sessions') WHERE name='state'",
-            [],
-            |row| row.get(0),
-        );
+    /// Run incremental schema migrations for columns added after initial release.
+    fn run_migrations(conn: &Connection) -> Result<(), SessionManagerError> {
+        let migrations: &[(&str, &str, &str)] = &[
+            ("sessions", "state", "TEXT DEFAULT 'created'"),
+            ("sessions", "label", "TEXT"),
+            ("sessions", "input_tokens", "INTEGER DEFAULT 0"),
+            ("sessions", "output_tokens", "INTEGER DEFAULT 0"),
+            ("sessions", "model", "TEXT"),
+            ("sessions", "model_provider", "TEXT"),
+            ("sessions", "parent_session_key", "TEXT"),
+            ("sessions", "compaction_count", "INTEGER DEFAULT 0"),
+            ("messages", "input_tokens", "INTEGER DEFAULT 0"),
+            ("messages", "output_tokens", "INTEGER DEFAULT 0"),
+        ];
 
-        match has_state {
-            Ok(true) => {}
-            Ok(false) => {
+        for (table, column, def) in migrations {
+            let has_col: Result<bool, _> = conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('{}') WHERE name='{}'",
+                    table, column
+                ),
+                [],
+                |row| row.get(0),
+            );
+
+            let needs_add = match has_col {
+                Ok(true) => false,
+                Ok(false) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        table = %table,
+                        column = %column,
+                        error = %e,
+                        "Failed to check column existence - assuming missing"
+                    );
+                    true
+                }
+            };
+
+            if needs_add {
                 conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'",
+                    &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, def),
                     [],
                 )
                 .map_err(|e| {
-                    SessionManagerError::DatabaseError(format!("Failed to add state column: {}", e))
+                    SessionManagerError::DatabaseError(format!(
+                        "Failed to add column {} to {}: {}",
+                        column, table, e
+                    ))
                 })?;
-                tracing::info!("Migrated sessions table: added state column");
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to check if state column exists - assuming it doesn't"
-                );
-                conn.execute(
-                    "ALTER TABLE sessions ADD COLUMN state TEXT DEFAULT 'created'",
-                    [],
-                )
-                .map_err(|e| {
-                    SessionManagerError::DatabaseError(format!("Failed to add state column: {}", e))
-                })?;
+                tracing::info!(table = %table, column = %column, "Migrated database schema");
             }
         }
 

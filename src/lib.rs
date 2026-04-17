@@ -49,7 +49,6 @@ pub mod components;
 pub mod compressor;
 mod config;
 pub mod context;
-pub mod conversation;
 mod core;
 pub mod discovery;
 pub mod dispatcher;
@@ -284,12 +283,6 @@ pub use crate::media::{
     AudioFormat, DocFormat, MediaChunk, MediaError, MediaImageFormat, MediaInput, MediaOutput,
     MediaPipeline, MediaPolicy, MediaProvider, MediaType, VideoFormat,
 };
-
-// =============================================================================
-// Conversation Exports
-// =============================================================================
-
-pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 
 // =============================================================================
 // Provider Exports

@@ -21,9 +21,11 @@
 //! - **Nostr**: Nostr NIP-01 relay WebSocket + NIP-04 DM integration
 //! - **Feishu**: Feishu/Lark Bot WebSocket + REST API integration
 //! - **LINE**: LINE Messaging API webhook + REST API integration
+//! - **WeChat**: WeChat iLink Bot API integration
 
 pub mod cli;
 pub mod plugin;
+pub mod wechat;
 
 #[cfg(target_os = "macos")]
 pub mod imessage;
@@ -42,6 +44,7 @@ pub mod slack;
 pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
+pub mod qq;
 pub mod xmpp;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
@@ -66,9 +69,13 @@ pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
 pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
+pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
+pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
 
 pub fn register_channel_plugins() {
     line::register_with_plugin();
     telegram::register_with_plugin();
+    wechat::register_with_plugin();
+    qq::register_with_plugin();
 }

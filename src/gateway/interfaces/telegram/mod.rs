@@ -29,17 +29,16 @@ pub mod offset;
 mod polling;
 pub mod bot_instance;
 pub mod poll;
-pub mod reasoning_lane;
 pub mod reaction_handler;
-pub mod status_reaction;
 pub mod sticker;
+pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
 pub use config_v2::TelegramConfigV2;
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
-pub use config_v2::{DmPolicy, GroupPolicy, StreamingOptions};
+pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
@@ -646,6 +645,11 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.bot_instances.len() > 1 {
+            tracing::warn!(
+                "Multi-account Telegram is configured, but send() currently uses only the first account"
+            );
+        }
         let instance = self.bot_instances.first().ok_or_else(|| {
             ChannelError::NotConnected("No bot instances".to_string())
         })?;

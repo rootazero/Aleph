@@ -372,6 +372,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    let event_bus = server.event_bus().clone();
+
     // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
     // disconnect hook captures session-end events (Task 8).
     // Attach after memory_db is initialised — session_manager was created earlier
@@ -381,10 +383,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .unwrap_or_else(|_| panic!("session_manager has no other owners at this point"))
             .with_raw_memory_writer(
                 memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
-            ),
+            )
+            .with_event_bus(event_bus.clone()),
     );
-
-    let event_bus = server.event_bus().clone();
 
     // Auth subsystem construction (early — vault needed for API key resolution)
     let auth_bundle = initialize_auth(

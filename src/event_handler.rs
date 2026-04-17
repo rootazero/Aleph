@@ -6,6 +6,19 @@
 
 use crate::clarification::{ClarificationRequest, ClarificationResult};
 
+/// A single turn in a conversation (user input + AI response).
+#[derive(Debug, Clone)]
+pub struct ConversationTurn {
+    /// Sequential turn number (0-indexed)
+    pub turn_id: u32,
+    /// User's input for this turn
+    pub user_input: String,
+    /// AI's response for this turn
+    pub ai_response: String,
+    /// Unix timestamp when this turn occurred
+    pub timestamp: i64,
+}
+
 /// Processing states for the Aleph system
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessingState {
@@ -157,7 +170,7 @@ pub trait InternalEventHandler: Send + Sync {
     ///
     /// # Arguments
     /// * `turn` - The completed turn with user input and AI response
-    fn on_conversation_turn_completed(&self, turn: crate::conversation::ConversationTurn);
+    fn on_conversation_turn_completed(&self, turn: ConversationTurn);
 
     /// Called when the AI response is ready and continuation input can be shown.
     ///
@@ -299,8 +312,7 @@ pub struct MockEventHandler {
     pub clarification_response: std::sync::Arc<std::sync::Mutex<Option<ClarificationResult>>>, // Mock response to return
     // Multi-turn conversation tracking
     pub conversation_started: std::sync::Arc<std::sync::Mutex<Vec<String>>>, // Session IDs
-    pub conversation_turns:
-        std::sync::Arc<std::sync::Mutex<Vec<crate::conversation::ConversationTurn>>>,
+    pub conversation_turns: std::sync::Arc<std::sync::Mutex<Vec<ConversationTurn>>>,
     pub conversation_continuation_ready_count: std::sync::Arc<std::sync::Mutex<u32>>,
     pub conversation_ended: std::sync::Arc<std::sync::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
     // Tool registry tracking
@@ -495,7 +507,7 @@ impl MockEventHandler {
             .clone()
     }
 
-    pub fn get_conversation_turns(&self) -> Vec<crate::conversation::ConversationTurn> {
+    pub fn get_conversation_turns(&self) -> Vec<ConversationTurn> {
         self.conversation_turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -620,7 +632,7 @@ impl InternalEventHandler for MockEventHandler {
             .push(session_id.to_owned());
     }
 
-    fn on_conversation_turn_completed(&self, turn: crate::conversation::ConversationTurn) {
+    fn on_conversation_turn_completed(&self, turn: ConversationTurn) {
         self.conversation_turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())

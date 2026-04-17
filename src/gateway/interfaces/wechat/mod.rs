@@ -1,0 +1,210 @@
+//! WeChat Channel Implementation
+//!
+//! iLink Bot API integration for WeChat messaging.
+
+pub mod api;
+pub mod auth;
+pub mod config;
+pub mod inbound;
+pub mod media;
+pub mod outbound;
+pub mod runtime;
+pub mod sync_buf;
+pub mod types;
+
+use async_trait::async_trait;
+use std::sync::Arc;
+
+use crate::gateway::channel::{
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
+};
+
+pub use config::WeChatConfig;
+
+pub struct WeChatChannel {
+    info: ChannelInfo,
+    config: WeChatConfig,
+    channel_state: ChannelState,
+    runtime: Option<Arc<runtime::WeChatRuntime>>,
+}
+
+impl WeChatChannel {
+    pub fn new(id: impl Into<String>, config: WeChatConfig) -> Self {
+        let info = ChannelInfo {
+            id: ChannelId::new(id),
+            name: "WeChat".to_string(),
+            channel_type: "wechat".to_string(),
+            status: ChannelStatus::Disconnected,
+            capabilities: Self::capabilities(),
+        };
+
+        Self {
+            info,
+            config,
+            channel_state: ChannelState::new(100),
+            runtime: None,
+        }
+    }
+
+    fn capabilities() -> ChannelCapabilities {
+        ChannelCapabilities {
+            attachments: true,
+            images: true,
+            audio: true,
+            video: true,
+            reactions: false,
+            replies: false,
+            editing: false,
+            deletion: false,
+            typing_indicator: true,
+            read_receipts: false,
+            rich_text: false,
+            max_message_length: 2000,
+            max_attachment_size: 10 * 1024 * 1024,
+            stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
+        }
+    }
+}
+
+#[async_trait]
+impl Channel for WeChatChannel {
+    fn info(&self) -> &ChannelInfo {
+        &self.info
+    }
+
+    fn state(&self) -> &ChannelState {
+        &self.channel_state
+    }
+
+    async fn start(&mut self) -> ChannelResult<()> {
+        self.config
+            .validate()
+            .map_err(ChannelError::ConfigError)?;
+
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
+
+        tracing::info!("Starting WeChat channel...");
+
+        let runtime = Arc::new(runtime::WeChatRuntime::new(
+            self.config.clone(),
+            auth::ContextTokenStore::new(""),
+        ));
+        self.runtime = Some(runtime.clone());
+
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
+
+        tracing::info!("WeChat channel started");
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> ChannelResult<()> {
+        tracing::info!("Stopping WeChat channel...");
+
+        if let Some(runtime) = self.runtime.take() {
+            runtime.stop().await;
+        }
+
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
+        Ok(())
+    }
+
+    async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
+
+        let payload = outbound::mapper::build_send_payload(
+            &self.config.account_id,
+            message.conversation_id.as_str(),
+            &self.config.account_id,
+            &message.text,
+            None,
+        );
+
+        runtime
+            .send_message(&self.config.token, payload)
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+
+        Ok(SendResult {
+            message_id: MessageId::new(""),
+            timestamp: chrono::Utc::now(),
+        })
+    }
+
+    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
+        Ok(())
+    }
+
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _reaction: &str,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "WeChat reactions not yet implemented".to_string(),
+        ))
+    }
+
+    async fn edit(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _new_text: &str,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "WeChat does not support message editing".to_string(),
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+    ) -> ChannelResult<()> {
+        Err(ChannelError::UnsupportedFeature(
+            "WeChat does not support message deletion".to_string(),
+        ))
+    }
+}
+
+/// Factory for creating WeChat channels.
+pub struct WeChatChannelFactory;
+
+#[async_trait]
+impl ChannelFactory for WeChatChannelFactory {
+    fn channel_type(&self) -> &str {
+        "wechat"
+    }
+
+    async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
+        let config: WeChatConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid WeChat config: {}", e)))?;
+
+        config
+            .validate()
+            .map_err(|e| ChannelError::ConfigError(e))?;
+
+        Ok(Box::new(WeChatChannel::new("wechat", config)))
+    }
+}
+
+fn wechat_factory_creator(
+    _config: crate::gateway::channel::ChannelConfig,
+) -> crate::gateway::channel::ChannelResult<Arc<dyn ChannelFactory>> {
+    Ok(Arc::new(WeChatChannelFactory))
+}
+
+pub fn register_with_plugin() {
+    crate::gateway::interfaces::plugin::register("wechat", wechat_factory_creator);
+}

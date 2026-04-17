@@ -100,7 +100,7 @@ pub mod secret_migration;
 pub mod security_config;
 pub mod services;
 pub mod session;
-pub mod session_usage;
+
 pub mod skills;
 #[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;

@@ -5,10 +5,36 @@ use tracing::{debug, info};
 
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
-    SessionSearchResult, SessionState, StoredMessage,
+    SessionPatch, SessionPreview, SessionSearchResult, SessionState, StoredMessage,
 };
 use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
+
+fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {
+    let state_str: Option<String> = row.get(8)?;
+    let state = state_str
+        .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
+        .unwrap_or_default();
+    Ok(SessionMetadata {
+        key: row.get(0)?,
+        agent_id: row.get(1)?,
+        session_type: row.get(2)?,
+        created_at: row.get(3)?,
+        last_active_at: row.get(4)?,
+        message_count: row.get(5)?,
+        total_tokens: row.get(6)?,
+        auto_reset_at: row.get(7)?,
+        state: Some(state),
+        metadata_json: row.get(9)?,
+        label: row.get(10)?,
+        input_tokens: row.get(11)?,
+        output_tokens: row.get(12)?,
+        model: row.get(13)?,
+        model_provider: row.get(14)?,
+        parent_session_key: row.get(15)?,
+        compaction_count: row.get(16)?,
+    })
+}
 
 impl SessionManager {
     /// Get or create a session
@@ -30,27 +56,12 @@ impl SessionManager {
         let existing: Option<SessionMetadata> = conn
             .query_row(
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state
+                        message_count, total_tokens, auto_reset_at, state, metadata,
+                        label, input_tokens, output_tokens, model, model_provider,
+                        parent_session_key, compaction_count
                  FROM sessions WHERE key = ?",
                 params![&key_str],
-                |row| {
-                    let state_str: Option<String> = row.get(8)?;
-                    let state = state_str
-                        .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
-                        .unwrap_or_default();
-                    Ok(SessionMetadata {
-                        key: row.get(0)?,
-                        agent_id: row.get(1)?,
-                        session_type: row.get(2)?,
-                        created_at: row.get(3)?,
-                        last_active_at: row.get(4)?,
-                        message_count: row.get(5)?,
-                        total_tokens: row.get(6)?,
-                        auto_reset_at: row.get(7)?,
-                        state: Some(state),
-                        metadata_json: None,
-                    })
-                },
+                map_session_metadata,
             )
             .ok();
 
@@ -97,6 +108,13 @@ impl SessionManager {
             auto_reset_at: None,
             state: Some(SessionState::Created),
             metadata_json: None,
+            label: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+            parent_session_key: None,
+            compaction_count: 0,
         })
     }
 
@@ -106,6 +124,22 @@ impl SessionManager {
         key: &SessionKey,
         role: &str,
         content: &str,
+    ) -> Result<i64, SessionManagerError> {
+        self.add_message_with_meta(key, role, content, None, 0, 0, None, None)
+            .await
+    }
+
+    /// Add a message to a session with optional metadata and token tracking.
+    pub async fn add_message_with_meta(
+        &self,
+        key: &SessionKey,
+        role: &str,
+        content: &str,
+        metadata: Option<&str>,
+        input_tokens: i64,
+        output_tokens: i64,
+        model: Option<&str>,
+        model_provider: Option<&str>,
     ) -> Result<i64, SessionManagerError> {
         let key_str = key.to_key_string();
         let now = chrono::Utc::now().timestamp();
@@ -119,8 +153,9 @@ impl SessionManager {
 
             // Insert message
             conn.execute(
-                "INSERT INTO messages (session_key, role, content, timestamp) VALUES (?, ?, ?, ?)",
-                params![&key_str, role, content, now],
+                "INSERT INTO messages (session_key, role, content, timestamp, metadata, input_tokens, output_tokens)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![&key_str, role, content, now, metadata, input_tokens, output_tokens],
             )
             .map_err(|e| {
                 SessionManagerError::DatabaseError(format!("Insert message failed: {}", e))
@@ -136,8 +171,6 @@ impl SessionManager {
             .ok();
 
             // Only transition to Running if current state allows it
-            // Valid: Created, Active, Idle (Running -> Running is also fine)
-            // Invalid: Error, Stopped (terminal states)
             let valid_transition: bool = conn
                 .query_row(
                     "SELECT state FROM sessions WHERE key = ?",
@@ -151,19 +184,38 @@ impl SessionManager {
                 )
                 .unwrap_or(true);
 
+            let total_delta = input_tokens + output_tokens;
+            let model_owned = model.map(|s| s.to_string());
+            let provider_owned = model_provider.map(|s| s.to_string());
+
+            let mut session_update_sql = String::from(
+                "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
+            );
             if valid_transition {
-                conn.execute(
-                    "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, state = 'running' WHERE key = ?",
-                    params![now, &key_str],
-                )
-                .ok();
-            } else {
-                conn.execute(
-                    "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1 WHERE key = ?",
-                    params![now, &key_str],
-                )
-                .ok();
+                session_update_sql.push_str(", state = 'running'");
             }
+            if model_owned.is_some() {
+                session_update_sql.push_str(", model = ?");
+            }
+            if provider_owned.is_some() {
+                session_update_sql.push_str(", model_provider = ?");
+            }
+            session_update_sql.push_str(" WHERE key = ?");
+
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![
+                &now,
+                &input_tokens,
+                &output_tokens,
+                &total_delta,
+            ];
+            if let Some(ref m) = model_owned {
+                params.push(m);
+            }
+            if let Some(ref mp) = provider_owned {
+                params.push(mp);
+            }
+            params.push(&key_str);
+            conn.execute(&session_update_sql, params.as_slice()).ok();
 
             // Check if compaction needed
             let count: i64 = conn
@@ -180,6 +232,8 @@ impl SessionManager {
         if needs_compaction {
             self.compact_session(key).await?;
         }
+
+        self.emit_session_updated(&key_str);
 
         Ok(message_id)
     }
@@ -198,8 +252,11 @@ impl SessionManager {
 
         let query = match limit {
             Some(n) => format!(
-                "SELECT id, role, content, timestamp, metadata FROM messages
-                 WHERE session_key = ? ORDER BY timestamp DESC LIMIT {}",
+                "SELECT id, role, content, timestamp, metadata FROM (
+                    SELECT id, role, content, timestamp, metadata
+                    FROM messages
+                    WHERE session_key = ? ORDER BY timestamp DESC LIMIT {}
+                ) ORDER BY timestamp ASC",
                 n
             ),
             None => "SELECT id, role, content, timestamp, metadata FROM messages
@@ -224,12 +281,6 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .filter_map(|r| r.ok())
             .collect();
-
-        // If we used DESC for limit, reverse to get chronological order
-        if limit.is_some() {
-            let reversed: Vec<_> = messages.into_iter().rev().collect();
-            return Ok(reversed);
-        }
 
         Ok(messages)
     }
@@ -309,63 +360,29 @@ impl SessionManager {
             .lock()
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
+        let sql = "SELECT key, agent_id, session_type, created_at, last_active_at,
+                          message_count, total_tokens, auto_reset_at, state, metadata,
+                          label, input_tokens, output_tokens, model, model_provider,
+                          parent_session_key, compaction_count
+                   FROM sessions";
+
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
-                .prepare(
-                    "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at, state, metadata
-                     FROM sessions WHERE agent_id = ? ORDER BY last_active_at DESC",
-                )
+                .prepare(&format!("{} WHERE agent_id = ? ORDER BY last_active_at DESC", sql))
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
-                .query_map(params![id], |row| {
-                    let state_str: String = row.get(8)?;
-                    let state =
-                        serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
-                    Ok(SessionMetadata {
-                        key: row.get(0)?,
-                        agent_id: row.get(1)?,
-                        session_type: row.get(2)?,
-                        created_at: row.get(3)?,
-                        last_active_at: row.get(4)?,
-                        message_count: row.get(5)?,
-                        total_tokens: row.get(6)?,
-                        auto_reset_at: row.get(7)?,
-                        state: Some(state),
-                        metadata_json: row.get(9)?,
-                    })
-                })
+                .query_map(params![id], map_session_metadata)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             rows.filter_map(|r| r.ok()).collect()
         } else {
             let mut stmt = conn
-                .prepare(
-                    "SELECT key, agent_id, session_type, created_at, last_active_at,
-                            message_count, total_tokens, auto_reset_at, state, metadata
-                     FROM sessions ORDER BY last_active_at DESC",
-                )
+                .prepare(&format!("{} ORDER BY last_active_at DESC", sql))
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
-                .query_map([], |row| {
-                    let state_str: String = row.get(8)?;
-                    let state =
-                        serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
-                    Ok(SessionMetadata {
-                        key: row.get(0)?,
-                        agent_id: row.get(1)?,
-                        session_type: row.get(2)?,
-                        created_at: row.get(3)?,
-                        last_active_at: row.get(4)?,
-                        message_count: row.get(5)?,
-                        total_tokens: row.get(6)?,
-                        auto_reset_at: row.get(7)?,
-                        state: Some(state),
-                        metadata_json: row.get(9)?,
-                    })
-                })
+                .query_map([], map_session_metadata)
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             rows.filter_map(|r| r.ok()).collect()
@@ -409,7 +426,6 @@ impl SessionManager {
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            // Update message count
             let new_count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM messages WHERE session_key = ?",
@@ -419,7 +435,7 @@ impl SessionManager {
                 .unwrap_or(0);
 
             conn.execute(
-                "UPDATE sessions SET message_count = ? WHERE key = ?",
+                "UPDATE sessions SET message_count = ?, compaction_count = compaction_count + 1 WHERE key = ?",
                 params![new_count, &key_str],
             )
             .ok();
@@ -827,6 +843,8 @@ impl SessionManager {
         state: SessionState,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
+        let old_state = self.get_state(key).await.ok();
+
         let conn = self
             .conn
             .lock()
@@ -838,8 +856,217 @@ impl SessionManager {
         )
         .map_err(|e| SessionManagerError::DatabaseError(format!("Set state failed: {}", e)))?;
 
+        drop(conn);
+
         debug!("Session {} transitioned to {}", key_str, state);
+        self.emit_session_lifecycle_changed(
+            &key_str,
+            old_state.as_ref(),
+            &state.to_string(),
+            None,
+        );
+        self.emit_session_updated(&key_str);
         Ok(())
+    }
+
+    /// Patch session metadata (label, status, model, model_provider, metadata JSON)
+    pub async fn patch_session(
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+    ) -> Result<bool, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut meta: serde_json::Value = existing_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        if let Some(obj) = meta.as_object_mut() {
+            if let Some(status) = &patch.status {
+                obj.insert("status".to_string(), serde_json::json!(status));
+            }
+            if let Some(extra) = &patch.metadata {
+                if let Some(extra_obj) = extra.as_object() {
+                    for (k, v) in extra_obj {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let mut sql = String::from("UPDATE sessions SET metadata = ?");
+        let mut sql_params: Vec<&dyn rusqlite::ToSql> = vec![&meta_json];
+
+        if let Some(label) = &patch.label {
+            sql.push_str(", label = ?");
+            sql_params.push(label);
+        }
+        if let Some(model) = &patch.model {
+            sql.push_str(", model = ?");
+            sql_params.push(model);
+        }
+        if let Some(provider) = &patch.model_provider {
+            sql.push_str(", model_provider = ?");
+            sql_params.push(provider);
+        }
+
+        sql.push_str(" WHERE key = ?");
+        sql_params.push(&key_str as &dyn rusqlite::ToSql);
+
+        let updated = conn
+            .execute(&sql, sql_params.as_slice())
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Patch failed: {}", e)))?;
+
+        drop(conn);
+        self.emit_session_updated(&key_str);
+        Ok(updated > 0)
+    }
+
+    /// Update session usage statistics (token counts, model info)
+    pub async fn update_session_usage(
+        &self,
+        key: &SessionKey,
+        input_tokens: i64,
+        output_tokens: i64,
+        model: Option<&str>,
+        model_provider: Option<&str>,
+    ) -> Result<(), SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let total = input_tokens + output_tokens;
+        let model_owned = model.map(|s| s.to_string());
+        let provider_owned = model_provider.map(|s| s.to_string());
+
+        let mut sql = String::from(
+            "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            vec![&input_tokens, &output_tokens, &total];
+
+        if model_owned.is_some() {
+            sql.push_str(", model = ?");
+        }
+        if provider_owned.is_some() {
+            sql.push_str(", model_provider = ?");
+        }
+        sql.push_str(" WHERE key = ?");
+
+        if let Some(ref m) = model_owned {
+            params.push(m);
+        }
+        if let Some(ref mp) = provider_owned {
+            params.push(mp);
+        }
+        params.push(&key_str);
+
+        conn.execute(&sql, params.as_slice())
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Usage update failed: {}", e)))?;
+
+        drop(conn);
+        self.emit_session_updated(&key_str);
+        Ok(())
+    }
+
+    /// Get a preview of the session (last N messages + summary metadata)
+    pub async fn get_session_preview(
+        &self,
+        key: &SessionKey,
+        message_limit: usize,
+    ) -> Result<SessionPreview, SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let meta = conn
+            .query_row(
+                "SELECT key, agent_id, session_type, created_at, last_active_at,
+                        message_count, total_tokens, auto_reset_at, state, metadata,
+                        label, input_tokens, output_tokens, model, model_provider,
+                        parent_session_key, compaction_count
+                 FROM sessions WHERE key = ?",
+                params![&key_str],
+                map_session_metadata,
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let mut messages = Vec::new();
+        if message_limit > 0 {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, role, content, timestamp, metadata FROM (
+                        SELECT id, role, content, timestamp, metadata
+                        FROM messages WHERE session_key = ? ORDER BY timestamp DESC LIMIT ?
+                    ) ORDER BY timestamp ASC"
+                )
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+            messages = stmt
+                .query_map(params![&key_str, message_limit as i64], |row| {
+                    Ok(StoredMessage {
+                        id: row.get(0)?,
+                        role: row.get(1)?,
+                        content: row.get(2)?,
+                        timestamp: row.get(3)?,
+                        metadata: row.get(4)?,
+                    })
+                })
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+                .filter_map(|r| r.ok())
+                .collect();
+        }
+
+        Ok(SessionPreview { meta, messages })
+    }
+
+    fn emit_session_updated(&self, session_key: &str) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key: session_key.to_string(),
+            };
+            let _ = bus.publish_frame(&frame);
+        }
+    }
+
+    fn emit_session_lifecycle_changed(
+        &self,
+        session_key: &str,
+        old_state: Option<&SessionState>,
+        new_state: &str,
+        reason: Option<&str>,
+    ) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::SessionLifecycleChanged {
+                session_key: session_key.to_string(),
+                old_state: old_state.map(|s| s.to_string()),
+                new_state: new_state.to_string(),
+                reason: reason.map(|s| s.to_string()),
+            };
+            let _ = bus.publish_frame(&frame);
+        }
     }
 
     /// Get current session state
@@ -936,28 +1163,15 @@ impl SessionManager {
         let mut stmt = conn
             .prepare(
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
-                        message_count, total_tokens, auto_reset_at, state
+                        message_count, total_tokens, auto_reset_at, state, metadata,
+                        label, input_tokens, output_tokens, model, model_provider,
+                        parent_session_key, compaction_count
                  FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![state.to_string()], |row| {
-                let state_str: String = row.get(8)?;
-                let state = serde_json::from_str(&format!("\"{}\"", state_str)).unwrap_or_default();
-                Ok(SessionMetadata {
-                    key: row.get(0)?,
-                    agent_id: row.get(1)?,
-                    session_type: row.get(2)?,
-                    created_at: row.get(3)?,
-                    last_active_at: row.get(4)?,
-                    message_count: row.get(5)?,
-                    total_tokens: row.get(6)?,
-                    auto_reset_at: row.get(7)?,
-                    state: Some(state),
-                    metadata_json: None,
-                })
-            })
+            .query_map(params![state.to_string()], map_session_metadata)
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         Ok(rows.filter_map(|r| r.ok()).collect())

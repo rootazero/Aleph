@@ -1,13 +1,13 @@
 pub(crate) mod api;
 pub(crate) mod auth;
 pub(crate) mod config;
-mod dedup;
-pub(crate) mod events;
-pub(crate) mod streaming;
+pub(crate) mod message_ops;
 pub(crate) mod types;
-mod user_cache;
-mod webhook;
-mod websocket;
+
+pub mod feishu_inbound;
+pub mod feishu_outbound;
+pub mod feishu_policy;
+pub mod feishu_runtime;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -17,50 +17,28 @@ use tokio::sync::watch;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelProvider,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
 use crate::thinker::interaction::{
     InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 
-use api::{FeishuApi, FeishuSendError};
+use api::FeishuApi;
 use auth::TokenManager;
 pub use config::FeishuConfig;
-use dedup::MessageDedup;
-use user_cache::UserProfileCache;
-use webhook::WebhookContext;
-use websocket::WsLoopContext;
-
-/// Determine if the response should use a Feishu card for markdown rendering.
-fn should_use_card(text: &str, render_mode: &str) -> bool {
-    match render_mode {
-        "card" => true,
-        "raw" => false,
-        // "auto": use card for rich/long content
-        _ => {
-            text.len() > 200
-                || text.contains("```")
-                || text.contains("|---|")
-                || text.contains("|:--")
-        }
-    }
-}
-
-fn map_send_error(e: FeishuSendError) -> ChannelError {
-    match e {
-        FeishuSendError::RateLimited { retry_after_secs } => {
-            ChannelError::RateLimited { retry_after_secs }
-        }
-        FeishuSendError::Other(msg) => ChannelError::SendFailed(msg),
-    }
-}
+use feishu_inbound::{InboundPolicy, MessageDedup, UserProfileCache};
+use feishu_outbound::FeishuSender;
+use feishu_runtime::FeishuRuntime;
+use message_ops::MessageOps;
 
 pub struct FeishuChannel {
     info: ChannelInfo,
     config: FeishuConfig,
     channel_state: ChannelState,
     api: Option<Arc<FeishuApi>>,
-    user_cache: Option<Arc<UserProfileCache>>,
+    runtime: Option<FeishuRuntime>,
+    message_ops: Option<MessageOps>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
@@ -81,7 +59,8 @@ impl FeishuChannel {
             config,
             channel_state: ChannelState::new(100),
             api: None,
-            user_cache: None,
+            runtime: None,
+            message_ops: None,
             shutdown_tx: None,
         })
     }
@@ -94,7 +73,7 @@ impl FeishuChannel {
             video: false,
             reactions: true,
             replies: true,
-            editing: true,
+            editing: false,
             deletion: false,
             typing_indicator: true,
             read_receipts: false,
@@ -116,10 +95,17 @@ impl Channel for FeishuChannel {
         &self.channel_state
     }
 
+    fn status(&self) -> ChannelStatus {
+        match self.runtime.as_ref().map(|r| r.connection_state()) {
+            Some(feishu_runtime::RuntimeState::Connected) => ChannelStatus::Connected,
+            Some(feishu_runtime::RuntimeState::Connecting) => ChannelStatus::Connecting,
+            Some(feishu_runtime::RuntimeState::Error) => ChannelStatus::Error,
+            _ => ChannelStatus::Disconnected,
+        }
+    }
+
     async fn start(&mut self) -> ChannelResult<()> {
-        self.channel_state
-            .set_status(ChannelStatus::Connecting)
-            .await;
+        self.channel_state.set_status(ChannelStatus::Connecting).await;
 
         let http = reqwest::Client::new();
         let base_url = self.config.base_url();
@@ -144,13 +130,9 @@ impl Channel for FeishuChannel {
 
         let bot_open_id = api.bot_open_id().await.unwrap_or_default();
 
-        let user_cache = Arc::new(UserProfileCache::new());
-        let dedup = Arc::new(StdMutex::new(MessageDedup::new()));
-
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
-
-        auth.spawn_token_refresh(shutdown_rx.clone());
+        auth.spawn_token_refresh(shutdown_rx);
 
         if self.config.is_webhook_mode() {
             tracing::info!(
@@ -160,44 +142,28 @@ impl Channel for FeishuChannel {
                 self.config.webhook_path
             );
 
-            let webhook_ctx = WebhookContext {
+            use crate::gateway::interfaces::feishu::feishu_inbound::webhook_server::{run_webhook_server, WebhookState};
+
+            let webhook_state = WebhookState {
                 config: self.config.clone(),
                 channel_id: self.info.id.clone(),
-                bot_open_id,
+                bot_open_id: bot_open_id.clone(),
                 sender: self.channel_state.sender(),
-                status_handle: self.channel_state.status_handle(),
                 api: api.clone(),
-                user_cache: user_cache.clone(),
-                dedup,
+                user_cache: Arc::new(UserProfileCache::new()),
+                dedup: Arc::new(StdMutex::new(MessageDedup::new())),
+                policy: Arc::new(InboundPolicy::new(self.config.clone(), bot_open_id)),
             };
-
-            tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+            tokio::spawn(run_webhook_server(webhook_state));
         } else {
-            let ws_url = api
-                .get_ws_endpoint()
-                .await
-                .map_err(|e| ChannelError::Internal(format!("WS endpoint failed: {e}")))?;
-
-            let ws_ctx = WsLoopContext {
-                initial_ws_url: ws_url,
-                channel_id: self.info.id.clone(),
-                config: self.config.clone(),
-                bot_open_id,
-                sender: self.channel_state.sender(),
-                status_handle: self.channel_state.status_handle(),
-                shutdown_rx,
-                api: api.clone(),
-                user_cache: user_cache.clone(),
-            };
-
-            tokio::spawn(websocket::run_ws_loop(ws_ctx));
+            let mut runtime = FeishuRuntime::new(api.clone(), self.config.clone(), bot_open_id);
+            runtime.start(self.channel_state.sender()).await?;
+            self.runtime = Some(runtime);
         }
 
-        self.api = Some(api);
-        self.user_cache = Some(user_cache);
-        self.channel_state
-            .set_status(ChannelStatus::Connected)
-            .await;
+        self.api = Some(api.clone());
+        self.message_ops = Some(MessageOps::new(api));
+        self.channel_state.set_status(ChannelStatus::Connected).await;
 
         Ok(())
     }
@@ -206,11 +172,12 @@ impl Channel for FeishuChannel {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
         }
+        if let Some(mut runtime) = self.runtime.take() {
+            runtime.stop().await;
+        }
         self.api = None;
-        self.user_cache = None;
-        self.channel_state
-            .set_status(ChannelStatus::Disconnected)
-            .await;
+        self.message_ops = None;
+        self.channel_state.set_status(ChannelStatus::Disconnected).await;
         Ok(())
     }
 
@@ -219,60 +186,45 @@ impl Channel for FeishuChannel {
             .api
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+        FeishuSender::send_message(api, message, &self.config).await
+    }
 
-        let chat_id = message.conversation_id.as_str();
-        let reply_to = message.reply_to.as_ref().map(|id| id.as_str());
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        let ops = self
+            .message_ops
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+        ops.react(_conversation_id, message_id, reaction).await
+    }
 
-        let has_image = message
-            .attachments
-            .iter()
-            .any(|a| a.mime_type.starts_with("image/"));
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
+        let ops = self
+            .message_ops
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+        ops.edit(conversation_id, message_id, new_text).await
+    }
 
-        let msg_id = if has_image {
-            if let Some(attachment) = message
-                .attachments
-                .iter()
-                .find(|a| a.mime_type.starts_with("image/"))
-            {
-                let image_data = attachment.data.clone().ok_or_else(|| {
-                    ChannelError::SendFailed("Image attachment has no data".to_string())
-                })?;
-                let filename = attachment.filename.as_deref().unwrap_or("image.png");
-                let image_key = api
-                    .upload_image(image_data, filename)
-                    .await
-                    .map_err(ChannelError::SendFailed)?;
-                api.send_image(chat_id, &image_key, reply_to)
-                    .await
-                    .map_err(map_send_error)?
-            } else {
-                return Err(ChannelError::SendFailed(
-                    "Image attachment not found".to_string(),
-                ));
-            }
-        } else {
-            if message.text.is_empty() {
-                return Err(ChannelError::SendFailed("Empty message".to_string()));
-            }
-            if should_use_card(&message.text, &self.config.render_mode) {
-                api.send_card(chat_id, &message.text, reply_to)
-                    .await
-                    .map_err(map_send_error)?
-            } else {
-                api.send_text(chat_id, &message.text, reply_to)
-                    .await
-                    .map_err(map_send_error)?
-            }
-        };
-
-        if has_image && !message.text.is_empty() {
-            let _ = api.send_text(chat_id, &message.text, reply_to).await;
-        }
-
-        Ok(SendResult {
-            message_id: MessageId::new(msg_id),
-            timestamp: Utc::now(),
-        })
+    async fn delete(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
+        let ops = self
+            .message_ops
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
+        ops.delete(conversation_id, message_id).await
     }
 }
 
@@ -284,44 +236,5 @@ impl ChannelProvider for FeishuChannel {
                 .supports_streaming(self.config.streaming)
                 .prefer_compact(false),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_use_card;
-
-    #[test]
-    fn test_should_use_card_auto_plain() {
-        assert!(!should_use_card("Hello world", "auto"));
-    }
-
-    #[test]
-    fn test_should_use_card_auto_code_block() {
-        assert!(should_use_card(
-            "Here is code:\n```rust\nfn main() {}\n```",
-            "auto"
-        ));
-    }
-
-    #[test]
-    fn test_should_use_card_auto_table() {
-        assert!(should_use_card("| A |---|B |", "auto"));
-    }
-
-    #[test]
-    fn test_should_use_card_auto_long() {
-        let long_text = "a".repeat(201);
-        assert!(should_use_card(&long_text, "auto"));
-    }
-
-    #[test]
-    fn test_should_use_card_forced() {
-        assert!(should_use_card("Hi", "card"));
-    }
-
-    #[test]
-    fn test_should_use_card_raw() {
-        assert!(!should_use_card("```code```", "raw"));
     }
 }
