@@ -9,6 +9,7 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::sync_primitives::Arc;
+use super::directory::UserDirectory;
 use chrono::Utc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -661,6 +662,14 @@ impl SlackMessageOps {
             return None;
         }
 
+        if !config.is_user_allowed(user_id) {
+            tracing::debug!(
+                "Slack: user {} not in user_allowlist, filtering mention",
+                user_id
+            );
+            return None;
+        }
+
         let slack_channel = event["channel"].as_str()?;
         if !config.is_channel_allowed(slack_channel) {
             return None;
@@ -737,6 +746,15 @@ impl SlackMessageOps {
             return None;
         }
 
+        // Filter by user allowlist
+        if !config.is_user_allowed(user_id) {
+            tracing::debug!(
+                "Slack: user {} not in user_allowlist, filtering",
+                user_id
+            );
+            return None;
+        }
+
         let slack_channel = event["channel"].as_str()?;
 
         // Filter by allowed channels
@@ -809,6 +827,7 @@ impl SlackMessageOps {
         config: SlackConfig,
         inbound_tx: InboundMessageSender,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        user_directory: Option<Arc<UserDirectory>>,
     ) {
         use futures_util::{SinkExt, StreamExt};
 
@@ -938,15 +957,34 @@ impl SlackMessageOps {
                                 };
 
                                 if let Some(inbound) = inbound {
+                                    let resolved_inbound = if config.resolve_user_names {
+                                        if let Some(ref dir) = user_directory {
+                                            if let Some(name) =
+                                                dir.resolve(inbound.sender_id.as_str()).await
+                                            {
+                                                InboundMessage {
+                                                    sender_name: Some(name),
+                                                    ..inbound
+                                                }
+                                            } else {
+                                                inbound
+                                            }
+                                        } else {
+                                            inbound
+                                        }
+                                    } else {
+                                        inbound
+                                    };
+
                                     tracing::debug!(
                                         "Slack {} from {}: {}",
                                         event_type,
-                                        inbound.sender_id.as_str(),
-                                        &inbound.text[..inbound.text.len().min(50)]
+                                        resolved_inbound.sender_id.as_str(),
+                                        &resolved_inbound.text[..resolved_inbound.text.len().min(50)]
                                     );
-                                    let reply_to = inbound.reply_to.clone();
+                                    let reply_to = resolved_inbound.reply_to.clone();
                                     let thread_ts = reply_to.as_ref().map(|id| id.as_str());
-                                    if debouncer.enqueue(inbound, thread_ts).await {
+                                    if debouncer.enqueue(resolved_inbound, thread_ts).await {
                                         tracing::error!("Slack: inbound channel closed");
                                         return;
                                     }
@@ -1333,5 +1371,104 @@ mod tests {
         let msg =
             SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_filters_user_not_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U456",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_allows_user_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U123",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
+    }
+
+    #[test]
+    fn test_convert_allowlist_empty_allows_all() {
+        let event = serde_json::json!({
+            "type": "message",
+            "user": "U456",
+            "channel": "C789",
+            "text": "Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig::default();
+
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
+    }
+
+    #[test]
+    fn test_convert_mention_filters_user_not_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "app_mention",
+            "user": "U456",
+            "channel": "C789",
+            "text": "<@B123> Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg =
+            SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_mention_allows_user_in_allowlist() {
+        let event = serde_json::json!({
+            "type": "app_mention",
+            "user": "U123",
+            "channel": "C789",
+            "text": "<@B123> Hello",
+            "ts": "1700000000.000100"
+        });
+
+        let channel_id = ChannelId::new("slack");
+        let config = SlackConfig {
+            user_allowlist: vec!["U123".to_string()],
+            ..Default::default()
+        };
+
+        let msg =
+            SlackMessageOps::convert_app_mention_to_inbound(&event, &channel_id, "B123", &config);
+        assert!(msg.is_some());
     }
 }

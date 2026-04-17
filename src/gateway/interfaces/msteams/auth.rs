@@ -4,6 +4,7 @@
 //! - `TokenCache`: outbound OAuth2 token cache for Bot Framework REST API calls
 //! - `JwtValidator`: inbound JWT validation for Bot Framework webhook requests
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -561,4 +562,273 @@ DQIDAQAB
             "Should reject when no keys are loaded"
         );
     }
+
+    #[tokio::test]
+    async fn test_certificate_load_valid_pem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        let pem_content = "-----BEGIN CERTIFICATE-----\nMIICpDCCAYwCCQDU+pQ4P0aW5DANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAls\nb2NhbGhvc3QwHhcNMjQwMTAxMDAwMDAwWhcNMjUwMTAxMDAwMDAwWjAUMRIwEAYDVQQD\nDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7o5gELJvF\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7o5gELJvF\n-----END PRIVATE KEY-----\n";
+        std::fs::write(&cert_path, pem_content).unwrap();
+        let cert = Certificate::load(cert_path).await;
+        assert!(cert.is_ok(), "Certificate load failed: {:?}", cert.err());
+    }
+
+    #[tokio::test]
+    async fn test_certificate_load_missing_file() {
+        let result = Certificate::load(PathBuf::from("/nonexistent/cert.pem")).await;
+        assert!(result.is_err());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedCredential {
+    pub certificate_path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_identity_client_id: Option<String>,
+    pub authority_url: String,
+}
+
+impl FederatedCredential {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.certificate_path.exists() {
+            return Err("Certificate file does not exist");
+        }
+        if !self.authority_url.contains("{tenant}") {
+            return Err("authority_url must contain {tenant} placeholder");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthFlow {
+    ClientSecret(String),
+    Federated(FederatedCredential),
+}
+
+impl AuthFlow {
+    pub fn is_federated(&self) -> bool {
+        matches!(self, AuthFlow::Federated(_))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Certificate {
+    pub der: Vec<u8>,
+    pub private_key: Vec<u8>,
+}
+
+impl Certificate {
+    pub async fn load(path: std::path::PathBuf) -> Result<Self, CertificateError> {
+        let content = tokio::fs::read(&path)
+            .await
+            .map_err(|e| CertificateError::IoError(e.to_string()))?;
+        Self::load_from_pem(&content)
+    }
+
+    fn load_from_pem(content: &[u8]) -> Result<Self, CertificateError> {
+        let pem_str = String::from_utf8_lossy(content);
+        let mut der = None;
+        let mut private_key = None;
+
+        let cert_re = regex::Regex::new(r"-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+)\s*-----END CERTIFICATE-----").unwrap();
+        let key_re = regex::Regex::new(r"-----BEGIN (?:RSA )?PRIVATE KEY-----\s*([A-Za-z0-9+/=\s]+)\s*-----END (?:RSA )?PRIVATE KEY-----").unwrap();
+
+        if let Some(caps) = cert_re.captures(&pem_str) {
+            let base64_content = caps.get(1).unwrap().as_str();
+            let cleaned: String = base64_content.chars().filter(|c| !c.is_whitespace()).collect();
+            use base64::Engine;
+            der = Some(base64::engine::general_purpose::STANDARD
+                .decode(&cleaned)
+                .map_err(|e| CertificateError::ParseError(format!("certificate base64 error: {}", e)))?);
+        }
+
+        if let Some(caps) = key_re.captures(&pem_str) {
+            let base64_content = caps.get(1).unwrap().as_str();
+            let cleaned: String = base64_content.chars().filter(|c| !c.is_whitespace()).collect();
+            use base64::Engine;
+            private_key = Some(base64::engine::general_purpose::STANDARD
+                .decode(&cleaned)
+                .map_err(|e| CertificateError::ParseError(format!("key base64 error: {}", e)))?);
+        }
+
+        let der = der.ok_or_else(|| CertificateError::ParseError("No certificate found".into()))?;
+        let private_key = private_key.ok_or_else(|| CertificateError::ParseError("No private key found".into()))?;
+
+        Ok(Self { der, private_key })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CertificateError {
+    #[error("I/O error: {0}")]
+    IoError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
+}
+
+pub struct ManagedIdentityTokenProvider {
+    client: reqwest::Client,
+    client_id: Option<String>,
+}
+
+impl ManagedIdentityTokenProvider {
+    pub fn new(client_id: Option<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            client_id,
+        }
+    }
+
+    pub async fn get_token(&self, resource: &str) -> Result<String, MsTeamsAuthError> {
+        let endpoint = "http://169.254.169.254/metadata/identity/oauth2/token";
+        let mut url = format!("{}?api-version=2018-02-01&resource={}", endpoint, resource);
+        if let Some(cid) = &self.client_id {
+            url = format!("{}&client_id={}", url, cid);
+        }
+
+        let response = self.client
+            .get(&url)
+            .header("Metadata", "true")
+            .send()
+            .await
+            .map_err(|e| MsTeamsAuthError::NetworkError(e.to_string()))?;
+
+        #[derive(serde::Deserialize)]
+        struct TokenResponse { access_token: String }
+
+        let token_resp: TokenResponse = response.json()
+            .await
+            .map_err(|e| MsTeamsAuthError::ParseError(e.to_string()))?;
+
+        Ok(token_resp.access_token)
+    }
+}
+
+#[derive(Clone)]
+pub struct JwtAssertionGenerator {
+    certificate_der: Vec<u8>,
+    private_key_der: Vec<u8>,
+    app_id: String,
+    authority_url: String,
+    client: reqwest::Client,
+}
+
+impl JwtAssertionGenerator {
+    pub fn new(certificate: Certificate, app_id: String, authority_url: String) -> Self {
+        Self {
+            certificate_der: certificate.der,
+            private_key_der: certificate.private_key,
+            app_id,
+            authority_url,
+            client: reqwest::Client::new(),
+        }
+    }
+
+    pub async fn exchange_for_token(
+        &self,
+        tenant_id: &str,
+        scope: &str,
+    ) -> Result<String, MsTeamsAuthError> {
+        let assertion = self.generate_assertion()?;
+        let endpoint = format!("{}/{}/oauth2/v2.0/token", self.authority_url, tenant_id);
+
+        let params = [
+            ("grant_type", "client_credentials"),
+            ("client_id", &self.app_id),
+            ("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+            ("client_assertion", &assertion),
+            ("scope", scope),
+        ];
+
+        let resp = self
+            .client
+            .post(&endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| MsTeamsAuthError::NetworkError(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MsTeamsAuthError::TokenExchangeError(format!(
+                "Token endpoint returned {}: {}",
+                status,
+                body
+            )));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+        }
+
+        let token_resp: TokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| MsTeamsAuthError::ParseError(e.to_string()))?;
+
+        Ok(token_resp.access_token)
+    }
+
+    fn generate_assertion(&self) -> Result<String, MsTeamsAuthError> {
+        use base64::Engine;
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let x5c = base64::engine::general_purpose::STANDARD.encode(&self.certificate_der);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        #[derive(serde::Serialize)]
+        struct MsClaims<'a> {
+            iss: &'a str,
+            sub: &'a str,
+            aud: String,
+            exp: i64,
+            iat: i64,
+            #[serde(rename = "x5c")]
+            x5c: Vec<String>,
+            #[serde(rename = "x5t")]
+            x5t: String,
+        }
+
+        let x5t = base64::engine::general_purpose::STANDARD.encode(&self.certificate_der);
+
+        let claims = MsClaims {
+            iss: &self.app_id,
+            sub: &self.app_id,
+            aud: "49aba4-55c4-4c17-9d36-846e36a6f66a".to_string(),
+            exp: now + 300,
+            iat: now,
+            x5c: vec![x5c],
+            x5t,
+        };
+
+        let encoding_key = EncodingKey::from_rsa_der(&self.private_key_der);
+
+        encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+            .map_err(|e| MsTeamsAuthError::TokenExchangeError(format!(
+            "Failed to sign JWT assertion: {}",
+            e
+        )))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MsTeamsAuthError {
+    #[error("Network error: {0}")]
+    NetworkError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
+    #[error("Token exchange failed: {0}")]
+    TokenExchangeError(String),
+    #[error("Certificate error: {0}")]
+    CertificateError(String),
 }

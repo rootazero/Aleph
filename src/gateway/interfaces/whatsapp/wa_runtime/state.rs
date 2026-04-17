@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
     Disconnected,
+    Pairing,
     Connecting,
     Connected,
     Error,
@@ -21,9 +22,10 @@ impl AtomicConnectionState {
 
     pub fn get(&self) -> ConnectionState {
         match self.inner.load(Ordering::SeqCst) {
-            1 => ConnectionState::Connecting,
-            2 => ConnectionState::Connected,
-            3 => ConnectionState::Error,
+            1 => ConnectionState::Pairing,
+            2 => ConnectionState::Connecting,
+            3 => ConnectionState::Connected,
+            4 => ConnectionState::Error,
             _ => ConnectionState::Disconnected,
         }
     }
@@ -41,6 +43,8 @@ mod tests {
     fn test_state_transitions() {
         let state = AtomicConnectionState::new(ConnectionState::Disconnected);
         assert_eq!(state.get(), ConnectionState::Disconnected);
+        state.set(ConnectionState::Pairing);
+        assert_eq!(state.get(), ConnectionState::Pairing);
         state.set(ConnectionState::Connecting);
         assert_eq!(state.get(), ConnectionState::Connecting);
         state.set(ConnectionState::Connected);

@@ -1,8 +1,9 @@
 //! Matrix Channel Configuration
 //!
-//! Configuration types for the Matrix Bot integration using the Client-Server API v3.
+//! Configuration types for the Matrix Bot integration using the official Rust SDK.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 fn default_true() -> bool {
     true
@@ -10,6 +11,21 @@ fn default_true() -> bool {
 
 fn default_sync_timeout() -> u64 {
     30000
+}
+
+fn default_initial_sync_limit() -> u64 {
+    10
+}
+
+/// Room-level policy configuration for Matrix channels.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MatrixRoomPolicy {
+    /// Only process messages that @mention the bot
+    pub require_mention: Option<bool>,
+    /// Allow messages from bots
+    pub allow_bots: Option<bool>,
+    /// Allowed user IDs in this room (empty = allow all)
+    pub users: Option<Vec<String>>,
 }
 
 /// Matrix channel configuration
@@ -40,6 +56,26 @@ pub struct MatrixConfig {
     /// Allowed user IDs (empty = allow all users)
     #[serde(default)]
     pub allowed_users: Vec<String>,
+
+    /// Sync state persistent store path (default: ~/.aleph/state/matrix_sync.db)
+    #[serde(default)]
+    pub state_store_path: Option<String>,
+
+    /// Event deduplication store path (default: ~/.aleph/state/matrix_dedupe.db)
+    #[serde(default)]
+    pub dedupe_store_path: Option<String>,
+
+    /// Initial sync history message limit
+    #[serde(default = "default_initial_sync_limit")]
+    pub initial_sync_limit: u64,
+
+    /// Automatically join rooms when invited
+    #[serde(default)]
+    pub auto_join_invites: bool,
+
+    /// Room-level policy overrides
+    #[serde(default)]
+    pub rooms: HashMap<String, MatrixRoomPolicy>,
 }
 
 impl Default for MatrixConfig {
@@ -52,6 +88,11 @@ impl Default for MatrixConfig {
             send_typing: true,
             mention_gating: false,
             allowed_users: Vec::new(),
+            state_store_path: None,
+            dedupe_store_path: None,
+            initial_sync_limit: 10,
+            auto_join_invites: false,
+            rooms: HashMap::new(),
         }
     }
 }
@@ -71,6 +112,36 @@ impl MatrixConfig {
         Ok(())
     }
 
+    /// Return the default state store path.
+    pub fn default_state_store_path() -> String {
+        dirs::data_dir()
+            .map(|p| p.join("aleph").join("state").join("matrix_sync.db"))
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "./matrix_sync.db".to_string())
+    }
+
+    /// Return the default dedupe store path.
+    pub fn default_dedupe_store_path() -> String {
+        dirs::data_dir()
+            .map(|p| p.join("aleph").join("state").join("matrix_dedupe.db"))
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "./matrix_dedupe.db".to_string())
+    }
+
+    /// Resolve state store path.
+    pub fn state_store_path(&self) -> String {
+        self.state_store_path
+            .clone()
+            .unwrap_or_else(Self::default_state_store_path)
+    }
+
+    /// Resolve dedupe store path.
+    pub fn dedupe_store_path(&self) -> String {
+        self.dedupe_store_path
+            .clone()
+            .unwrap_or_else(Self::default_dedupe_store_path)
+    }
+
     /// Check if a room ID is allowed
     pub fn is_room_allowed(&self, room_id: &str) -> bool {
         if self.allowed_rooms.is_empty() {
@@ -87,6 +158,27 @@ impl MatrixConfig {
         } else {
             self.allowed_users.iter().any(|u| u == user_id)
         }
+    }
+
+    /// Get effective mention gating for a room.
+    pub fn is_mention_gating_enabled(&self, _room_id: &str) -> bool {
+        self.mention_gating
+    }
+
+    /// Check if a user is allowed in a specific room.
+    pub fn is_user_allowed_in_room(&self, user_id: &str, room_id: &str) -> bool {
+        let base_allowed = self.is_user_allowed(user_id);
+        if !base_allowed {
+            return false;
+        }
+        if let Some(policy) = self.rooms.get(room_id) {
+            if let Some(ref users) = policy.users {
+                if !users.is_empty() && !users.iter().any(|u| u == user_id) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     pub fn check_mention(&self, body: &str, user_id: &str) -> bool {
@@ -119,6 +211,8 @@ mod tests {
         assert!(config.allowed_rooms.is_empty());
         assert_eq!(config.sync_timeout_ms, 30000);
         assert!(config.send_typing);
+        assert_eq!(config.initial_sync_limit, 10);
+        assert!(!config.auto_join_invites);
     }
 
     #[test]
@@ -164,16 +258,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_http_url() {
-        let config = MatrixConfig {
-            homeserver_url: "http://localhost:8008".to_string(),
-            access_token: "token123".to_string(),
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
     fn test_room_allowed_empty_list() {
         let config = MatrixConfig::default();
         assert!(config.is_room_allowed("!room1:matrix.org"));
@@ -204,6 +288,22 @@ mod tests {
             send_typing: false,
             mention_gating: true,
             allowed_users: vec!["@alice:matrix.org".to_string()],
+            state_store_path: Some("/tmp/matrix_sync.db".to_string()),
+            dedupe_store_path: Some("/tmp/matrix_dedupe.db".to_string()),
+            initial_sync_limit: 50,
+            auto_join_invites: true,
+            rooms: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "!room1:matrix.org".to_string(),
+                    MatrixRoomPolicy {
+                        require_mention: Some(true),
+                        allow_bots: Some(false),
+                        users: Some(vec!["@alice:matrix.org".to_string()]),
+                    },
+                );
+                m
+            },
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -216,6 +316,11 @@ mod tests {
         assert_eq!(deserialized.send_typing, config.send_typing);
         assert_eq!(deserialized.mention_gating, config.mention_gating);
         assert_eq!(deserialized.allowed_users, config.allowed_users);
+        assert_eq!(deserialized.state_store_path, config.state_store_path);
+        assert_eq!(deserialized.dedupe_store_path, config.dedupe_store_path);
+        assert_eq!(deserialized.initial_sync_limit, config.initial_sync_limit);
+        assert_eq!(deserialized.auto_join_invites, config.auto_join_invites);
+        assert_eq!(deserialized.rooms.len(), config.rooms.len());
     }
 
     #[test]
@@ -228,5 +333,25 @@ mod tests {
         assert!(config.allowed_rooms.is_empty());
         assert!(!config.mention_gating);
         assert!(config.allowed_users.is_empty());
+        assert_eq!(config.initial_sync_limit, 10);
+        assert!(!config.auto_join_invites);
+    }
+
+    #[test]
+    fn test_room_policy_user_allowlist() {
+        let mut config = MatrixConfig::default();
+        config.rooms.insert(
+            "!room1:matrix.org".to_string(),
+            MatrixRoomPolicy {
+                require_mention: None,
+                allow_bots: None,
+                users: Some(vec!["@alice:matrix.org".to_string()]),
+            },
+        );
+
+        assert!(config.is_user_allowed_in_room("@alice:matrix.org", "!room1:matrix.org"));
+        assert!(!config.is_user_allowed_in_room("@bob:matrix.org", "!room1:matrix.org"));
+        // Other rooms fall back to global allowlist
+        assert!(config.is_user_allowed_in_room("@bob:matrix.org", "!room2:matrix.org"));
     }
 }

@@ -112,13 +112,13 @@ impl InboundMessageRouter {
         let pending_media: crate::gateway::media::PendingMedia =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        // Detect feishu channel and optionally construct FeishuEventEmitter
-        let is_feishu = {
+        // Detect feishu/telegram channels and optionally construct custom emitters
+        let (is_feishu, is_telegram) = {
             if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
                 let ch = handle.read().await;
-                ch.channel_type() == "feishu"
+                (ch.channel_type() == "feishu", ch.channel_type() == "telegram")
             } else {
-                false
+                (false, false)
             }
         };
 
@@ -147,6 +147,29 @@ impl InboundMessageRouter {
                     .await
                 {
                     Some(fe) => Arc::new(fe),
+                    None => {
+                        let re = ReplyEmitter::with_config(
+                            self.channel_registry.clone(),
+                            ctx.reply_route.clone(),
+                            run_id.clone(),
+                            reply_config,
+                            pending_media.clone(),
+                        );
+                        Arc::new(attach_voice(re))
+                    }
+                }
+            } else if is_telegram {
+                // Try to create Telegram orchestrated emitter
+                match self
+                    .try_create_telegram_emitter(
+                        ctx,
+                        &run_id,
+                        reply_config.clone(),
+                        pending_media.clone(),
+                    )
+                    .await
+                {
+                    Some(te) => Arc::new(te),
                     None => {
                         let re = ReplyEmitter::with_config(
                             self.channel_registry.clone(),
@@ -311,10 +334,10 @@ impl InboundMessageRouter {
         run_id: &str,
         reply_config: ReplyEmitterConfig,
         pending_media: crate::gateway::media::PendingMedia,
-    ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
+    ) -> Option<crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter> {
         use crate::gateway::interfaces::feishu::api::FeishuApi;
         use crate::gateway::interfaces::feishu::auth::TokenManager;
-        use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
+        use crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter;
         use crate::gateway::interfaces::feishu::FeishuConfig;
 
         // Read feishu config from app config
@@ -367,6 +390,48 @@ impl InboundMessageRouter {
             reply_to,
             feishu_cfg.streaming,
             feishu_cfg.typing_indicator,
+        ))
+    }
+
+    /// Try to create a TelegramEventEmitter for telegram channels.
+    async fn try_create_telegram_emitter(
+        &self,
+        ctx: &InboundContext,
+        _run_id: &str,
+        _reply_config: ReplyEmitterConfig,
+        _pending_media: crate::gateway::media::PendingMedia,
+    ) -> Option<crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter> {
+        use crate::gateway::interfaces::telegram::config_v2::TelegramConfigV2;
+        use crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter;
+
+        let tg_cfg = {
+            let cfg = self.app_config.as_ref()?.read().await;
+            let channel_id = ctx.reply_route.channel_id.as_str();
+            let raw = cfg.channels.get(channel_id)?;
+            serde_json::from_value::<TelegramConfigV2>(raw.clone()).ok()?
+        };
+
+        let account = tg_cfg.accounts.first()?;
+        let streaming = account.streaming.clone().unwrap_or_default();
+
+        // Only use orchestrated emitter when new streaming features are explicitly enabled
+        if !streaming.draft_api_enabled
+            && !streaming.reasoning_lane_enabled
+            && streaming.status_reactions.processing.is_none()
+            && streaming.status_reactions.tool_active.is_none()
+            && streaming.status_reactions.complete.is_none()
+        {
+            return None;
+        }
+
+        let bot = teloxide::Bot::new(&account.bot_token);
+        let conversation_id = ctx.message.conversation_id.as_str().to_string();
+
+        Some(TelegramEventEmitter::new(
+            bot,
+            streaming,
+            conversation_id,
+            ctx.reply_route.clone(),
         ))
     }
 }

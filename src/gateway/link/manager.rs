@@ -1,16 +1,13 @@
-//! LinkManager — central orchestrator for the social connectivity plugin system.
+//! LinkManager — central orchestrator for builtin messaging channels.
 //!
-//! The `LinkManager` ties together bridge definitions, link instance configs,
-//! the `BridgeSupervisor`, and channel lifecycle management. On startup it:
-//!
-//! 1. Scans `~/.aleph/bridges/` for external bridge plugin definitions.
-//! 2. Scans `~/.aleph/links/` for link instance configurations.
-//! 3. Creates and starts each enabled link.
+//! The `LinkManager` manages builtin channel factories and link instance
+//! configurations. On startup it scans `~/.aleph/links/` and creates each
+//! enabled link using the registered builtin [`ChannelFactory`].
 //!
 //! # Standalone helpers
 //!
-//! [`scan_link_configs`], [`scan_bridge_definitions`], and [`expand_env_vars`]
-//! are public, stateless functions usable independently of `LinkManager`.
+//! [`scan_link_configs`] and [`expand_env_vars`] are public, stateless
+//! functions usable independently of `LinkManager`.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
@@ -19,11 +16,7 @@ use std::path::{Path, PathBuf};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
-use super::types::LinkConfig;
-use crate::gateway::bridge::{
-    BridgeDefinition, BridgeId, BridgeRuntime, BridgeSupervisor, BridgedChannel,
-    ManagedProcessConfig,
-};
+use super::types::{BridgeId, LinkConfig};
 use crate::gateway::channel::{ChannelError, ChannelFactory, ChannelId};
 
 type ChannelMap = HashMap<ChannelId, Arc<Mutex<Box<dyn crate::gateway::channel::Channel>>>>;
@@ -80,68 +73,6 @@ pub async fn scan_link_configs(dir: &Path) -> Result<Vec<LinkConfig>, LinkManage
     Ok(configs)
 }
 
-/// Scan a directory for bridge plugin definitions.
-///
-/// Each bridge plugin lives in its own sub-directory containing a `bridge.yaml`
-/// manifest file.  Directories without a `bridge.yaml` are silently skipped.
-/// The function returns `Ok([])` if `dir` does not exist.
-pub async fn scan_bridge_definitions(
-    dir: &Path,
-) -> Result<Vec<BridgeDefinition>, LinkManagerError> {
-    let mut defs = Vec::new();
-
-    if !tokio::fs::try_exists(dir).await.unwrap_or(false) {
-        return Ok(defs);
-    }
-
-    let mut entries = tokio::fs::read_dir(dir)
-        .await
-        .map_err(|e| LinkManagerError::IoError(format!("read_dir {}: {e}", dir.display())))?;
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| LinkManagerError::IoError(format!("next_entry: {e}")))?
-    {
-        let path = entry.path();
-
-        // Bridges live in sub-directories.
-        if !path.is_dir() {
-            continue;
-        }
-
-        let bridge_yaml = path.join("bridge.yaml");
-        if !tokio::fs::try_exists(&bridge_yaml).await.unwrap_or(false) {
-            continue;
-        }
-
-        match tokio::fs::read_to_string(&bridge_yaml).await {
-            Ok(content) => match serde_yaml::from_str::<BridgeDefinition>(&content) {
-                Ok(def) => {
-                    info!(path = %bridge_yaml.display(), id = %def.id, "Loaded bridge definition");
-                    defs.push(def);
-                }
-                Err(e) => {
-                    warn!(
-                        path = %bridge_yaml.display(),
-                        error = %e,
-                        "Failed to parse bridge.yaml — skipping"
-                    );
-                }
-            },
-            Err(e) => {
-                warn!(
-                    path = %bridge_yaml.display(),
-                    error = %e,
-                    "Failed to read bridge.yaml — skipping"
-                );
-            }
-        }
-    }
-
-    Ok(defs)
-}
-
 /// Recursively expand `${env.VAR_NAME}` references in a JSON value.
 ///
 /// * String values matching the pattern are replaced with the environment
@@ -187,10 +118,9 @@ pub fn expand_env_vars(settings: &serde_json::Value) -> serde_json::Value {
 // LinkManager
 // ---------------------------------------------------------------------------
 
-/// Manages the full lifecycle of all messaging links:
+/// Manages the full lifecycle of builtin messaging channels.
 ///
-/// - **Builtin** bridges (Telegram, Discord, iMessage) created via [`ChannelFactory`].
-/// - **External** bridges (arbitrary executables) managed by [`BridgeSupervisor`].
+/// Builtin bridges (Telegram, Discord, etc.) are created via [`ChannelFactory`].
 ///
 /// # Usage
 ///
@@ -206,9 +136,6 @@ pub fn expand_env_vars(settings: &serde_json::Value) -> serde_json::Value {
 /// # }
 /// ```
 pub struct LinkManager {
-    /// Registered bridge type definitions (both builtin and external).
-    bridge_registry: RwLock<HashMap<BridgeId, BridgeDefinition>>,
-
     /// Builtin channel factories keyed by bridge id.
     builtin_factories: RwLock<HashMap<BridgeId, Arc<dyn ChannelFactory>>>,
 
@@ -217,15 +144,6 @@ pub struct LinkManager {
     /// Wrapped in `Arc<Mutex<>>` because [`Channel::start`] / [`Channel::stop`]
     /// take `&mut self`.
     builtin_channels: RwLock<ChannelMap>,
-
-    /// Active bridged channel instances keyed by channel id.
-    ///
-    /// `BridgedChannel` does not implement the `Channel` trait (see module
-    /// docs) so it is stored separately.
-    bridged_channels: RwLock<HashMap<ChannelId, Arc<Mutex<BridgedChannel>>>>,
-
-    /// External bridge process supervisor.
-    bridge_supervisor: Arc<BridgeSupervisor>,
 
     /// Base directory (typically `~/.aleph/`).
     base_dir: PathBuf,
@@ -238,73 +156,47 @@ impl LinkManager {
     ///
     /// ```text
     /// base_dir/
-    ///   bridges/   — external bridge plugin directories
     ///   links/     — link instance config files (*.yaml)
-    ///   run/       — runtime files (Unix sockets, PIDs)
     /// ```
     pub fn new(base_dir: PathBuf) -> Self {
-        let run_dir = base_dir.join("run");
         Self {
-            bridge_registry: RwLock::new(HashMap::new()),
             builtin_factories: RwLock::new(HashMap::new()),
             builtin_channels: RwLock::new(HashMap::new()),
-            bridged_channels: RwLock::new(HashMap::new()),
-            bridge_supervisor: Arc::new(BridgeSupervisor::new(run_dir)),
             base_dir,
         }
     }
 
     /// Register a builtin bridge type (e.g. Telegram, Discord).
-    ///
-    /// Builtin bridges have a `BridgeRuntime::Builtin` definition paired with
-    /// a [`ChannelFactory`] that creates channel instances from settings JSON.
     pub async fn register_builtin(
         &self,
-        definition: BridgeDefinition,
+        bridge_id: BridgeId,
         factory: Arc<dyn ChannelFactory>,
     ) {
-        let id = definition.id.clone();
-        self.bridge_registry
-            .write()
-            .await
-            .insert(id.clone(), definition);
         self.builtin_factories
             .write()
             .await
-            .insert(id.clone(), factory);
-        info!(bridge_id = %id, "Registered builtin bridge");
+            .insert(bridge_id.clone(), factory);
+        info!(bridge_id = %bridge_id, "Registered builtin bridge");
     }
 
     /// Full startup sequence.
     ///
-    /// 1. Scans `{base_dir}/bridges/` for external bridge definitions.
-    /// 2. Scans `{base_dir}/links/` for link instance configs.
-    /// 3. Creates and starts each enabled link.
+    /// 1. Scans `{base_dir}/links/` for link instance configs.
+    /// 2. Creates and starts each enabled link.
     ///
     /// Individual link failures are logged but do not abort the overall
     /// startup — the manager starts as many links as possible.
     pub async fn start(&self) -> Result<(), LinkManagerError> {
-        // 1. Scan external bridge definitions.
-        let bridges_dir = self.base_dir.join("bridges");
-        let external_defs = scan_bridge_definitions(&bridges_dir).await?;
-        for def in external_defs {
-            let id = def.id.clone();
-            self.bridge_registry.write().await.insert(id.clone(), def);
-            info!(bridge_id = %id, "Registered external bridge");
-        }
-
-        // 2. Scan link instance configs.
         let links_dir = self.base_dir.join("links");
         let link_configs = scan_link_configs(&links_dir).await?;
 
-        // 3. Instantiate and start each enabled link.
         for link in link_configs {
             if !link.enabled {
                 info!(link_id = %link.id, "Skipping disabled link");
                 continue;
             }
 
-            if let Err(e) = self.create_and_start_link(&link).await {
+            if let Err(e) = self.start_builtin_link(&link, expand_env_vars(&link.settings)).await {
                 error!(
                     link_id = %link.id,
                     bridge = %link.bridge,
@@ -318,27 +210,8 @@ impl LinkManager {
         Ok(())
     }
 
-    /// Stop all active links and bridge processes.
+    /// Stop all active builtin channels.
     pub async fn stop(&self) {
-        // Stop all bridged channels first.
-        let bridged_ids: Vec<ChannelId> = {
-            let guard = self.bridged_channels.read().await;
-            guard.keys().cloned().collect()
-        };
-        for id in bridged_ids {
-            let channel = {
-                let guard = self.bridged_channels.read().await;
-                guard.get(&id).cloned()
-            };
-            if let Some(ch) = channel {
-                let mut guard = ch.lock().await;
-                if let Err(e) = guard.stop().await {
-                    warn!(channel_id = %id, error = %e, "Error stopping bridged channel");
-                }
-            }
-        }
-
-        // Stop all builtin channels.
         let builtin_ids: Vec<ChannelId> = {
             let guard = self.builtin_channels.read().await;
             guard.keys().cloned().collect()
@@ -356,44 +229,18 @@ impl LinkManager {
             }
         }
 
-        // Stop all bridge processes.
-        self.bridge_supervisor.stop_all().await;
-
         info!("LinkManager stopped all links");
     }
 
-    /// List all active channel ids (both builtin and bridged).
+    /// List all active builtin channel ids.
     pub async fn list_channel_ids(&self) -> Vec<ChannelId> {
-        let mut ids = Vec::new();
-        ids.extend(self.builtin_channels.read().await.keys().cloned());
-        ids.extend(self.bridged_channels.read().await.keys().cloned());
-        ids
+        self.builtin_channels.read().await.keys().cloned().collect()
     }
 
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
 
-    async fn create_and_start_link(&self, link: &LinkConfig) -> Result<(), LinkManagerError> {
-        // Look up the bridge definition.  Hold the lock only for the lookup.
-        let bridge = {
-            let registry = self.bridge_registry.read().await;
-            registry
-                .get(&link.bridge)
-                .cloned()
-                .ok_or_else(|| LinkManagerError::BridgeNotFound(link.bridge.to_string()))?
-        };
-
-        // Expand ${env.VAR} references in settings before passing to the bridge.
-        let expanded_settings = expand_env_vars(&link.settings);
-
-        match &bridge.runtime {
-            BridgeRuntime::Builtin => self.start_builtin_link(link, expanded_settings).await,
-            BridgeRuntime::Process { .. } => self.start_process_link(link, &bridge.runtime).await,
-        }
-    }
-
-    /// Create and start a builtin (Rust-compiled) bridge channel.
     async fn start_builtin_link(
         &self,
         link: &LinkConfig,
@@ -427,42 +274,6 @@ impl LinkManager {
         info!(link_id = %link.id, channel_id = %channel_id, "Started builtin link");
         Ok(())
     }
-
-    /// Spawn an external bridge process and start the bridged channel.
-    async fn start_process_link(
-        &self,
-        link: &LinkConfig,
-        runtime: &BridgeRuntime,
-    ) -> Result<(), LinkManagerError> {
-        let process_config = ManagedProcessConfig::from_runtime(runtime)
-            .ok_or_else(|| LinkManagerError::InvalidRuntime("Expected process runtime".into()))?;
-
-        // Spawn the bridge process and get its transport + handshake response.
-        let result = self
-            .bridge_supervisor
-            .spawn(&link.id, process_config)
-            .await
-            .map_err(|e| LinkManagerError::BridgeSpawnFailed(e.to_string()))?;
-
-        // Build and start the BridgedChannel.
-        let mut bridged = BridgedChannel::new(link.id.as_str(), &link.name, link.bridge.as_str());
-        bridged.set_transport(result.transport);
-
-        bridged
-            .start()
-            .await
-            .map_err(|e| LinkManagerError::ChannelStartFailed(e.to_string()))?;
-
-        let channel_id = ChannelId::new(link.id.as_str());
-        let wrapped = Arc::new(Mutex::new(bridged));
-        self.bridged_channels
-            .write()
-            .await
-            .insert(channel_id.clone(), wrapped);
-
-        info!(link_id = %link.id, channel_id = %channel_id, "Started external bridge link");
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,23 +286,14 @@ pub enum LinkManagerError {
     #[error("IO error: {0}")]
     IoError(String),
 
-    #[error("Bridge not found: {0}")]
-    BridgeNotFound(String),
-
     #[error("Factory not found for bridge: {0}")]
     FactoryNotFound(String),
-
-    #[error("Invalid runtime: {0}")]
-    InvalidRuntime(String),
 
     #[error("Channel creation failed: {0}")]
     ChannelCreationFailed(String),
 
     #[error("Channel start failed: {0}")]
     ChannelStartFailed(String),
-
-    #[error("Bridge spawn failed: {0}")]
-    BridgeSpawnFailed(String),
 
     #[error("Config parse error: {0}")]
     ConfigParseError(String),
@@ -518,7 +320,6 @@ mod tests {
         let links_dir = tmp.path().join("links");
         std::fs::create_dir_all(&links_dir).unwrap();
 
-        // Write a test link.yaml.
         std::fs::write(
             links_dir.join("test-telegram.yaml"),
             r#"
@@ -560,61 +361,8 @@ routing:
         assert!(configs.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_scan_bridge_definitions() {
-        let tmp = TempDir::new().unwrap();
-        let bridges_dir = tmp.path().join("bridges");
-        let whatsapp_dir = bridges_dir.join("whatsapp-go");
-        std::fs::create_dir_all(&whatsapp_dir).unwrap();
-
-        std::fs::write(
-            whatsapp_dir.join("bridge.yaml"),
-            r#"
-spec_version: "1.0"
-id: "whatsapp-go"
-name: "WhatsApp"
-version: "1.0.0"
-runtime:
-  type: process
-  executable: "./bin/whatsapp-bridge"
-  transport: unix-socket
-capabilities:
-  messaging:
-    - send_text
-"#,
-        )
-        .unwrap();
-
-        let defs = scan_bridge_definitions(&bridges_dir).await.unwrap();
-        assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].id.as_str(), "whatsapp-go");
-    }
-
-    #[tokio::test]
-    async fn test_scan_bridge_definitions_missing_dir() {
-        let tmp = TempDir::new().unwrap();
-        let bridges_dir = tmp.path().join("bridges-nonexistent");
-
-        let defs = scan_bridge_definitions(&bridges_dir).await.unwrap();
-        assert!(defs.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_scan_bridge_skips_non_directories() {
-        let tmp = TempDir::new().unwrap();
-        let bridges_dir = tmp.path().join("bridges");
-        std::fs::create_dir_all(&bridges_dir).unwrap();
-
-        // A plain file at the bridges_dir level — should be skipped.
-        std::fs::write(bridges_dir.join("README.md"), "# Bridges").unwrap();
-
-        let defs = scan_bridge_definitions(&bridges_dir).await.unwrap();
-        assert!(defs.is_empty());
-    }
-
     #[test]
     fn test_expand_env_vars() {
-        // Use a unique var name to avoid collision with real env vars.
         std::env::set_var("ALEPH_TEST_TOKEN_XYZZY_12345", "secret-value");
         let settings = serde_json::json!({
             "token": "${env.ALEPH_TEST_TOKEN_XYZZY_12345}",
@@ -663,7 +411,6 @@ capabilities:
 
         let expanded = expand_env_vars(&settings);
 
-        // Unexpanded string is kept as-is.
         assert_eq!(
             expanded.get("token").unwrap().as_str().unwrap(),
             "${env.ALEPH_TEST_DEFINITELY_NOT_SET_XYZZY}"
@@ -694,20 +441,16 @@ capabilities:
     async fn test_link_manager_start_no_links() {
         let tmp = TempDir::new().unwrap();
         let manager = LinkManager::new(tmp.path().to_path_buf());
-        // Should succeed even if bridges/ and links/ don't exist.
         let result = manager.start().await;
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_link_manager_error_display() {
-        let err = LinkManagerError::BridgeNotFound("my-bridge".into());
-        assert_eq!(err.to_string(), "Bridge not found: my-bridge");
+        let err = LinkManagerError::FactoryNotFound("my-bridge".into());
+        assert_eq!(err.to_string(), "Factory not found for bridge: my-bridge");
 
         let err = LinkManagerError::IoError("disk full".into());
         assert_eq!(err.to_string(), "IO error: disk full");
-
-        let err = LinkManagerError::BridgeSpawnFailed("timeout".into());
-        assert_eq!(err.to_string(), "Bridge spawn failed: timeout");
     }
 }

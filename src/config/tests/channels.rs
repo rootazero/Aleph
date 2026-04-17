@@ -92,6 +92,7 @@ fn test_resolved_channels_all_known_platforms() {
         "webhook",
         "xmpp",
         "nostr",
+        "qq",
     ];
     for name in &platforms {
         config.channels.insert(name.to_string(), json!({}));

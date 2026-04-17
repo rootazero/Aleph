@@ -1,14 +1,4 @@
-use tokio::sync::mpsc;
-
-#[allow(clippy::never_loop)]
-pub async fn run_event_loop(
-    _event_tx: mpsc::Sender<whatsapp_rust::types::events::Event>,
-    mut shutdown_rx: mpsc::Receiver<()>,
-) {
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.recv() => break,
-            else => break,
-        }
-    }
-}
+//! WhatsApp event loop placeholder
+//!
+//! whatsapp_rust uses callback-based events via Bot::on_event(),
+//! so the event loop is integrated into WaRuntime::start().

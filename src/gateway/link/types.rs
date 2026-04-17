@@ -7,7 +7,29 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::gateway::bridge::BridgeId;
+// ---------------------------------------------------------------------------
+// BridgeId
+// ---------------------------------------------------------------------------
+
+/// Unique identifier for a bridge plugin (e.g. "telegram", "discord").
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BridgeId(pub String);
+
+impl BridgeId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for BridgeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // LinkId

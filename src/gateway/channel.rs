@@ -402,6 +402,8 @@ pub enum ChannelStatus {
     Disconnected,
     /// Connecting in progress
     Connecting,
+    /// Waiting for QR scan / pairing
+    Pairing,
     /// Connected and ready
     Connected,
     /// Connection failed, may retry
