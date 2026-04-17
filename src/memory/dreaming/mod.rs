@@ -7,6 +7,7 @@
 pub mod gate;
 pub mod report;
 pub mod stages;
+pub mod strategy;
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
@@ -33,6 +34,7 @@ pub use report::{DreamReport, DreamReportStatus, DreamRunMetadata, DreamRunType}
 
 // Re-export stage trait and shared types
 pub use stages::{DreamStage, MemoryCluster};
+pub use strategy::DreamStrategy;
 
 // ---------------------------------------------------------------------------
 // NoteEntry — metadata for a single note in the dream pipeline
