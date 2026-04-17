@@ -1,22 +1,6 @@
-//! DreamReport and run metadata for the dream pipeline.
+//! DreamReport for the dream pipeline.
 
 use serde::{Deserialize, Serialize};
-
-/// The type of dream run (daily vs weekly).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DreamRunType {
-    Daily,
-    Weekly,
-}
-
-/// Metadata about a dream pipeline run.
-#[derive(Debug, Clone)]
-pub struct DreamRunMetadata {
-    pub run_type: DreamRunType,
-    pub run_date: String,
-    pub run_start_ts: i64,
-}
 
 /// Status of a completed dream pipeline run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

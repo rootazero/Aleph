@@ -35,7 +35,7 @@ use tracing::{info, warn};
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
 
 // Re-export report types
-pub use report::{DreamReport, DreamReportStatus, DreamRunMetadata, DreamRunType};
+pub use report::{DreamReport, DreamReportStatus};
 
 // Re-export stage trait and shared types
 pub use stages::{DreamStage, MemoryCluster};
@@ -77,12 +77,12 @@ pub struct DreamContext {
     pub provider: Arc<dyn AiProvider>,
     pub embedder: Arc<dyn EmbeddingProvider>,
     pub report: DreamReport,
-    /// "daily" or "weekly"
+    /// Strategy name driving this cycle ("consolidate", "synthesize", "conserve").
     pub pipeline_type: String,
     /// Activity checker: returns true if user activity has been detected.
     pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
-    /// Run metadata for scheduling and reporting.
-    pub run_metadata: DreamRunMetadata,
+    /// Strategy selected for this Dream cycle.
+    pub strategy: DreamStrategy,
     /// Optional wiki orientation — used by `IndexRefresherStage`.
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
@@ -118,31 +118,6 @@ pub struct DreamPipeline {
 impl DreamPipeline {
     pub fn new(stages: Vec<Box<dyn DreamStage>>) -> Self {
         Self { stages }
-    }
-
-    /// Build the standard daily pipeline.
-    pub fn daily() -> Self {
-        Self::new(vec![
-            Box::new(stages::NoteConsolidateStage), // merge first to reduce volume
-            Box::new(stages::NoteDriftStage),       // detect contradictions
-            Box::new(stages::IndexRefresherStage),  // rebuild index.md + rotate log
-            Box::new(stages::NoteLintStage),        // format fixes
-            Box::new(stages::NoteDecayStage),       // cleanup low-value
-            Box::new(stages::DailyDigestStage),     // generate daily report
-        ])
-    }
-
-    /// Build the weekly pipeline (daily + deep synthesis).
-    pub fn weekly() -> Self {
-        Self::new(vec![
-            Box::new(stages::NoteConsolidateStage),
-            Box::new(stages::NoteDriftStage),
-            Box::new(stages::NoteSynthesisStage), // weekly-only: deep synthesis
-            Box::new(stages::IndexRefresherStage), // rebuild index.md + rotate log
-            Box::new(stages::NoteLintStage),
-            Box::new(stages::NoteDecayStage),
-            Box::new(stages::DailyDigestStage),
-        ])
     }
 
     /// Build a pipeline from a DreamStrategy.
@@ -559,22 +534,6 @@ impl DreamDaemon {
         }
     }
 
-    /// Determine whether to run a daily or weekly dream cycle.
-    async fn determine_run_type(&self) -> DreamRunType {
-        if !self.config.weekly_enabled {
-            return DreamRunType::Daily;
-        }
-        if let Ok(status) = self.database.get_dream_status().await {
-            if let Some(last_run) = status.last_run_at {
-                let days_since = (now_timestamp() - last_run) / 86400;
-                if days_since >= self.config.weekly_interval_days as i64 {
-                    return DreamRunType::Weekly;
-                }
-            }
-        }
-        DreamRunType::Daily
-    }
-
     async fn run_dream(
         &self,
         run_start: i64,
@@ -713,18 +672,6 @@ mod tests {
         let early = NaiveTime::from_hms_opt(4, 0, 0).unwrap();
         assert!(late >= start || late <= end);
         assert!(early >= start || early <= end);
-    }
-
-    #[test]
-    fn test_pipeline_builder_daily() {
-        let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 6);
-    }
-
-    #[test]
-    fn test_pipeline_builder_weekly() {
-        let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 7);
     }
 
     #[test]
