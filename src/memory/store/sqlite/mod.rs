@@ -10,6 +10,7 @@ pub mod vec;
 pub mod assembly_logs;
 pub mod dream_reports;
 pub mod notes;
+pub mod query_filed;
 pub mod raw_memories;
 pub mod recall_signals;
 mod sessions;
