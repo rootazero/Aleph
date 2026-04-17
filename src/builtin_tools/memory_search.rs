@@ -107,7 +107,7 @@ pub struct PathCluster {
 ///
 /// Paths follow the pattern `aleph://session/{id}/dN/...` where N is 0, 1, or 2.
 /// Returns 0 if the depth segment cannot be parsed.
-fn extract_depth_from_path(path: &str) -> u32 {
+fn _extract_depth_from_path(path: &str) -> u32 {
     // Look for a segment matching "dN" after the path prefix
     for segment in path.split('/') {
         if let Some(rest) = segment.strip_prefix('d') {

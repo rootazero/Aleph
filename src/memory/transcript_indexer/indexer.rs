@@ -10,6 +10,7 @@ use crate::sync_primitives::Arc;
 use super::config::TranscriptIndexerConfig;
 
 /// Near-realtime transcript indexer
+#[allow(dead_code)]
 pub struct TranscriptIndexer {
     database: MemoryBackend,
     embedder: Arc<dyn EmbeddingProvider>,
@@ -67,7 +68,7 @@ impl TranscriptIndexer {
         seq: u32,
         user_input: &str,
         ai_output: &str,
-        namespace: &str,
+        _namespace: &str,
         agent: &str,
     ) -> Vec<String> {
         // Build combined text

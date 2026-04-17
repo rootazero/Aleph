@@ -8,7 +8,6 @@ use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::RwLock;
 
 /// Cache hit/miss statistics for [`PromptPipeline::execute_cached`].

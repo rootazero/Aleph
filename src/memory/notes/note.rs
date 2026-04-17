@@ -83,7 +83,7 @@ impl KnowledgeNote {
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
 
-        let tags_yaml: Vec<String> = self.tags.iter().map(|t| format!("{t}")).collect();
+        let tags_yaml: Vec<String> = self.tags.iter().map(|t| t.to_string()).collect();
 
         let mut out = String::new();
         out.push_str("---\n");

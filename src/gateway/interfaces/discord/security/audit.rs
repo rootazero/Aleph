@@ -5,7 +5,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Audit event types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -96,6 +95,7 @@ pub enum ContentRetention {
 
 /// Audit logger for Discord events
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct DiscordAuditLogger {
     config: DiscordSecurityConfig,
     http_client: Arc<DiscordClient>,
@@ -192,7 +192,7 @@ impl DiscordAuditLogger {
     async fn send_to_channel(
         &self,
         channel_id: u64,
-        payload: &serde_json::Value,
+        _payload: &serde_json::Value,
     ) -> Result<(), AuditError> {
         tracing::debug!(channel_id = channel_id, "audit log sent");
         Ok(())

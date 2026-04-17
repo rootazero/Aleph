@@ -21,7 +21,9 @@ pub struct DreamRunMetadata {
 /// Status of a completed dream pipeline run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DreamReportStatus {
+    #[default]
     Completed,
     Interrupted,
     Failed,
@@ -58,8 +60,3 @@ pub struct DreamReport {
     pub extra: std::collections::BTreeMap<String, String>,
 }
 
-impl Default for DreamReportStatus {
-    fn default() -> Self {
-        DreamReportStatus::Completed
-    }
-}

@@ -329,7 +329,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     self.agent_id,
                     from,
                     &Vec::<String>::new(),
-                    &vec![to.to_string()],
+                    &[to.to_string()],
                 )
                 .await?;
         }

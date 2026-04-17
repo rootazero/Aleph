@@ -97,7 +97,7 @@ impl BrowserBackend for ChromeMcpBackend {
                     None
                 }
             })
-            .last();
+            .next_back();
         Ok(last_id.unwrap_or_else(|| {
             text.lines()
                 .filter(|l| l.contains(url))
@@ -296,8 +296,10 @@ impl BrowserBackend for ChromeMcpBackend {
 
 /// Best-effort extraction of page URL and title from the first few lines of a snapshot.
 /// Chrome DevTools MCP snapshot text begins with header lines like:
+///
 ///   - Page URL: https://example.com/
 ///   - Page Title: Hello
+///
 /// Returns empty strings when the fields are absent (graceful degradation).
 fn parse_snapshot_header(text: &str) -> (String, String) {
     let mut url = String::new();

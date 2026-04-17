@@ -92,7 +92,7 @@ impl DreamStage for NoteSynthesisStage {
             let synthesis_text = response.text_content();
 
             // Build links from source note paths
-            let source_links: Vec<String> = note_paths.iter().cloned().collect();
+            let source_links: Vec<String> = note_paths.to_vec();
 
             let note = KnowledgeNote {
                 title: format!("{category} Synthesis"),

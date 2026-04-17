@@ -82,11 +82,10 @@ pub async fn gather_related<S: NoteStore + Send + Sync + 'static>(
             if seen.contains(&link) {
                 continue;
             }
-            if store.get_note_index(&link, agent_id).await?.is_some() {
-                if seen.insert(link.clone()) {
+            if store.get_note_index(&link, agent_id).await?.is_some()
+                && seen.insert(link.clone()) {
                     ranked.push((link, 0.0));
                 }
-            }
         }
     }
 
