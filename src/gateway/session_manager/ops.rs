@@ -16,6 +16,9 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
     let state = state_str
         .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
         .unwrap_or_default();
+    let metadata_json: Option<String> = row.get(9)?;
+    let (topic, status, identity_meta) =
+        SessionMetadata::parse_legacy_metadata_json(metadata_json.as_deref());
     Ok(SessionMetadata {
         key: row.get(0)?,
         agent_id: row.get(1)?,
@@ -26,7 +29,9 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         total_tokens: row.get(6)?,
         auto_reset_at: row.get(7)?,
         state: Some(state),
-        metadata_json: row.get(9)?,
+        topic,
+        status,
+        identity_meta,
         label: row.get(10)?,
         input_tokens: row.get(11)?,
         output_tokens: row.get(12)?,
@@ -109,7 +114,9 @@ impl SessionManager {
             total_tokens: 0,
             auto_reset_at: None,
             state: Some(SessionState::Created),
-            metadata_json: None,
+            topic: None,
+            status: None,
+            identity_meta: None,
             label: None,
             input_tokens: 0,
             output_tokens: 0,
@@ -478,20 +485,20 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Query session metadata
-        let metadata_json: Option<String> = {
+        let identity_meta: SessionIdentityMeta = {
             let mut stmt = conn
                 .prepare("SELECT metadata FROM sessions WHERE key = ?")
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-            stmt.query_row(params![session_key], |row| row.get(0))
+            let metadata_json: Option<String> = stmt
+                .query_row(params![session_key], |row| row.get(0))
                 .optional()
-                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
-        };
+                .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        // Parse metadata or use default (Owner)
-        let identity_meta: SessionIdentityMeta = metadata_json
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel));
+            metadata_json
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel))
+        };
 
         // Construct IdentityContext
         let identity = match identity_meta.role {
@@ -602,19 +609,19 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
 
-        let mut meta: serde_json::Value = existing_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-
-        if let Some(obj) = meta.as_object_mut() {
-            obj.insert("status".to_string(), serde_json::json!("closed"));
-            if let Some(t) = &topic {
-                obj.insert("topic".to_string(), serde_json::json!(t));
-            }
+        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+        identity_meta.custom.insert(
+            "status".to_string(),
+            serde_json::json!("closed"),
+        );
+        if let Some(t) = topic {
+            identity_meta
+                .custom
+                .insert("topic".to_string(), serde_json::json!(t));
         }
 
-        let meta_json = serde_json::to_string(&meta)
+        let meta_json = identity_meta
+            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         conn.execute(
@@ -650,16 +657,13 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
 
-        let mut meta: serde_json::Value = existing_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+        identity_meta
+            .custom
+            .insert("topic".to_string(), serde_json::json!(topic));
 
-        if let Some(obj) = meta.as_object_mut() {
-            obj.insert("topic".to_string(), serde_json::json!(topic));
-        }
-
-        let meta_json = serde_json::to_string(&meta)
+        let meta_json = identity_meta
+            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         conn.execute(
@@ -706,7 +710,7 @@ impl SessionManager {
         }
     }
 
-    /// Get the topic string from a session's metadata JSON
+    /// Get the topic string from a session's metadata
     pub async fn get_session_topic(
         &self,
         key: &SessionKey,
@@ -727,9 +731,12 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
 
-        Ok(metadata_json
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
-            .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string())))
+        let identity_meta = SessionIdentityMeta::from_json_str(metadata_json.as_deref());
+        Ok(identity_meta
+            .custom
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()))
     }
 
     /// Cleanup expired sessions
@@ -824,9 +831,12 @@ impl SessionManager {
         let results: Vec<SessionSearchResult> =
             match stmt.query_map(params![&sanitized_query, max_results as i64], |row| {
                 let metadata_json: Option<String> = row.get(6)?;
-                let topic = metadata_json
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
-                    .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()));
+                let identity_meta = SessionIdentityMeta::from_json_str(metadata_json.as_deref());
+                let topic = identity_meta
+                    .custom
+                    .get("topic")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
                 Ok(SessionSearchResult {
                     message_id: row.get(0)?,
@@ -903,25 +913,23 @@ impl SessionManager {
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
 
-        let mut meta: serde_json::Value = existing_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
 
-        if let Some(obj) = meta.as_object_mut() {
-            if let Some(status) = &patch.status {
-                obj.insert("status".to_string(), serde_json::json!(status));
-            }
-            if let Some(extra) = &patch.metadata {
-                if let Some(extra_obj) = extra.as_object() {
-                    for (k, v) in extra_obj {
-                        obj.insert(k.clone(), v.clone());
-                    }
+        if let Some(status) = &patch.status {
+            identity_meta
+                .custom
+                .insert("status".to_string(), serde_json::json!(status));
+        }
+        if let Some(extra) = &patch.metadata {
+            if let Some(extra_obj) = extra.as_object() {
+                for (k, v) in extra_obj {
+                    identity_meta.custom.insert(k.clone(), v.clone());
                 }
             }
         }
 
-        let meta_json = serde_json::to_string(&meta)
+        let meta_json = identity_meta
+            .to_json_string()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         let mut sql = String::from("UPDATE sessions SET metadata = ?");

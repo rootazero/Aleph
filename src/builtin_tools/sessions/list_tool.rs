@@ -152,10 +152,11 @@ impl SessionsListTool {
             .derived_title
             .clone()
             .or_else(|| {
-                meta.metadata_json
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-                    .and_then(|v| v.get("topic").and_then(|t| t.as_str()).map(String::from))
+                meta.topic.clone().or_else(|| {
+                    meta.identity_meta.as_ref().and_then(|im| {
+                        im.custom.get("topic").and_then(|v| v.as_str()).map(String::from)
+                    })
+                })
             });
 
         SessionListRow {

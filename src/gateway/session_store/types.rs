@@ -31,7 +31,11 @@ pub struct SessionMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::gateway::session_manager::SessionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_json: Option<String>,
+    pub topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_meta: Option<crate::gateway::session_manager::SessionIdentityMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default)]
@@ -61,6 +65,42 @@ pub struct SessionMetadata {
     /// List of compaction checkpoints (file backend only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checkpoints: Vec<CheckpointSummary>,
+}
+
+impl SessionMetadata {
+    /// Parse topic and status from a raw metadata JSON string for backward compatibility.
+    pub fn parse_legacy_metadata_json(
+        json: Option<&str>,
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Option<crate::gateway::session_manager::SessionIdentityMeta>,
+    ) {
+        let Some(s) = json else {
+            return (None, None, None);
+        };
+        if let Ok(identity) =
+            serde_json::from_str::<crate::gateway::session_manager::SessionIdentityMeta>(s)
+        {
+            let topic = identity
+                .custom
+                .get("topic")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let status = identity
+                .custom
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            (topic, status, Some(identity))
+        } else if let Ok(val) = serde_json::from_str::<Value>(s) {
+            let topic = val.get("topic").and_then(|v| v.as_str()).map(String::from);
+            let status = val.get("status").and_then(|v| v.as_str()).map(String::from);
+            (topic, status, None)
+        } else {
+            (None, None, None)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -41,6 +41,11 @@ fn map_session_metadata(
     let state = state_str
         .and_then(|s| serde_json::from_str(&format!("\"{}\"", s)).ok())
         .unwrap_or_default();
+    let metadata_json: Option<String> = row.get(9)?;
+    let (topic, status, identity_meta) =
+        crate::gateway::session_store::types::SessionMetadata::parse_legacy_metadata_json(
+            metadata_json.as_deref(),
+        );
     Ok(crate::gateway::session_store::types::SessionMetadata {
         key: row.get(0)?,
         agent_id: row.get(1)?,
@@ -51,7 +56,9 @@ fn map_session_metadata(
         total_tokens: row.get(6)?,
         auto_reset_at: row.get(7)?,
         state: Some(state),
-        metadata_json: row.get(9)?,
+        topic,
+        status,
+        identity_meta,
         label: row.get(10)?,
         input_tokens: row.get(11)?,
         output_tokens: row.get(12)?,

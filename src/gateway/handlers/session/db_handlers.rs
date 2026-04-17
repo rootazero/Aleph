@@ -92,14 +92,15 @@ pub async fn handle_list_db(
                 // that should not appear in user-facing session lists
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
-                    let parsed_meta = m.metadata_json.as_deref().and_then(|s| {
-                        serde_json::from_str::<serde_json::Value>(s).ok()
+                    let topic = m.topic.clone().or_else(|| {
+                        m.identity_meta.as_ref().and_then(|im| {
+                            im.custom.get("topic").and_then(|v| v.as_str()).map(String::from)
+                        })
                     });
-                    let topic = parsed_meta.as_ref().and_then(|v| {
-                        v.get("topic").and_then(|t| t.as_str()).map(|s| s.to_string())
-                    });
-                    let status = parsed_meta.as_ref().and_then(|v| {
-                        v.get("status").and_then(|t| t.as_str()).map(|s| s.to_string())
+                    let status = m.status.clone().or_else(|| {
+                        m.identity_meta.as_ref().and_then(|im| {
+                            im.custom.get("status").and_then(|v| v.as_str()).map(String::from)
+                        })
                     });
 
                     SessionInfo {

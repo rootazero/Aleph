@@ -291,7 +291,9 @@ impl SessionStore for FileSessionStore {
             total_tokens: 0,
             auto_reset_at: None,
             state: Some(SessionState::Created),
-            metadata_json: None,
+            topic: None,
+            status: None,
+            identity_meta: None,
             label: None,
             input_tokens: 0,
             output_tokens: 0,
@@ -553,7 +555,9 @@ impl SessionStore for FileSessionStore {
             total_tokens: 0,
             auto_reset_at: None,
             state: Some(SessionState::Created),
-            metadata_json: None,
+            topic: None,
+            status: None,
+            identity_meta: None,
             label: None,
             input_tokens: 0,
             output_tokens: 0,
@@ -660,15 +664,10 @@ impl SessionStore for FileSessionStore {
 
     async fn get_identity_context(
         &self, session_key: &str, source_channel: &str) -> Result<aleph_protocol::IdentityContext, SessionStoreError> {
-        let meta_path = self.metadata_path(session_key);
-        let metadata_json: Option<String> = if meta_path.exists() {
-            tokio::fs::read_to_string(&meta_path).await.ok()
-        } else {
-            None
+        let identity_meta = match self.read_metadata(session_key).await? {
+            Some(meta) => meta.identity_meta.unwrap_or_else(|| SessionIdentityMeta::owner(source_channel)),
+            None => SessionIdentityMeta::owner(source_channel),
         };
-        let identity_meta: SessionIdentityMeta = metadata_json
-            .and_then(|json| serde_json::from_str(&json).ok())
-            .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel));
         Ok(identity_meta.to_identity_context(session_key.to_string()))
     }
 
