@@ -30,7 +30,10 @@ impl DiscordAccountPool {
         }
     }
 
-    pub async fn get_or_create(&self, account_id: &str) -> Result<Arc<DiscordBot>, AccountPoolError> {
+    pub async fn get_or_create(
+        &self,
+        account_id: &str,
+    ) -> Result<Arc<DiscordBot>, AccountPoolError> {
         {
             let bots = self.bots.read().await;
             if let Some(bot) = bots.get(account_id) {
@@ -38,7 +41,9 @@ impl DiscordAccountPool {
             }
         }
 
-        let account_config = self.config.accounts
+        let account_config = self
+            .config
+            .accounts
             .get(account_id)
             .ok_or_else(|| AccountPoolError::AccountNotFound(account_id.to_string()))?;
 
@@ -52,7 +57,11 @@ impl DiscordAccountPool {
         Ok(bot)
     }
 
-    async fn create_bot(&self, account_id: &str, config: AccountConfig) -> Result<Arc<DiscordBot>, AccountPoolError> {
+    async fn create_bot(
+        &self,
+        account_id: &str,
+        config: AccountConfig,
+    ) -> Result<Arc<DiscordBot>, AccountPoolError> {
         let http = Http::new(&config.token);
         Ok(Arc::new(DiscordBot {
             account_id: account_id.to_string(),

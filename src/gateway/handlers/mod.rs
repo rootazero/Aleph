@@ -112,7 +112,6 @@ pub mod version;
 pub mod wizard;
 pub mod workspace;
 
-
 pub use config::{handle_get_full_config, handle_patch_config};
 pub use guests::SharedInvitationManager;
 pub use identity::SharedIdentityResolver;

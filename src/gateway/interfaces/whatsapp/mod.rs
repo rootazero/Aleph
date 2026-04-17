@@ -43,7 +43,8 @@ pub use config::{
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, PairingData, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, PairingData,
+    SendResult,
 };
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
@@ -162,9 +163,10 @@ impl Channel for WhatsAppChannel {
             access,
             vec![],
         );
-        let history_buffer = crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer::new(
-            self.config.history.clone(),
-        );
+        let history_buffer =
+            crate::gateway::interfaces::whatsapp::history_buffer::GroupHistoryBuffer::new(
+                self.config.history.clone(),
+            );
 
         let mut shutdown_rx = shutdown_rx;
         tokio::spawn(async move {
@@ -240,7 +242,10 @@ impl Channel for WhatsAppChannel {
         })
     }
 
-    async fn send_typing(&self, conversation_id: &crate::gateway::channel::ConversationId) -> ChannelResult<()> {
+    async fn send_typing(
+        &self,
+        conversation_id: &crate::gateway::channel::ConversationId,
+    ) -> ChannelResult<()> {
         let runtime = self
             .runtime
             .as_ref()
@@ -287,5 +292,3 @@ impl ChannelFactory for WhatsAppChannelFactory {
         Ok(Box::new(WhatsAppChannel::new("whatsapp", config)))
     }
 }
-
-

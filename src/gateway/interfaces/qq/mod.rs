@@ -137,13 +137,9 @@ impl Channel for QQChannel {
 
         let event_handle = tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                if let Some(inbound) = handlers::convert_event(&event, &channel_id)
-                {
+                if let Some(inbound) = handlers::convert_event(&event, &channel_id) {
                     let group_openid = if inbound.is_group {
-                        inbound
-                            .conversation_id
-                            .as_str()
-                            .strip_prefix("group:")
+                        inbound.conversation_id.as_str().strip_prefix("group:")
                     } else {
                         None
                     };
@@ -152,10 +148,7 @@ impl Channel for QQChannel {
                         == access::AccessDecision::Allow
                     {
                         if let Err(e) = inbound_tx.send(inbound) {
-                            tracing::error!(
-                                "Failed to send inbound QQ message: {:?}",
-                                e
-                            );
+                            tracing::error!("Failed to send inbound QQ message: {:?}", e);
                         }
                     }
                 }
@@ -191,9 +184,10 @@ impl Channel for QQChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let api = self.api_client.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("QQ API not initialized".to_string())
-        })?;
+        let api = self
+            .api_client
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("QQ API not initialized".to_string()))?;
         delivery::deliver_message(api, &message, &self.reply_tracker).await
     }
 }
@@ -206,10 +200,7 @@ impl ChannelFactory for QQChannelFactory {
         "qq"
     }
 
-    async fn create(
-        &self,
-        config: serde_json::Value,
-    ) -> ChannelResult<Box<dyn Channel>> {
+    async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
         let qq_config: QQConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid QQ config: {e}")))?;
         Ok(Box::new(QQChannel::new("qq", qq_config)))

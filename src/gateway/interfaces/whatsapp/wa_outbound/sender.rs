@@ -1,6 +1,6 @@
 use crate::gateway::channel::{ChannelResult, MessageId, OutboundMessage};
-use crate::gateway::interfaces::whatsapp::wa_runtime::WaRuntime;
 use crate::gateway::interfaces::whatsapp::config::WhatsAppAccountConfig;
+use crate::gateway::interfaces::whatsapp::wa_runtime::WaRuntime;
 
 pub struct WaOutbound;
 
@@ -22,17 +22,11 @@ impl WaOutbound {
         runtime.send_reaction(jid, msg_id, emoji).await
     }
 
-    pub async fn mark_read(
-        runtime: &WaRuntime,
-        msg_id: &str,
-    ) -> ChannelResult<()> {
+    pub async fn mark_read(runtime: &WaRuntime, msg_id: &str) -> ChannelResult<()> {
         runtime.mark_read(msg_id).await
     }
 
-    pub async fn send_typing(
-        runtime: &WaRuntime,
-        jid: &str,
-    ) -> ChannelResult<()> {
+    pub async fn send_typing(runtime: &WaRuntime, jid: &str) -> ChannelResult<()> {
         runtime.send_typing(jid).await
     }
 }
@@ -53,9 +47,14 @@ mod tests {
         auth.save(&data).unwrap();
         let (tx, _rx) = tokio::sync::mpsc::channel(4);
         let runtime = WaRuntime::new(auth, tx).await.unwrap();
-        runtime.state_handle().set(crate::gateway::interfaces::whatsapp::wa_runtime::ConnectionState::Connected);
+        runtime
+            .state_handle()
+            .set(crate::gateway::interfaces::whatsapp::wa_runtime::ConnectionState::Connected);
         let msg = OutboundMessage::text("jid", "hello");
         let result = WaOutbound::send_message(&runtime, msg, &Default::default()).await;
-        assert!(matches!(result, Err(crate::gateway::channel::ChannelError::NotConnected(_))));
+        assert!(matches!(
+            result,
+            Err(crate::gateway::channel::ChannelError::NotConnected(_))
+        ));
     }
 }

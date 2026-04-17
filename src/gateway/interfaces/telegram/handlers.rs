@@ -11,10 +11,10 @@
 //! Key Telegram-specific metadata (thread_id, sender_id) is also passed via
 //! `InboundMessage.metadata` so the router can access it if needed.
 
+use super::sticker::StickerPipeline;
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
-use super::sticker::StickerPipeline;
 use chrono::{TimeZone, Utc};
 use std::time::Duration;
 use teloxide::prelude::*;
@@ -62,7 +62,9 @@ pub(crate) async fn convert_message(
             MediaKind::Sticker(s) => {
                 let emoji = s.sticker.emoji.as_deref().unwrap_or("?");
                 let file_unique_id = &s.sticker.file.unique_id;
-                let desc = sticker_pipeline.resolve_description(file_unique_id, "").await;
+                let desc = sticker_pipeline
+                    .resolve_description(file_unique_id, "")
+                    .await;
                 match desc {
                     Some(d) => format!("[Sticker: {} | {}]", emoji, d),
                     None => format!("[Sticker: {}]", emoji),

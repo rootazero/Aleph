@@ -39,12 +39,12 @@ pub mod matrix;
 pub mod mattermost;
 pub mod msteams;
 pub mod nostr;
+pub mod qq;
 pub mod signal;
 pub mod slack;
 pub mod telegram;
 pub mod webhook;
 pub mod whatsapp;
-pub mod qq;
 pub mod xmpp;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
@@ -64,13 +64,13 @@ pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
 pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
 pub use msteams::{MsTeamsChannel, MsTeamsConfig};
 pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
+pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
 pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
-pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
-pub use qq::{QQChannel, QQChannelFactory, QQConfig, QQDmPolicy, QQGroupPolicy};
 pub use wechat::{WeChatChannel, WeChatChannelFactory, WeChatConfig};
+pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
 
 pub fn register_channel_plugins() {

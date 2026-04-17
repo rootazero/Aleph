@@ -214,7 +214,9 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     let md_path = notes_dir()
         .join(agent_id)
         .join(format!("{}.md", entry.path));
-    let content = tokio::fs::read_to_string(&md_path).await.unwrap_or_default();
+    let content = tokio::fs::read_to_string(&md_path)
+        .await
+        .unwrap_or_default();
 
     // Fetch backlinks (incoming links).
     let backlinks = db

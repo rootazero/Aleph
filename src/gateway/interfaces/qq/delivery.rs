@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use dashmap::DashMap;
+use std::time::{Duration, Instant};
 
 use crate::gateway::channel::{
     ChannelError, ConversationId, MessageId, OutboundMessage, SendResult,
@@ -34,10 +34,7 @@ impl ReplyTracker {
         Self::default()
     }
 
-    pub fn can_reply_passively(
-        &self,
-        msg_id: &str,
-    ) -> (bool, bool) {
+    pub fn can_reply_passively(&self, msg_id: &str) -> (bool, bool) {
         if let Some(entry) = self.inner.get(msg_id) {
             let record = entry.value();
             let elapsed = Instant::now().duration_since(record.first_reply_at);
@@ -52,10 +49,7 @@ impl ReplyTracker {
         (false, false)
     }
 
-    pub fn record_reply(
-        &self,
-        msg_id: &str,
-    ) {
+    pub fn record_reply(&self, msg_id: &str) {
         {
             let mut entry = self.inner.entry(msg_id.to_string()).or_insert(ReplyRecord {
                 count: 0,
@@ -66,9 +60,8 @@ impl ReplyTracker {
 
         if self.inner.len() > 10000 {
             let now = Instant::now();
-            self.inner.retain(|_, v| {
-                now.duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL
-            });
+            self.inner
+                .retain(|_, v| now.duration_since(v.first_reply_at) <= PASSIVE_REPLY_TTL);
         }
     }
 }
@@ -138,7 +131,11 @@ pub async fn deliver_message(
 
     for (idx, chunk) in chunks.iter().enumerate() {
         let payload = SendMessagePayload {
-            msg_id: if use_passive { final_msg_id.clone() } else { None },
+            msg_id: if use_passive {
+                final_msg_id.clone()
+            } else {
+                None
+            },
             msg_type: 0,
             content: chunk.clone(),
             markdown: None,

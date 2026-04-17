@@ -21,7 +21,11 @@ impl SharePointClient {
         Self { graph_client }
     }
 
-    async fn get_channel_drive(&self, team_id: &str, channel_id: &str) -> Result<String, ChannelError> {
+    async fn get_channel_drive(
+        &self,
+        team_id: &str,
+        channel_id: &str,
+    ) -> Result<String, ChannelError> {
         #[derive(Deserialize)]
         struct DriveResponse {
             id: String,
@@ -75,14 +79,22 @@ impl SharePointClient {
 
             let _: serde_json::Value = self
                 .graph_client
-                .put_raw(upload_url, chunk, &[("Content-Range", range_header.as_str())])
+                .put_raw(
+                    upload_url,
+                    chunk,
+                    &[("Content-Range", range_header.as_str())],
+                )
                 .await?;
         }
 
         Ok(())
     }
 
-    async fn create_share_link(&self, drive_id: &str, file_name: &str) -> Result<ShareLink, ChannelError> {
+    async fn create_share_link(
+        &self,
+        drive_id: &str,
+        file_name: &str,
+    ) -> Result<ShareLink, ChannelError> {
         #[derive(Deserialize)]
         struct PermissionResponse {
             link: ShareLinkResponse,
@@ -106,10 +118,8 @@ impl SharePointClient {
             )
             .await?;
 
-        let expiration: Option<chrono::DateTime<chrono::Utc>> = response
-            .link
-            .expiration_date_time
-            .and_then(|s: String| {
+        let expiration: Option<chrono::DateTime<chrono::Utc>> =
+            response.link.expiration_date_time.and_then(|s: String| {
                 chrono::DateTime::parse_from_rfc3339(&s)
                     .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))

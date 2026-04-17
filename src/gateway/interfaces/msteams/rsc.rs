@@ -3,10 +3,10 @@
 //! RSC allows bot apps to access Teams data with granular permissions
 //! without requiring user consent for each operation.
 
-use serde::{Deserialize, Serialize};
 use crate::gateway::channel::ChannelError;
 use crate::gateway::interfaces::msteams::graph::GraphClient;
 use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
 
 /// RSC permissions for Teams
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -184,11 +184,13 @@ mod tests {
     fn test_build_resource_access_list_read() {
         let perms = RscPermissions::new(true, false, false, false, false);
         let manager = RscPermissionManager::new(
-            Arc::new(GraphClient::new(Arc::new(crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
-                "app".to_string(),
-                "secret".to_string(),
-                "tenant".to_string(),
-            )))),
+            Arc::new(GraphClient::new(Arc::new(
+                crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
+                    "app".to_string(),
+                    "secret".to_string(),
+                    "tenant".to_string(),
+                ),
+            ))),
             perms,
         );
 
@@ -200,11 +202,13 @@ mod tests {
     fn test_build_resource_access_list_all() {
         let perms = RscPermissions::new(true, true, true, true, true);
         let manager = RscPermissionManager::new(
-            Arc::new(GraphClient::new(Arc::new(crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
-                "app".to_string(),
-                "secret".to_string(),
-                "tenant".to_string(),
-            )))),
+            Arc::new(GraphClient::new(Arc::new(
+                crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
+                    "app".to_string(),
+                    "secret".to_string(),
+                    "tenant".to_string(),
+                ),
+            ))),
             perms,
         );
 
@@ -217,11 +221,13 @@ mod tests {
     fn test_build_resource_access_list_empty() {
         let perms = RscPermissions::default();
         let manager = RscPermissionManager::new(
-            Arc::new(GraphClient::new(Arc::new(crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
-                "app".to_string(),
-                "secret".to_string(),
-                "tenant".to_string(),
-            )))),
+            Arc::new(GraphClient::new(Arc::new(
+                crate::gateway::interfaces::msteams::graph::GraphTokenCache::new(
+                    "app".to_string(),
+                    "secret".to_string(),
+                    "tenant".to_string(),
+                ),
+            ))),
             perms,
         );
 

@@ -22,7 +22,15 @@ pub struct UserProfileOutput {
 }
 
 pub struct UserProfileTool {
-    synthesizer: Arc<dyn ProfileSynthesizer>,
+    pub(crate) synthesizer: Arc<dyn ProfileSynthesizer>,
+}
+
+impl Clone for UserProfileTool {
+    fn clone(&self) -> Self {
+        Self {
+            synthesizer: Arc::clone(&self.synthesizer),
+        }
+    }
 }
 
 impl UserProfileTool {

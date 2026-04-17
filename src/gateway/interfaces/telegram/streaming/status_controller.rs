@@ -22,27 +22,13 @@ impl StatusReactionController {
     }
 
     /// Handle a stream event and update the reaction accordingly.
-    pub async fn handle_event(
-        &self,
-        event: &StreamEvent,
-        message_id: i64,
-    ) -> ChannelResult<()> {
+    pub async fn handle_event(&self, event: &StreamEvent, message_id: i64) -> ChannelResult<()> {
         let target_emoji = match event {
-            StreamEvent::ResponseChunk { .. } => {
-                self.config.processing.clone()
-            }
-            StreamEvent::ToolStart { .. } => {
-                self.config.tool_active.clone()
-            }
-            StreamEvent::ToolEnd { .. } => {
-                self.config.processing.clone()
-            }
-            StreamEvent::RunComplete { .. } => {
-                self.config.complete.clone()
-            }
-            StreamEvent::RunError { .. } => {
-                Some("👎".to_string())
-            }
+            StreamEvent::ResponseChunk { .. } => self.config.processing.clone(),
+            StreamEvent::ToolStart { .. } => self.config.tool_active.clone(),
+            StreamEvent::ToolEnd { .. } => self.config.processing.clone(),
+            StreamEvent::RunComplete { .. } => self.config.complete.clone(),
+            StreamEvent::RunError { .. } => Some("👎".to_string()),
             _ => None,
         };
 

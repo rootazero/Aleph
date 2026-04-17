@@ -29,7 +29,10 @@ impl ReactionHelper {
             g.take()
         };
         if let Some(typing) = guard {
-            if let Err(e) = api.remove_reaction(&typing.message_id, &typing.reaction_id).await {
+            if let Err(e) = api
+                .remove_reaction(&typing.message_id, &typing.reaction_id)
+                .await
+            {
                 tracing::debug!("Failed to remove typing indicator: {e}");
             }
         }

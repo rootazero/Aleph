@@ -251,6 +251,11 @@ impl BuiltinToolRegistry {
             .as_ref()
             .map(|dir| crate::builtin_tools::note_schema::NoteSchemaTool::new(dir.clone()));
 
+        // Build user profile tool (Spec 7 Task 9)
+        let user_profile_tool = config.profile_synthesizer.as_ref().map(|synth| {
+            crate::builtin_tools::user_profile::UserProfileTool::new(Arc::clone(synth))
+        });
+
         // Build tool metadata
         let mut tools = HashMap::new();
 
@@ -306,6 +311,7 @@ impl BuiltinToolRegistry {
             config.injection_mode,
             &note_orient_tool,
             &note_schema_tool,
+            &user_profile_tool,
         );
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
@@ -1004,6 +1010,7 @@ impl BuiltinToolRegistry {
             memory_reflect_tool,
             note_orient_tool,
             note_schema_tool,
+            user_profile_tool,
             tools,
         }
     }
@@ -1223,6 +1230,7 @@ impl BuiltinToolRegistry {
         injection_mode: crate::config::types::memory::MemoryInjectionMode,
         note_orient_tool: &Option<crate::builtin_tools::note_orient::NoteOrientTool>,
         note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
+        user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
     ) {
         use schemars::schema_for;
 
@@ -1604,6 +1612,22 @@ impl BuiltinToolRegistry {
                 .unwrap_or_default(),
             );
             info!("Registered note_orient tool in BuiltinToolRegistry");
+        }
+
+        // User profile tool (Spec 7 Task 9) — always exposed when synthesizer is available.
+        if user_profile_tool.is_some() {
+            reg(
+                tools,
+                "user_profile",
+                "Read the current user profile (interests, preferences, context) or view \
+                 its revision history. Use 'read' to get the latest profile, 'history' to \
+                 inspect the revision log.",
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::user_profile::UserProfileArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered user_profile tool in BuiltinToolRegistry");
         }
     }
 }

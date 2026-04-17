@@ -116,7 +116,10 @@ impl InboundMessageRouter {
         let (is_feishu, is_telegram) = {
             if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
                 let ch = handle.read().await;
-                (ch.channel_type() == "feishu", ch.channel_type() == "telegram")
+                (
+                    ch.channel_type() == "feishu",
+                    ch.channel_type() == "telegram",
+                )
             } else {
                 (false, false)
             }
@@ -334,7 +337,8 @@ impl InboundMessageRouter {
         run_id: &str,
         reply_config: ReplyEmitterConfig,
         pending_media: crate::gateway::media::PendingMedia,
-    ) -> Option<crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter> {
+    ) -> Option<crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter>
+    {
         use crate::gateway::interfaces::feishu::api::FeishuApi;
         use crate::gateway::interfaces::feishu::auth::TokenManager;
         use crate::gateway::interfaces::feishu::feishu_outbound::streaming::FeishuEventEmitter;

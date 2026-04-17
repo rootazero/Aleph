@@ -93,10 +93,7 @@ pub struct QrLoginResult {
 }
 
 /// Perform QR login flow (requires interactive terminal).
-pub async fn qr_login(
-    _hermes_home: &str,
-    _bot_type: &str,
-) -> Result<QrLoginResult, String> {
+pub async fn qr_login(_hermes_home: &str, _bot_type: &str) -> Result<QrLoginResult, String> {
     Err("QR login requires terminal interaction. Use CLI tool instead.".to_string())
 }
 
@@ -109,7 +106,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = ContextTokenStore::new(temp_dir.path().to_str().unwrap());
 
-        store.set("account1", "user1", "token_abc".to_string()).await;
+        store
+            .set("account1", "user1", "token_abc".to_string())
+            .await;
         assert_eq!(
             store.get("account1", "user1").await,
             Some("token_abc".to_string())

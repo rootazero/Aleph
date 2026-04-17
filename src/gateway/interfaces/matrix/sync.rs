@@ -1,6 +1,4 @@
-use crate::gateway::channel::{
-    ChannelId, ChannelStatus, InboundMessageSender,
-};
+use crate::gateway::channel::{ChannelId, ChannelStatus, InboundMessageSender};
 use crate::gateway::interfaces::matrix::{
     client::MatrixSdkClient, config::MatrixConfig, dedupe::EventDeduper, events,
 };
@@ -19,8 +17,7 @@ pub async fn run_sync_loop(
     deduper: Arc<EventDeduper>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let settings = SyncSettings::default()
-        .timeout(Duration::from_millis(config.sync_timeout_ms));
+    let settings = SyncSettings::default().timeout(Duration::from_millis(config.sync_timeout_ms));
 
     let sdk_client = client.inner().clone();
     let stream = sdk_client.sync_stream(settings).await;
@@ -62,18 +59,16 @@ pub async fn run_sync_loop(
             }
 
             for raw_event in joined_room.timeline.events {
-                let event_json: serde_json::Value = match serde_json::from_str(raw_event.raw().json().get()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!("Failed to deserialize timeline event: {e}");
-                        continue;
-                    }
-                };
+                let event_json: serde_json::Value =
+                    match serde_json::from_str(raw_event.raw().json().get()) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!("Failed to deserialize timeline event: {e}");
+                            continue;
+                        }
+                    };
 
-                let event_id = event_json["event_id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let event_id = event_json["event_id"].as_str().unwrap_or("").to_string();
 
                 if event_id.is_empty() {
                     continue;

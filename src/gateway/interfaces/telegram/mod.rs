@@ -17,19 +17,19 @@
 
 pub mod access;
 pub mod approval;
+pub mod bot_instance;
 pub mod chunking;
 pub mod config;
-pub mod config_v2;
 pub mod config_resolver;
+pub mod config_v2;
 pub mod context;
 pub mod delivery;
 pub mod error_cooldown;
 pub mod group_chat;
 pub mod handlers;
 pub mod offset;
-mod polling;
-pub mod bot_instance;
 pub mod poll;
+mod polling;
 pub mod reaction_handler;
 pub mod session;
 pub mod status_reaction;
@@ -38,12 +38,14 @@ pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
-pub use context::{AccessLevel, ChatType, ConversationKey, MediaItem, SessionState, TelegramInboundContext};
-pub use session::{SessionConfig, SessionError, TelegramSessionManager};
-pub use config_v2::TelegramConfigV2;
-pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
+pub use config_resolver::{ConfigResolver, ResolvedConfig};
+pub use config_v2::TelegramConfigV2;
 pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
+pub use context::{
+    AccessLevel, ChatType, ConversationKey, MediaItem, SessionState, TelegramInboundContext,
+};
+pub use session::{SessionConfig, SessionError, TelegramSessionManager};
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
@@ -102,20 +104,23 @@ impl TelegramChannel {
 
         let resolver = ConfigResolver::from_v2(&config_v2);
         let access_config = if let Some(first) = config_v2.accounts.first() {
-            resolver.resolve(&first.id, 0, None).cloned().unwrap_or_else(|| ResolvedConfig {
-                account_id: first.id.clone(),
-                bot_token: first.bot_token.clone(),
-                bot_username: first.bot_username.clone(),
-                default_agent: first.default_agent.clone(),
-                dm_policy: first.dm_policy.clone().unwrap_or_default(),
-                group_policy: first.group_policy.clone().unwrap_or_default(),
-                send_typing: first.send_typing.unwrap_or(true),
-                allowed_users: first.allowed_users.clone().unwrap_or_default(),
-                allowed_groups: first.allowed_groups.clone().unwrap_or_default(),
-                streaming: first.streaming.clone().unwrap_or_default(),
-                error_policy: first.error_policy.clone().unwrap_or_default(),
-                max_retries: 3,
-            })
+            resolver
+                .resolve(&first.id, 0, None)
+                .cloned()
+                .unwrap_or_else(|| ResolvedConfig {
+                    account_id: first.id.clone(),
+                    bot_token: first.bot_token.clone(),
+                    bot_username: first.bot_username.clone(),
+                    default_agent: first.default_agent.clone(),
+                    dm_policy: first.dm_policy.clone().unwrap_or_default(),
+                    group_policy: first.group_policy.clone().unwrap_or_default(),
+                    send_typing: first.send_typing.unwrap_or(true),
+                    allowed_users: first.allowed_users.clone().unwrap_or_default(),
+                    allowed_groups: first.allowed_groups.clone().unwrap_or_default(),
+                    streaming: first.streaming.clone().unwrap_or_default(),
+                    error_policy: first.error_policy.clone().unwrap_or_default(),
+                    max_retries: 3,
+                })
         } else {
             ResolvedConfig {
                 account_id: "default".to_string(),
@@ -259,8 +264,7 @@ impl Channel for TelegramChannel {
                     max_retries: 3,
                 });
 
-            let mut instance =
-                BotInstance::new(account, self.callback_tx.clone(), resolved_config);
+            let mut instance = BotInstance::new(account, self.callback_tx.clone(), resolved_config);
 
             // Verify bot token by getting bot info
             match instance.bot.get_me().await {
@@ -425,12 +429,13 @@ impl Channel for TelegramChannel {
 
             let state_db_for_sticker = self.state_db.clone();
 
-            let message_handler =
-                Update::filter_message().endpoint(move |bot: Bot, msg: teloxide::types::Message| {
+            let message_handler = Update::filter_message().endpoint(
+                move |bot: Bot, msg: teloxide::types::Message| {
                     let inbound_tx = inbound_tx.clone();
                     let channel_id = channel_id.clone();
                     let access = access_clone.clone();
-                    let sticker_pipeline = sticker::StickerPipeline::new(state_db_for_sticker.clone());
+                    let sticker_pipeline =
+                        sticker::StickerPipeline::new(state_db_for_sticker.clone());
                     async move {
                         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
                         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
@@ -438,13 +443,16 @@ impl Channel for TelegramChannel {
 
                         match access.check_message(user_id, chat_id, is_group).await {
                             AccessDecision::Allowed => {
-                                if let Some(inbound) =
-                                    handlers::convert_message(&msg, &bot, &channel_id, &sticker_pipeline).await
+                                if let Some(inbound) = handlers::convert_message(
+                                    &msg,
+                                    &bot,
+                                    &channel_id,
+                                    &sticker_pipeline,
+                                )
+                                .await
                                 {
-                                    let tg_ctx = TelegramInboundContext::from_inbound(
-                                        inbound.clone(),
-                                        &msg,
-                                    );
+                                    let tg_ctx =
+                                        TelegramInboundContext::from_inbound(inbound.clone(), &msg);
                                     let access_level = AccessLevel::Member;
                                     let _tg_ctx = tg_ctx.with_access_level(access_level);
 
@@ -462,13 +470,16 @@ impl Channel for TelegramChannel {
                                 }
                             }
                             AccessDecision::NeedsPairing => {
-                                if let Some(inbound) =
-                                    handlers::convert_message(&msg, &bot, &channel_id, &sticker_pipeline).await
+                                if let Some(inbound) = handlers::convert_message(
+                                    &msg,
+                                    &bot,
+                                    &channel_id,
+                                    &sticker_pipeline,
+                                )
+                                .await
                                 {
-                                    let tg_ctx = TelegramInboundContext::from_inbound(
-                                        inbound.clone(),
-                                        &msg,
-                                    );
+                                    let tg_ctx =
+                                        TelegramInboundContext::from_inbound(inbound.clone(), &msg);
                                     let access_level = AccessLevel::Stranger;
                                     let _tg_ctx = tg_ctx.with_access_level(access_level);
 
@@ -495,7 +506,8 @@ impl Channel for TelegramChannel {
                         }
                         Ok::<(), std::convert::Infallible>(())
                     }
-                });
+                },
+            );
 
             let callback_handler =
                 Update::filter_callback_query().endpoint(move |bot: Bot, q: TgCallbackQuery| {
@@ -587,8 +599,8 @@ impl Channel for TelegramChannel {
 
             let inbound_tx_for_poll = self.channel_state.sender();
             let channel_id_for_poll = self.info.id.clone();
-            let poll_handler = Update::filter_poll_answer().endpoint(
-                move |q: teloxide::types::PollAnswer| {
+            let poll_handler =
+                Update::filter_poll_answer().endpoint(move |q: teloxide::types::PollAnswer| {
                     let inbound_tx = inbound_tx_for_poll.clone();
                     let channel_id = channel_id_for_poll.clone();
                     async move {
@@ -596,7 +608,9 @@ impl Channel for TelegramChannel {
                             teloxide::types::Voter::User(user) => (
                                 ConversationId::new(user.id.to_string()),
                                 UserId::new(user.id.to_string()),
-                                user.username.clone().or_else(|| Some(user.first_name.clone())),
+                                user.username
+                                    .clone()
+                                    .or_else(|| Some(user.first_name.clone())),
                             ),
                             teloxide::types::Voter::Chat(chat) => (
                                 ConversationId::new(chat.id.0.to_string()),
@@ -625,8 +639,7 @@ impl Channel for TelegramChannel {
                         let _ = inbound_tx.send(inbound);
                         Ok::<(), std::convert::Infallible>(())
                     }
-                },
-            );
+                });
 
             let inbound_tx_for_reaction = self.channel_state.sender();
             let channel_id_for_reaction = self.info.id.clone();
@@ -689,7 +702,8 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let (chat_id, thread_id) = delivery::parse_conversation_id(message.conversation_id.as_str());
+        let (chat_id, thread_id) =
+            delivery::parse_conversation_id(message.conversation_id.as_str());
         let chat_id_i64 = chat_id.0;
 
         let instance = self
@@ -888,11 +902,13 @@ mod tests {
     #[test]
     fn test_channel_creation() {
         let config = TelegramConfigV2 {
-            accounts: vec![crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
-                id: "default".to_string(),
-                bot_token: "123:ABC".to_string(),
-                ..Default::default()
-            }],
+            accounts: vec![
+                crate::gateway::interfaces::telegram::config_v2::TelegramAccountConfig {
+                    id: "default".to_string(),
+                    bot_token: "123:ABC".to_string(),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
         let channel = TelegramChannel::new("telegram-test", config);

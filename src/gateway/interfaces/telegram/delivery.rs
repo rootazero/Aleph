@@ -161,7 +161,9 @@ pub(crate) async fn send_message(
         );
         let err = ChannelError::SendFailed(format!("conversation in cooldown: {}", cd));
         if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
-            return Err(ChannelError::SendFailed("Error suppressed by policy".to_string()));
+            return Err(ChannelError::SendFailed(
+                "Error suppressed by policy".to_string(),
+            ));
         }
         return Err(err);
     }
@@ -300,7 +302,11 @@ pub(crate) async fn send_message(
                                         "Telegram send error: {}",
                                         fallback_err
                                     ));
-                                    if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
+                                    if !cooldown.should_send_error(
+                                        conv_id,
+                                        &config.error_policy,
+                                        "",
+                                    ) {
                                         return Err(ChannelError::SendFailed(
                                             "Error suppressed by policy".to_string(),
                                         ));
@@ -388,7 +394,9 @@ pub(crate) async fn send_message(
             let err =
                 ChannelError::SendFailed("No message chunks to send (empty formatted text)".into());
             if !cooldown.should_send_error(conv_id, &config.error_policy, "") {
-                return Err(ChannelError::SendFailed("Error suppressed by policy".to_string()));
+                return Err(ChannelError::SendFailed(
+                    "Error suppressed by policy".to_string(),
+                ));
             }
             return Err(err);
         }
@@ -676,14 +684,12 @@ impl TelegramDelivery {
     }
 
     /// Send a plain text message and return its Telegram message ID.
-    pub async fn send_text_message(
-        &self,
-        text: &str,
-    ) -> ChannelResult<i64> {
+    pub async fn send_text_message(&self, text: &str) -> ChannelResult<i64> {
         let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id);
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
         let req = with_thread!(
-            self.bot.send_message(chat_id, &html_text)
+            self.bot
+                .send_message(chat_id, &html_text)
                 .parse_mode(ParseMode::Html),
             thread_id
         );
@@ -699,11 +705,7 @@ impl TelegramDelivery {
     }
 
     /// Edit an existing message.
-    pub async fn edit_text_message(
-        &self,
-        message_id: i64,
-        text: &str,
-    ) -> ChannelResult<()> {
+    pub async fn edit_text_message(&self, message_id: i64, text: &str) -> ChannelResult<()> {
         let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
         let msg_id = teloxide::types::MessageId(message_id as i32);
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
@@ -722,11 +724,7 @@ impl TelegramDelivery {
     }
 
     /// Set a reaction on a message.
-    pub async fn set_reaction(
-        &self,
-        message_id: i64,
-        emoji: &str,
-    ) -> ChannelResult<()> {
+    pub async fn set_reaction(&self, message_id: i64, emoji: &str) -> ChannelResult<()> {
         let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id);
         let msg_id = teloxide::types::MessageId(message_id as i32);
         let reactions = if emoji.is_empty() {
@@ -754,7 +752,10 @@ impl TelegramDelivery {
     pub fn send_streaming_orchestrated(
         &self,
         config: &super::config_v2::StreamingOptions,
-    ) -> (super::streaming::StreamOrchestrator, mpsc::Sender<StreamEvent>) {
+    ) -> (
+        super::streaming::StreamOrchestrator,
+        mpsc::Sender<StreamEvent>,
+    ) {
         super::streaming::StreamOrchestrator::new(self.clone(), config.clone())
     }
 }

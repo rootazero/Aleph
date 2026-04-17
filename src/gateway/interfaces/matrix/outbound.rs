@@ -4,18 +4,18 @@ use crate::gateway::channel::{
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::gateway::interfaces::matrix::media;
 use chrono::Utc;
-use matrix_sdk::Client;
 use matrix_sdk::ruma::{
     events::{
         reaction::ReactionEventContent,
         relation::Annotation,
         room::message::{
-            AudioMessageEventContent, FileMessageEventContent, ImageMessageEventContent,
-            Relation, ReplacementMetadata, RoomMessageEventContent, VideoMessageEventContent,
+            AudioMessageEventContent, FileMessageEventContent, ImageMessageEventContent, Relation,
+            ReplacementMetadata, RoomMessageEventContent, VideoMessageEventContent,
         },
     },
     OwnedEventId, OwnedRoomId,
 };
+use matrix_sdk::Client;
 
 pub const MATRIX_MSG_LIMIT: usize = 65535;
 
@@ -44,9 +44,9 @@ pub async fn send_message(client: &Client, message: OutboundMessage) -> ChannelR
 
         if idx == 0 {
             if let Some(event_id_str) = reply_to {
-                let event_id: OwnedEventId = event_id_str
-                    .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid reply event ID: {e}")))?;
+                let event_id: OwnedEventId = event_id_str.parse().map_err(|e| {
+                    ChannelError::SendFailed(format!("Invalid reply event ID: {e}"))
+                })?;
                 content.relates_to = Some(Relation::Reply {
                     in_reply_to: matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
                 });
@@ -84,11 +84,9 @@ async fn send_with_attachments(
 
             if idx == 0 {
                 if let Some(ref event_id_str) = reply_to {
-                    let event_id: OwnedEventId = event_id_str
-                        .parse()
-                        .map_err(|e| {
-                            ChannelError::SendFailed(format!("Invalid reply event ID: {e}"))
-                        })?;
+                    let event_id: OwnedEventId = event_id_str.parse().map_err(|e| {
+                        ChannelError::SendFailed(format!("Invalid reply event ID: {e}"))
+                    })?;
                     content.relates_to = Some(Relation::Reply {
                         in_reply_to: matrix_sdk::ruma::events::relation::InReplyTo::new(event_id),
                     });
@@ -109,14 +107,11 @@ async fn send_with_attachments(
 
     for attachment in &message.attachments {
         let (content_bytes, mime_type, filename) = prepare_attachment(attachment).await?;
-        let mxc_uri = media::upload_media(client, content_bytes, &mime_type, filename.as_deref())
-            .await?;
+        let mxc_uri =
+            media::upload_media(client, content_bytes, &mime_type, filename.as_deref()).await?;
 
         let body = filename.clone().unwrap_or_else(|| "attachment".to_string());
-        let event_content = build_media_message(&mime_type,
-            &body,
-            &mxc_uri,
-        )?;
+        let event_content = build_media_message(&mime_type, &body, &mxc_uri)?;
 
         let response = room
             .send(event_content)
@@ -129,7 +124,8 @@ async fn send_with_attachments(
         });
     }
 
-    last_result.ok_or_else(|| ChannelError::SendFailed("No message or attachments to send".to_string()))
+    last_result
+        .ok_or_else(|| ChannelError::SendFailed("No message or attachments to send".to_string()))
 }
 
 fn build_media_message(
@@ -272,7 +268,9 @@ pub async fn edit_message(
     let chunks = MessageFormatter::split(&formatted, MATRIX_MSG_LIMIT);
 
     if chunks.is_empty() {
-        return Err(ChannelError::SendFailed("No message content to edit".to_string()));
+        return Err(ChannelError::SendFailed(
+            "No message content to edit".to_string(),
+        ));
     }
 
     let chunk = &chunks[0];

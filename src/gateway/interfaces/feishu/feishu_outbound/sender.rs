@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use crate::gateway::channel::{ChannelError, ChannelResult, MessageId, OutboundMessage, SendResult};
+use crate::gateway::channel::{
+    ChannelError, ChannelResult, MessageId, OutboundMessage, SendResult,
+};
 use crate::gateway::interfaces::feishu::api::{FeishuApi, FeishuSendError};
 use crate::gateway::interfaces::feishu::config::FeishuConfig;
 use crate::gateway::interfaces::feishu::feishu_outbound::media::MediaHelper;
@@ -40,10 +42,17 @@ impl FeishuSender {
         let chat_id = message.conversation_id.as_str();
         let reply_to = message.reply_to.as_ref().map(|id| id.as_str());
 
-        let has_image = message.attachments.iter().any(|a| a.mime_type.starts_with("image/"));
+        let has_image = message
+            .attachments
+            .iter()
+            .any(|a| a.mime_type.starts_with("image/"));
 
         let msg_id = if has_image {
-            if let Some(attachment) = message.attachments.iter().find(|a| a.mime_type.starts_with("image/")) {
+            if let Some(attachment) = message
+                .attachments
+                .iter()
+                .find(|a| a.mime_type.starts_with("image/"))
+            {
                 let image_data = attachment.data.clone().ok_or_else(|| {
                     ChannelError::SendFailed("Image attachment has no data".to_string())
                 })?;
@@ -53,7 +62,9 @@ impl FeishuSender {
                     .await
                     .map_err(map_send_error)?
             } else {
-                return Err(ChannelError::SendFailed("Image attachment not found".to_string()));
+                return Err(ChannelError::SendFailed(
+                    "Image attachment not found".to_string(),
+                ));
             }
         } else {
             if message.text.is_empty() {

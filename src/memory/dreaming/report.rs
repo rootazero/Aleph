@@ -59,4 +59,3 @@ pub struct DreamReport {
     #[serde(skip)]
     pub extra: std::collections::BTreeMap<String, String>,
 }
-

@@ -105,7 +105,9 @@ impl Channel for FeishuChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
 
         let http = reqwest::Client::new();
         let base_url = self.config.base_url();
@@ -142,7 +144,9 @@ impl Channel for FeishuChannel {
                 self.config.webhook_path
             );
 
-            use crate::gateway::interfaces::feishu::feishu_inbound::webhook_server::{run_webhook_server, WebhookState};
+            use crate::gateway::interfaces::feishu::feishu_inbound::webhook_server::{
+                run_webhook_server, WebhookState,
+            };
 
             let webhook_state = WebhookState {
                 config: self.config.clone(),
@@ -163,7 +167,9 @@ impl Channel for FeishuChannel {
 
         self.api = Some(api.clone());
         self.message_ops = Some(MessageOps::new(api));
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
 
         Ok(())
     }
@@ -177,7 +183,9 @@ impl Channel for FeishuChannel {
         }
         self.api = None;
         self.message_ops = None;
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 

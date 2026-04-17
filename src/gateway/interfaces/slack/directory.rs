@@ -77,7 +77,11 @@ impl UserDirectory {
             .as_str()
             .filter(|s| !s.is_empty())
             .map(String::from)
-            .or_else(|| resp["user"]["profile"]["real_name"].as_str().map(String::from))
+            .or_else(|| {
+                resp["user"]["profile"]["real_name"]
+                    .as_str()
+                    .map(String::from)
+            })
     }
 
     pub async fn clear_cache(&self) {

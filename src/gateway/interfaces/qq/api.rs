@@ -31,15 +31,12 @@ impl TokenManager {
         }
     }
 
-    pub async fn get_token(
-        &self,
-        client: &reqwest::Client,
-    ) -> Result<String, QQError> {
+    pub async fn get_token(&self, client: &reqwest::Client) -> Result<String, QQError> {
         {
             let guard = self.cache.lock().await;
             if let Some(ref cached) = *guard {
-                let refresh_ahead = Duration::from_secs(300)
-                    .min((cached.expires_at - Instant::now()) / 3);
+                let refresh_ahead =
+                    Duration::from_secs(300).min((cached.expires_at - Instant::now()) / 3);
                 if Instant::now() < cached.expires_at - refresh_ahead {
                     return Ok(cached.token.clone());
                 }
@@ -70,10 +67,7 @@ impl TokenManager {
         result
     }
 
-    async fn fetch_token(
-        &self,
-        client: &reqwest::Client,
-    ) -> Result<String, QQError> {
+    async fn fetch_token(&self, client: &reqwest::Client) -> Result<String, QQError> {
         let body = serde_json::json!({
             "appId": self.app_id,
             "clientSecret": self.client_secret,
@@ -95,8 +89,8 @@ impl TokenManager {
             });
         }
 
-        let data: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| QQError::AuthFailed(e.to_string()))?;
+        let data: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| QQError::AuthFailed(e.to_string()))?;
 
         let token = data["access_token"]
             .as_str()
@@ -107,7 +101,10 @@ impl TokenManager {
         let expires_at = Instant::now() + Duration::from_secs(expires_in);
 
         let mut cache = self.cache.lock().await;
-        *cache = Some(CachedToken { token: token.clone(), expires_at });
+        *cache = Some(CachedToken {
+            token: token.clone(),
+            expires_at,
+        });
 
         Ok(token)
     }
@@ -169,7 +166,9 @@ impl QQApiClient {
         let body = resp.text().await.unwrap_or_default();
 
         if status.as_u16() == 429 || body.contains("304023") || body.contains("304024") {
-            return Err(QQError::RateLimited { retry_after_secs: 5 });
+            return Err(QQError::RateLimited {
+                retry_after_secs: 5,
+            });
         }
 
         if !status.is_success() {

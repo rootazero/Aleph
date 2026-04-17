@@ -1,7 +1,7 @@
 use crate::gateway::channel::ChannelError;
-use matrix_sdk::Client;
-use matrix_sdk::ruma::events::room::MediaSource;
 use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
+use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::Client;
 
 pub const MATRIX_MEDIA_MAX_SIZE: u64 = 100 * 1024 * 1024;
 
