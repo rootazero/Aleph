@@ -32,10 +32,13 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
         match tokio_tungstenite::connect_async(&current_url).await {
             Ok((ws_stream, _)) => {
                 backoff_secs = 1;
-                let _ = ctx.event_tx.send(QQEvent::Unknown {
-                    t: "CONNECTED".into(),
-                    d: serde_json::Value::Null,
-                }).await;
+                let _ = ctx
+                    .event_tx
+                    .send(QQEvent::Unknown {
+                        t: "CONNECTED".into(),
+                        d: serde_json::Value::Null,
+                    })
+                    .await;
 
                 let (mut write, mut read) = ws_stream.split();
                 let mut heartbeat_interval = Duration::from_secs(30);
@@ -47,7 +50,8 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                             if let Some(d) = payload.d {
                                 if let Some(interval) = d["heartbeat_interval"].as_u64() {
                                     heartbeat_interval = Duration::from_millis(interval);
-                                    heartbeat_deadline = tokio::time::Instant::now() + heartbeat_interval * 2;
+                                    heartbeat_deadline =
+                                        tokio::time::Instant::now() + heartbeat_interval * 2;
                                 }
                             }
                         }
@@ -62,7 +66,11 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                         "shard": [0, 1],
                     }
                 });
-                if write.send(WsMessage::Text(identify.to_string().into())).await.is_err() {
+                if write
+                    .send(WsMessage::Text(identify.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     tracing::warn!("Failed to send QQ Identify");
                     continue;
                 }
@@ -126,7 +134,8 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
             Err(e) => {
                 tracing::warn!(
                     "QQ Gateway connect failed: {}, retry in {}s",
-                    e, backoff_secs
+                    e,
+                    backoff_secs
                 );
                 tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                 backoff_secs = (backoff_secs * 2).min(60);

@@ -106,7 +106,10 @@ pub struct DiscordClient;
 impl DiscordAuditLogger {
     /// Create a new audit logger
     pub fn new(config: DiscordSecurityConfig, http_client: Arc<DiscordClient>) -> Self {
-        Self { config, http_client }
+        Self {
+            config,
+            http_client,
+        }
     }
 
     /// Log an audit event
@@ -149,8 +152,10 @@ impl DiscordAuditLogger {
                 event.user_id = 0;
                 event.channel_id = 0;
                 event.guild_id = None;
-                event.metadata.content_preview =
-                    event.metadata.content_preview.map(|_| "[CONTENT REDACTED]".to_string());
+                event.metadata.content_preview = event
+                    .metadata
+                    .content_preview
+                    .map(|_| "[CONTENT REDACTED]".to_string());
             }
             ContentRetention::MetadataOnly => {
                 event.metadata.content_preview = None;

@@ -29,9 +29,7 @@ impl LaneHandle {
     /// Append a text chunk to this lane.
     /// If no preview message exists yet, sends a new message.
     /// Otherwise edits the existing preview message.
-    pub async fn write_chunk(&self,
-        text: &str,
-    ) -> ChannelResult<()> {
+    pub async fn write_chunk(&self, text: &str) -> ChannelResult<()> {
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
@@ -53,9 +51,7 @@ impl LaneHandle {
 
     /// Finalize the lane with final text.
     /// Returns the Telegram message ID of the finalized message.
-    pub async fn finalize(&self,
-        final_text: &str,
-    ) -> ChannelResult<i64> {
+    pub async fn finalize(&self, final_text: &str) -> ChannelResult<i64> {
         let mut tracker = self.tracker.lock().await;
         let state = tracker
             .get_mut(self.lane_id)
@@ -71,7 +67,9 @@ impl LaneHandle {
         };
 
         drop(tracker);
-        self.delivery.edit_text_message(message_id, final_text).await?;
+        self.delivery
+            .edit_text_message(message_id, final_text)
+            .await?;
 
         let mut tracker = self.tracker.lock().await;
         let state = tracker

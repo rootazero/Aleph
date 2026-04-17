@@ -93,6 +93,9 @@ impl ReactionHandler {
     }
 
     pub fn should_agent_react(&self, _msg: &InboundMessage) -> bool {
-        matches!(self.level, ReactionLevel::Minimal | ReactionLevel::Extensive)
+        matches!(
+            self.level,
+            ReactionLevel::Minimal | ReactionLevel::Extensive
+        )
     }
 }

@@ -763,6 +763,9 @@ pub(in crate::commands::start) fn init_compression_service(
     compound_ingestor: Option<
         std::sync::Arc<dyn alephcore::memory::notes::ingest::CompoundIngestor>,
     >,
+    profile_synthesizer: Option<
+        std::sync::Arc<dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer>,
+    >,
 ) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
@@ -773,6 +776,10 @@ pub(in crate::commands::start) fn init_compression_service(
     }
     if let Some(ing) = compound_ingestor {
         service = service.with_compound_ingestor(ing);
+    }
+    // Spec 7 T9: inject profile synthesizer so SessionEnd triggers USER.md update.
+    if let Some(ps) = profile_synthesizer {
+        service = service.with_profile_synthesizer(ps);
     }
     let service = std::sync::Arc::new(service);
 
@@ -798,8 +805,6 @@ pub(in crate::commands::start) async fn init_command_handler(
 ) -> std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler> {
     use alephcore::memory::events::handler::MemoryCommandHandler;
 
-    
-
     std::sync::Arc::new(MemoryCommandHandler::new(
         std::sync::Arc::clone(state_db),
         Some(memory_db.clone()),
@@ -821,10 +826,12 @@ pub(in crate::commands::start) fn init_memory_context_provider(
         assembler_config,
         None,
         None,
+        None,
     )
 }
 
-/// Like `init_memory_context_provider` but wires an optional extension registry and wiki handle.
+/// Like `init_memory_context_provider` but wires an optional extension registry, wiki handle,
+/// and profile synthesizer.
 pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     memory_db: &MemoryBackend,
     embedder: std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>,
@@ -832,6 +839,9 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     assembler_config: alephcore::AssemblerConfig,
     extensions: Option<std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>>,
     wiki: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
+    profile_synthesizer: Option<
+        std::sync::Arc<dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer>,
+    >,
 ) -> std::sync::Arc<alephcore::thinker::MemoryContextProvider> {
     let mcp = match provider {
         Some(p) => alephcore::thinker::MemoryContextProvider::with_provider(
@@ -851,6 +861,12 @@ pub(in crate::commands::start) fn init_memory_context_provider_with_extensions(
     // Spec 5 Task 12: wire wiki orientation for build_orientation_user_message.
     let mcp = if let Some(w) = wiki {
         mcp.with_orientation(w)
+    } else {
+        mcp
+    };
+    // Spec 7 Task 9: wire profile synthesizer for build_profile_user_message.
+    let mcp = if let Some(ps) = profile_synthesizer {
+        mcp.with_profile(ps)
     } else {
         mcp
     };

@@ -4,9 +4,11 @@ use async_trait::async_trait;
 use reqwest::Client;
 use tracing::debug;
 
-use crate::gateway::channel::ChannelError;
-use crate::gateway::interfaces::msteams::auth::{Certificate, FederatedCredential, JwtAssertionGenerator, ManagedIdentityTokenProvider};
 use super::graph::GraphTokenSource;
+use crate::gateway::channel::ChannelError;
+use crate::gateway::interfaces::msteams::auth::{
+    Certificate, FederatedCredential, JwtAssertionGenerator, ManagedIdentityTokenProvider,
+};
 
 const GRAPH_TOKEN_REFRESH_THRESHOLD: f64 = 0.8;
 
@@ -55,8 +57,14 @@ impl GraphTokenManager {
         }
     }
 
-    pub fn with_federated(app_id: String, tenant_id: String, credential: FederatedCredential) -> Self {
-        let mi_provider = Some(ManagedIdentityTokenProvider::new(credential.managed_identity_client_id.clone()));
+    pub fn with_federated(
+        app_id: String,
+        tenant_id: String,
+        credential: FederatedCredential,
+    ) -> Self {
+        let mi_provider = Some(ManagedIdentityTokenProvider::new(
+            credential.managed_identity_client_id.clone(),
+        ));
 
         Self {
             app_id: app_id.clone(),
@@ -106,7 +114,8 @@ impl GraphTokenManager {
                 mi_provider,
             } => {
                 let gen = self.get_or_init_generator(generator, credential).await?;
-                self.fetch_token_via_federated(&gen, mi_provider.as_ref()).await
+                self.fetch_token_via_federated(&gen, mi_provider.as_ref())
+                    .await
             }
         }
     }
@@ -194,13 +203,18 @@ impl GraphTokenManager {
         let assertion = generator
             .exchange_for_token(&self.tenant_id, "https://graph.microsoft.com/.default")
             .await
-            .map_err(|e| ChannelError::AuthFailed(format!("Federated token exchange failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::AuthFailed(format!("Federated token exchange failed: {e}"))
+            })?;
 
         let lifetime = Duration::from_secs(3600);
         let refresh_after = lifetime.mul_f64(GRAPH_TOKEN_REFRESH_THRESHOLD);
         let now = Instant::now();
 
-        debug!(refresh_after_secs = refresh_after.as_secs(), "Fetched new Graph API token via federated auth");
+        debug!(
+            refresh_after_secs = refresh_after.as_secs(),
+            "Fetched new Graph API token via federated auth"
+        );
 
         Ok(CachedToken {
             token: assertion,

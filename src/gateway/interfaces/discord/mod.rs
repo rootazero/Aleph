@@ -37,8 +37,8 @@ pub use account_pool::DiscordAccountPool;
 pub use config::{DiscordChannelConfig, DiscordChannelSettings, DiscordConfig, IntentsConfig};
 pub use handlers::{
     AgentId, ApprovalError, ApprovalQueue, ApprovalStatus, InteractionError, InteractionHandler,
-    InteractionResult, PendingExec, StreamingError, StreamingHandler, StreamingPreview, ThreadBindingError,
-    ThreadBindingHandler, ThreadInfo,
+    InteractionResult, PendingExec, StreamingError, StreamingHandler, StreamingPreview,
+    ThreadBindingError, ThreadBindingHandler, ThreadInfo,
 };
 pub use resolver::{
     AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,

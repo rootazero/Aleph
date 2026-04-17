@@ -710,6 +710,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             get_extension_manager().ok().map(Arc::clone)
         };
 
+        // Spec 7 T9: construct FsProfileSynthesizer from the note_memory_dir + AI provider.
+        // Constructed before tool_config so we can inject into BuiltinToolConfig, and later
+        // into MemoryContextProvider and CompressionService.
+        let profile_synth: Option<
+            std::sync::Arc<dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer>,
+        > = {
+            use alephcore::memory::notes::profile::synthesizer::FsProfileSynthesizer;
+            let prov = provider_registry.default_provider();
+            let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
+                alephcore::utils::paths::get_note_memory_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
+            });
+            let mut synth = FsProfileSynthesizer::new(note_dir, prov);
+            if let Some(ref wiki) = orientation {
+                synth = synth.with_orientation(wiki.clone());
+            }
+            synth = synth.with_config(&app_config.memory.profile);
+            Some(std::sync::Arc::new(synth)
+                as std::sync::Arc<
+                    dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer,
+                >)
+        };
+
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
             memory_db: Some(memory_db.clone()),
@@ -750,6 +773,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Spec 5 Task 12: wiki orientation tools.
             orientation: orientation.clone(),
             note_memory_dir: note_memory_dir.clone(),
+            // Spec 7 Task 9: user profile tool.
+            profile_synthesizer: profile_synth.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
@@ -840,7 +865,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // On failure we log a warning and continue — memory_reflect will return a clear error.
         if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
             use alephcore::memory::reflector::{
-                recall_signals::SignalRow, fs_reflector::RecallWriter, MemoryReflector,
+                fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector,
             };
             use alephcore::memory::store::sqlite::recall_signals::RecallHit;
 
@@ -1049,6 +1074,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     daemon,
                     command_handler.clone(),
                     compound_ingestor,
+                    profile_synth.clone(),
                 )
             })
         } else {
@@ -1113,6 +1139,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 app_config.memory.assembler.clone(),
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
+                profile_synth.clone(),
             );
             engine = engine.with_memory_context_provider(mcp);
         }

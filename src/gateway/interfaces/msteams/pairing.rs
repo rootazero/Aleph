@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::gateway::channel::UserId;
 use crate::gateway::channel::ChannelError;
+use crate::gateway::channel::UserId;
 use crate::sync_primitives::Arc;
 
 use super::graph::GraphClient;
@@ -73,7 +73,11 @@ impl PairingManager {
     /// Handle an incoming DM message, auto-pairing on first contact.
     ///
     /// Returns `Some(DirectLine)` if this is the paired user, `None` otherwise.
-    pub async fn handle_dm(&self, user_id: &str, user_display: Option<&str>) -> Result<Option<DirectLine>, ChannelError> {
+    pub async fn handle_dm(
+        &self,
+        user_id: &str,
+        user_display: Option<&str>,
+    ) -> Result<Option<DirectLine>, ChannelError> {
         let user_id = UserId::new(user_id.to_string());
         let user_email = user_display.unwrap_or("").to_string();
 
@@ -121,7 +125,11 @@ impl PairingManager {
 
     // ── Private helpers ────────────────────────────────────────────────────────
 
-    async fn create_pairing(&self, user_id: &UserId, _email: &str) -> Result<PairingInfo, ChannelError> {
+    async fn create_pairing(
+        &self,
+        user_id: &UserId,
+        _email: &str,
+    ) -> Result<PairingInfo, ChannelError> {
         // Step 1: Create a one-on-one chat via Graph API
         #[derive(Serialize)]
         struct CreateChatRequest {
@@ -153,7 +161,8 @@ impl PairingManager {
             }],
         };
 
-        let chat: ChatResponse = self.graph_client
+        let chat: ChatResponse = self
+            .graph_client
             .post_json("/me/chats", &request)
             .await
             .map_err(|e| ChannelError::SendFailed(format!("Failed to create DM chat: {e}")))?;

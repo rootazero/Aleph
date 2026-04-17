@@ -37,7 +37,10 @@ impl WeChatRuntime {
         }
     }
 
-    pub async fn start(&self, sender: tokio::sync::mpsc::Sender<crate::gateway::channel::InboundMessage>) {
+    pub async fn start(
+        &self,
+        sender: tokio::sync::mpsc::Sender<crate::gateway::channel::InboundMessage>,
+    ) {
         {
             let mut running = self.running.write().await;
             if *running {
@@ -63,14 +66,23 @@ impl WeChatRuntime {
             let sync_buf = self.sync_buf.read().await.clone();
             let timeout = LONG_POLL_TIMEOUT_MS;
 
-            match self.api.get_updates(&self.config.token, &sync_buf, timeout).await {
+            match self
+                .api
+                .get_updates(&self.config.token, &sync_buf, timeout)
+                .await
+            {
                 Ok(resp) => {
                     if resp.ret == 0 {
                         if let Some(new_buf) = resp.get_updates_buf {
                             let mut buf = self.sync_buf.write().await;
                             *buf = new_buf.clone();
                             drop(buf);
-                            save_sync_buf(&self.config.account_id, &self.config.account_id, &new_buf).await;
+                            save_sync_buf(
+                                &self.config.account_id,
+                                &self.config.account_id,
+                                &new_buf,
+                            )
+                            .await;
                         }
 
                         self.process_messages(&resp.msgs, &sender).await;
@@ -95,7 +107,11 @@ impl WeChatRuntime {
                 continue;
             }
 
-            if let Some(inbound) = map_message_to_inbound(msg, &crate::gateway::channel::ChannelId::new("wechat"), &self.config.account_id) {
+            if let Some(inbound) = map_message_to_inbound(
+                msg,
+                &crate::gateway::channel::ChannelId::new("wechat"),
+                &self.config.account_id,
+            ) {
                 if let Err(e) = sender.send(inbound).await {
                     tracing::error!("failed to send message to channel: {}", e);
                 }
@@ -108,7 +124,11 @@ impl WeChatRuntime {
         *running = false;
     }
 
-    pub async fn send_message(&self, token: &str, payload: super::types::SendMessagePayload) -> Result<(), String> {
+    pub async fn send_message(
+        &self,
+        token: &str,
+        payload: super::types::SendMessagePayload,
+    ) -> Result<(), String> {
         self.api.send_message(token, payload).await
     }
 

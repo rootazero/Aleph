@@ -2,7 +2,6 @@
 
 use async_trait::async_trait;
 
-
 /// HTTP client implementation using reqwest for whatsapp-rust Bot
 #[derive(Debug, Clone)]
 pub struct ReqwestHttpClient {

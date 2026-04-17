@@ -29,10 +29,9 @@ pub fn pkcs7_pad(data: &[u8], block_size: usize) -> Vec<u8> {
 
 /// Parse AES key from base64 or hex string.
 pub fn parse_aes_key(aes_key_b64: &str) -> Result<[u8; 16], String> {
-    if let Ok(decoded) = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        aes_key_b64,
-    ) {
+    if let Ok(decoded) =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, aes_key_b64)
+    {
         if decoded.len() == 16 {
             let mut key = [0u8; 16];
             key.copy_from_slice(&decoded);

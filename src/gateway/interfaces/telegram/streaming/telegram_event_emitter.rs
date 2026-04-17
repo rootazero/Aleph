@@ -1,5 +1,9 @@
-use crate::gateway::channel::{ChannelError, ChannelResult, ConversationId, MessageId, OutboundMessage, SendResult};
-use crate::gateway::event_emitter::{EventEmitError, EventEmitter, RunSummary, StreamEvent, ToolResult};
+use crate::gateway::channel::{
+    ChannelError, ChannelResult, ConversationId, MessageId, OutboundMessage, SendResult,
+};
+use crate::gateway::event_emitter::{
+    EventEmitError, EventEmitter, RunSummary, StreamEvent, ToolResult,
+};
 use crate::gateway::interfaces::telegram::config_v2::StreamingOptions;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
 use crate::gateway::interfaces::telegram::error_cooldown::ErrorCooldown;
@@ -14,7 +18,7 @@ use super::{LaneId, StreamOrchestrator};
 pub struct TelegramEventEmitter {
     event_tx: mpsc::Sender<StreamEvent>,
     seq_counter: Arc<crate::sync_primitives::AtomicU64>,
-        route: crate::gateway::inbound_context::ReplyRoute,
+    route: crate::gateway::inbound_context::ReplyRoute,
 }
 
 impl TelegramEventEmitter {

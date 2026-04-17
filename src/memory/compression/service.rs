@@ -60,6 +60,7 @@ pub struct CompressionService {
     command_handler: Option<Arc<MemoryCommandHandler>>,
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
+    profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
 }
 
 impl CompressionService {
@@ -94,6 +95,7 @@ impl CompressionService {
             command_handler: None,
             compound_ingestor: None,
             compound_enabled: false,
+            profile_synthesizer: None,
         }
     }
 
@@ -117,6 +119,18 @@ impl CompressionService {
     ) -> Self {
         self.compound_enabled = true;
         self.compound_ingestor = Some(ing);
+        self
+    }
+
+    /// Attach a `ProfileSynthesizer` to trigger user-profile updates on SessionEnd.
+    ///
+    /// When set, a fire-and-forget profile update is spawned after each
+    /// SessionEnd batch is successfully ingested.
+    pub fn with_profile_synthesizer(
+        mut self,
+        ps: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
+    ) -> Self {
+        self.profile_synthesizer = Some(ps);
         self
     }
 
@@ -216,6 +230,42 @@ impl CompressionService {
             if let Some(ing) = self.compound_ingestor.clone() {
                 match ing.ingest_batch(workspace_id, raw_memories.clone()).await {
                     Ok(_report) => {
+                        // Fire profile update for each SessionEnd raw memory —
+                        // fire-and-forget, never block the compression flow.
+                        if let Some(ps) = self.profile_synthesizer.clone() {
+                            use crate::memory::store::raw_memory::RawMemorySource;
+                            let session_end_raws: Vec<_> = raw_memories
+                                .iter()
+                                .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))
+                                .collect();
+                            if !session_end_raws.is_empty() {
+                                let agent = workspace_id.to_string();
+                                let digest: String = session_end_raws
+                                    .iter()
+                                    .map(|r| r.content.clone())
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let reason = match &session_end_raws[0].source {
+                                    RawMemorySource::SessionEnd { reason } => {
+                                        format!("{reason:?}")
+                                    }
+                                    _ => "unknown".to_string(),
+                                };
+                                tokio::spawn(async move {
+                                    let signal = crate::memory::notes::profile::SessionSignal {
+                                        reason,
+                                        digest_text: digest,
+                                        recent_user_turns: vec![],
+                                        session_id: String::new(),
+                                    };
+                                    if let Err(e) = ps.update(&agent, signal).await {
+                                        tracing::warn!(
+                                            "profile update after session end failed: {e}"
+                                        );
+                                    }
+                                });
+                            }
+                        }
                         // Fall through to mark_raw_as_processed below.
                     }
                     Err(e) => {

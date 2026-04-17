@@ -7,10 +7,10 @@ use tokio::sync::watch;
 use crate::gateway::channel::{ChannelId, InboundMessageSender};
 use crate::gateway::interfaces::feishu::api::FeishuApi;
 use crate::gateway::interfaces::feishu::config::FeishuConfig;
+use crate::gateway::interfaces::feishu::feishu_inbound::events::parse_ws_frame;
 use crate::gateway::interfaces::feishu::feishu_inbound::{
     map_event_to_inbound, InboundPolicy, MessageDedup, UserProfileCache,
 };
-use crate::gateway::interfaces::feishu::feishu_inbound::events::parse_ws_frame;
 use crate::gateway::interfaces::feishu::feishu_runtime::state::{AtomicRuntimeState, RuntimeState};
 
 pub struct WsLoopContext {

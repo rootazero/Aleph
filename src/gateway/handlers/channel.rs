@@ -22,15 +22,15 @@ use crate::Config;
 
 /// Known secret field names per channel type.
 pub const CHANNEL_SECRET_FIELDS: &[&str] = &[
-    "bot_token",    // telegram, discord, slack
-    "app_token",    // slack
-    "app_secret",   // feishu
-    "app_password", // msteams
-    "access_token", // matrix
-    "password",     // xmpp, irc, email
-    "private_key",  // nostr
-    "secret",       // webhook
-    "session_data", // whatsapp
+    "bot_token",     // telegram, discord, slack
+    "app_token",     // slack
+    "app_secret",    // feishu
+    "app_password",  // msteams
+    "access_token",  // matrix
+    "password",      // xmpp, irc, email
+    "private_key",   // nostr
+    "secret",        // webhook
+    "session_data",  // whatsapp
     "client_secret", // qq
 ];
 

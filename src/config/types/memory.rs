@@ -25,7 +25,6 @@ pub enum MemoryInjectionMode {
     Hybrid,
 }
 
-
 // =============================================================================
 // MemoryConfig
 // =============================================================================
@@ -187,6 +186,13 @@ pub struct MemoryConfig {
     /// Compound ingest pipeline configuration.
     #[serde(default)]
     pub compound_ingest: CompoundIngestConfig,
+
+    // ========================================
+    // User Profile (Spec 7)
+    // ========================================
+    /// User profile configuration.
+    #[serde(default)]
+    pub profile: UserProfileConfig,
 }
 
 // =============================================================================
@@ -811,6 +817,8 @@ impl Default for MemoryConfig {
             orientation: OrientationConfig::default(),
             // Compound ingest (Spec 6)
             compound_ingest: CompoundIngestConfig::default(),
+            // User profile (Spec 7)
+            profile: UserProfileConfig::default(),
         }
     }
 }
@@ -912,6 +920,59 @@ fn default_orientation_log_rotate_lines() -> usize {
     2000
 }
 fn default_orientation_inject_on_agent_switch() -> bool {
+    true
+}
+
+// =============================================================================
+// UserProfileConfig (Memory Evolution Spec 7)
+// =============================================================================
+
+/// User profile synthesis and injection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UserProfileConfig {
+    #[serde(default = "default_profile_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_profile_min_interval_minutes")]
+    pub profile_min_interval_minutes: u32,
+    #[serde(default = "default_profile_inject_interval_turns")]
+    pub profile_inject_interval_turns: u32,
+    #[serde(default = "default_profile_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default = "default_profile_max_bullets")]
+    pub max_bullets_per_section: usize,
+    #[serde(default = "default_profile_bootstrap_on_first")]
+    pub bootstrap_on_first_session_end: bool,
+}
+
+impl Default for UserProfileConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profile_min_interval_minutes: 30,
+            profile_inject_interval_turns: 10,
+            max_body_bytes: 2048,
+            max_bullets_per_section: 20,
+            bootstrap_on_first_session_end: true,
+        }
+    }
+}
+
+fn default_profile_enabled() -> bool {
+    true
+}
+fn default_profile_min_interval_minutes() -> u32 {
+    30
+}
+fn default_profile_inject_interval_turns() -> u32 {
+    10
+}
+fn default_profile_max_body_bytes() -> usize {
+    2048
+}
+fn default_profile_max_bullets() -> usize {
+    20
+}
+fn default_profile_bootstrap_on_first() -> bool {
     true
 }
 

@@ -1,24 +1,17 @@
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use axum::{
-    body::Bytes,
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::post,
-    Router,
-};
+use axum::{body::Bytes, extract::State, http::StatusCode, response::Json, routing::post, Router};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 use crate::gateway::channel::{ChannelId, InboundMessageSender};
 use crate::gateway::interfaces::feishu::api::FeishuApi;
 use crate::gateway::interfaces::feishu::config::FeishuConfig;
+use crate::gateway::interfaces::feishu::feishu_inbound::events::parse_ws_frame;
 use crate::gateway::interfaces::feishu::feishu_inbound::{
     map_event_to_inbound, InboundPolicy, MessageDedup, UserProfileCache,
 };
-use crate::gateway::interfaces::feishu::feishu_inbound::events::parse_ws_frame;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -35,7 +28,10 @@ pub struct WebhookState {
 }
 
 pub async fn run_webhook_server(state: WebhookState) {
-    let addr = format!("{}:{}", state.config.webhook_host, state.config.webhook_port);
+    let addr = format!(
+        "{}:{}",
+        state.config.webhook_host, state.config.webhook_port
+    );
     let app = Router::new()
         .route(&state.config.webhook_path, post(handle_webhook))
         .with_state(state);
@@ -122,7 +118,8 @@ mod tests {
                 render_mode: "auto".into(),
                 typing_indicator: true,
                 reaction_notifications: true,
-                group_session_scope: crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
+                group_session_scope:
+                    crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                 connection_mode: "webhook".into(),
                 webhook_port: 3000,
                 webhook_host: "127.0.0.1".into(),
@@ -137,7 +134,10 @@ mod tests {
             sender: crate::gateway::channel::ChannelState::new(10).sender(),
             api: Arc::new(crate::gateway::interfaces::feishu::api::FeishuApi::new(
                 Arc::new(crate::gateway::interfaces::feishu::auth::TokenManager::new(
-                    "", "", "https://open.feishu.cn", reqwest::Client::new()
+                    "",
+                    "",
+                    "https://open.feishu.cn",
+                    reqwest::Client::new(),
                 )),
                 "https://open.feishu.cn",
                 reqwest::Client::new(),
@@ -159,7 +159,8 @@ mod tests {
                     render_mode: "auto".into(),
                     typing_indicator: true,
                     reaction_notifications: true,
-                    group_session_scope: crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
+                    group_session_scope:
+                        crate::gateway::interfaces::feishu::config::GroupSessionScope::default(),
                     connection_mode: "webhook".into(),
                     webhook_port: 3000,
                     webhook_host: "127.0.0.1".into(),
@@ -194,7 +195,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["challenge"].as_str(), Some("abc123"));
     }

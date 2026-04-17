@@ -2,8 +2,8 @@
 //!
 //! Functions for making requests to the iLink Bot API.
 
-use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -25,7 +25,7 @@ fn random_wechat_uin() -> String {
     result
 }
 
-    /// Build HTTP headers for iLink API requests.
+/// Build HTTP headers for iLink API requests.
 pub fn build_headers(token: Option<&str>, body: &str) -> HeaderMap {
     use reqwest::header::{HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE};
 
@@ -99,11 +99,7 @@ impl ILinkApi {
         sync_buf: &str,
         timeout_ms: u64,
     ) -> Result<GetUpdatesResponse, String> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            EP_GET_UPDATES
-        );
+        let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_GET_UPDATES);
         let payload = serde_json::json!({
             "get_updates_buf": sync_buf,
             "base_info": base_info()
@@ -129,7 +125,11 @@ impl ILinkApi {
     }
 
     /// Send a message.
-    pub async fn send_message(&self, token: &str, payload: SendMessagePayload) -> Result<(), String> {
+    pub async fn send_message(
+        &self,
+        token: &str,
+        payload: SendMessagePayload,
+    ) -> Result<(), String> {
         let url = format!(
             "{}/{}",
             self.base_url.trim_end_matches('/'),
@@ -154,11 +154,7 @@ impl ILinkApi {
 
     /// Send typing indicator.
     pub async fn send_typing(&self, token: &str, payload: SendTypingPayload) -> Result<(), String> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            EP_SEND_TYPING
-        );
+        let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_SEND_TYPING);
         let body =
             serde_json::to_string(&payload).map_err(|e| format!("Serialize error: {}", e))?;
         let headers = build_headers(Some(token), &body);
@@ -183,11 +179,7 @@ impl ILinkApi {
         user_id: &str,
         context_token: Option<&str>,
     ) -> Result<ConfigResponse, String> {
-        let url = format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            EP_GET_CONFIG
-        );
+        let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_GET_CONFIG);
         let mut payload = serde_json::json!({
             "ilink_user_id": user_id,
             "base_info": base_info()
@@ -280,18 +272,9 @@ mod tests {
     #[test]
     fn test_build_headers_with_token() {
         let headers = build_headers(Some("test_token"), "body");
-        assert_eq!(
-            headers.get("Content-Type").unwrap(),
-            "application/json"
-        );
-        assert_eq!(
-            headers.get("AuthorizationType").unwrap(),
-            "ilink_bot_token"
-        );
-        assert_eq!(
-            headers.get("Authorization").unwrap(),
-            "Bearer test_token"
-        );
+        assert_eq!(headers.get("Content-Type").unwrap(), "application/json");
+        assert_eq!(headers.get("AuthorizationType").unwrap(), "ilink_bot_token");
+        assert_eq!(headers.get("Authorization").unwrap(), "Bearer test_token");
     }
 
     #[test]

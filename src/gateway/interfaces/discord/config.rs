@@ -302,16 +302,14 @@ pub struct DiscordGuildSettings {
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
 pub enum ContentRetention {
-    Full,         // 保留全文
+    Full, // 保留全文
     #[default]
-    Anonymized,   // 移除 user_id, channel_id
+    Anonymized, // 移除 user_id, channel_id
     MetadataOnly, // 仅保留元数据
 }
 
-
 /// Security configuration for Discord channel
-#[derive(Debug, Clone, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct DiscordSecurityConfig {
     /// Enable security audit logging
     #[serde(default = "default_true")]
@@ -351,7 +349,6 @@ impl Default for AuditEvents {
         }
     }
 }
-
 
 // ============================================================================
 // Backward Compatibility

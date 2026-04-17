@@ -734,7 +734,10 @@ impl GraphClient {
     }
 
     /// Make a PUT request and parse JSON response.
-    pub async fn put_with_empty<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, ChannelError> {
+    pub async fn put_with_empty<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+    ) -> Result<T, ChannelError> {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {

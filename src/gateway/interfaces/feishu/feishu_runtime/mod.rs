@@ -23,11 +23,7 @@ pub struct FeishuRuntime {
 }
 
 impl FeishuRuntime {
-    pub fn new(
-        api: Arc<FeishuApi>,
-        config: FeishuConfig,
-        bot_open_id: String,
-    ) -> Self {
+    pub fn new(api: Arc<FeishuApi>, config: FeishuConfig, bot_open_id: String) -> Self {
         Self {
             state: Arc::new(AtomicRuntimeState::new(RuntimeState::Disconnected)),
             api,
@@ -52,8 +48,9 @@ impl FeishuRuntime {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        let ws_url = self.api.get_ws_endpoint().await
-            .map_err(|e| crate::gateway::channel::ChannelError::Internal(format!("WS endpoint failed: {e}")))?;
+        let ws_url = self.api.get_ws_endpoint().await.map_err(|e| {
+            crate::gateway::channel::ChannelError::Internal(format!("WS endpoint failed: {e}"))
+        })?;
 
         let ctx = WsLoopContext {
             initial_ws_url: ws_url,

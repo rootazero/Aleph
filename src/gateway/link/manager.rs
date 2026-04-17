@@ -167,11 +167,7 @@ impl LinkManager {
     }
 
     /// Register a builtin bridge type (e.g. Telegram, Discord).
-    pub async fn register_builtin(
-        &self,
-        bridge_id: BridgeId,
-        factory: Arc<dyn ChannelFactory>,
-    ) {
+    pub async fn register_builtin(&self, bridge_id: BridgeId, factory: Arc<dyn ChannelFactory>) {
         self.builtin_factories
             .write()
             .await
@@ -196,7 +192,10 @@ impl LinkManager {
                 continue;
             }
 
-            if let Err(e) = self.start_builtin_link(&link, expand_env_vars(&link.settings)).await {
+            if let Err(e) = self
+                .start_builtin_link(&link, expand_env_vars(&link.settings))
+                .await
+            {
                 error!(
                     link_id = %link.id,
                     bridge = %link.bridge,

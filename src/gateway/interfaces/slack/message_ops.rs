@@ -3,13 +3,13 @@
 //! Low-level functions for interacting with the Slack Web API and Socket Mode.
 //! These are separated from the channel struct for testability.
 
+use super::directory::UserDirectory;
 use crate::gateway::channel::{
     ChannelError, ChannelId, ChannelResult, ConversationId, InboundMessage, InboundMessageSender,
     MessageId, MessageMeta, SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use crate::sync_primitives::Arc;
-use super::directory::UserDirectory;
 use chrono::Utc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -748,10 +748,7 @@ impl SlackMessageOps {
 
         // Filter by user allowlist
         if !config.is_user_allowed(user_id) {
-            tracing::debug!(
-                "Slack: user {} not in user_allowlist, filtering",
-                user_id
-            );
+            tracing::debug!("Slack: user {} not in user_allowlist, filtering", user_id);
             return None;
         }
 

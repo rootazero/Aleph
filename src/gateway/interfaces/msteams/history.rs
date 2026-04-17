@@ -95,6 +95,9 @@ mod tests {
     fn test_encode_uri_component() {
         assert_eq!(encode_uri_component("simple"), "simple");
         assert_eq!(encode_uri_component("hello world"), "hello%20world");
-        assert_eq!(encode_uri_component("19:conv@thread.v2"), "19%3Aconv%40thread.v2");
+        assert_eq!(
+            encode_uri_component("19:conv@thread.v2"),
+            "19%3Aconv%40thread.v2"
+        );
     }
 }

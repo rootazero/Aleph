@@ -85,6 +85,7 @@ pub mod skill_status;
 pub mod system_tool;
 pub mod task_manage;
 pub mod team;
+pub mod user_profile;
 pub mod vault_store;
 pub mod vision;
 pub mod voice_tools;

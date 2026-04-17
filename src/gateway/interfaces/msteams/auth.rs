@@ -633,29 +633,47 @@ impl Certificate {
         let mut der = None;
         let mut private_key = None;
 
-        let cert_re = regex::Regex::new(r"-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+)\s*-----END CERTIFICATE-----").unwrap();
+        let cert_re = regex::Regex::new(
+            r"-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+)\s*-----END CERTIFICATE-----",
+        )
+        .unwrap();
         let key_re = regex::Regex::new(r"-----BEGIN (?:RSA )?PRIVATE KEY-----\s*([A-Za-z0-9+/=\s]+)\s*-----END (?:RSA )?PRIVATE KEY-----").unwrap();
 
         if let Some(caps) = cert_re.captures(&pem_str) {
             let base64_content = caps.get(1).unwrap().as_str();
-            let cleaned: String = base64_content.chars().filter(|c| !c.is_whitespace()).collect();
+            let cleaned: String = base64_content
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
             use base64::Engine;
-            der = Some(base64::engine::general_purpose::STANDARD
-                .decode(&cleaned)
-                .map_err(|e| CertificateError::ParseError(format!("certificate base64 error: {}", e)))?);
+            der = Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&cleaned)
+                    .map_err(|e| {
+                        CertificateError::ParseError(format!("certificate base64 error: {}", e))
+                    })?,
+            );
         }
 
         if let Some(caps) = key_re.captures(&pem_str) {
             let base64_content = caps.get(1).unwrap().as_str();
-            let cleaned: String = base64_content.chars().filter(|c| !c.is_whitespace()).collect();
+            let cleaned: String = base64_content
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
             use base64::Engine;
-            private_key = Some(base64::engine::general_purpose::STANDARD
-                .decode(&cleaned)
-                .map_err(|e| CertificateError::ParseError(format!("key base64 error: {}", e)))?);
+            private_key = Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&cleaned)
+                    .map_err(|e| {
+                        CertificateError::ParseError(format!("key base64 error: {}", e))
+                    })?,
+            );
         }
 
         let der = der.ok_or_else(|| CertificateError::ParseError("No certificate found".into()))?;
-        let private_key = private_key.ok_or_else(|| CertificateError::ParseError("No private key found".into()))?;
+        let private_key = private_key
+            .ok_or_else(|| CertificateError::ParseError("No private key found".into()))?;
 
         Ok(Self { der, private_key })
     }
@@ -689,7 +707,8 @@ impl ManagedIdentityTokenProvider {
             url = format!("{}&client_id={}", url, cid);
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Metadata", "true")
             .send()
@@ -697,9 +716,12 @@ impl ManagedIdentityTokenProvider {
             .map_err(|e| MsTeamsAuthError::NetworkError(e.to_string()))?;
 
         #[derive(serde::Deserialize)]
-        struct TokenResponse { access_token: String }
+        struct TokenResponse {
+            access_token: String,
+        }
 
-        let token_resp: TokenResponse = response.json()
+        let token_resp: TokenResponse = response
+            .json()
             .await
             .map_err(|e| MsTeamsAuthError::ParseError(e.to_string()))?;
 
@@ -738,7 +760,10 @@ impl JwtAssertionGenerator {
         let params = [
             ("grant_type", "client_credentials"),
             ("client_id", &self.app_id),
-            ("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+            (
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            ),
             ("client_assertion", &assertion),
             ("scope", scope),
         ];
@@ -756,8 +781,7 @@ impl JwtAssertionGenerator {
             let body = resp.text().await.unwrap_or_default();
             return Err(MsTeamsAuthError::TokenExchangeError(format!(
                 "Token endpoint returned {}: {}",
-                status,
-                body
+                status, body
             )));
         }
 
@@ -813,11 +837,9 @@ impl JwtAssertionGenerator {
 
         let encoding_key = EncodingKey::from_rsa_der(&self.private_key_der);
 
-        encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
-            .map_err(|e| MsTeamsAuthError::TokenExchangeError(format!(
-            "Failed to sign JWT assertion: {}",
-            e
-        )))
+        encode(&Header::new(Algorithm::RS256), &claims, &encoding_key).map_err(|e| {
+            MsTeamsAuthError::TokenExchangeError(format!("Failed to sign JWT assertion: {}", e))
+        })
     }
 }
 

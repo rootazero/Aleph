@@ -1,0 +1,24 @@
+---
+source: src/memory/notes/profile/prompts.rs
+expression: PROMPT_PROFILE_BOOTSTRAP
+---
+You are synthesizing an initial user profile (USER.md) from a conversation.
+
+Output a single JSON object with exactly these keys:
+{
+  "Identity": [...],
+  "Communication Style": [...],
+  "Motivations": [...],
+  "Current Focus": [...],
+  "Stance Shifts": [...],
+  "Open Questions": [...],
+  "confidence": "low"
+}
+
+Rules:
+- All bullet strings must be written in third person (e.g. "Prefers concise answers", not "I prefer...").
+- Maximum 5 bullets per section. Omit sections that have no signal — use an empty array [].
+- Stance Shifts entries must be prefixed with a date: "YYYY-MM-DD: <shift>".
+- Do not include concrete personal facts like phone numbers, addresses, or passwords — those belong in personal/preference notes.
+- confidence is always "low" for a bootstrap.
+- Respond with the JSON object only. No markdown fences, no explanation.

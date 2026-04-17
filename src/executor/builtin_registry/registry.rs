@@ -217,6 +217,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) note_orient_tool: Option<crate::builtin_tools::note_orient::NoteOrientTool>,
     /// Note schema tool (Spec 5 Task 12) — always Some when note_memory_dir is set.
     pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
+    /// User profile tool (Spec 7 Task 9) — optional, requires ProfileSynthesizer.
+    pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -1044,6 +1046,34 @@ impl ToolRegistry for BuiltinToolRegistry {
                     Box::pin(async move {
                         Err(AlephError::tool(
                             "note_schema not available: note_memory_dir not configured at startup",
+                        ))
+                    })
+                }
+            }
+
+            // User profile tool (Spec 7 Task 9)
+            "user_profile" => {
+                let agent_id = self
+                    .session_context_handle
+                    .as_ref()
+                    .and_then(|h| h.try_read().ok())
+                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "default".to_string());
+                if let Some(ref tool) = self.user_profile_tool {
+                    let tool = tool.clone();
+                    Box::pin(async move {
+                        let args: crate::builtin_tools::user_profile::UserProfileArgs =
+                            serde_json::from_value(arguments).map_err(|e| {
+                                AlephError::tool(format!("user_profile: bad args: {e}"))
+                            })?;
+                        let out = tool.call(&agent_id, args).await?;
+                        serde_json::to_value(out)
+                            .map_err(|e| AlephError::tool(format!("user_profile: serialize: {e}")))
+                    })
+                } else {
+                    Box::pin(async move {
+                        Err(AlephError::tool(
+                            "user_profile not available: ProfileSynthesizer not wired at startup",
                         ))
                     })
                 }

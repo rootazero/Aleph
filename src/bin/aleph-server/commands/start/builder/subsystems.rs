@@ -13,10 +13,10 @@ use std::sync::Arc;
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
-#[cfg(target_os = "macos")]
-use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
 use alephcore::gateway::interfaces::telegram::TelegramConfigV2;
 use alephcore::gateway::interfaces::TelegramChannel;
+#[cfg(target_os = "macos")]
+use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
 use alephcore::gateway::security::{PairingManager, TokenManager};
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
@@ -259,8 +259,8 @@ pub(in crate::commands::start) async fn initialize_channels(
         {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-            if let Ok(tg_config) =
-                serde_json::from_value::<TelegramConfigV2>(config_with_secrets.clone())
+                if let Ok(tg_config) =
+                    serde_json::from_value::<TelegramConfigV2>(config_with_secrets.clone())
                 {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
@@ -278,15 +278,12 @@ pub(in crate::commands::start) async fn initialize_channels(
             }
 
             if inst.channel_type == "qq" {
-                if let Ok(qq_config) =
-                    serde_json::from_value::<alephcore::gateway::interfaces::qq::QQConfig>(
-                        config_with_secrets.clone()
-                    )
+                if let Ok(qq_config) = serde_json::from_value::<
+                    alephcore::gateway::interfaces::qq::QQConfig,
+                >(config_with_secrets.clone())
                 {
-                    let qq_channel = alephcore::gateway::interfaces::qq::QQChannel::new(
-                        &inst.id,
-                        qq_config,
-                    );
+                    let qq_channel =
+                        alephcore::gateway::interfaces::qq::QQChannel::new(&inst.id, qq_config);
                     channel = Box::new(qq_channel);
                 }
             }

@@ -79,9 +79,7 @@ impl Channel for WeChatChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)

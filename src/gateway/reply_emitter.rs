@@ -285,8 +285,7 @@ fn strip_trailing_incomplete(text: &str) -> String {
 /// preserved, preventing accidental extraction from example code.
 pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
     static QUICK_PROBE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)<(?:think|thinking|thought|antthinking)[\s/>]")
-            .expect("quick probe regex")
+        Regex::new(r"(?i)<(?:think|thinking|thought|antthinking)[\s/>]").expect("quick probe regex")
     });
 
     if !QUICK_PROBE.is_match(text) {
@@ -348,8 +347,7 @@ pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
         // Outside code — check for thinking tags to extract
         if bytes[i] == b'<' {
             for tag in THINKING_TAGS.iter() {
-                if let Some((content, end)) =
-                    try_extract_paired_tag_bytes(bytes, i, tag.as_bytes())
+                if let Some((content, end)) = try_extract_paired_tag_bytes(bytes, i, tag.as_bytes())
                 {
                     if !content.is_empty() {
                         reasoning_parts.push(content);
@@ -419,7 +417,9 @@ fn try_extract_paired_tag_bytes(bytes: &[u8], pos: usize, tag: &[u8]) -> Option<
                 .all(|(a, b)| a.to_ascii_lowercase() == *b)
             && bytes[k + 2 + tag.len()] == b'>'
         {
-            let content = String::from_utf8_lossy(&bytes[search_start..k]).trim().to_string();
+            let content = String::from_utf8_lossy(&bytes[search_start..k])
+                .trim()
+                .to_string();
             return Some((content, k + close_tag_len));
         }
     }
@@ -901,9 +901,7 @@ impl ReplyEmitter {
 
         let (embedded_reasoning, answer) = split_reasoning(content);
         let final_reasoning = match (reasoning, embedded_reasoning) {
-            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => {
-                Some(format!("{}\n\n{}", r, e))
-            }
+            (Some(r), Some(e)) if !r.is_empty() && !e.is_empty() => Some(format!("{}\n\n{}", r, e)),
             (Some(r), _) if !r.is_empty() => Some(r.to_string()),
             (None, Some(e)) => Some(e),
             _ => None,
@@ -1404,11 +1402,8 @@ impl EventEmitter for ReplyEmitter {
                             if self.should_voice().await {
                                 self.send_as_voice(&text).await;
                             } else {
-                                self.send_to_channel_with_reasoning(
-                                    &text,
-                                    reasoning.as_deref(),
-                                )
-                                .await;
+                                self.send_to_channel_with_reasoning(&text, reasoning.as_deref())
+                                    .await;
                             }
                         }
                     }

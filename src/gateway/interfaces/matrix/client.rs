@@ -27,9 +27,10 @@ impl MatrixSdkClient {
             )));
         }
 
-        let whoami: serde_json::Value = resp.json().await.map_err(|e| {
-            ChannelError::AuthFailed(format!("whoami parse failed: {e}"))
-        })?;
+        let whoami: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::AuthFailed(format!("whoami parse failed: {e}")))?;
         let user_id = whoami["user_id"]
             .as_str()
             .ok_or_else(|| ChannelError::AuthFailed("whoami missing user_id".to_string()))?
@@ -49,9 +50,7 @@ impl MatrixSdkClient {
             .sqlite_store(&state_path, None)
             .build()
             .await
-            .map_err(|e| {
-                ChannelError::Internal(format!("Failed to build Matrix client: {e}"))
-            })?;
+            .map_err(|e| ChannelError::Internal(format!("Failed to build Matrix client: {e}")))?;
 
         let device_id = whoami["device_id"]
             .as_str()
@@ -78,7 +77,10 @@ impl MatrixSdkClient {
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("Session restore failed: {e}")))?;
 
-        Ok(Self { inner: client, user_id })
+        Ok(Self {
+            inner: client,
+            user_id,
+        })
     }
 
     pub fn user_id(&self) -> &str {

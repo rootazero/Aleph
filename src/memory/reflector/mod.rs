@@ -2,10 +2,10 @@
 //!
 //! See `docs/superpowers/specs/2026-04-13-memory-evolution-spec2-reflector-design.md`.
 
+pub mod fs_reflector;
 pub mod packet_adapter;
 pub mod prompts;
 pub mod recall_signals;
-pub mod fs_reflector;
 pub mod types;
 
 pub use fs_reflector::MemoryReflector;

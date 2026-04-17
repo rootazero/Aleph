@@ -116,7 +116,9 @@ impl ApprovalQueue {
             ));
         }
 
-        let age = Utc::now().signed_duration_since(pending.created_at).num_seconds() as u64;
+        let age = Utc::now()
+            .signed_duration_since(pending.created_at)
+            .num_seconds() as u64;
         if age > self.ttl_secs {
             pending.status = ApprovalStatus::Expired;
             return Err(ApprovalError::Expired(approval_id.to_string()));

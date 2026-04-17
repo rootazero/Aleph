@@ -114,4 +114,9 @@ pub struct BuiltinToolConfig {
     /// Memory dir root for note_schema tool (Spec 5 Task 12).
     /// Points to the `note` subdirectory (e.g. `~/.aleph/memory/note`).
     pub note_memory_dir: Option<std::path::PathBuf>,
+
+    /// Profile synthesizer for `user_profile` tool (Spec 7 Task 9).
+    /// When set, the `user_profile` tool is registered and dispatched.
+    pub profile_synthesizer:
+        Option<std::sync::Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
 }

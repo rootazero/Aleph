@@ -76,7 +76,10 @@ impl StreamingHandler {
         }
     }
 
-    pub async fn handle_presence_update(&self, update: PresenceUpdate) -> Result<(), StreamingError> {
+    pub async fn handle_presence_update(
+        &self,
+        update: PresenceUpdate,
+    ) -> Result<(), StreamingError> {
         for activity in &update.activities {
             if matches!(activity.kind, ActivityType::Streaming) {
                 let preview = StreamingPreview {
@@ -84,7 +87,8 @@ impl StreamingHandler {
                     username: update.username.clone(),
                     stream_url: activity.url.clone().unwrap_or_default(),
                     title: activity.name.clone(),
-                    viewer_count: activity.details
+                    viewer_count: activity
+                        .details
                         .as_ref()
                         .and_then(|d| d.get("viewer_count"))
                         .and_then(|v| v.as_i64()),

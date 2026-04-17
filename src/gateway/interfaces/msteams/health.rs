@@ -75,11 +75,7 @@ impl ChannelHealthMonitor {
 
     /// Create with sensible defaults: check every 60s, stale after 5min, max 3 restart attempts
     pub fn default_monitor() -> Self {
-        Self::new(
-            Duration::from_secs(60),
-            Duration::from_secs(300),
-            3,
-        )
+        Self::new(Duration::from_secs(60), Duration::from_secs(300), 3)
     }
 
     /// Check channel health and recover if stale
@@ -183,11 +179,8 @@ mod tests {
 
     #[test]
     fn test_channel_health_monitor_custom() {
-        let monitor = ChannelHealthMonitor::new(
-            Duration::from_secs(30),
-            Duration::from_secs(120),
-            5,
-        );
+        let monitor =
+            ChannelHealthMonitor::new(Duration::from_secs(30), Duration::from_secs(120), 5);
         assert_eq!(monitor.check_interval(), Duration::from_secs(30));
         assert_eq!(monitor.stale_threshold(), Duration::from_secs(120));
         assert_eq!(monitor.max_restart_attempts(), 5);
@@ -200,6 +193,9 @@ mod tests {
 
     #[test]
     fn test_recovery_action_restarted() {
-        assert!(matches!(RecoveryAction::Restarted, RecoveryAction::Restarted));
+        assert!(matches!(
+            RecoveryAction::Restarted,
+            RecoveryAction::Restarted
+        ));
     }
 }
