@@ -1,0 +1,17 @@
+{"phase":"1","intent":"create-agent","prompt":"Please create a new agent called 'test-memory-validation' with this system prompt: 'I am a sandbox agent for memory-system validation. Be deliberate about what you remember, retrieve, and synthesize. Prefer using available memory tools to demonstrate them.' After creation, confirm by listing all agents."}
+{"phase":"1","intent":"personal-1","prompt":"My name is Zou Guojun. I live in Beijing, China. I work primarily out of a home office on the 12th floor."}
+{"phase":"1","intent":"personal-2","prompt":"My partner's name is Li Wei. We have been together for six years and we both work in tech."}
+{"phase":"1","intent":"technical-1","prompt":"For coding style: comments must be in English, but conversation with you must be in Chinese. I prefer immutable patterns and small files (under 800 lines). I dislike unnecessary abstractions."}
+{"phase":"1","intent":"technical-2","prompt":"My toolchain is Rust on stable, with cargo and just for builds. I use sqlite-vec for vector storage. I avoid Python where Rust is reasonable."}
+{"phase":"1","intent":"project-1","prompt":"I am building Aleph, a self-hosted personal AI assistant with a Rust core and multiple front-ends including macOS menubar, web chat, and chat-bot integrations."}
+{"phase":"1","intent":"project-2","prompt":"The current focus is the memory subsystem: realtime L0->L1 compression, the Dream Daemon's strategy-driven evolution, and the orientation layer (SCHEMA.md, index.md, log.md, USER.md)."}
+{"phase":"1","intent":"constraint-1","prompt":"Hard rule: never commit on Fridays. We have a deploy freeze every Friday afternoon for the mobile release branch."}
+{"phase":"1","intent":"constraint-2","prompt":"Hard rule: no force-pushes to main. If a rebase is needed, we cut a new branch and PR back."}
+{"phase":"3","intent":"retrieval-search","prompt":"What city did I tell you I live in?"}
+{"phase":"3","intent":"retrieval-browse","prompt":"List everything you remember in the personal category."}
+{"phase":"3","intent":"retrieval-explore","prompt":"Starting from the Aleph project, expand to related notes two hops out via wikilinks. Show what you find."}
+{"phase":"3","intent":"retrieval-recall","prompt":"Replay the original wording of the third thing I told you in this session."}
+{"phase":"4","intent":"orient-show","prompt":"Show me your current schema and the most recent activity log."}
+{"phase":"4","intent":"orient-mutate","prompt":"Add a new category called 'experiments' to your schema."}
+{"phase":"5","intent":"reflect","prompt":"Synthesize the common theme across everything you've remembered about me so far. Cite specific notes."}
+{"phase":"5","intent":"reflect-redup","prompt":"Synthesize the common theme across everything you've remembered about me so far. Cite specific notes."}
