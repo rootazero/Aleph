@@ -37,11 +37,9 @@ async def run(args: argparse.Namespace) -> int:
             "id": connect_id,
             "method": "connect",
             "params": {
-                "minProtocol": 1,
-                "maxProtocol": 1,
-                "client": {"id": "e2e-validator", "version": "1.0.0", "platform": "darwin"},
-                "role": "operator",
-                "auth": {"token": args.token},
+                "shared_token": args.token,
+                "device_name": "e2e-validator",
+                "device_id": "e2e-validator",
             },
         }))
         # await connect ack
@@ -51,11 +49,12 @@ async def run(args: argparse.Namespace) -> int:
         # 2. optional events.subscribe
         if args.stream_events:
             sub_id = str(uuid.uuid4())
+            topics = [t for t in args.event_pattern.split(",") if t]
             await ws.send(json.dumps({
                 "jsonrpc": "2.0",
                 "id": sub_id,
                 "method": "events.subscribe",
-                "params": {"pattern": args.event_pattern},
+                "params": {"topics": topics},
             }))
             sub_ack = await asyncio.wait_for(ws.recv(), timeout=5)
             print(sub_ack, flush=True)
