@@ -10,6 +10,7 @@ pub mod stages;
 pub mod signals;
 pub mod strategy;
 pub mod selector;
+pub mod mutation_gate;
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
@@ -39,6 +40,7 @@ pub use stages::{DreamStage, MemoryCluster};
 pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
 pub use strategy::DreamStrategy;
 pub use selector::{GateDecision, SelectionDecision, StrategySelector};
+pub use mutation_gate::MutationGate;
 
 // ---------------------------------------------------------------------------
 // NoteEntry — metadata for a single note in the dream pipeline
