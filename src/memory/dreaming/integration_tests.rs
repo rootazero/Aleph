@@ -1,0 +1,185 @@
+//! Integration tests for Dream Daemon evolution upgrade.
+//!
+//! Tests the full signal → select → gate → validate → solidify flow
+//! using in-memory/temp-dir setup without an actual LLM provider.
+
+use std::collections::HashMap;
+use tempfile::tempdir;
+
+use crate::memory::dreaming::event_log::{DreamEvent, EventLog};
+use crate::memory::dreaming::mutation_gate::MutationGate;
+use crate::memory::dreaming::selector::{GateDecision, StrategySelector};
+use crate::memory::dreaming::signals::{RawMetrics, SignalSnapshot};
+use crate::memory::dreaming::strategy::DreamStrategy;
+use crate::memory::dreaming::validation::{
+    check_duplicate_hashes, run_l1_validation, DreamValidationReport, ValidationTier,
+};
+use crate::memory::dreaming::{DreamPipeline, DreamReport};
+
+/// Full evolution cycle: signals → select → gate → validate → log.
+#[tokio::test]
+async fn full_evolution_cycle_consolidate() {
+    let dir = tempdir().unwrap();
+
+    // 1. Collect signals (default → low growth, low issues)
+    let metrics = RawMetrics::default();
+    let snapshot = SignalSnapshot::from_metrics(&metrics);
+
+    // 2. Gate evaluation (no history → Allow)
+    let gate = MutationGate::new();
+    let gate_decision = gate.evaluate();
+    assert!(matches!(gate_decision, GateDecision::Allow));
+
+    // 3. Strategy selection (default → Consolidate)
+    let selector = StrategySelector::new();
+    let selection = selector.select(&snapshot, &gate_decision);
+    assert_eq!(selection.strategy, DreamStrategy::Consolidate);
+
+    // 4. Build pipeline (verify stages)
+    let pipeline = DreamPipeline::from_strategy(selection.strategy);
+    assert_eq!(pipeline.stages.len(), 5);
+
+    // 5. Validation (empty notes → passes trivially)
+    let l1 = run_l1_validation(&HashMap::new());
+    let l2_issues = check_duplicate_hashes(&[]);
+    assert!(l1.passed);
+    assert!(l2_issues.is_empty());
+
+    // 6. Solidify (write event)
+    let event_log = EventLog::new(dir.path().join("test_agent"));
+    let cycle = event_log.next_cycle().await.unwrap();
+    assert_eq!(cycle, 1);
+
+    let event = DreamEvent {
+        id: format!("dream_test_{}", cycle),
+        cycle,
+        strategy: selection.strategy,
+        selection,
+        gate_decision,
+        report: DreamReport::default(),
+        validation: DreamValidationReport {
+            l1_format: l1,
+            l2_consistency: ValidationTier {
+                passed: true,
+                checks_run: 1,
+                checks_passed: 1,
+                issues: vec![],
+            },
+            l3_semantic: None,
+            l4_retrospective: None,
+        },
+        duration_ms: 42,
+        created_at: chrono::Utc::now().timestamp(),
+    };
+
+    event_log.append(&event).await.unwrap();
+
+    // Verify event was persisted
+    let events = event_log.read_last(10).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].strategy, DreamStrategy::Consolidate);
+    assert!(events[0].validation.overall_ok());
+}
+
+/// High-growth scenario selects Synthesize.
+#[tokio::test]
+async fn high_growth_selects_synthesize() {
+    let metrics = RawMetrics {
+        notes_added_24h: 80,
+        total_notes: 100,
+        skill_notes_total: 10,
+        skill_notes_recalled: 0,
+        ..Default::default()
+    };
+    let snapshot = SignalSnapshot::from_metrics(&metrics);
+
+    let gate = MutationGate::new();
+    let gate_decision = gate.evaluate();
+
+    let selector = StrategySelector::new();
+    let selection = selector.select(&snapshot, &gate_decision);
+    assert_eq!(selection.strategy, DreamStrategy::Synthesize);
+
+    let pipeline = DreamPipeline::from_strategy(selection.strategy);
+    assert_eq!(pipeline.stages.len(), 5);
+    assert_eq!(pipeline.stages[3].name(), "skill_distill");
+}
+
+/// Mutation gate forces Conserve on merge cycle.
+#[tokio::test]
+async fn merge_cycle_forces_conserve() {
+    let mut gate = MutationGate::new();
+
+    // Simulate 3 cycles with same merge pair
+    for _ in 0..3 {
+        gate.record_merge_pair("note_a", "note_b");
+        if gate.evaluate() != GateDecision::Allow {
+            break; // Hit conserve early
+        }
+        gate.advance_cycle();
+    }
+
+    // After 3 cycles, the pair triggers conserve
+    let gate_decision = gate.evaluate();
+    assert!(matches!(gate_decision, GateDecision::Conserve { .. }));
+
+    // Selector should respect the gate
+    let snapshot = SignalSnapshot::from_metrics(&RawMetrics {
+        notes_added_24h: 80,
+        total_notes: 100,
+        ..Default::default()
+    });
+    let selector = StrategySelector::new();
+    let selection = selector.select(&snapshot, &gate_decision);
+    assert_eq!(selection.strategy, DreamStrategy::Conserve);
+
+    // Conserve pipeline is minimal
+    let pipeline = DreamPipeline::from_strategy(selection.strategy);
+    assert_eq!(pipeline.stages.len(), 2);
+}
+
+/// Personality adaptation across multiple cycles.
+#[tokio::test]
+async fn personality_adapts_over_cycles() {
+    let mut selector = StrategySelector::new();
+
+    // 10 successful cycles → threshold drops
+    for _ in 0..10 {
+        selector.record_cycle_outcome(DreamStrategy::Consolidate, true, 0.5);
+    }
+    let threshold_after_success = selector.synthesize_threshold();
+
+    // Reset and do 10 failed cycles → threshold rises
+    let mut selector2 = StrategySelector::new();
+    for _ in 0..10 {
+        selector2.record_cycle_outcome(DreamStrategy::Consolidate, false, 0.0);
+    }
+    let threshold_after_failure = selector2.synthesize_threshold();
+
+    assert!(
+        threshold_after_success < threshold_after_failure,
+        "success threshold ({}) should be lower than failure threshold ({})",
+        threshold_after_success,
+        threshold_after_failure
+    );
+}
+
+/// L1 validation catches bad frontmatter.
+#[test]
+fn l1_catches_bad_frontmatter() {
+    let mut contents = HashMap::new();
+    contents.insert(
+        "learning/good".to_string(),
+        "---\ncategory: learning\ntags: []\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n\n- fact\n".to_string(),
+    );
+    contents.insert(
+        "learning/bad".to_string(),
+        "no frontmatter at all".to_string(),
+    );
+
+    let tier = run_l1_validation(&contents);
+    assert!(!tier.passed);
+    assert_eq!(tier.checks_run, 2);
+    assert_eq!(tier.checks_passed, 1);
+    assert!(!tier.issues.is_empty());
+}

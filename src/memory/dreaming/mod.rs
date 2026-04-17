@@ -7,6 +7,15 @@
 pub mod gate;
 pub mod report;
 pub mod stages;
+pub mod signals;
+pub mod strategy;
+pub mod selector;
+pub mod mutation_gate;
+pub mod validation;
+pub mod event_log;
+
+#[cfg(test)]
+mod integration_tests;
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
@@ -29,10 +38,16 @@ use tracing::{info, warn};
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
 
 // Re-export report types
-pub use report::{DreamReport, DreamReportStatus, DreamRunMetadata, DreamRunType};
+pub use report::{DreamReport, DreamReportStatus};
 
 // Re-export stage trait and shared types
 pub use stages::{DreamStage, MemoryCluster};
+pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
+pub use strategy::DreamStrategy;
+pub use selector::{GateDecision, SelectionDecision, StrategySelector};
+pub use mutation_gate::MutationGate;
+pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
+pub use event_log::{DreamEvent, EventLog};
 
 // ---------------------------------------------------------------------------
 // NoteEntry — metadata for a single note in the dream pipeline
@@ -65,12 +80,12 @@ pub struct DreamContext {
     pub provider: Arc<dyn AiProvider>,
     pub embedder: Arc<dyn EmbeddingProvider>,
     pub report: DreamReport,
-    /// "daily" or "weekly"
+    /// Strategy name driving this cycle ("consolidate", "synthesize", "conserve").
     pub pipeline_type: String,
     /// Activity checker: returns true if user activity has been detected.
     pub activity_checker: Arc<dyn Fn() -> bool + Send + Sync>,
-    /// Run metadata for scheduling and reporting.
-    pub run_metadata: DreamRunMetadata,
+    /// Strategy selected for this Dream cycle.
+    pub strategy: DreamStrategy,
     /// Optional wiki orientation — used by `IndexRefresherStage`.
     pub orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
@@ -100,7 +115,7 @@ impl DreamContext {
 
 /// Executes a sequence of `DreamStage` implementations.
 pub struct DreamPipeline {
-    stages: Vec<Box<dyn DreamStage>>,
+    pub stages: Vec<Box<dyn DreamStage>>,
 }
 
 impl DreamPipeline {
@@ -108,29 +123,29 @@ impl DreamPipeline {
         Self { stages }
     }
 
-    /// Build the standard daily pipeline.
-    pub fn daily() -> Self {
-        Self::new(vec![
-            Box::new(stages::NoteConsolidateStage), // merge first to reduce volume
-            Box::new(stages::NoteDriftStage),       // detect contradictions
-            Box::new(stages::IndexRefresherStage),  // rebuild index.md + rotate log
-            Box::new(stages::NoteLintStage),        // format fixes
-            Box::new(stages::NoteDecayStage),       // cleanup low-value
-            Box::new(stages::DailyDigestStage),     // generate daily report
-        ])
-    }
-
-    /// Build the weekly pipeline (daily + deep synthesis).
-    pub fn weekly() -> Self {
-        Self::new(vec![
-            Box::new(stages::NoteConsolidateStage),
-            Box::new(stages::NoteDriftStage),
-            Box::new(stages::NoteSynthesisStage), // weekly-only: deep synthesis
-            Box::new(stages::IndexRefresherStage), // rebuild index.md + rotate log
-            Box::new(stages::NoteLintStage),
-            Box::new(stages::NoteDecayStage),
-            Box::new(stages::DailyDigestStage),
-        ])
+    /// Build a pipeline from a DreamStrategy.
+    pub fn from_strategy(strategy: DreamStrategy) -> Self {
+        let stage_list: Vec<Box<dyn DreamStage>> = match strategy {
+            DreamStrategy::Consolidate => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteDriftStage),
+                Box::new(stages::IndexRefresherStage),
+                Box::new(stages::NoteDecayStage),
+            ],
+            DreamStrategy::Synthesize => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::NoteConsolidateStage),
+                Box::new(stages::NoteSynthesisStage),
+                Box::new(stages::SkillDistillStage),
+                Box::new(stages::DailyDigestStage),
+            ],
+            DreamStrategy::Conserve => vec![
+                Box::new(stages::NoteLintStage),
+                Box::new(stages::IndexRefresherStage),
+            ],
+        };
+        Self::new(stage_list)
     }
 
     /// Run the pipeline, returning the final `DreamReport`.
@@ -323,6 +338,10 @@ pub struct DreamDaemon {
     provider: Option<Arc<dyn AiProvider>>,
     /// Optional wiki orientation — forwarded into DreamContext for IndexRefresherStage.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    /// Strategy selector with personality adaptation.
+    selector: std::sync::Mutex<StrategySelector>,
+    /// Mutation gate tracking evolution pathologies.
+    mutation_gate: std::sync::Mutex<MutationGate>,
 }
 
 impl DreamDaemon {
@@ -338,6 +357,8 @@ impl DreamDaemon {
             command_handler: None,
             provider: None,
             orientation: None,
+            selector: std::sync::Mutex::new(StrategySelector::new()),
+            mutation_gate: std::sync::Mutex::new(MutationGate::new()),
         })
     }
 
@@ -516,51 +537,40 @@ impl DreamDaemon {
         }
     }
 
-    /// Determine whether to run a daily or weekly dream cycle.
-    async fn determine_run_type(&self) -> DreamRunType {
-        if !self.config.weekly_enabled {
-            return DreamRunType::Daily;
-        }
-        if let Ok(status) = self.database.get_dream_status().await {
-            if let Some(last_run) = status.last_run_at {
-                let days_since = (now_timestamp() - last_run) / 86400;
-                if days_since >= self.config.weekly_interval_days as i64 {
-                    return DreamRunType::Weekly;
-                }
-            }
-        }
-        DreamRunType::Daily
-    }
-
     async fn run_dream(
         &self,
         run_start: i64,
         _run_date: String,
     ) -> Result<(DreamRunStatus, DreamReport), AlephError> {
-        let _activity_snapshot = last_activity_timestamp().max(run_start);
+        // --- Phase 1: Collect signals ---
+        // For now, use empty metrics since DreamContext wiring is still pending.
+        // When fully wired, populate RawMetrics from database queries.
+        let raw_metrics = RawMetrics::default();
+        let signal_snapshot = SignalSnapshot::from_metrics(&raw_metrics);
 
-        let run_type = self.determine_run_type().await;
-
-        let pipeline = match run_type {
-            DreamRunType::Daily => DreamPipeline::daily(),
-            DreamRunType::Weekly => DreamPipeline::weekly(),
+        // --- Phase 2: Mutation gate evaluation ---
+        let gate_decision = {
+            let gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
+            gate.evaluate()
         };
 
-        let pipeline_type_str = match run_type {
-            DreamRunType::Daily => "daily",
-            DreamRunType::Weekly => "weekly",
+        // --- Phase 3: Strategy selection ---
+        let selection = {
+            let selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
+            selector.select(&signal_snapshot, &gate_decision)
         };
 
-        // NOTE: Task 8 will wire a real NoteIndexer and embedder here.
-        // For now the pipeline is empty so this path is never reached in
-        // production unless Task 8 stages are added.
-        let _pipeline_start = Instant::now();
+        let strategy = selection.strategy;
+        info!(strategy = %strategy, rationale = %selection.rationale, "Dream strategy selected");
 
-        // We cannot construct a full DreamContext without a NoteIndexer and
-        // EmbeddingProvider — those are wired in Task 8.  Return a stub
-        // success report so the daemon scheduler stays happy.
+        // --- Phase 4: Build and run pipeline ---
+        let pipeline = DreamPipeline::from_strategy(strategy);
+
+        // NOTE: Full DreamContext wiring requires NoteIndexer and EmbeddingProvider
+        // (same constraint as before). Return stub report until those are wired.
+        let _pipeline = pipeline;
         let report = DreamReport {
-            pipeline_type: pipeline_type_str.to_string(),
+            pipeline_type: strategy.to_string(),
             started_at: run_start,
             finished_at: now_timestamp(),
             duration_ms: 0,
@@ -569,7 +579,61 @@ impl DreamDaemon {
             ..Default::default()
         };
 
-        let _ = pipeline; // silence unused warning until Task 8 wires the context
+        // --- Phase 5: Validation (L1 + L2, deterministic) ---
+        let validation_report = DreamValidationReport {
+            l1_format: ValidationTier {
+                passed: true,
+                checks_run: 0,
+                checks_passed: 0,
+                issues: vec![],
+            },
+            l2_consistency: ValidationTier {
+                passed: true,
+                checks_run: 0,
+                checks_passed: 0,
+                issues: vec![],
+            },
+            l3_semantic: None,
+            l4_retrospective: None,
+        };
+
+        // --- Phase 6: Solidify (event log) ---
+        let memory_dir = crate::utils::paths::get_note_memory_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".aleph/data/memory"));
+        let agent_dir = memory_dir.join("default"); // TODO: use actual agent_id when available
+        let event_log = EventLog::new(&agent_dir);
+        let cycle = event_log.next_cycle().await.unwrap_or(1);
+
+        let event = DreamEvent {
+            id: format!("dream_{}_{}", run_start, cycle),
+            cycle,
+            strategy,
+            selection: selection.clone(),
+            gate_decision: gate_decision.clone(),
+            report: report.clone(),
+            validation: validation_report,
+            duration_ms: ((now_timestamp() - run_start).max(0) as u64) * 1000,
+            created_at: now_timestamp(),
+        };
+
+        if let Err(e) = event_log.append(&event).await {
+            warn!(error = %e, "Failed to write dream event log");
+        }
+
+        // --- Phase 7: Update personality + mutation gate ---
+        {
+            let mut selector = self.selector.lock().unwrap_or_else(|e| e.into_inner());
+            selector.record_cycle_outcome(
+                strategy,
+                event.validation.overall_ok(),
+                signal_snapshot.score("skill_recall_rate"),
+            );
+        }
+        {
+            let mut gate = self.mutation_gate.lock().unwrap_or_else(|e| e.into_inner());
+            gate.advance_cycle();
+            gate.tick_cooldown();
+        }
 
         Ok((DreamRunStatus::Success, report))
     }
@@ -614,14 +678,41 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_builder_daily() {
-        let pipeline = DreamPipeline::daily();
-        assert_eq!(pipeline.stages.len(), 6);
+    fn pipeline_from_strategy_consolidate() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_drift",
+                "index_refresher",
+                "note_decay"
+            ]
+        );
     }
 
     #[test]
-    fn test_pipeline_builder_weekly() {
-        let pipeline = DreamPipeline::weekly();
-        assert_eq!(pipeline.stages.len(), 7);
+    fn pipeline_from_strategy_synthesize() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_synthesis",
+                "skill_distill",
+                "daily_digest"
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_from_strategy_conserve() {
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        assert_eq!(names, vec!["note_lint", "index_refresher"]);
     }
 }

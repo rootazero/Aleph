@@ -24,7 +24,8 @@ impl DreamStage for NoteSynthesisStage {
     }
 
     async fn should_run(&self, ctx: &DreamContext) -> bool {
-        ctx.pipeline_type == "weekly" && ctx.notes.len() >= 5
+        // Runs when strategy is Synthesize and there are enough notes
+        ctx.notes.len() >= 5
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
@@ -177,40 +178,25 @@ mod tests {
     // constructing a full DreamContext requires heavy dependencies)
 
     #[test]
-    fn should_run_false_for_daily() {
-        // pipeline_type == "daily" → false regardless of note count
-        let pipeline_type = "daily".to_string();
-        let notes = make_notes(10, "preference");
-        let result = pipeline_type == "weekly" && notes.len() >= 5;
-        assert!(!result, "daily pipeline should not trigger synthesis");
-    }
-
-    #[test]
     fn should_run_false_when_too_few_notes() {
-        // pipeline_type == "weekly" but < 5 notes → false
-        let pipeline_type = "weekly".to_string();
+        // < 5 notes → false regardless of strategy
         let notes = make_notes(4, "preference");
-        let result = pipeline_type == "weekly" && notes.len() >= 5;
+        let result = notes.len() >= 5;
         assert!(!result, "fewer than 5 notes should not trigger synthesis");
     }
 
     #[test]
-    fn should_run_true_for_weekly_with_enough_notes() {
-        // pipeline_type == "weekly" and >= 5 notes → true
-        let pipeline_type = "weekly".to_string();
+    fn should_run_true_with_enough_notes() {
+        // >= 5 notes → true (strategy selection is handled upstream)
         let notes = make_notes(5, "preference");
-        let result = pipeline_type == "weekly" && notes.len() >= 5;
-        assert!(
-            result,
-            "weekly pipeline with 5+ notes should trigger synthesis"
-        );
+        let result = notes.len() >= 5;
+        assert!(result, "5+ notes should trigger synthesis");
     }
 
     #[test]
     fn should_run_boundary_exactly_five_notes() {
-        let pipeline_type = "weekly".to_string();
         let notes = make_notes(5, "skill");
-        let result = pipeline_type == "weekly" && notes.len() >= 5;
+        let result = notes.len() >= 5;
         assert!(result, "exactly 5 notes should satisfy the threshold");
     }
 
