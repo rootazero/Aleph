@@ -21,20 +21,6 @@ fn map_err(e: crate::gateway::session_manager::SessionManagerError) -> SessionSt
     }
 }
 
-fn stored_to_record(msg: crate::gateway::session_manager::StoredMessage) -> MessageRecord {
-    MessageRecord {
-        id: msg.id.to_string(),
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        metadata: msg.metadata.and_then(|s| serde_json::from_str(&s).ok()),
-        input_tokens: 0,
-        output_tokens: 0,
-        model: None,
-        model_provider: None,
-    }
-}
-
 fn search_result_to_hit(
     r: crate::gateway::session_manager::SessionSearchResult,
 ) -> SearchHit {
@@ -45,15 +31,6 @@ fn search_result_to_hit(
         content: r.content,
         timestamp: r.timestamp,
         topic: r.topic,
-    }
-}
-
-fn manager_preview_to_store(
-    p: crate::gateway::session_manager::SessionPreview,
-) -> SessionPreview {
-    SessionPreview {
-        meta: p.meta,
-        messages: p.messages.into_iter().map(stored_to_record).collect(),
     }
 }
 
@@ -153,6 +130,7 @@ impl SessionStore for SessionManager {
         self.reset_session(key).await.map_err(map_err)
     }
 
+    #[allow(deprecated)]
     async fn append_message(
         &self,
         key: &SessionKey,
@@ -179,10 +157,7 @@ impl SessionStore for SessionManager {
         key: &SessionKey,
         limit: Option<usize>,
     ) -> Result<Vec<MessageRecord>, SessionStoreError> {
-        self.get_history(key, limit)
-            .await
-            .map_err(map_err)
-            .map(|msgs| msgs.into_iter().map(stored_to_record).collect())
+        self.get_history(key, limit).await.map_err(map_err)
     }
 
     async fn search_messages(
@@ -377,7 +352,6 @@ impl SessionStore for SessionManager {
         self.get_session_preview(key, message_limit)
             .await
             .map_err(map_err)
-            .map(manager_preview_to_store)
     }
 
     async fn count_by_state(

@@ -5,8 +5,9 @@ use tracing::{debug, info};
 
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
-    SessionPatch, SessionPreview, SessionSearchResult, SessionState, StoredMessage,
+    SessionPatch, SessionSearchResult, SessionState,
 };
+use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
 use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 
@@ -121,6 +122,7 @@ impl SessionManager {
     }
 
     /// Add a message to a session
+    #[allow(deprecated)]
     pub async fn add_message(
         &self,
         key: &SessionKey,
@@ -132,6 +134,9 @@ impl SessionManager {
     }
 
     /// Add a message to a session with optional metadata and token tracking.
+    #[deprecated(
+        note = "SQLite messages table is legacy; new code should use FileSessionStore"
+    )]
     #[allow(clippy::too_many_arguments)]
     pub async fn add_message_with_meta(
         &self,
@@ -246,7 +251,7 @@ impl SessionManager {
         &self,
         key: &SessionKey,
         limit: Option<usize>,
-    ) -> Result<Vec<StoredMessage>, SessionManagerError> {
+    ) -> Result<Vec<MessageRecord>, SessionManagerError> {
         let key_str = key.to_key_string();
         let conn = self
             .conn
@@ -255,14 +260,14 @@ impl SessionManager {
 
         let query = match limit {
             Some(n) => format!(
-                "SELECT id, role, content, timestamp, metadata FROM (
-                    SELECT id, role, content, timestamp, metadata
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
+                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
                     FROM messages
                     WHERE session_key = ? ORDER BY timestamp DESC LIMIT {}
                 ) ORDER BY timestamp ASC",
                 n
             ),
-            None => "SELECT id, role, content, timestamp, metadata FROM messages
+            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
                      WHERE session_key = ? ORDER BY timestamp ASC"
                 .to_string(),
         };
@@ -271,14 +276,18 @@ impl SessionManager {
             .prepare(&query)
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
-        let messages: Vec<StoredMessage> = stmt
+        let messages: Vec<MessageRecord> = stmt
             .query_map(params![&key_str], |row| {
-                Ok(StoredMessage {
-                    id: row.get(0)?,
+                Ok(MessageRecord {
+                    id: row.get::<_, i64>(0)?.to_string(),
                     role: row.get(1)?,
                     content: row.get(2)?,
                     timestamp: row.get(3)?,
-                    metadata: row.get(4)?,
+                    metadata: row.get::<_, Option<String>>(4)?.and_then(|s| serde_json::from_str(&s).ok()),
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    model: None,
+                    model_provider: None,
                 })
             })
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
@@ -1021,20 +1030,24 @@ impl SessionManager {
         if message_limit > 0 {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, role, content, timestamp, metadata FROM (
-                        SELECT id, role, content, timestamp, metadata
+                    "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
+                        SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
                         FROM messages WHERE session_key = ? ORDER BY timestamp DESC LIMIT ?
                     ) ORDER BY timestamp ASC"
                 )
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
             messages = stmt
                 .query_map(params![&key_str, message_limit as i64], |row| {
-                    Ok(StoredMessage {
-                        id: row.get(0)?,
+                    Ok(MessageRecord {
+                        id: row.get::<_, i64>(0)?.to_string(),
                         role: row.get(1)?,
                         content: row.get(2)?,
                         timestamp: row.get(3)?,
-                        metadata: row.get(4)?,
+                        metadata: row.get::<_, Option<String>>(4)?.and_then(|s| serde_json::from_str(&s).ok()),
+                        input_tokens: row.get(5)?,
+                        output_tokens: row.get(6)?,
+                        model: None,
+                        model_provider: None,
                     })
                 })
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?

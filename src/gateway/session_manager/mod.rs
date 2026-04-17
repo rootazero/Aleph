@@ -17,16 +17,6 @@ use tracing::info;
 use super::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 
-/// Session message stored in database
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredMessage {
-    pub id: i64,
-    pub role: String,
-    pub content: String,
-    pub timestamp: i64,
-    pub metadata: Option<String>,
-}
-
 /// A message matched by FTS5 cross-session search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSearchResult {
@@ -95,14 +85,6 @@ pub use crate::gateway::session_store::types::SessionMetadata;
 
 /// Patch request for updating session metadata
 pub use crate::gateway::session_store::types::SessionPatch;
-
-/// Preview of a session: metadata plus recent messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionPreview {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<SessionMetadata>,
-    pub messages: Vec<StoredMessage>,
-}
 
 /// Session identity metadata stored in database
 ///

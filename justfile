@@ -149,6 +149,41 @@ clean:
     rm -rf {{panel_dist}}
     @echo "✓ Cleaned"
 
+# Verify session store migration status (legacy SQLite vs file backend)
+migrate-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DATA_DIR="${ALEPH_DATA_DIR:-$HOME/.aleph}"
+    DB="$DATA_DIR/sessions.db"
+    SESSIONS_DIR="$DATA_DIR/sessions"
+    MARKER="$SESSIONS_DIR/.migrated_from_sqlite"
+
+    echo "=== Session Store Migration Report ==="
+    echo "Data dir: $DATA_DIR"
+
+    if [[ -f "$DB" ]]; then
+        LEGACY_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM messages;" 2>/dev/null || echo "0")
+        echo "Legacy SQLite messages: $LEGACY_COUNT"
+    else
+        echo "Legacy SQLite DB not found."
+    fi
+
+    if [[ -d "$SESSIONS_DIR" ]]; then
+        JSONL_COUNT=$(find "$SESSIONS_DIR" -name "*.jsonl" -not -path "*/.archive/*" | wc -l | tr -d ' ')
+        echo "JSONL transcript files: $JSONL_COUNT"
+    else
+        echo "JSONL session directory not found."
+        JSONL_COUNT=0
+    fi
+
+    if [[ -f "$MARKER" ]]; then
+        echo "Migration marker: present ($(cat "$MARKER"))"
+    else
+        echo "Migration marker: not present"
+    fi
+
+    echo "======================================"
+
 # Verify build dependencies are installed
 deps:
     #!/usr/bin/env bash
