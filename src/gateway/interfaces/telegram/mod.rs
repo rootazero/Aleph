@@ -21,6 +21,7 @@ pub mod chunking;
 pub mod config;
 pub mod config_v2;
 pub mod config_resolver;
+pub mod context;
 pub mod delivery;
 pub mod error_cooldown;
 pub mod group_chat;
@@ -31,11 +32,14 @@ pub mod bot_instance;
 pub mod poll;
 pub mod reasoning_lane;
 pub mod reaction_handler;
+pub mod session;
 pub mod status_reaction;
 pub mod sticker;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
+pub use context::{AccessLevel, ChatType, ConversationKey, MediaItem, SessionState, TelegramInboundContext};
+pub use session::{SessionConfig, SessionError, TelegramSessionManager};
 pub use config_v2::TelegramConfigV2;
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
@@ -646,9 +650,20 @@ impl Channel for TelegramChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let instance = self.bot_instances.first().ok_or_else(|| {
-            ChannelError::NotConnected("No bot instances".to_string())
-        })?;
+        let (chat_id, thread_id) = delivery::parse_conversation_id(message.conversation_id.as_str());
+        let chat_id_i64 = chat_id.0;
+
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .is_some()
+            })
+            .or(self.bot_instances.first())
+            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
+
         delivery::send_message(
             &instance.bot,
             &instance.resolved_config,
@@ -659,9 +674,19 @@ impl Channel for TelegramChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        let instance = self.bot_instances.first().ok_or_else(|| {
-            ChannelError::NotConnected("No bot instances".to_string())
-        })?;
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let chat_id_i64 = chat_id.0;
+
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .is_some()
+            })
+            .or(self.bot_instances.first())
+            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
         delivery::send_typing(
             &instance.bot,
             conversation_id.as_str(),
@@ -677,9 +702,19 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        let instance = self.bot_instances.first().ok_or_else(|| {
-            ChannelError::NotConnected("No bot instances".to_string())
-        })?;
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let chat_id_i64 = chat_id.0;
+
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .is_some()
+            })
+            .or(self.bot_instances.first())
+            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
         delivery::send_reaction(
             &instance.bot,
             conversation_id.as_str(),
@@ -695,9 +730,19 @@ impl Channel for TelegramChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        let instance = self.bot_instances.first().ok_or_else(|| {
-            ChannelError::NotConnected("No bot instances".to_string())
-        })?;
+        let (chat_id, thread_id) = delivery::parse_conversation_id(conversation_id.as_str());
+        let chat_id_i64 = chat_id.0;
+
+        let instance = self
+            .bot_instances
+            .iter()
+            .find(|inst| {
+                self.config_resolver
+                    .resolve(&inst.account_id, chat_id_i64, thread_id)
+                    .is_some()
+            })
+            .or(self.bot_instances.first())
+            .ok_or_else(|| ChannelError::NotConnected("No bot instances".to_string()))?;
         delivery::edit_message(
             &instance.bot,
             conversation_id.as_str(),
