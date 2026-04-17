@@ -68,13 +68,22 @@ async def run(args: argparse.Namespace) -> int:
             "params": params,
         }))
 
-        # 4. stream until timeout
+        # 4. stream until wall-clock timeout, EOF, or break-on marker
+        deadline = asyncio.get_event_loop().time() + args.timeout_seconds
+        break_markers = [m for m in args.break_on.split(",") if m] if args.break_on else []
         try:
             while True:
-                frame = await asyncio.wait_for(ws.recv(), timeout=args.timeout_seconds)
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                frame = await asyncio.wait_for(ws.recv(), timeout=remaining)
                 print(frame, flush=True)
                 if not args.stream_events:
-                    # one frame and done
+                    break
+                if break_markers and any(
+                    f'"method":"{m}"' in frame or f'"topic":"{m}"' in frame
+                    for m in break_markers
+                ):
                     break
         except asyncio.TimeoutError:
             pass
@@ -92,7 +101,10 @@ def main() -> int:
     p.add_argument("--params-file", default=None, help="path to JSON params file")
     p.add_argument("--stream-events", action="store_true")
     p.add_argument("--event-pattern", default="*")
-    p.add_argument("--timeout-seconds", type=float, default=30.0)
+    p.add_argument("--timeout-seconds", type=float, default=30.0,
+                   help="wall-clock deadline for the streaming loop (not per-frame)")
+    p.add_argument("--break-on", default="",
+                   help="comma-separated substrings; if any matches a frame, exit early")
     args = p.parse_args()
     return asyncio.run(run(args))
 
