@@ -17,17 +17,14 @@ use serde::{Deserialize, Serialize};
 /// - `Hybrid` (default): both — memory is auto-injected AND tools are available.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum MemoryInjectionMode {
     Context,
     Tools,
+    #[default]
     Hybrid,
 }
 
-impl Default for MemoryInjectionMode {
-    fn default() -> Self {
-        Self::Hybrid
-    }
-}
 
 // =============================================================================
 // MemoryConfig

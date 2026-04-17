@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 use crate::memory::extensions::types::CaptureCtx;
 use crate::memory::extensions::{insert_with_capture_filter, MemoryExtensionRegistry};
 use crate::memory::namespace::NamespaceScope;
@@ -186,6 +186,7 @@ pub(crate) fn build_content(args: &SessionCompleteArgs) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AlephError;
     use std::sync::Mutex;
 
     // Minimal fake that records every insert call.

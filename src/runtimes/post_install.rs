@@ -88,7 +88,7 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
                 .find(|t| t.starts_with('v'))
                 .map(String::from)
         })
-        .last()
+        .next_back()
         .ok_or(PostInstallError::NoNodeVersion)?;
     // Best-effort: failure is not fatal; caller logs it.
     let _ = Command::new("fnm")

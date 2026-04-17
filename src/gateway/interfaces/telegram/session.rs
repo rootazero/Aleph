@@ -36,7 +36,7 @@ impl Default for SessionConfig {
 
 impl SessionConfig {
     pub fn timeout(&self) -> Duration {
-        Duration::from_secs(self.timeout_minutes as u64 * 60)
+        Duration::from_secs(self.timeout_minutes * 60)
     }
 }
 
@@ -188,7 +188,7 @@ impl TelegramSessionManager {
             )
             .map_err(|e| SessionError::Database(e.to_string()))?;
 
-        Ok(deleted as usize)
+        Ok(deleted)
     }
 
     // ------------------------------------------------------------------------
@@ -222,7 +222,7 @@ impl TelegramSessionManager {
 
         drop(stmt);
 
-        if let Some((created_at, updated_at)) = result {
+        if let Some((_created_at, updated_at)) = result {
             let conversation_key = self
                 .parse_session_key(session_key)
                 .unwrap_or_else(|| ConversationKey::new(0));

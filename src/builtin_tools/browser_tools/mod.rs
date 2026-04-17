@@ -49,7 +49,7 @@ async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserE
             }
             None
         })
-        .last();
+        .next_back();
     last_id
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }

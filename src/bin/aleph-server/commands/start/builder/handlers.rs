@@ -763,12 +763,12 @@ pub(in crate::commands::start) async fn init_command_handler(
 ) -> std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler> {
     use alephcore::memory::events::handler::MemoryCommandHandler;
 
-    let handler = std::sync::Arc::new(MemoryCommandHandler::new(
+    
+
+    std::sync::Arc::new(MemoryCommandHandler::new(
         std::sync::Arc::clone(state_db),
         Some(memory_db.clone()),
-    ));
-
-    handler
+    ))
 }
 
 // ─── init_memory_context_provider ────────────────────────────────────────────

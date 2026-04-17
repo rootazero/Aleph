@@ -1,7 +1,6 @@
 //! Async memory context provider — fetches relevant memories before prompt assembly.
 
 use crate::config::types::memory::{AssemblerConfig, MemoryInjectionMode};
-use crate::memory::assembler::envelope::MemoryEnvelope;
 use crate::memory::assembler::hybrid::{AiProviderReranker, LlmReranker};
 use crate::memory::assembler::{
     AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
@@ -14,7 +13,6 @@ use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use tracing::warn;
 
 /// Configuration for memory context retrieval.
 pub struct MemoryContextConfig {
@@ -146,7 +144,7 @@ impl MemoryContextProvider {
     /// mode-gating without needing real retrieval infrastructure.
     #[cfg(test)]
     pub(crate) fn new_for_test_empty_envelope(mode: MemoryInjectionMode) -> Self {
-        use crate::memory::assembler::envelope::EnvelopeMeta;
+        use crate::memory::assembler::envelope::{EnvelopeMeta, MemoryEnvelope};
         use async_trait::async_trait;
 
         struct EmptyAssembler;
@@ -220,7 +218,7 @@ impl MemoryContextProvider {
         let snapshot_dir = SnapshotReader::default_path()
             .map(|_| {
                 dirs::home_dir()
-                    .unwrap_or_else(|| std::env::temp_dir())
+                    .unwrap_or_else(std::env::temp_dir)
                     .join(".aleph/data/sessions")
             })
             .unwrap_or_else(|| {

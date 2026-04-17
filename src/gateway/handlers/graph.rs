@@ -214,19 +214,13 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     let md_path = notes_dir()
         .join(agent_id)
         .join(format!("{}.md", entry.path));
-    let content = match tokio::fs::read_to_string(&md_path).await {
-        Ok(c) => c,
-        Err(_) => String::new(), // graceful fallback if file is missing
-    };
+    let content = tokio::fs::read_to_string(&md_path).await.unwrap_or_default();
 
     // Fetch backlinks (incoming links).
-    let backlinks = match db
+    let backlinks = db
         .get_incoming_links(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
         .await
-    {
-        Ok(links) => links,
-        Err(_) => Vec::new(),
-    };
+        .unwrap_or_default();
 
     let node = entry_to_dto(&entry);
     let response = NoteDetailResponse {

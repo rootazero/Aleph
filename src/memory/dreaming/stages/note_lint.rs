@@ -239,10 +239,7 @@ fn ensure_frontmatter(content: &str, default_category: &str) -> Option<String> {
 
     // Parse the frontmatter section to check for missing fields
     let after_open = &trimmed[3..];
-    let close_pos = match after_open.find("---") {
-        Some(p) => p,
-        None => return None, // Malformed — don't touch it
-    };
+    let close_pos = after_open.find("---")?;
 
     let yaml_section = &after_open[..close_pos];
     let body_after = &after_open[close_pos + 3..];

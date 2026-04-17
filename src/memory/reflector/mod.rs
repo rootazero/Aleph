@@ -5,8 +5,8 @@
 pub mod packet_adapter;
 pub mod prompts;
 pub mod recall_signals;
-pub mod reflector;
+pub mod fs_reflector;
 pub mod types;
 
-pub use reflector::MemoryReflector;
+pub use fs_reflector::MemoryReflector;
 pub use types::{NoteRef, ReflectOpts, Synthesis};

@@ -158,6 +158,7 @@ impl HybridAssembler {
         Ok(slots)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn pack_envelope(
         &self,
         query: &str,

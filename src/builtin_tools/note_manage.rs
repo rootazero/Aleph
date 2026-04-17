@@ -170,7 +170,7 @@ impl NoteManageTool {
             .filename
             .as_deref()
             .ok_or_else(|| AlephError::tool("filename is required for create"))?;
-        let title = args
+        let _title = args
             .title
             .as_deref()
             .ok_or_else(|| AlephError::tool("title is required for create"))?;
@@ -212,8 +212,8 @@ impl NoteManageTool {
                 .lines()
                 .filter_map(|l| {
                     let t = l.trim();
-                    if t.starts_with("- ") {
-                        Some(t[2..].to_string())
+                    if let Some(rest) = t.strip_prefix("- ") {
+                        Some(rest.to_string())
                     } else if !t.is_empty() {
                         // Non-bullet lines stored verbatim as facts
                         Some(t.to_string())
@@ -307,8 +307,8 @@ impl NoteManageTool {
             .lines()
             .filter_map(|l| {
                 let t = l.trim();
-                if t.starts_with("- ") {
-                    Some(t[2..].to_string())
+                if let Some(rest) = t.strip_prefix("- ") {
+                    Some(rest.to_string())
                 } else if !t.is_empty() {
                     Some(t.to_string())
                 } else {
