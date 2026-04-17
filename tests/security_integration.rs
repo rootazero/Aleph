@@ -5,10 +5,13 @@ use alephcore::secrets::types::{DecryptedSecret, SecretError};
 use alephcore::security::{
     ContextIdHasher, GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig,
 };
+use alephcore::security::audit::{AuditEventType, AuditSeverity};
 use alephcore::thinker::inbound_context::{
     ChannelContext, InboundContext, MessageMetadata, SenderInfo, SessionContext,
 };
 use std::sync::Mutex;
+use std::time::Duration;
+use tokio::time::timeout;
 
 static PII_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -278,4 +281,123 @@ async fn test_platform_excluded_provider_end_to_end() {
             other
         ),
     }
+}
+
+#[tokio::test]
+async fn test_audit_outbound_exec_blocked() {
+    let config = SecurityGuardConfig::default();
+    let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(config);
+
+    let input = "My secret key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+    let result = guard
+        .process_outbound(input, None, SecurityContext::default())
+        .await;
+
+    assert!(
+        matches!(result, Ok(GuardResult::Blocked { .. })),
+        "Expected outbound secret leak to be blocked, got {:?}",
+        result
+    );
+
+    let entry = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("timed out waiting for audit event")
+        .expect("audit channel closed unexpectedly");
+
+    assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
+    assert_eq!(entry.severity, AuditSeverity::Critical);
+    assert!(
+        entry.detail.contains("outbound leak blocked"),
+        "Expected detail to mention outbound leak blocked, got: {}",
+        entry.detail
+    );
+}
+
+#[tokio::test]
+async fn test_audit_inbound_exec_blocked() {
+    let config = SecurityGuardConfig::default();
+    let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(config);
+    let resolver = TestResolver;
+
+    let _ = guard
+        .process_outbound("Please use {{secret:api_key}}", Some(&resolver), SecurityContext::default())
+        .await
+        .unwrap();
+
+    let _ = timeout(Duration::from_millis(50), rx.recv()).await;
+
+    let inbound = "Your key sk-ant-integration123456789012345 has been used";
+    let result = guard.process_inbound(inbound).unwrap();
+
+    assert!(
+        matches!(result, GuardResult::Blocked { .. }),
+        "Expected inbound echo to be blocked, got {:?}",
+        result
+    );
+
+    let entry = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("timed out waiting for audit event")
+        .expect("audit channel closed unexpectedly");
+
+    assert_eq!(entry.event_type, AuditEventType::EnvInjectionDetected);
+    assert_eq!(entry.severity, AuditSeverity::Critical);
+    assert!(
+        entry.detail.contains("inbound secret leak blocked"),
+        "Expected detail to mention inbound secret leak blocked, got: {}",
+        entry.detail
+    );
+}
+
+#[tokio::test]
+async fn test_audit_outbound_pii_detected() {
+    let _lock = PII_MUTEX.lock().unwrap();
+
+    let mut privacy_config = PrivacyConfig::default();
+    let mut policy = PlatformPiiPolicy::default();
+    policy.phone = Some(PiiAction::Warn);
+    privacy_config
+        .platform_policies
+        .insert("discord".to_string(), policy);
+
+    if PiiEngine::global().is_some() {
+        PiiEngine::reload(privacy_config);
+    } else {
+        PiiEngine::init(privacy_config);
+    }
+
+    let mut config = SecurityGuardConfig::default();
+    config.pii_filtering = true;
+    let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(config);
+
+    let context = SecurityContext {
+        platform_name: Some("discord".to_string()),
+        ..Default::default()
+    };
+
+    let result = guard
+        .process_outbound("Call me at 13812345678", None, context)
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result, GuardResult::Warned { .. }),
+        "Expected Warned result for discord platform override, got {:?}",
+        result
+    );
+
+    let mut found = false;
+    while let Ok(Some(entry)) = timeout(Duration::from_millis(200), rx.recv()).await {
+        if entry.event_type == AuditEventType::PiiDetected {
+            assert_eq!(entry.severity, AuditSeverity::Warn);
+            assert!(
+                entry.detail.contains("PII filter warned"),
+                "Expected detail to mention PII filter warned, got: {}",
+                entry.detail
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "Expected PiiDetected audit event in receiver");
 }

@@ -22,6 +22,7 @@ pub enum AuditEventType {
     PairingBruteForce,
     PermissionDenied,
     GuestSessionCreated,
+    PiiDetected,
 }
 
 impl fmt::Display for AuditEventType {
@@ -40,6 +41,7 @@ impl fmt::Display for AuditEventType {
             Self::PairingBruteForce => "pairing_brute_force",
             Self::PermissionDenied => "permission_denied",
             Self::GuestSessionCreated => "guest_session_created",
+            Self::PiiDetected => "pii_detected",
         };
         write!(f, "{}", s)
     }
