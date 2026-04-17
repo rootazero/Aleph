@@ -6,6 +6,7 @@
 
 use crate::error::{AlephError, Result};
 use crate::memory::namespace::NamespaceScope;
+use crate::memory::notes::query_filer::QueryFiler;
 use crate::memory::reflector::{MemoryReflector, ReflectOpts, Synthesis};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -47,6 +48,8 @@ pub struct MemoryReflectTool {
     agent_id: String,
     /// Injected at agent-loop startup via `set_session_id`.
     session_id: Option<Arc<tokio::sync::RwLock<String>>>,
+    /// Optional fire-and-forget query filer hook (Task 7).
+    pub query_filer: Option<Arc<dyn QueryFiler>>,
 }
 
 impl MemoryReflectTool {
@@ -57,12 +60,19 @@ impl MemoryReflectTool {
             reflector: None,
             agent_id: agent_id.into(),
             session_id: None,
+            query_filer: None,
         }
     }
 
     /// Attach the reflector instance (called by Task 8 server builder).
     pub fn with_reflector(mut self, reflector: Arc<MemoryReflector>) -> Self {
         self.reflector = Some(reflector);
+        self
+    }
+
+    /// Attach a query filer for fire-and-forget filing after successful synthesis.
+    pub fn with_query_filer(mut self, qf: Arc<dyn QueryFiler>) -> Self {
+        self.query_filer = Some(qf);
         self
     }
 
@@ -122,6 +132,19 @@ impl AlephTool for MemoryReflectTool {
         };
 
         let synthesis = reflector.reflect(&args.query, opts).await?;
+
+        // Fire-and-forget: file the query without blocking the reflect return path.
+        if let Some(qf) = self.query_filer.clone() {
+            let agent = self.agent_id.clone();
+            let q = args.query.clone();
+            let synth = synthesis.clone();
+            let sid = session_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = qf.maybe_file(&agent, &q, &synth, sid.as_deref()).await {
+                    tracing::warn!("query filer failed: {e}");
+                }
+            });
+        }
 
         Ok(MemoryReflectResult { synthesis })
     }

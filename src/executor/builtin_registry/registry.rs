@@ -285,6 +285,21 @@ impl BuiltinToolRegistry {
         }
     }
 
+    /// Inject a `QueryFiler` into the `memory_reflect` tool (Spec 8 Task 8 wiring).
+    ///
+    /// Must be called before the registry is wrapped in `Arc` (takes `&mut self`).
+    /// After injection the tool will fire-and-forget file interesting syntheses;
+    /// without it the tool still works but query filing is silently skipped.
+    pub fn set_query_filer(
+        &mut self,
+        query_filer: Arc<dyn crate::memory::notes::query_filer::QueryFiler>,
+    ) {
+        if let Some(ref mut tool) = self.memory_reflect_tool {
+            *tool = tool.clone().with_query_filer(query_filer);
+            info!("QueryFiler injected into memory_reflect tool");
+        }
+    }
+
     /// Get the parameter schema for a tool by name.
     ///
     /// Returns the schema if the tool exists in the internal registry and has

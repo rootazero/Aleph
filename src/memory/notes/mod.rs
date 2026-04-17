@@ -21,3 +21,4 @@ pub use wikilink::{extract_wikilinks, resolve_wikilink, rewrite_wikilinks};
 
 pub mod ingest;
 pub mod profile;
+pub mod query_filer;

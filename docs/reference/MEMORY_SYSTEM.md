@@ -203,3 +203,12 @@ is injected as a `<UserProfile>` XML envelope on first turn and every
 N turns thereafter (configurable). The `user_profile` tool exposes
 read access in Tools/Hybrid mode. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §4](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).
+
+## Query filed-back (Spec 8, shipped 2026-04-17)
+
+High-value `memory_reflect` answers are automatically archived as
+`query/` category notes. A two-tier gate (cheap: ≥3 sources + ≥200 chars;
+LLM: novel synthesis check) decides filing. The `query_filed` SQLite
+table deduplicates by `sha256(query)`. `NoteSynthesis` weekly stage
+excludes `query/` to prevent recursion. See
+[docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §5](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).

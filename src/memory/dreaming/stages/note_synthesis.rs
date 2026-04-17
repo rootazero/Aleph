@@ -33,7 +33,7 @@ impl DreamStage for NoteSynthesisStage {
         // Group notes by category, skipping synthesis notes to avoid recursion
         let mut by_category: HashMap<String, Vec<&NoteEntry>> = HashMap::new();
         for note in &ctx.notes {
-            if note.category == "synthesis" {
+            if note.category == "synthesis" || note.category == "query" {
                 continue;
             }
             by_category

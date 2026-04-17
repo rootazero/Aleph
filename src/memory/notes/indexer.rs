@@ -31,6 +31,7 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "subagent-checkpoint",
     "subagent-transcript",
     "other",
+    "query", // Spec 8: filed-back query answers
 ];
 
 /// Statistics from an indexing operation.
