@@ -3,6 +3,13 @@
 //! These are pure functions that convert teloxide types into the channel-agnostic
 //! `InboundMessage` / `Attachment` types. Extracted from `mod.rs` to keep the
 //! top-level module focused on channel lifecycle and trait implementation.
+//!
+//! # Telegram-InboundContext Integration
+//!
+//! `TelegramInboundContext` is constructed in `mod.rs` (where we have access to
+//! the original `teloxide::types::Message`) using `TelegramInboundContext::from_inbound()`.
+//! Key Telegram-specific metadata (thread_id, sender_id) is also passed via
+//! `InboundMessage.metadata` so the router can access it if needed.
 
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
@@ -90,6 +97,8 @@ pub(crate) async fn convert_message(
         ConversationId::new(msg.chat.id.0.to_string())
     };
 
+    let thread_id = msg.thread_id.map(|t| t.0 .0 as i64);
+
     // Extract platform-specific metadata
     let mut metadata: Vec<MessageMeta> = Vec::new();
 
@@ -140,6 +149,10 @@ pub(crate) async fn convert_message(
             mime_types = %mime_types.join(","),
             "Inbound message with attachments"
         );
+    }
+
+    if let Some(tid) = thread_id {
+        metadata.push(MessageMeta::ThreadId(tid));
     }
 
     Some(InboundMessage {

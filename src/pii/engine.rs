@@ -113,41 +113,90 @@ impl PiiEngine {
         self.config
             .exclude_providers
             .iter()
-            .any(|p| p == provider_name)
+            .any(|p| p.eq_ignore_ascii_case(provider_name))
     }
 
-    /// Get the configured action for a rule by name
-    fn action_for_rule(&self, rule_name: &str) -> &PiiAction {
+    /// Check whether a provider is excluded, considering platform overrides.
+    pub fn is_platform_excluded(&self, platform: Option<&str>, provider: &str) -> bool {
+        if self.is_provider_excluded(provider) {
+            return true;
+        }
+        if let Some(p) = platform {
+            if let Some(policy) = self.config.platform_policies.get(p) {
+                if let Some(ref excluded) = policy.exclude_providers {
+                    if excluded.iter().any(|e| e.eq_ignore_ascii_case(provider)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Get the configured action for a rule by name from the given config.
+    fn action_for_rule<'a>(config: &'a PrivacyConfig, rule_name: &str) -> &'a PiiAction {
         match rule_name {
-            "phone" => &self.config.phone,
-            "id_card" => &self.config.id_card,
-            "bank_card" => &self.config.bank_card,
-            "email" => &self.config.email,
-            "ip_address" => &self.config.ip_address,
-            "api_key" => &self.config.api_key,
-            "ssh_key" => &self.config.ssh_key,
+            "phone" => &config.phone,
+            "id_card" => &config.id_card,
+            "bank_card" => &config.bank_card,
+            "email" => &config.email,
+            "ip_address" => &config.ip_address,
+            "api_key" => &config.api_key,
+            "ssh_key" => &config.ssh_key,
             _ => &PiiAction::Block,
         }
     }
 
-    /// Filter PII from text
-    pub fn filter(&self, text: &str) -> FilterResult {
-        if !self.config.pii_filtering {
+    /// Compute an effective PrivacyConfig by applying platform overrides.
+    fn effective_config(&self, platform: Option<&str>) -> PrivacyConfig {
+        let mut cfg = self.config.clone();
+        if let Some(p) = platform {
+            if let Some(policy) = self.config.platform_policies.get(p) {
+                if let Some(v) = policy.pii_filtering {
+                    cfg.pii_filtering = v;
+                }
+                if let Some(ref v) = policy.id_card {
+                    cfg.id_card = v.clone();
+                }
+                if let Some(ref v) = policy.bank_card {
+                    cfg.bank_card = v.clone();
+                }
+                if let Some(ref v) = policy.phone {
+                    cfg.phone = v.clone();
+                }
+                if let Some(ref v) = policy.api_key {
+                    cfg.api_key = v.clone();
+                }
+                if let Some(ref v) = policy.ssh_key {
+                    cfg.ssh_key = v.clone();
+                }
+                if let Some(ref v) = policy.email {
+                    cfg.email = v.clone();
+                }
+                if let Some(ref v) = policy.ip_address {
+                    cfg.ip_address = v.clone();
+                }
+            }
+        }
+        cfg
+    }
+
+    /// Filter PII from text using a specific config.
+    fn filter_with_config(&self, text: &str, config: &PrivacyConfig) -> FilterResult {
+        if !config.pii_filtering {
             return FilterResult::unchanged(text);
         }
 
         let mut all_matches: Vec<PiiMatch> = Vec::new();
 
-        // Run all rules
         for rule in &self.rules {
-            let action = self.action_for_rule(rule.name());
+            let action = Self::action_for_rule(config, rule.name());
             if *action == PiiAction::Off {
                 continue;
             }
 
             let matches = rule.detect(text);
 
-            // Filter through allowlist
             for m in matches {
                 if !self.allowlist.is_allowed(&m.matched_text, rule.name()) {
                     all_matches.push(m);
@@ -159,22 +208,17 @@ impl PiiEngine {
             return FilterResult::unchanged(text);
         }
 
-        // Sort by position (reverse) for safe in-place replacement
         all_matches.sort_by(|a, b| b.start.cmp(&a.start));
-
-        // Deduplicate overlapping matches (keep first = higher severity due to rule ordering)
         let deduped = dedup_overlapping(all_matches);
 
-        // Apply replacements
         let mut result = text.to_string();
         let mut blocked_count = 0;
         let mut warned_count = 0;
 
         for detection in &deduped {
-            let action = self.action_for_rule(&detection.rule_name);
+            let action = Self::action_for_rule(config, &detection.rule_name);
             match action {
                 PiiAction::Block => {
-                    // Safety: ensure indices are valid UTF-8 boundaries
                     if detection.start <= detection.end
                         && detection.end <= result.len()
                         && result.is_char_boundary(detection.start)
@@ -208,6 +252,17 @@ impl PiiEngine {
             warned_count,
         }
     }
+
+    /// Filter PII from text using the global config.
+    pub fn filter(&self, text: &str) -> FilterResult {
+        self.filter_with_config(text, &self.config)
+    }
+
+    /// Filter PII from text, applying platform-specific overrides if provided.
+    pub fn filter_with_platform(&self, text: &str, platform: Option<&str>) -> FilterResult {
+        let config = self.effective_config(platform);
+        self.filter_with_config(text, &config)
+    }
 }
 
 /// Remove overlapping matches, keeping the one encountered first (rules are ordered by severity)
@@ -232,7 +287,7 @@ fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{PiiAction, PrivacyConfig};
+    use crate::config::{PiiAction, PlatformPiiPolicy, PrivacyConfig};
 
     fn engine() -> PiiEngine {
         PiiEngine::new(PrivacyConfig::default())
@@ -314,5 +369,40 @@ mod tests {
         let engine = PiiEngine::new(config);
         assert!(engine.is_provider_excluded("ollama"));
         assert!(!engine.is_provider_excluded("anthropic"));
+    }
+
+    #[test]
+    fn test_filter_with_platform_override() {
+        let mut config = PrivacyConfig::default();
+        config.phone = PiiAction::Block;
+        let mut policy = PlatformPiiPolicy::default();
+        policy.phone = Some(PiiAction::Warn);
+        config
+            .platform_policies
+            .insert("discord".to_string(), policy);
+
+        let engine = PiiEngine::new(config);
+        let default_result = engine.filter_with_platform("Call 13812345678", None);
+        assert!(default_result.text.contains("[PHONE]"));
+
+        let discord_result = engine.filter_with_platform("Call 13812345678", Some("discord"));
+        assert_eq!(discord_result.text, "Call 13812345678");
+        assert!(discord_result.warned_count > 0);
+    }
+
+    #[test]
+    fn test_is_platform_excluded() {
+        let mut config = PrivacyConfig::default();
+        config.exclude_providers = vec!["ollama".to_string()];
+        let mut policy = PlatformPiiPolicy::default();
+        policy.exclude_providers = Some(vec!["local-llm".to_string()]);
+        config
+            .platform_policies
+            .insert("telegram".to_string(), policy);
+
+        let engine = PiiEngine::new(config);
+        assert!(engine.is_platform_excluded(None, "ollama"));
+        assert!(engine.is_platform_excluded(Some("telegram"), "local-llm"));
+        assert!(!engine.is_platform_excluded(Some("telegram"), "anthropic"));
     }
 }

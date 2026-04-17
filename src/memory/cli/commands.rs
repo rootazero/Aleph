@@ -7,7 +7,6 @@ use crate::error::AlephError;
 use crate::memory::notes::store::NoteIndexEntry;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
-use crate::sync_primitives::Arc;
 
 /// Filter options for listing notes
 #[derive(Debug, Clone, Default)]

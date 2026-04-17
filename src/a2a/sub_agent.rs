@@ -117,6 +117,7 @@ impl A2ASubAgent {
 /// can distil durable lessons for the parent agent's long-term memory.
 /// The parent agent_id is taken from `execution_context.metadata["parent_agent_id"]`
 /// (falls back to `"default"` when absent — Task 10 will wire the real value at startup).
+#[allow(dead_code)]
 pub(crate) fn emit_delegation_raw(
     writer: std::sync::Arc<dyn RawMemoryStore>,
     request: &SubAgentRequest,

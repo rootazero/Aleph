@@ -222,6 +222,10 @@ impl SessionScheduler {
         );
         metadata.insert("is_group".to_string(), ctx.message.is_group.to_string());
         metadata.insert("is_mentioned".to_string(), ctx.is_mentioned.to_string());
+        if let Some(handle) = self.channel_registry.get(&ctx.message.channel_id).await {
+            let channel = handle.read().await;
+            metadata.insert("platform".to_string(), channel.channel_type().to_string());
+        }
 
         let request = RunRequest {
             run_id: run_id.clone(),

@@ -27,7 +27,7 @@ pub struct InjectedSecret {
 }
 
 impl InjectedSecret {
-    fn from_value(name: &str, value: &str) -> Self {
+    pub fn from_value(name: &str, value: &str) -> Self {
         // Use non-zero fixed keys to avoid trivial rainbow table attacks
         let mut hasher =
             siphasher::sip::SipHasher::new_with_keys(0x517c_c1b7_2722_0a95, 0x6c62_272e_07bb_0142);

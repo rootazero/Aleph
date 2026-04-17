@@ -300,20 +300,18 @@ pub struct DiscordGuildSettings {
 /// Content retention policy for audit logs
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ContentRetention {
     Full,         // 保留全文
+    #[default]
     Anonymized,   // 移除 user_id, channel_id
     MetadataOnly, // 仅保留元数据
 }
 
-impl Default for ContentRetention {
-    fn default() -> Self {
-        ContentRetention::Anonymized
-    }
-}
 
 /// Security configuration for Discord channel
 #[derive(Debug, Clone, Deserialize)]
+#[derive(Default)]
 pub struct DiscordSecurityConfig {
     /// Enable security audit logging
     #[serde(default = "default_true")]
@@ -354,16 +352,6 @@ impl Default for AuditEvents {
     }
 }
 
-impl Default for DiscordSecurityConfig {
-    fn default() -> Self {
-        Self {
-            audit_enabled: false,
-            audit_channels: Vec::new(),
-            audit_events: AuditEvents::default(),
-            content_retention: ContentRetention::default(),
-        }
-    }
-}
 
 // ============================================================================
 // Backward Compatibility

@@ -53,13 +53,28 @@ pub struct MessageMetadata {
 }
 
 /// Aggregated per-request context injected into the prompt pipeline.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct InboundContext {
     pub sender: SenderInfo,
     pub channel: ChannelContext,
     pub session: SessionContext,
     pub message: MessageMetadata,
     pub voice_mode_active: bool,
+    /// When true, session identifiers are hashed before prompt injection.
+    pub redact_ids: bool,
+}
+
+impl Default for InboundContext {
+    fn default() -> Self {
+        Self {
+            sender: SenderInfo::default(),
+            channel: ChannelContext::default(),
+            session: SessionContext::default(),
+            message: MessageMetadata::default(),
+            voice_mode_active: false,
+            redact_ids: true,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +95,12 @@ impl InboundContext {
             .unwrap_or(&self.sender.id);
         let role = if self.sender.is_owner { " (owner)" } else { "" };
         lines.push(format!("Sender: {}{}", sender_name, role));
+        if self.redact_ids && self.sender.display_name.is_some() {
+            lines.push(format!(
+                "Sender ID: {}",
+                crate::security::ContextIdHasher::hash(&self.sender.id)
+            ));
+        }
 
         // Channel
         let mut channel_parts = vec![self.channel.kind.clone()];
@@ -101,7 +122,12 @@ impl InboundContext {
 
         // Session
         if !self.session.session_key.is_empty() {
-            lines.push(format!("Session: {}", self.session.session_key));
+            let session_val = if self.redact_ids {
+                crate::security::ContextIdHasher::hash(&self.session.session_key)
+            } else {
+                self.session.session_key.clone()
+            };
+            lines.push(format!("Session: {}", session_val));
         }
 
         // Active agent
@@ -112,14 +138,18 @@ impl InboundContext {
         // Attachments
         if self.message.has_attachments && !self.message.attachment_types.is_empty() {
             let count = self.message.attachment_types.len();
-            // Group by type and show counts
             let summary = format!("{} ({})", self.message.attachment_types.join(", "), count);
             lines.push(format!("Attachments: {}", summary));
         }
 
         // Reply-to
         if let Some(reply) = &self.message.reply_to {
-            lines.push(format!("Reply To: {}", reply));
+            let reply_val = if self.redact_ids {
+                crate::security::ContextIdHasher::hash(reply)
+            } else {
+                reply.clone()
+            };
+            lines.push(format!("Reply To: {}", reply_val));
         }
 
         // Voice mode
@@ -157,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn format_for_prompt_basic() {
+    fn format_for_prompt_redacts_by_default() {
         let ctx = InboundContext {
             sender: SenderInfo {
                 id: "u123".to_string(),
@@ -180,13 +210,43 @@ mod tests {
 
         let output = ctx.format_for_prompt();
         assert!(output.contains("Sender: Alice (owner)"));
+        assert!(output.contains("Sender ID: ctx:"));
         assert!(output.contains("Channel: telegram | group_chat | mentioned"));
         assert!(output.contains("Capabilities: reactions, inline_buttons"));
-        assert!(output.contains("Session: tg:dm:123"));
+        assert!(!output.contains("Session: tg:dm:123"));
+        assert!(output.contains("Session: ctx:"));
         assert!(output.contains("Active Agent: default"));
-        // No attachments or reply
         assert!(!output.contains("Attachments:"));
         assert!(!output.contains("Reply To:"));
+    }
+
+    #[test]
+    fn format_for_prompt_without_redaction() {
+        let ctx = InboundContext {
+            sender: SenderInfo {
+                id: "u123".to_string(),
+                display_name: Some("Alice".to_string()),
+                is_owner: true,
+            },
+            channel: ChannelContext {
+                kind: "telegram".to_string(),
+                capabilities: vec!["reactions".to_string(), "inline_buttons".to_string()],
+                is_group_chat: true,
+                is_mentioned: true,
+            },
+            session: SessionContext {
+                session_key: "tg:dm:123".to_string(),
+                active_agent: Some("default".to_string()),
+            },
+            message: MessageMetadata::default(),
+            redact_ids: false,
+            voice_mode_active: false,
+        };
+
+        let output = ctx.format_for_prompt();
+        assert!(output.contains("Sender: Alice (owner)"));
+        assert!(!output.contains("Sender ID: ctx:"));
+        assert!(output.contains("Session: tg:dm:123"));
     }
 
     #[test]
@@ -216,16 +276,12 @@ mod tests {
         };
 
         let output = ctx.format_for_prompt();
-        // Falls back to id when display_name is None
         assert!(output.contains("Sender: u456"));
-        // Not owner
         assert!(!output.contains("(owner)"));
-        // No capabilities line
         assert!(!output.contains("Capabilities:"));
-        // Attachments
         assert!(output.contains("Attachments: image (1)"));
-        // Reply
-        assert!(output.contains("Reply To: msg_789"));
+        assert!(!output.contains("Reply To: msg_789"));
+        assert!(output.contains("Reply To: ctx:"));
     }
 
     #[test]

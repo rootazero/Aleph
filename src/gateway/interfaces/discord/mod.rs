@@ -114,6 +114,7 @@ pub struct DiscordChannel {
     /// Configuration (legacy flat config)
     config: DiscordConfig,
     /// Channel configuration (new nested config, for multi-account support)
+    #[allow(dead_code)]
     channel_config: Option<DiscordChannelConfig>,
     /// Account pool for multi-bot-instance support
     account_pool: Option<DiscordAccountPool>,

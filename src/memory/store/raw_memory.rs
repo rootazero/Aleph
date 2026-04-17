@@ -90,7 +90,7 @@ impl RawMemorySource {
     }
 
     /// Backwards-compat shim — existing callers that only had a token.
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_str_(s: &str) -> Self {
         Self::from_persisted(s, None)
     }
 }

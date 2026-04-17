@@ -12,6 +12,7 @@ use crate::sync_primitives::Arc;
 /// All active extraction entry points are now in `CompoundIngestor`.
 /// This struct is retained only to hold the `embedder` accessor used by
 /// `CompressionService` during legacy-path note embedding.
+#[allow(dead_code)]
 pub struct FactExtractor {
     provider: Arc<dyn AiProvider>,
     embedder: Arc<dyn EmbeddingProvider>,

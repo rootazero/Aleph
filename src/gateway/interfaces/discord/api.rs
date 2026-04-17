@@ -15,6 +15,7 @@ pub struct DiscordClient {
 }
 
 impl DiscordClient {
+    #[allow(clippy::result_large_err)]
     pub fn new(token: &str) -> Result<Self, serenity::Error> {
         let http = serenity::http::Http::new(token);
         Ok(Self {

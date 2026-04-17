@@ -129,7 +129,7 @@ impl ThreadBindingHandler {
         let mut bindings = self.bindings.write().await;
         let binding = bindings
             .get_mut(&thread_id)
-            .ok_or_else(|| ThreadBindingError::NotFound(thread_id))?;
+            .ok_or(ThreadBindingError::NotFound(thread_id))?;
 
         if !binding.participants.contains(&agent_id) {
             binding.participants.push(agent_id);
@@ -147,7 +147,7 @@ impl ThreadBindingHandler {
         let mut bindings = self.bindings.write().await;
         let binding = bindings
             .get_mut(&thread_id)
-            .ok_or_else(|| ThreadBindingError::NotFound(thread_id))?;
+            .ok_or(ThreadBindingError::NotFound(thread_id))?;
 
         binding.participants.retain(|a| a != agent_id);
         Ok(())
@@ -171,7 +171,7 @@ impl ThreadBindingHandler {
             let mut bindings = self.bindings.write().await;
             bindings
                 .remove(&thread_id)
-                .ok_or_else(|| ThreadBindingError::NotFound(thread_id))?
+                .ok_or(ThreadBindingError::NotFound(thread_id))?
         };
 
         {

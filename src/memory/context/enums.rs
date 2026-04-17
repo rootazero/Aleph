@@ -6,7 +6,6 @@
 //! and agent experiences. Knowledge Notes are the primary structural layer, with
 //! wikilink-based linking replacing the deprecated graph_nodes/graph_edges system.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================

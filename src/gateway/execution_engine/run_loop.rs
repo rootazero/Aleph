@@ -619,6 +619,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 )) as Arc<dyn crate::agent_loop::ToolRefreshSource>
             });
 
+            let platform_name = request.metadata.get("platform").cloned();
+
             let mut agent_loop = AgentLoop::new(
                 bridge,
                 tool_registry,
@@ -634,7 +636,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .with_context_compactor(context_compactor)
             .with_summary_provider(self.provider_registry.default_provider())
             .with_stop_hooks(stop_hooks)
-            .with_shared_snapshot(shared_snapshot);
+            .with_shared_snapshot(shared_snapshot)
+            .with_provider_name(resolved.provider_name.clone())
+            .with_platform_name(platform_name)
+            .with_session_id(request.session_key.to_key_string());
 
             if let Some(skill_system) = skill_system.as_ref() {
                 agent_loop =

@@ -840,7 +840,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // On failure we log a warning and continue — memory_reflect will return a clear error.
         if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
             use alephcore::memory::reflector::{
-                recall_signals::SignalRow, reflector::RecallWriter, MemoryReflector,
+                recall_signals::SignalRow, fs_reflector::RecallWriter, MemoryReflector,
             };
             use alephcore::memory::store::sqlite::recall_signals::RecallHit;
 
