@@ -6,6 +6,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // =============================================================================
 // PiiAction
@@ -23,6 +24,29 @@ pub enum PiiAction {
     Block,
     Warn,
     Off,
+}
+
+/// Per-platform override for PII filtering rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlatformPiiPolicy {
+    #[serde(default)]
+    pub pii_filtering: Option<bool>,
+    #[serde(default)]
+    pub id_card: Option<PiiAction>,
+    #[serde(default)]
+    pub bank_card: Option<PiiAction>,
+    #[serde(default)]
+    pub phone: Option<PiiAction>,
+    #[serde(default)]
+    pub api_key: Option<PiiAction>,
+    #[serde(default)]
+    pub ssh_key: Option<PiiAction>,
+    #[serde(default)]
+    pub email: Option<PiiAction>,
+    #[serde(default)]
+    pub ip_address: Option<PiiAction>,
+    #[serde(default)]
+    pub exclude_providers: Option<Vec<String>>,
 }
 
 // =============================================================================
@@ -87,6 +111,10 @@ pub struct PrivacyConfig {
     /// Messages routed to these providers bypass all PII checks.
     #[serde(default)]
     pub exclude_providers: Vec<String>,
+
+    /// Per-platform PII policy overrides.
+    #[serde(default)]
+    pub platform_policies: HashMap<String, PlatformPiiPolicy>,
 }
 
 // =============================================================================
@@ -125,6 +153,7 @@ impl Default for PrivacyConfig {
             email: default_warn(),
             ip_address: default_off(),
             exclude_providers: Vec::new(),
+            platform_policies: HashMap::new(),
         }
     }
 }
@@ -149,6 +178,7 @@ mod tests {
         assert_eq!(config.email, PiiAction::Warn);
         assert_eq!(config.ip_address, PiiAction::Off);
         assert!(config.exclude_providers.is_empty());
+        assert!(config.platform_policies.is_empty());
     }
 
     #[test]
@@ -209,5 +239,23 @@ mod tests {
         "#;
         let config: PrivacyConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.exclude_providers, vec!["ollama", "local-llm"]);
+    }
+
+    #[test]
+    fn test_platform_policy_deserialization() {
+        let toml_str = r#"
+            [platform_policies.telegram]
+            phone = "warn"
+            email = "off"
+            exclude_providers = ["local-llm"]
+        "#;
+        let config: PrivacyConfig = toml::from_str(toml_str).unwrap();
+        let telegram = config.platform_policies.get("telegram").unwrap();
+        assert_eq!(telegram.phone, Some(PiiAction::Warn));
+        assert_eq!(telegram.email, Some(PiiAction::Off));
+        assert_eq!(
+            telegram.exclude_providers,
+            Some(vec!["local-llm".to_string()])
+        );
     }
 }

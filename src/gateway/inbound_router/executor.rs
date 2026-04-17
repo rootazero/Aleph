@@ -203,6 +203,10 @@ impl InboundMessageRouter {
             "conversation_id".to_string(),
             ctx.message.conversation_id.as_str().to_string(),
         );
+        if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
+            let channel = handle.read().await;
+            metadata.insert("platform".to_string(), channel.channel_type().to_string());
+        }
 
         // Inject user locale for downstream i18n (run_loop, error messages)
         if let Some(ref cfg) = self.app_config {

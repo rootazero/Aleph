@@ -44,7 +44,7 @@ impl ReplyTracker {
             if elapsed > PASSIVE_REPLY_TTL {
                 return (false, true);
             }
-            if record.count >= PASSIVE_REPLY_LIMIT {
+            if record.count > PASSIVE_REPLY_LIMIT {
                 return (false, true);
             }
             return (true, false);
