@@ -14,9 +14,6 @@ pub mod mutation_gate;
 pub mod validation;
 pub mod event_log;
 
-#[cfg(test)]
-mod integration_tests;
-
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;

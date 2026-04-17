@@ -1,4 +1,4 @@
-//! Integration tests for Dream Daemon evolution upgrade.
+//! Integration test for Dream Daemon evolution upgrade.
 //!
 //! Tests the full signal → select → gate → validate → solidify flow
 //! using in-memory/temp-dir setup without an actual LLM provider.
@@ -6,15 +6,15 @@
 use std::collections::HashMap;
 use tempfile::tempdir;
 
-use crate::memory::dreaming::event_log::{DreamEvent, EventLog};
-use crate::memory::dreaming::mutation_gate::MutationGate;
-use crate::memory::dreaming::selector::{GateDecision, StrategySelector};
-use crate::memory::dreaming::signals::{RawMetrics, SignalSnapshot};
-use crate::memory::dreaming::strategy::DreamStrategy;
-use crate::memory::dreaming::validation::{
+use alephcore::memory::dreaming::event_log::{DreamEvent, EventLog};
+use alephcore::memory::dreaming::mutation_gate::MutationGate;
+use alephcore::memory::dreaming::selector::{GateDecision, StrategySelector};
+use alephcore::memory::dreaming::signals::{RawMetrics, SignalSnapshot};
+use alephcore::memory::dreaming::strategy::DreamStrategy;
+use alephcore::memory::dreaming::validation::{
     check_duplicate_hashes, run_l1_validation, DreamValidationReport, ValidationTier,
 };
-use crate::memory::dreaming::{DreamPipeline, DreamReport};
+use alephcore::memory::dreaming::{DreamPipeline, DreamReport};
 
 /// Full evolution cycle: signals → select → gate → validate → log.
 #[tokio::test]

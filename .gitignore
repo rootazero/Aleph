@@ -68,8 +68,6 @@ newinstall*.txt
 *.py
 test-results/
 playwright-report/
-e2e/dist/
-/tests/
 SystemPrompt.md
 
 # Build pipeline artifacts
