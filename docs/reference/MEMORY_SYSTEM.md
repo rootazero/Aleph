@@ -191,3 +191,15 @@ content hashes. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §2](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md)
 for the design; the four new markdown files now live alongside the
 existing per-category note directories.
+
+## User profile (Spec 7, shipped 2026-04-17)
+
+`USER.md` is a dialectic, session-end-synthesised user model with six
+fixed sections (Identity, Communication Style, Motivations, Current
+Focus, Stance Shifts, Open Questions). `ProfileSynthesizer` fires after
+each `SessionEnd` raw is processed — the LLM merges session insights
+into the existing profile with hash-guarded atomic writes. The profile
+is injected as a `<UserProfile>` XML envelope on first turn and every
+N turns thereafter (configurable). The `user_profile` tool exposes
+read access in Tools/Hybrid mode. See
+[docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §4](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).
