@@ -107,8 +107,7 @@ impl AlephTool for SessionNewTool {
         // Create new session with next epoch
         let new_routing_key = routing_key.with_next_epoch();
         let new_key_str = new_routing_key.to_key_string();
-        let new_legacy = LegacySessionKey::from_new(&new_routing_key);
-        if let Err(e) = self.session_store.get_or_create(&new_legacy).await {
+        if let Err(e) = self.session_store.get_or_create(&new_routing_key).await {
             warn!("session_new: failed to create new session: {}", e);
         }
 

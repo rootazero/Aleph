@@ -623,10 +623,9 @@ pub async fn handle_new_session_db(
     // Create new epoch key
     let new_routing_key = routing_key.with_next_epoch();
     let new_key_str = new_routing_key.to_key_string();
-    let new_legacy_key = SessionKey::from_new(&new_routing_key);
 
     // Create the new session
-    match manager.get_or_create(&new_legacy_key).await {
+    match manager.get_or_create(&new_routing_key).await {
         Ok(_meta) => JsonRpcResponse::success(
             request.id,
             json!({

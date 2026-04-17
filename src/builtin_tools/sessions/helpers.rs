@@ -420,7 +420,7 @@ mod tests {
         let test_cases = vec![
             "agent:main:main",
             "agent:work:custom",
-            "agent:main:dm:user123",
+            "agent:main:peer:user123",
             "agent:main:telegram:dm:user456",
             "agent:main:discord:group:guild789",
             "agent:main:slack:channel:c123",

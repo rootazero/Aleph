@@ -115,8 +115,7 @@ impl InboundMessageRouter {
             .with_inbound_message_id(msg.id.clone());
 
         let base_key = if let Some(route) = resolved_route {
-            // Use the new routing system's session key, converted to legacy format
-            SessionKey::from_new(&route.session_key)
+            route.session_key.clone()
         } else {
             // Fallback: use old-style session key construction
             self.resolve_session_key_with_agent(msg, agent_id)

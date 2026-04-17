@@ -429,8 +429,10 @@ pub enum SessionManagerError {
 pub(super) fn session_type_str(key: &SessionKey) -> String {
     match key {
         SessionKey::Main { .. } => "main".to_string(),
-        SessionKey::PerPeer { .. } => "peer".to_string(),
+        SessionKey::DirectMessage { .. } => "peer".to_string(),
         SessionKey::Task { .. } => "task".to_string(),
         SessionKey::Ephemeral { .. } => "ephemeral".to_string(),
+        SessionKey::Group { .. } => "group".to_string(),
+        SessionKey::Subagent { .. } => "subagent".to_string(),
     }
 }

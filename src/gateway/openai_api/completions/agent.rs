@@ -282,11 +282,7 @@ pub async fn handle(
 
     // 6. Build session key and run request
     let agent_id = agent.id().to_string();
-    let session_key = SessionKey::PerPeer {
-        agent_id: agent_id.clone(),
-        peer_id: peer_id.clone(),
-        epoch: 0,
-    };
+    let session_key = SessionKey::peer(&agent_id, &peer_id);
 
     // Seed session with conversation history for stateless clients (e.g. Cursor)
     // that send the full multi-turn history in every request.

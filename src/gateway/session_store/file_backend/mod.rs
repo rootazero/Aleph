@@ -278,9 +278,11 @@ impl SessionStore for FileSessionStore {
             agent_id: key.agent_id().to_string(),
             session_type: match key {
                 SessionKey::Main { .. } => "main",
-                SessionKey::PerPeer { .. } => "peer",
+                SessionKey::DirectMessage { .. } => "peer",
                 SessionKey::Task { .. } => "task",
                 SessionKey::Ephemeral { .. } => "ephemeral",
+                SessionKey::Group { .. } => "group",
+                SessionKey::Subagent { .. } => "subagent",
             }
             .to_string(),
             created_at: now,
@@ -538,9 +540,11 @@ impl SessionStore for FileSessionStore {
             agent_id: new_key.agent_id().to_string(),
             session_type: match new_key {
                 SessionKey::Main { .. } => "main",
-                SessionKey::PerPeer { .. } => "peer",
+                SessionKey::DirectMessage { .. } => "peer",
                 SessionKey::Task { .. } => "task",
                 SessionKey::Ephemeral { .. } => "ephemeral",
+                SessionKey::Group { .. } => "group",
+                SessionKey::Subagent { .. } => "subagent",
             }
             .to_string(),
             created_at: now,

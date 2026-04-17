@@ -102,6 +102,11 @@ impl SessionKey {
         }
     }
 
+    /// Create a per-peer DM session key (legacy compatibility alias).
+    pub fn peer(agent_id: impl Into<String>, peer_id: impl Into<String>) -> Self {
+        Self::dm(agent_id, "", peer_id, DmScope::PerPeer)
+    }
+
     /// Create a DM session key with scope strategy
     ///
     /// If dm_scope is Main, returns a Main session key (DMs collapse into main).
@@ -211,6 +216,33 @@ impl SessionKey {
         }
     }
 
+    /// Return a clone with the given epoch (legacy compatibility alias).
+    pub fn with_epoch(&self, epoch: u32) -> Self {
+        match self {
+            Self::Main {
+                agent_id, main_key, ..
+            } => Self::Main {
+                agent_id: agent_id.clone(),
+                main_key: main_key.clone(),
+                epoch,
+            },
+            Self::DirectMessage {
+                agent_id,
+                channel,
+                peer_id,
+                dm_scope,
+                ..
+            } => Self::DirectMessage {
+                agent_id: agent_id.clone(),
+                channel: channel.clone(),
+                peer_id: peer_id.clone(),
+                dm_scope: *dm_scope,
+                epoch,
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Return a clone with epoch incremented by 1.
     /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
     pub fn with_next_epoch(&self) -> Self {
@@ -257,6 +289,9 @@ impl SessionKey {
                 ..
             } => match dm_scope {
                 DmScope::Main => format!("agent:{}:main", agent_id),
+                DmScope::PerPeer if channel.is_empty() => {
+                    format!("agent:{}:peer:{}", agent_id, peer_id)
+                }
                 DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
                 DmScope::PerChannelPeer => {
                     format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
@@ -291,6 +326,9 @@ impl SessionKey {
             } => {
                 let base = match dm_scope {
                     DmScope::Main => format!("agent:{}:main", agent_id),
+                    DmScope::PerPeer if channel.is_empty() => {
+                        format!("agent:{}:peer:{}", agent_id, peer_id)
+                    }
                     DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
                     DmScope::PerChannelPeer => {
                         format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
@@ -380,6 +418,15 @@ impl SessionKey {
         };
 
         match rest {
+            // agent:id:peer:peer_id (legacy per-peer DM format)
+            ["peer", peer_id] => Some(Self::DirectMessage {
+                agent_id,
+                channel: String::new(),
+                peer_id: peer_id.to_string(),
+                dm_scope: DmScope::PerPeer,
+                epoch,
+            }),
+
             // agent:id:dm:peer (per-peer DM)
             ["dm", peer_id] => Some(Self::DirectMessage {
                 agent_id,
@@ -474,6 +521,11 @@ impl SessionKey {
 
             _ => None,
         }
+    }
+
+    /// Alias for `parse` with legacy fallback to match gateway/router.rs behavior.
+    pub fn from_key_string(s: &str) -> Option<Self> {
+        Self::parse(s).or_else(|| Self::from_legacy(s))
     }
 
     /// Parse legacy format from gateway/router.rs for backward compatibility
@@ -621,6 +673,12 @@ mod tests {
     }
 
     #[test]
+    fn test_to_key_string_peer() {
+        let key = SessionKey::peer("main", "user123");
+        assert_eq!(key.to_key_string(), "agent:main:peer:user123");
+    }
+
+    #[test]
     fn test_to_key_string_dm_per_channel_peer() {
         let key = SessionKey::dm("main", "telegram", "user123", DmScope::PerChannelPeer);
         assert_eq!(key.to_key_string(), "agent:main:telegram:dm:user123");
@@ -682,6 +740,14 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_peer_legacy() {
+        let key = SessionKey::parse("agent:main:peer:user123").unwrap();
+        assert!(
+            matches!(key, SessionKey::DirectMessage { peer_id, dm_scope: DmScope::PerPeer, channel, .. } if peer_id == "user123" && channel.is_empty())
+        );
+    }
+
+    #[test]
     fn test_parse_dm_per_channel_peer() {
         let key = SessionKey::parse("agent:main:telegram:dm:user123").unwrap();
         assert!(
@@ -730,7 +796,7 @@ mod tests {
     fn test_roundtrip() {
         let keys = vec![
             SessionKey::main("work"),
-            SessionKey::dm("main", "telegram", "user1", DmScope::PerPeer),
+            SessionKey::peer("main", "user1"),
             SessionKey::dm("main", "discord", "user2", DmScope::PerChannelPeer),
             SessionKey::group("main", "slack", PeerKind::Channel, "C123"),
             SessionKey::task("main", "webhook", "hook-1"),
@@ -783,7 +849,7 @@ mod tests {
             dm_scope: DmScope::PerPeer,
             epoch: 1,
         };
-        assert_eq!(key.to_key_string(), "agent:main:dm:user123:s1");
+        assert_eq!(key.to_key_string(), "agent:main:peer:user123:s1");
         let parsed = SessionKey::parse(&key.to_key_string()).unwrap();
         assert_eq!(parsed.epoch(), 1);
     }

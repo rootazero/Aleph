@@ -705,7 +705,7 @@ mod tests {
         let gateway_key = session_key_to_gateway(&routing_key);
 
         assert!(
-            matches!(gateway_key, SessionKey::PerPeer { agent_id, peer_id, .. } if agent_id == "main" && peer_id == "user123")
+            matches!(gateway_key, SessionKey::DirectMessage { agent_id, peer_id, .. } if agent_id == "main" && peer_id == "user123")
         );
     }
 
