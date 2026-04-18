@@ -12,6 +12,7 @@ impl MessageOps {
         Self { api }
     }
 
+    #[allow(dead_code)]
     pub async fn reply(
         &self,
         conversation_id: &ConversationId,
@@ -56,6 +57,7 @@ impl MessageOps {
         Err(ChannelError::UnsupportedFeature("deletion".to_string()))
     }
 
+    #[allow(dead_code)]
     pub async fn send(
         &self,
         conversation_id: &ConversationId,

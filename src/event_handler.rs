@@ -8,6 +8,7 @@ use crate::clarification::{ClarificationRequest, ClarificationResult};
 
 /// A single turn in a conversation (user input + AI response).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConversationTurn {
     /// Sequential turn number (0-indexed)
     pub turn_id: u32,

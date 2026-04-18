@@ -1,6 +1,6 @@
 //! LLM prompts for profile bootstrap and merge operations.
 
-use super::types::{ProfileSection, SessionSignal, UserProfile};
+use super::types::{SessionSignal, UserProfile};
 
 // ---------------------------------------------------------------------------
 // System prompt constants

@@ -100,14 +100,16 @@ impl MsTeamsChannel {
             let gc = GraphClient::with_federated(graph_token_manager);
             (Self::build_bot_client(&config), Arc::new(gc))
         } else {
+            #[allow(deprecated)]
+            let app_password = config.app_password.clone();
             let token_cache = Arc::new(TokenCache::new(
                 config.app_id.clone(),
-                config.app_password.clone(),
+                app_password.clone(),
                 config.tenant_id.clone(),
             ));
             let graph_token_cache = Arc::new(self::graph::GraphTokenCache::new(
                 config.app_id.clone(),
-                config.app_password.clone(),
+                app_password,
                 config.tenant_id.clone(),
             ));
             let gc = GraphClient::new(graph_token_cache);
@@ -127,9 +129,11 @@ impl MsTeamsChannel {
     }
 
     fn build_bot_client(config: &MsTeamsConfig) -> Arc<BotFrameworkClient> {
+        #[allow(deprecated)]
+        let app_password = config.app_password.clone();
         let token_cache = Arc::new(TokenCache::new(
             config.app_id.clone(),
-            config.app_password.clone(),
+            app_password,
             config.tenant_id.clone(),
         ));
         Arc::new(BotFrameworkClient::new(token_cache))

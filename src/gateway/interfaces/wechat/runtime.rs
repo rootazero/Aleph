@@ -3,7 +3,6 @@
 //! Implements the long-polling getupdates loop for receiving messages.
 
 use reqwest::Client;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
@@ -14,12 +13,14 @@ use super::config::WeChatConfig;
 use super::inbound::mapper::map_message_to_inbound;
 use super::inbound::policy::should_accept_message;
 use super::sync_buf::{load_sync_buf, save_sync_buf};
-use super::types::{GetUpdatesResponse, LONG_POLL_TIMEOUT_MS};
+use super::types::LONG_POLL_TIMEOUT_MS;
 
 pub struct WeChatRuntime {
     config: WeChatConfig,
     api: ILinkApi,
+    #[allow(dead_code)]
     http: Client,
+    #[allow(dead_code)]
     token_store: ContextTokenStore,
     sync_buf: RwLock<String>,
     running: RwLock<bool>,

@@ -4,8 +4,7 @@
 
 use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
 
-use crate::gateway::interfaces::wechat::config::GroupPolicy;
-use crate::gateway::interfaces::wechat::types::{Message, MessageItem, TextItem};
+use crate::gateway::interfaces::wechat::types::{Message, MessageItem};
 
 /// Extract text content from a message item.
 pub fn extract_text(item: &MessageItem) -> String {

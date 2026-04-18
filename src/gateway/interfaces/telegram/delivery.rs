@@ -664,12 +664,12 @@ use tokio::sync::mpsc;
 pub struct TelegramDelivery {
     pub bot: Bot,
     pub config: ResolvedConfig,
-    pub cooldown: Arc<ErrorCooldown>,
+    pub(crate) cooldown: Arc<ErrorCooldown>,
     pub conversation_id: String,
 }
 
 impl TelegramDelivery {
-    pub fn new(
+    pub(crate) fn new(
         bot: Bot,
         config: ResolvedConfig,
         cooldown: Arc<ErrorCooldown>,

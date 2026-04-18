@@ -14,6 +14,7 @@ pub struct InboundPolicy {
     dm: DmPolicyEngine,
     group: GroupPolicyEngine,
     require_mention: bool,
+    #[allow(dead_code)]
     bot_open_id: String,
 }
 

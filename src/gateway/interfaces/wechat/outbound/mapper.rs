@@ -2,7 +2,7 @@
 //!
 //! Maps OutboundMessage to iLink format.
 
-use crate::gateway::channel::{ConversationId, OutboundMessage, UserId};
+use crate::gateway::channel::OutboundMessage;
 
 use crate::gateway::interfaces::wechat::types::{
     OutboundItem, OutboundMsg, SendMessagePayload, TextItemContent, ITEM_TEXT, MSG_STATE_FINISH,

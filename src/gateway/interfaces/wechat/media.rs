@@ -4,6 +4,7 @@
 
 use reqwest::Client;
 
+#[allow(dead_code)]
 const AES_BLOCK_SIZE: usize = 16;
 
 /// AES-128-ECB decryption with PKCS7 padding.

@@ -39,6 +39,7 @@ impl HealthStatus {
 }
 
 /// Channel with health monitoring capability
+#[allow(async_fn_in_trait)]
 pub trait HealthyChannel: Send + Sync {
     /// Check if channel is stale
     async fn is_stale(&self) -> bool;

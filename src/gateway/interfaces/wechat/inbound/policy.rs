@@ -2,7 +2,7 @@
 //!
 //! Enforces DM and group access policies based on configuration.
 
-use crate::gateway::interfaces::wechat::config::{GroupPolicy, WeChatConfig};
+use crate::gateway::interfaces::wechat::config::WeChatConfig;
 use crate::gateway::interfaces::wechat::types::Message;
 
 /// Check if a message should be accepted based on policy.

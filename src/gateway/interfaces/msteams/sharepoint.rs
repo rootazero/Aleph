@@ -1,7 +1,6 @@
 //! SharePoint File Upload Client
 
 use serde::Deserialize;
-use std::borrow::Cow;
 
 use crate::gateway::channel::ChannelError;
 use crate::sync_primitives::Arc;

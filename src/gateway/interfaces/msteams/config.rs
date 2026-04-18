@@ -133,6 +133,7 @@ fn default_webhook_path() -> String {
 }
 impl Default for MsTeamsConfig {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self {
             app_id: String::new(),
             app_password: String::new(),
@@ -154,7 +155,9 @@ impl MsTeamsConfig {
         if self.app_id.is_empty() {
             return Err("app_id is required".into());
         }
-        if self.app_password.is_empty() && self.federated_identity.is_none() {
+        #[allow(deprecated)]
+        let app_password_empty = self.app_password.is_empty();
+        if app_password_empty && self.federated_identity.is_none() {
             return Err("either app_password or federated_identity is required".into());
         }
         if let Some(ref fed) = self.federated_identity {
