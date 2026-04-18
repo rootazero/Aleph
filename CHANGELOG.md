@@ -7,49 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Playwright CLI runtime bootstrap: one-click install of fnm, Node LTS, @playwright/cli, Chromium, and skills from Panel → Settings → Browser → "Install All".
-- `BrowserBackend` trait reshaped to text-first (SnapshotOutput / ScreenshotOutput / String) for token-efficient LLM responses.
-- Gateway RPCs `browser.runtime_status`, `browser.install_runtime`, `browser.refresh_runtime` for UI-driven runtime management.
-- `BrowserInstallProgressEvent` streaming event for UI progress feedback.
-- Top-level Panel view "Runtimes" (sidebar entry) showing read-only runtime status for fnm, Node.js, uv, playwright-cli, and cargo placeholder.
-- Gateway RPCs `runtimes.list`, `runtimes.install`, `runtimes.refresh` for programmatic runtime management.
-- Windows install support via PowerShell (`winget install Schniz.fnm`, `irm astral.sh/uv/install.ps1 | iex`).
-- `cargo`/`rustup` placeholder spec entry (empty install array; reserves the name for future work).
-- `fnm alias <version> lts` post-install action (fixes the lts-alias bug from the prior playwright-cli migration).
+## [2026.04.18]
 
-### Changed
-- Managed browser automation now uses @playwright/cli instead of @playwright/mcp + chromiumoxide.
-- PDF generation (`pdf_generate` tool) migrated from chromiumoxide to `playwright-cli pdf`.
-- Browser configuration TOML key renamed from `[playwright_mcp]` to `[playwright_cli]` (serde alias kept for backward compat — old keys silently upgrade).
-- `ProfileConfig.headless` changed from `bool` to `Option<bool>` (None = follow global `playwright_cli.headless`).
-- `src/runtimes/` unified with `src/browser/bootstrap.rs` into one cross-OS runtime manager driven by a single `SPECS` table. Probe/install/LLM-hint now share one data source.
-- Runtime Status moved from Settings → Browser into a new top-level "Runtimes" Dashboard view (read-only informational).
-- Gateway event `BrowserInstallProgressEvent` renamed to `RuntimeInstallProgressEvent`; variant `GatewayEvent::BrowserInstallProgress` → `GatewayEvent::RuntimeInstallProgress`.
-- LLM runtime usage hints (injected into system prompt) now sourced from `SPECS[name].llm_hint` single field instead of a hardcoded match table.
-- Runtime install paths no longer use `~/.aleph/runtimes/` bespoke locations; defers to language-native tool defaults (`~/.local/share/fnm/`, `~/.local/bin/uv`, etc.).
+This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v2026.04.08.
 
-### Removed
-- `chromiumoxide` dependency.
-- `@playwright/mcp` integration (`PlaywrightMcpDriver`, `PlaywrightMcpBackend`, `PlaywrightMcpConfig`).
-- `AriaSnapshot` / `AriaElement` / `ConsoleMessage` / `TabInfo` / `ScreenshotResult` structured types (replaced by text-first types).
-- Legacy `builtin_tools/browser/` folder (dead code, no external consumers).
-- `src/browser/bootstrap.rs` (merged into `src/runtimes/`, ~430 lines).
-- `src/gateway/handlers/browser_runtime.rs` (replaced by `handlers/runtimes.rs`).
-- `interfaces/webchat/src/views/settings/browser_runtime.rs` (replaced by `views/runtimes.rs` Dashboard view).
-- `BrowserRuntimeApi`, `RuntimeStatusResponse`, `ComponentStatus` from `interfaces/webchat/src/api/browser.rs` (moved/renamed to `api/runtimes.rs`).
-- Gateway RPCs `browser.runtime_status`, `browser.install_runtime`, `browser.refresh_runtime` (replaced by `runtimes.*`).
-- Legacy `aleph_paths` probe fields from `src/runtimes/probe.rs`. Old `~/.aleph/runtimes/python/default/` / `~/.aleph/runtimes/uv/uv` bundled directories are no longer detected.
-- Hardcoded `get_usage_hints()` function in `src/runtimes/capability.rs`.
-- `ffmpeg` and `yt-dlp` capability entries (scope now focuses on language-native runtime managers; these may return as separate SPECS entries in the future).
+### Memory Layer — 8-Spec Evolution
+
+This is the headline refactor. The legacy `facts` table and the `MemoryStore` trait are gone. Notes are now the single source of truth, stored under `~/.aleph/memory/{raw,note}/{agent_id}/{category}/`. Six new dream stages, two new ingestion paths, and three new memory tools ship with it.
+
+#### Added
+- **Working Memory Assembler (Spec 1)** — HybridAssembler with concurrent candidate gathering, LLM rerank, deterministic skeleton fallback packer; MemoryEnvelope v1.0 with markdown/xml/json renderers; `assembly_logs` writer; UTF-8 safe truncation; integration tests across 6 paths.
+- **L0 Raw Memory Capture Hooks (Spec 1)** — RawMemory + RawMemoryStore trait, `raw_memories` SQLite table; G1 pre-compress, G2 delegation, G3-A session-disconnect hooks; `on_capture` filter at every insert site; SessionCompactor and TranscriptIndexer dual-write to raw_memories.
+- **MemoryReflector (Spec 2)** — LLM synthesis path with packet adapter, recall_signals per note, empty-packet short-circuit, builtin tool `memory_reflect`, MemoryProducerScheduler ticking the produce hook.
+- **Context Fencing & Memory Modes (Spec 3)** — `MemoryInjectionMode` enum + `MemoryConfig.injection_mode`; MemoryContextProvider emits fenced UnifiedMessage; `memory_*` retrieval tools gated on injection mode.
+- **Pluggable Memory Extensions (Spec 4)** — `MemoryExtension` trait + Registry with hybrid dispatch, `McpMemoryExtension` adapter, `[memory]` plugin manifest section, first-party `EnvelopeRelevanceFloorExtension` POC, on_retrieve invocation in MemoryContextProvider.
+- **Wiki Orientation Layer (Spec 5)** — `NoteOrientation` handle, `parse_domain_topic` VFS path utility, palace topology generated columns (domain/topic) on facts, wiki compilation with manual-page protection, `wiki_sync` module for wikilink↔graph sync, fact↔node bidirectional index.
+- **Compound Ingest (Spec 6)** — `CompoundIngestor` trait + `DefaultCompoundIngestor`, LLM-planned operations with source-aware suffix prompts, `CompoundApplyTx` transactional staging + rollback, `gather_related` Phase 1 retrieval with 1-hop expansion, `ingest_batch` with hash-conflict retry; CompressionService routed through CompoundIngestor.
+- **User Profile (Spec 7)** — `ProfileSynthesizer` trait + `FsProfileSynthesizer` with merge algorithm and bootstrap prompts, `ProfileStore` USER.md read/write with hash-guard, profile injection into prompt layer, triggered on SessionEnd in CompressionService, builtin tool `user_profile` (read + history).
+- **Query Filed-Back (Spec 8)** — `QueryFiler` trait + `DefaultQueryFiler` with two-tier gating (LLM gate + heuristic), fire-and-forget hook in `memory_reflect`, `query_filed` SQLite table, query category excluded from synthesis.
+- **Dream Daemon Evolution Upgrade** — Strategy-driven pipeline replaces hardcoded daily/weekly. New components: `DreamStrategy` enum with stage mapping, Signal Collector (4-source signal extraction), Strategy Selector (personality-adaptive), MutationGate (cycle/oscillation/waste detection), 4-tier Validation Layer, immutable EventLog audit trail, SkillDistill stage; integration tests included.
+- Six note-based dream stages: NoteSynthesis (weekly cross-note insight), NoteConsolidate (merge similar), NoteDecay (access-based archival), NoteDrift (contradiction/staleness), NoteLint (format + broken link repair, graph-based suggested links), DailyDigest, plus TunnelDiscoveryStage.
+- Builtin memory tools: `memory_explore` (RippleTask wrapper), `memory_timeline`, `memory_browse` (notes filesystem browser), `session_complete`.
+- Temporal validity — `valid_from`/`valid_to` on facts, schema columns, SearchFilter `as_of`/`include_historical`; DriftDetect closes validity windows on supersede instead of invalidating.
+- Cross-encoder reranking integrated into retrieval; `RerankConfig` field on FactRetrieval; tunnel-aware traversal in Ripple; progressive search scope narrowing module; multi-agent NoteFactRetrieval queries; `top_synthesized` and `touch_fact_updated_at` for layered retrieval; LLM-based conflict arbitration for fact dedup.
+
+#### Changed (refactor)
+- **Notes are the single source of truth.** All retrieval, reranking, dream stages, memory tools, compression, panel reads migrated to NoteStore.
+- Memory paths reorganized to `~/.aleph/memory/{raw,note}/{agent_id}/{category}/`; Canvas tab renamed to Memory in Panel.
+- `FactType` renamed to `NoteType`; "facts" terminology removed from codebase.
+- Compaction's `session_summary_source` uses RawMemoryStore; conflict detector uses NoteStore similarity with warn-log resolution.
+- Tool index coordinator stores tools as notes in `tool/` category; retrieval uses NoteStore vector search.
+- `recall_signals.fact_id` renamed to `note_path`.
+- LLM-produced Contradict ops replace deterministic ConflictDetector.
+
+#### Removed
+- `MemoryStore` trait + `facts.rs` backend; `facts` DDL + `memory_facts`/`facts_fts`/`facts_vec` tables.
+- `fact_retrieval`, `hybrid_retrieval`, `retrieval_trace` modules; legacy `MemoryContext` prompt-path; transitional migration scripts.
+- Cortex module (POE never built); VFS module entirely (L1Generator gone with it).
+- Cognitive modules — evolution, consolidation, reflection, promotion, decay; auxiliary modules — backup, cleanup, perf_monitor, lazy_decay, adaptive_retrieval, archival, noise_filter; `value_estimator`, `importance_weight` scoring stage.
+- `MemoryScope`/`MemoryTier` enums; `MemoryEventStore` trait; `GraphNode`/`GraphEdge`/`memory_entities` (notes replaced them); `l1_overview` field (NoteSynthesis covers it).
+
+### Agent Loop Evolution (Claude Code-inspired)
+
+A 14-task overhaul aligning Aleph's loop with Claude Code's preflight + recovery model.
+
+- `PreflightStage` trait + `PreflightPipeline` running microcompact → context_collapse → autocompact before each iteration.
+- `ToolExecutionContext` with cascade policy and progress reporting.
+- Multi-tier 413 recovery cascade and `TruncationRecovery` escalation loop.
+
+### Channels — Multi-Platform Expansion
+
+Seven new chat channels plus a structured Telegram v2.
+
+#### Added
+- **WeChat** — iLink Bot API integration with structured errors, dedup, and media support; markdown list/italic ordering bug fixed.
+- **QQ** — Channel implementation with stabilized delivery and handlers.
+- **Discord** — Full nested config hierarchy: `AccountResolver` (channel→account mapping), `ApprovalQueue` (exec command approval workflow), `DiscordAccountPool` (multi-bot-instance), `ChannelSettingsResolver` (per-channel override), security audit infrastructure, handlers module covering interactions, streaming, threads.
+- **Matrix** — Refactor to matrix-sdk 0.16, enhanced message operations.
+- **Signal** — `SignalMonitor` SSE-based message monitor with typed `SignalError`; polling code removed.
+- **LINE** — Messaging API client, channel config, event types, webhook server with HMAC verification.
+- **WhatsApp (native Rust)** — `WaRuntime` state machine + wa-rs client wrapper, Vault-backed auth storage, callback-based event loop with Pairing state, policy engine, outbound sender with media preprocessing; legacy native design docs marked superseded; whatsapp-rust Bot integration with WaRuntime.
+- **Feishu** — Channel architecture alignment design + plan landed.
+
+#### Telegram — Structured Upgrade
+- Multi-account support: `BotInstance`, hierarchical config v2 types, `AccountResolver`, `start()` refactor for multi-bot startup.
+- Reasoning lane, sticker pipeline, polls, error policy, status reactions; stream orchestrator with reasoning lane, status reactions, draft API support.
+- WebhookHandler implementation for webhook mode.
+- Config resolver with account-group-topic inheritance + unit tests.
+- Legacy V1 (flat `bot_token`) configs auto-upgrade to V2 at registration so existing users don't have to migrate manually — resolves the "Failed to create channel 'AlephzBot'" startup error.
+- `thread_id` wired into InboundMessage metadata; `AccessDecision` branches split.
+
+### Security — Runtime Security Orchestrator (Phase 1-2)
+
+- `RuntimeSecurityGuard` core types mounted in agent loop; inbound + outbound security pipelines.
+- `ContextIdHasher` for session identifier hashing in InboundContext prompts.
+- Platform-aware PII policies with `platform_name` propagation through PII filtering.
+- Audit log integration with tracing spans; structured media fallback placeholders unify media handling.
+- Phase 2 integration tests covering context hashing, placeholders, and platform PII; LLM context protection design docs.
+
+### Browser & Runtime
+
+- Migration: Playwright MCP → Playwright CLI for managed browser automation and PDF generation.
+- Runtime bootstrap — one-click install of fnm, Node LTS, @playwright/cli, Chromium, plus skills (Panel → Settings → Browser → "Install All").
+- Top-level Panel "Runtimes" view showing fnm, Node.js, uv, playwright-cli, cargo placeholder.
+- Gateway RPCs: `runtimes.list`, `runtimes.install`, `runtimes.refresh`, plus `runtime_status`/`install_runtime`/`refresh_runtime` and `RuntimeInstallProgressEvent`.
+- Cross-OS support — Windows via PowerShell (`winget install Schniz.fnm`, `irm astral.sh/uv/install.ps1 | iex`).
+- `BrowserBackend` reshaped to text-first (SnapshotOutput / ScreenshotOutput / String) for token-efficient LLM responses.
+- `chromiumoxide` and `@playwright/mcp` integrations removed; legacy `builtin_tools/browser/` deleted; `src/browser/bootstrap.rs` merged into unified `src/runtimes/` (~430 lines).
+- Runtime install paths now defer to language-native tool defaults (`~/.local/share/fnm/`, `~/.local/bin/uv`, etc.) instead of bespoke `~/.aleph/runtimes/`.
+- TOML `[playwright_mcp]` reads as `[playwright_cli]` via serde alias for backward compat.
+
+### Canvas / Knowledge Graph
+
+- Obsidian-style rendering: glow dots, title labels, continuous drift.
+- Click-to-center animation, hover neighbor highlighting, focus dimming.
+- Graph handlers query NoteStore directly (no separate GraphStore).
+- Gateway RPCs: `graph.query`, `graph.neighbors`, `graph.node_detail`, `graph.search`.
+- Canvas route renamed `/memory`; `PanelMode::Canvas` → `PanelMode::Memory`.
+
+### Providers / Vault
+
+- **Vault api_key runtime injection** — `handle_set_default` and startup `MultiProviderRegistry` now hydrate api_key from vault before `create_provider`. Resolves the "API key is required" error users hit on Telegram/Feishu chat paths after configuring providers via the panel.
+- **Plaintext config → vault auto-migration is now wired into startup** — `migrate_all_secrets_to_vault` (previously dead code) runs before reverse-hydration; any plaintext key written into config.toml (manual edit, LLM patch) is relocated to the vault and stripped from disk.
+- **Anthropic protocol hardening** — Filter empty/whitespace-only text blocks and replace empty-blocks fallback with single-space placeholder, so Anthropic-compatible backends (e.g. Kimi for Coding) don't reject historical empty-turn artifacts with HTTP 400 "must not be empty".
+- New preset `kimi-for-coding` (alias `kimi-coding`) for the Kimi for Coding Anthropic-compatible IDE/agent endpoint at `https://api.kimi.com/coding/v1`. Standard `moonshot`/`kimi` presets restored to `https://api.moonshot.ai/v1` + `kimi-k2-0905-preview` + `protocol=openai`.
+- `register_handler!` macro gains a 4-arg variant.
+
+### Session Store
+
+- `SessionStore` trait + file backend implementation with auto-migration from SQLite blob (Phases 1-3).
+- Phase 4 cleanup — deprecated legacy SQLite message types, added migration verification.
+- `metadata_json` string blob replaced with typed fields.
+- Session manager refactor with richer metadata and events.
+- `SessionKey` unified by removing legacy gateway/router enum.
+
+### Event Sourcing
+
+- Event sourcing wiring design + implementation.
+- Handler writes to NoteStore instead of facts table.
+- Server init wires event-sourced handler with migration; replay tolerates unknown event variants; PII-risky `event_json` snippet dropped from replay skip log.
+
+### Other
+
+- Gateway loads agent identity files into system prompt.
+- Gateway: `CancellationToken` with broadcast cancellation; channel registry migrated to broadcast sender.
+- Webchat: new-chat creates next epoch; epoch resolution corrected; refresh routes to same session.
+- Teams: simplified to string-based dynamic roles (Explorer/Critic hardcoding gone); broadcast/peek/lock; lifecycle and plan modules.
+- Browser: extended `browser_config` RPC with timeouts and persistent_sessions.
+- `sources/{agent_id}/` structure for raw data storage.
+
+### Fixed
+
+- Memory pipeline — 4 wiring gaps closed for full L0 capture + L1 compression on the WS gateway path.
+- Discord resolver and QQ delivery pre-existing test bugs corrected.
+- Wiki compilation no longer overwrites manually curated pages.
+- Notes — title sanitization prevents path traversal; canonical data dir used.
+- NoteIndexer writes sync to SQLite immediately.
+- `memory_search` session-local path restored via RawMemoryStore.
+- Canvas sizing and graph data loading; sidebar hidden in Canvas mode for full-width layout; dark background `#0a0a0f` applied to Canvas container.
+- Telegram cyclic import between config and config_v2 resolved; missing `max_retries` and coalescing fields added.
+- WhatsApp bridge adapted to whatsmeow post-0.2 API changes.
+- Compiler warnings resolved across the codebase.
 
 ### Migration Notes
-- TOML `[playwright_mcp]` sections silently read as `[playwright_cli]`; old `command` / `args` fields are discarded. No action required.
-- First-run: open Panel → Settings → Browser, click "Install All" to bootstrap fnm + Node + @playwright/cli + Chromium.
-- Windows users: fnm auto-install is not supported v1; install manually via `winget install Schniz.fnm` before clicking "Install All".
-- If you previously had Aleph install Python/uv to `~/.aleph/runtimes/`, those bundled installs are now orphans. Probe will not find them. To clean up: `rm -rf ~/.aleph/runtimes/python ~/.aleph/runtimes/uv`; then open Panel → Runtimes → Install to reinstall into standard user paths.
-- Runtime status UI moved: Panel sidebar → Runtimes (new top-level entry). No longer under Settings → Browser.
-- The `runtimes.install` RPC currently returns an accepted-only placeholder pending event_bus wiring in Gateway startup; Install button in Panel triggers install but streaming progress logs will arrive in a follow-up.
+- **Provider api_key**: any existing provider config with plaintext `api_key = "..."` in config.toml will be automatically migrated to the vault on first startup; the field is stripped from disk and re-injected at runtime. No action required.
+- **Memory layout**: legacy `facts` table is dropped on startup; data lives under `~/.aleph/memory/{raw,note}/`. Existing notes are preserved.
+- **Telegram**: V1 flat configs (top-level `bot_token`) auto-upgrade to V2 at channel registration. No action required.
+- **Browser**: `[playwright_mcp]` TOML sections silently read as `[playwright_cli]`; old `command`/`args` fields are discarded.
+- **Runtime status UI**: moved from Settings → Browser to top-level Panel "Runtimes" sidebar entry.
+- **Kimi/Moonshot users**: `moonshot` preset now points to `https://api.moonshot.ai/v1` (OpenAI-compatible). For the Anthropic-compatible IDE endpoint use the new `kimi-for-coding` preset instead.
 
 ## [2026.04.08]
 
