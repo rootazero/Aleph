@@ -242,50 +242,77 @@ impl CompressionService {
         //    and skip the legacy accumulation path.
         if self.compound_enabled {
             if let Some(ing) = self.compound_ingestor.clone() {
-                match ing.ingest_batch(workspace_id, raw_memories.clone()).await {
-                    Ok(_report) => {
-                        // Fire profile update for each SessionEnd raw memory —
-                        // fire-and-forget, never block the compression flow.
-                        if let Some(ps) = self.profile_synthesizer.clone() {
-                            use crate::memory::store::raw_memory::RawMemorySource;
-                            let session_end_raws: Vec<_> = raw_memories
-                                .iter()
-                                .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))
-                                .collect();
-                            if !session_end_raws.is_empty() {
-                                let agent = workspace_id.to_string();
-                                let digest: String = session_end_raws
-                                    .iter()
-                                    .map(|r| r.content.clone())
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                let reason = match &session_end_raws[0].source {
-                                    RawMemorySource::SessionEnd { reason } => {
-                                        format!("{reason:?}")
-                                    }
-                                    _ => "unknown".to_string(),
-                                };
-                                tokio::spawn(async move {
-                                    let signal = crate::memory::notes::profile::SessionSignal {
-                                        reason,
-                                        digest_text: digest,
-                                        recent_user_turns: vec![],
-                                        session_id: String::new(),
-                                    };
-                                    if let Err(e) = ps.update(&agent, signal).await {
-                                        tracing::warn!(
-                                            "profile update after session end failed: {e}"
-                                        );
-                                    }
-                                });
+                let ingest_outcome = ing.ingest_batch(workspace_id, raw_memories.clone()).await;
+
+                // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
+                // result: a malformed LLM plan must not block USER.md updates.
+                // Fire-and-forget, never block the compression flow.
+                if let Some(ps) = self.profile_synthesizer.clone() {
+                    use crate::memory::store::raw_memory::RawMemorySource;
+                    let session_end_raws: Vec<_> = raw_memories
+                        .iter()
+                        .filter(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }))
+                        .collect();
+                    if !session_end_raws.is_empty() {
+                        let agent = workspace_id.to_string();
+                        let digest: String = session_end_raws
+                            .iter()
+                            .map(|r| r.content.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let reason = match &session_end_raws[0].source {
+                            RawMemorySource::SessionEnd { reason } => format!("{reason:?}"),
+                            _ => "unknown".to_string(),
+                        };
+                        tracing::info!(
+                            agent_id = %agent,
+                            session_end_count = session_end_raws.len(),
+                            "ProfileSynthesizer: firing on SessionEnd raws"
+                        );
+                        tokio::spawn(async move {
+                            let signal = crate::memory::notes::profile::SessionSignal {
+                                reason,
+                                digest_text: digest,
+                                recent_user_turns: vec![],
+                                session_id: String::new(),
+                            };
+                            if let Err(e) = ps.update(&agent, signal).await {
+                                tracing::warn!(
+                                    "profile update after session end failed: {e}"
+                                );
+                            } else {
+                                tracing::info!(
+                                    agent_id = %agent,
+                                    "ProfileSynthesizer: USER.md update completed"
+                                );
                             }
-                        }
+                        });
+                    }
+                }
+
+                match ingest_outcome {
+                    Ok(_report) => {
                         // Fall through to mark_raw_as_processed below.
                     }
                     Err(e) => {
                         tracing::warn!("compound ingest failed: {e}");
-                        // Leave this batch unprocessed; retry next tick.
-                        return Ok(CompressionResult::empty());
+                        // SessionEnd batches are still marked processed even
+                        // when the compound plan failed — ProfileSynthesizer
+                        // (above) already consumed them. Other batches retry
+                        // next tick because the raws stay unprocessed.
+                        use crate::memory::store::raw_memory::RawMemorySource;
+                        let only_session_end = raw_memories
+                            .iter()
+                            .all(|r| matches!(&r.source, RawMemorySource::SessionEnd { .. }));
+                        if only_session_end {
+                            tracing::info!(
+                                "compound ingest failed on SessionEnd-only batch; \
+                                 marking processed (ProfileSynthesizer already fired)"
+                            );
+                            // fall through to mark_processed below
+                        } else {
+                            return Ok(CompressionResult::empty());
+                        }
                     }
                 }
             } else {

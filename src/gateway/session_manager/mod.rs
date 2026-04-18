@@ -3,7 +3,7 @@
 //! Manages sessions with SQLite persistence, automatic compaction,
 //! and lifecycle management.
 
-mod ops;
+pub(crate) mod ops;
 #[cfg(test)]
 mod tests;
 

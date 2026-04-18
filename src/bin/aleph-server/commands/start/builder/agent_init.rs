@@ -873,6 +873,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Spec 2 Task 8: construct Arc<MemoryReflector> and inject into memory_reflect tool.
         // Requires embedder (for retrieval) and a default provider (for LLM synthesis).
         // On failure we log a warning and continue — memory_reflect will return a clear error.
+        //
+        // The default_prov assignment used to live ~140 lines below this block,
+        // which left both the reflector and the query-filer wiring permanently
+        // disabled at startup. Capture it here so both paths can fire.
+        if default_prov.is_none() {
+            default_prov = Some(provider_registry.default_provider());
+        }
         if let (Some(emb), Some(prov)) = (embedder_out.clone(), default_prov.clone()) {
             use alephcore::memory::reflector::{
                 fs_reflector::RecallWriter, recall_signals::SignalRow, MemoryReflector,

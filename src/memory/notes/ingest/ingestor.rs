@@ -117,6 +117,16 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         if raws.is_empty() {
             return Ok(ApplyReport::default());
         }
+        // G2 fix: ensure the agent's orientation files (SCHEMA.md, index.md,
+        // log.md) exist before we touch any notes. Dynamically-created agents
+        // never get the startup-time bootstrap that the default agent gets.
+        // The bootstrap is idempotent and cheap (file existence check + a
+        // single write of minimal markdown) so we can call it every batch.
+        if let Some(orient) = &self.orientation {
+            if let Err(e) = orient.bootstrap(agent_id).await {
+                warn!("orientation bootstrap for {agent_id} failed (continuing): {e}");
+            }
+        }
         let source = raws[0].source.clone();
         let related = gather_related(
             self.store.clone(),

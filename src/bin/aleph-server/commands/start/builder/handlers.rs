@@ -194,6 +194,7 @@ pub(in crate::commands::start) fn register_guest_handlers(
 pub(in crate::commands::start) fn register_session_handlers(
     server: &mut GatewayServer,
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    memory_db: &MemoryBackend,
     daemon: bool,
 ) {
     register_handler!(
@@ -214,12 +215,20 @@ pub(in crate::commands::start) fn register_session_handlers(
         session_handlers::handle_reset_db,
         session_store
     );
-    register_handler!(
-        server,
-        "sessions.delete",
-        session_handlers::handle_delete_db,
-        session_store
-    );
+    // sessions.delete is wired with the raw_memory writer so the SessionEnd
+    // capture path fires before the transcript is dropped (G4 fix).
+    {
+        let store = Arc::clone(session_store);
+        let writer: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
+            Arc::clone(memory_db) as _;
+        server.handlers_mut().register("sessions.delete", move |req| {
+            let store = Arc::clone(&store);
+            let writer = Arc::clone(&writer);
+            async move {
+                session_handlers::handle_delete_db_with_capture(req, store, writer).await
+            }
+        });
+    }
     register_handler!(
         server,
         "session.create",

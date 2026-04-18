@@ -762,7 +762,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         acp_manager.clone(),
     );
 
-    register_session_handlers(&mut server, &session_store, args.daemon);
+    register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
     register_memory_handlers(
         &mut server,
         &memory_db,

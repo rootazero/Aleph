@@ -26,7 +26,7 @@ use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{info, warn};
@@ -412,15 +412,31 @@ impl DreamDaemon {
     }
 
     async fn check_and_run(&self) -> Result<(), AlephError> {
+        // G3 fix: every skip case logs once at INFO so operators can observe
+        // daemon health from `journalctl`/log tails without DEBUG filtering.
         if !self.config.enabled {
+            info!(reason = "disabled", "DreamDaemon tick: skipped");
             return Ok(());
         }
 
         if !self.is_within_window() {
+            info!(
+                reason = "outside_window",
+                window_start = %self.config.window_start_local,
+                window_end = %self.config.window_end_local,
+                "DreamDaemon tick: skipped"
+            );
             return Ok(());
         }
 
-        if idle_seconds() < self.config.idle_threshold_seconds as i64 {
+        let idle = idle_seconds();
+        if idle < self.config.idle_threshold_seconds as i64 {
+            info!(
+                reason = "idle_below_threshold",
+                idle_seconds = idle,
+                threshold = self.config.idle_threshold_seconds,
+                "DreamDaemon tick: skipped"
+            );
             return Ok(());
         }
 
@@ -429,6 +445,7 @@ impl DreamDaemon {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
+            info!(reason = "already_running", "DreamDaemon tick: skipped");
             return Ok(());
         }
 
@@ -451,11 +468,22 @@ impl DreamDaemon {
                     if last_date.format("%Y-%m-%d").to_string() == run_date
                         && status.last_status.as_deref() == Some("success")
                     {
+                        info!(
+                            reason = "already_ran_today",
+                            last_run_at,
+                            "DreamDaemon tick: skipped"
+                        );
                         return Ok(());
                     }
                 }
             }
         }
+
+        info!(
+            reason = "preconditions_passed",
+            run_date = %run_date,
+            "DreamDaemon tick: starting cycle"
+        );
 
         self.database
             .set_dream_status(DreamStatus {
