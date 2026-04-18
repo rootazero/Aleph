@@ -157,7 +157,7 @@ pub trait NoteStore: Send + Sync {
 mod tests {
     use super::*;
     use crate::memory::store::SqliteMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use uuid::Uuid;
 
     const AGENT: &str = "default";

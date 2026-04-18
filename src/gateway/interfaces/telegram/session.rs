@@ -16,7 +16,7 @@ use crate::resilience::StateDatabase;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 /// Configuration for session behavior.

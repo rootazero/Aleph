@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::Serialize;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Connection role for presence classification.
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]

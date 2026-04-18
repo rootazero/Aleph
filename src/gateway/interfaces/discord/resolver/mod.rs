@@ -11,7 +11,7 @@ pub use input::ParsedInput;
 
 use super::api::{list_channels, list_guilds, ChannelSummary, GuildSummary};
 use serenity::http::Http;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use strategy::search_in_guilds;
 
 #[derive(Debug, Clone)]

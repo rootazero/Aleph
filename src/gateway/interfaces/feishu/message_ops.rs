@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::channel::{ChannelError, ChannelResult, ConversationId, MessageId};
 use crate::gateway::interfaces::feishu::api::FeishuApi;

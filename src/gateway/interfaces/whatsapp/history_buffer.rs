@@ -6,7 +6,7 @@ use crate::gateway::channel::{ConversationId, InboundMessage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferedMessage {

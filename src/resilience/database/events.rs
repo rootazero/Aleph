@@ -8,7 +8,7 @@ use crate::error::AlephError;
 use crate::resilience::AgentEvent;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use crate::sync_primitives::{AtomicBool, Ordering as AtomicOrdering};
 
 static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
 

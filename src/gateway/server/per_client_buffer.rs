@@ -4,8 +4,8 @@
 //! WebSocket connections. Uses tokio broadcast channel for sync recv compatibility
 //! with tokio::select!.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use tokio::sync::broadcast;
 
 /// Default per-client buffer capacity

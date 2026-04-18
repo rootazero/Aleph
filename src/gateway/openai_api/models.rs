@@ -4,7 +4,7 @@
 //! real model names from all configured providers.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;

@@ -6,7 +6,7 @@ use crate::error::AlephError;
 use crate::memory::extensions::registry::MemoryExtensionRegistry;
 use crate::memory::extensions::types::{CaptureCtx, CaptureDecision};
 use crate::memory::store::raw_memory::{RawMemory, RawMemoryStore};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub async fn insert_with_capture_filter(
     store: &Arc<dyn RawMemoryStore>,

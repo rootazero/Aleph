@@ -2,7 +2,7 @@ use crate::gateway::channel::{ChannelResult, InboundMessage};
 use crate::gateway::event_emitter::StreamEvent;
 use crate::gateway::interfaces::telegram::config_v2::StreamingOptions;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing;
 

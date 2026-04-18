@@ -2,7 +2,7 @@ use super::config_resolver::ResolvedConfig;
 use super::config_v2::TelegramAccountConfig;
 use super::offset::OffsetTracker;
 use crate::gateway::channel::{CallbackQuery, ChannelState};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use teloxide::Bot;
 use tokio::sync::{mpsc, oneshot};
 

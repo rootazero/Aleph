@@ -9,7 +9,7 @@
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
 
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -672,7 +672,7 @@ pub struct AgentLoop<P: LoopProvider> {
     provider: P,
     fallback_provider: Option<Box<dyn LoopProvider>>,
     fallback_label: Option<String>,
-    tool_registry: std::sync::RwLock<Arc<LoopToolRegistry>>,
+    tool_registry: crate::sync_primitives::RwLock<Arc<LoopToolRegistry>>,
     /// Optional source for runtime tool hot-refresh.
     tool_refresh: Option<Arc<dyn super::tool_refresh::ToolRefreshSource>>,
     prompt_builder: PromptBuilder,
@@ -765,7 +765,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             provider,
             fallback_provider: None,
             fallback_label: None,
-            tool_registry: std::sync::RwLock::new(Arc::new(tool_registry)),
+            tool_registry: crate::sync_primitives::RwLock::new(Arc::new(tool_registry)),
             tool_refresh: None,
             prompt_builder,
             safety_guard,

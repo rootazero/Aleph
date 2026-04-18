@@ -1,6 +1,6 @@
 //! Runtime RPC handlers: list + install + refresh.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Serialize;
 
@@ -217,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_install_failed_event_carries_stderr_field() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
         use tokio::sync::RwLock;
 
         let dir = tempfile::TempDir::new().unwrap();

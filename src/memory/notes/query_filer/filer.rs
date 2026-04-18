@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::config::types::memory::QueryFilerConfig;
 use crate::error::AlephError;

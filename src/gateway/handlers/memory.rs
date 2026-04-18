@@ -366,7 +366,7 @@ pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> Jso
 
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::memory::EmbeddingProvider;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::sync_primitives::{AtomicBool, Ordering};
 
 /// Shared state for the reembed background task.
 pub struct ReembedState {

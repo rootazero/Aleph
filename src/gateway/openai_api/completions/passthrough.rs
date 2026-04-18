@@ -1,6 +1,6 @@
 //! Passthrough path — direct LLM proxy via HttpProvider.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::body::Body;
 use axum::http::header;

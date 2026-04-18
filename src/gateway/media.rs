@@ -1,6 +1,6 @@
 //! Media attachment types for the `_media` tool output convention.
 
-use std::sync::{Arc, Mutex};
+use crate::sync_primitives::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 

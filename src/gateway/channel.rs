@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 
 use crate::gateway::cancellation::CancellationToken;

@@ -4,7 +4,7 @@ pub mod ws_client;
 pub use state::{AtomicRuntimeState, RuntimeState};
 pub use ws_client::{run_ws_loop, WsLoopContext};
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::watch;
 

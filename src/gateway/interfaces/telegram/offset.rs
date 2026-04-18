@@ -5,8 +5,8 @@
 //! rather than dropping or re-processing messages.
 
 use crate::resilience::StateDatabase;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicI64, Ordering};
 
 /// Tracks the Telegram getUpdates offset with DB persistence.
 ///

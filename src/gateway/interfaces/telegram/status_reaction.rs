@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use teloxide::payloads::SetMessageReactionSetters;
 use teloxide::prelude::Requester;

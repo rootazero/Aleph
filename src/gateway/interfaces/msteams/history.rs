@@ -1,6 +1,6 @@
 //! Message History Fetcher
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::channel::ChannelError;
 use crate::gateway::interfaces::msteams::graph::{GraphClient, GraphMessage};

@@ -8,7 +8,8 @@
 //! into the next assistant turn.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+
+use crate::sync_primitives::Mutex;
 
 use super::constraint_injector::{Constraint, ConstraintCategory, ConstraintSource};
 
@@ -130,18 +131,28 @@ fn truncate_preview(content: &str, max_chars: usize) -> String {
         return content.to_string();
     }
 
+    // Find the byte position of the character at max_chars
     let byte_limit = content
         .char_indices()
         .nth(max_chars)
         .map(|(i, _)| i)
         .unwrap_or(content.len());
 
+    // Find the last newline before byte_limit, staying on character boundaries
     let cut = content[..byte_limit]
-        .rfind('\n')
-        .map(|pos| pos + 1)
+        .char_indices()
+        .last()
+        .map(|(i, c)| {
+            if c == '\n' && i + c.len_utf8() <= byte_limit {
+                i + c.len_utf8()
+            } else {
+                i
+            }
+        })
         .unwrap_or(byte_limit);
 
-    let truncated = content.get(..cut).unwrap_or(&content[..byte_limit]);
+    // Use get() for safe byte-index slicing that won't panic on invalid indices
+    let truncated = content.get(..cut).unwrap_or(content);
     format!("{}...[truncated]", truncated)
 }
 

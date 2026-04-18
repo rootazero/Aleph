@@ -4,8 +4,8 @@
 //! Clients can compare their last-seen version with the current version to skip
 //! redundant event processing.
 
+use crate::sync_primitives::{AtomicU64, Ordering};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Tracks monotonically increasing version numbers for distinct state domains.
 ///

@@ -6,7 +6,7 @@
 //! from pluggable [`ConstraintSource`] implementations and formats them
 //! into an XML block that can be prepended to the next assistant turn.
 
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 use super::types::{CompactionResult, PostCompactCleanup};
 
@@ -65,7 +65,7 @@ pub trait ConstraintSource: Send + Sync {
 /// hook and automatically fire after every compaction pass.
 pub struct ConstraintInjector {
     sources: Vec<Arc<dyn ConstraintSource>>,
-    last_injection: std::sync::Mutex<Option<String>>,
+    last_injection: Mutex<Option<String>>,
 }
 
 impl ConstraintInjector {
@@ -73,7 +73,7 @@ impl ConstraintInjector {
     pub fn new(sources: Vec<Arc<dyn ConstraintSource>>) -> Self {
         Self {
             sources,
-            last_injection: std::sync::Mutex::new(None),
+            last_injection: Mutex::new(None),
         }
     }
 

@@ -9,7 +9,7 @@ pub mod types;
 pub mod webhook;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{

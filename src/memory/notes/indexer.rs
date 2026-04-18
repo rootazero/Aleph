@@ -4,7 +4,7 @@
 //! `KnowledgeNote`s, and maintains the SQLite index via a `NoteStore` implementation.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use sha2::{Digest, Sha256};
 use tokio::fs;

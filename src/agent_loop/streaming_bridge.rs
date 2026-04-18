@@ -14,8 +14,9 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
+
+use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;

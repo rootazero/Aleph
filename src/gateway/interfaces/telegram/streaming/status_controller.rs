@@ -2,7 +2,7 @@ use crate::gateway::channel::ChannelResult;
 use crate::gateway::event_emitter::StreamEvent;
 use crate::gateway::interfaces::telegram::config_v2::StatusReactionConfig;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 
 /// Manages status reactions on the inbound message based on stream events.

@@ -1,8 +1,8 @@
 //! Request state tracking for the gateway JSON-RPC handler pipeline.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{AtomicU64, Ordering};
+use crate::sync_primitives::{Arc, RwLock};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};

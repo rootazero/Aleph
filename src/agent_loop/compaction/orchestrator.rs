@@ -1,7 +1,7 @@
 //! Compaction orchestrator — evaluates pressure, dispatches strategies in
 //! priority order, and runs the post-compaction cleanup chain.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tracing::{error, info, warn};
 
@@ -18,7 +18,7 @@ pub struct OrchestratorBuilder {
     strategies: Vec<Arc<dyn CompactionStrategy>>,
     cleanups: Vec<Arc<dyn PostCompactCleanup>>,
     cache_monitor:
-        Option<std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
+        Option<crate::sync_primitives::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
 }
 
 impl OrchestratorBuilder {
@@ -37,7 +37,7 @@ impl OrchestratorBuilder {
     /// Attach a cache monitor that is notified after each compaction.
     pub fn cache_monitor(
         mut self,
-        monitor: std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>,
+        monitor: crate::sync_primitives::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>,
     ) -> Self {
         self.cache_monitor = Some(monitor);
         self
@@ -63,7 +63,7 @@ pub struct CompactionOrchestrator {
     strategies: Vec<Arc<dyn CompactionStrategy>>,
     cleanups: Vec<Arc<dyn PostCompactCleanup>>,
     cache_monitor:
-        Option<std::sync::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
+        Option<crate::sync_primitives::Arc<crate::thinker::prompt_builder::cache_monitor::CacheMonitor>>,
 }
 
 impl CompactionOrchestrator {

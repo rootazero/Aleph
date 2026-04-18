@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::sync::Mutex as StdMutex;
 
 use futures_util::StreamExt;
