@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Session Service foundation:** `src/session/` introduces `SessionService` + `InProcessActorSessionService` — an append-only event log per session, one tokio actor per session, SQLite-backed via a new `session_events` table (`migrate_add_session_events`), crash-recoverable through `wake(session_id)`. Public surface: `attach` / `emit_event` / `get_events` / `subscribe` / `wake` / `detach`. Event schema lives in `src/session/events.rs` (`SessionEvent`, `#[non_exhaustive]`). Read-side helper `project_messages` in `src/session/projection.rs` provides a classic message-history view over raw events. Phase 1 of the managed-agents refactor ([roadmap](docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md)).
+- **Dual-write shim:** `src/session/shim.rs` mirrors every `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. The shim is removed in Phase 6 when Gateway `session.*` RPC migrates to `SessionService` directly.
+- **Crash-recovery integration test** (`tests/session_wake_recovery.rs`) exercising the `wake(session_id)` replay path.
+- **Docs:** `docs/reference/SESSION_SERVICE.md` reference documentation; ARCHITECTURE.md cross-link; GLOSSARY.md "Session" entry updated.
+
 ### Changed
 - **ACP:** renamed `AcpHarness` trait and type family (`HarnessMode`, `HarnessConfig`, `AcpHarnessEntry`, `GenericAcpHarness`, `CustomHarness`) to the `AcpAdapter` family, freeing "Harness" for its Anthropic managed-agents meaning (the Think→Act loop) in upcoming phases. Module paths renamed: `src/acp/harness.rs` → `adapter.rs`, `src/acp/harnesses/` → `adapters/`. Legacy `[acp.harnesses]` TOML key remains accepted via `#[serde(alias = "harnesses")]` — no user config changes required. Phase 0 of the managed-agents refactor ([roadmap](docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md)).
+- **SessionManager is now a compatibility layer** for Gateway `session.*` RPC (see module docstring in `src/gateway/session_manager/mod.rs`). No behavior change yet — Phase 6 removes it. `agent_loop` was already decoupled from `SessionManager` before this work began; no migration was required inside the loop. Phase 4 will port `agent_loop` onto `SessionService` directly.
 
-### Added
+### Added (pre-existing)
 - **Docs:** canonical glossary at `docs/reference/GLOSSARY.md` aligning Harness / Sandbox / Session / Tools / Orchestrator / AcpAdapter with Anthropic's managed-agents paradigm.
 
 ## [2026.04.18]
