@@ -250,6 +250,14 @@ impl SessionManager {
 
         self.emit_session_updated(&key_str);
 
+        // Phase 1 dual-write shim: mirror the SQLite write into the
+        // append-only session_events log. Errors are logged inside the
+        // helper and never propagate — the legacy messages table stays
+        // the source of truth until Phase 6.
+        if let Some(svc) = self.session_service.as_ref() {
+            crate::session::shim::mirror_message_by_role(svc, key, role, content).await;
+        }
+
         Ok(message_id)
     }
 
