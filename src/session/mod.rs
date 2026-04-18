@@ -13,6 +13,7 @@ pub mod state;
 pub mod store;
 pub mod actor;
 pub mod in_process;
+pub mod projection;
 pub mod shim;
 
 pub use events::{
@@ -24,3 +25,4 @@ pub use state::SessionState;
 pub use store::SessionEventStore;
 pub use actor::{ActorCommand, SessionActor};
 pub use in_process::InProcessActorSessionService;
+pub use projection::{project_messages, MessageRole, ProjectedMessage};
