@@ -225,6 +225,48 @@ async fn initialize_session_store(
     }
 }
 
+/// Build a `SessionService` backed by the same SQLite file that the
+/// SessionManager uses.
+///
+/// Phase 1 dual-write wiring: opens a **dedicated** connection to the
+/// sessions DB, runs the `session_events` migration, and returns an
+/// `InProcessActorSessionService` around a `SqliteEventStore`. Uses a
+/// separate connection (not the one owned by `SessionManager`) because
+/// `SessionManager` uses `std::sync::Mutex<Connection>` while
+/// `SqliteEventStore` uses `tokio::sync::Mutex<Connection>` — reconciling
+/// them is out of scope for Task 9 and will be revisited in Phase 6.
+///
+/// Returns `None` on any failure (non-fatal — dual-write simply stays
+/// off for this run; the legacy `messages` table remains authoritative).
+fn build_sqlite_session_service(
+    db_path: &std::path::Path,
+) -> Option<Arc<dyn alephcore::session::service::SessionService>> {
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                path = ?db_path,
+                error = %e,
+                "Phase 1 dual-write: failed to open session_events connection; \
+                 mirroring disabled"
+            );
+            return None;
+        }
+    };
+    if let Err(e) = alephcore::session::store::migrate_add_session_events(&conn) {
+        tracing::warn!(
+            error = %e,
+            "Phase 1 dual-write: session_events migration failed; mirroring disabled"
+        );
+        return None;
+    }
+    let store: Arc<dyn alephcore::session::store::SessionEventStore> =
+        Arc::new(alephcore::session::store::SqliteEventStore::new(conn));
+    Some(Arc::new(
+        alephcore::session::in_process::InProcessActorSessionService::new(store),
+    ))
+}
+
 /// Initialize the ExtensionManager for the plugin system.
 async fn initialize_extension_manager(daemon: bool) {
     // Migrate old single-dir layout and update official skills
@@ -421,13 +463,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // disconnect hook captures session-end events (Task 8).
     // Only applicable for the SQLite backend; file backend skips this step.
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
-        Arc::new(
-            sm.with_raw_memory_writer(
+        // Phase 1 Task 9: build a SessionService sharing the sessions DB
+        // so every `SessionManager::add_message` mirrors into the new
+        // append-only `session_events` log. Uses a dedicated connection
+        // (rather than the one inside SessionManager) to avoid threading
+        // an async lock type into the legacy struct.
+        let session_service =
+            build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
+
+        let mut sm = sm
+            .with_raw_memory_writer(
                 memory_db.clone()
                     as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
             )
-            .with_event_bus(event_bus.clone()),
-        )
+            .with_event_bus(event_bus.clone());
+        if let Some(svc) = session_service {
+            sm = sm.with_session_service(svc);
+            if !args.daemon {
+                println!("  Session dual-write enabled (session_events log)");
+            }
+        }
+        Arc::new(sm)
     } else {
         session_store
     };

@@ -19,7 +19,7 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Session
 **Anthropic meaning:** Append-only log recording everything that happened during an agent's work. Persists independently outside the harness; accessed via `getEvents()` / `emitEvent()`.
 
-**Aleph today:** `SessionService` trait (post-Phase-1, `src/session/`), backed by an in-process tokio actor with SQLite persistence. Trait shape permits cross-process backends later.
+**Aleph today:** `SessionService` trait (`src/session/`), backed by an in-process tokio actor with SQLite persistence. Trait shape permits cross-process backends later. Gateway `session.*` RPC still routes through the legacy `SessionManager` during Phase 1 (migrated in Phase 6); every SessionManager append is mirrored into SessionService via a dual-write shim. See [SESSION_SERVICE.md](./SESSION_SERVICE.md).
 
 ### Tools
 **Anthropic meaning:** The "hands" — custom tools, MCP servers, execution environments — all reached through one `execute()` surface. The brain is agnostic to the backing.

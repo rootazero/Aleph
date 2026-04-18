@@ -1,7 +1,15 @@
-//! Session Manager
+//! Session Manager — Phase 1 compatibility layer for Gateway `session.*` RPC.
 //!
-//! Manages sessions with SQLite persistence, automatic compaction,
-//! and lifecycle management.
+//! Agent execution (`agent_loop`) no longer reads or writes SessionManager
+//! directly; it uses `crate::session::SessionService`. Every SessionManager
+//! append is mirrored into SessionService via `src/session/shim.rs` so
+//! `session_events` remains the authoritative log.
+//!
+//! Phase 6 migrates Gateway RPC to SessionService directly and removes this
+//! layer.
+//!
+//! Until then, this module continues to manage sessions with SQLite
+//! persistence, automatic compaction, and lifecycle management.
 
 pub(crate) mod ops;
 #[cfg(test)]
@@ -228,6 +236,13 @@ pub struct SessionManager {
     pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Optional event bus for publishing session lifecycle events.
     pub(super) event_bus: Option<Arc<super::event_bus::GatewayEventBus>>,
+    /// Phase 1 dual-write shim: mirror each `add_message` into the
+    /// append-only `session_events` log. Removed in Phase 6 when Gateway
+    /// RPC also migrates onto `SessionService`. `None` until wired in
+    /// startup, which keeps test fixtures and callers that don't care
+    /// about the new log unaffected.
+    pub(super) session_service:
+        Option<Arc<dyn crate::session::service::SessionService>>,
 }
 
 impl SessionManager {
@@ -254,6 +269,7 @@ impl SessionManager {
             conn: Arc::new(Mutex::new(conn)),
             raw_memory_writer: None,
             event_bus: None,
+            session_service: None,
         })
     }
 
@@ -269,6 +285,17 @@ impl SessionManager {
     /// Attach an event bus for publishing session lifecycle events.
     pub fn with_event_bus(mut self, bus: Arc<super::event_bus::GatewayEventBus>) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    /// Attach a `SessionService` to dual-write every `add_message` into the
+    /// append-only `session_events` log. Phase 1 migration scaffolding;
+    /// removed in Phase 6 when Gateway RPC also migrates.
+    pub fn with_session_service(
+        mut self,
+        svc: Arc<dyn crate::session::service::SessionService>,
+    ) -> Self {
+        self.session_service = Some(svc);
         self
     }
 

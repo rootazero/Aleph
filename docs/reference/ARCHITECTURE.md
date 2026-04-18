@@ -222,6 +222,24 @@ Thinker Decision (tool_use)
 | **routing** | `src/routing/` | Session key resolution |
 | **config** | `src/config/` | Configuration management |
 | **runtimes** | `src/runtimes/` | Capability ledger — probe, bootstrap, persist external tool status |
+| **session** | `src/session/` | Append-only session event log + in-process actor (see below) |
+
+---
+
+## Agent execution
+
+### Session Service
+
+Agent execution's authoritative session state lives in
+[`SessionService`](./SESSION_SERVICE.md) (`src/session/`). The Phase 1
+implementation `InProcessActorSessionService` spawns one tokio task per
+session and persists each event synchronously to the `session_events`
+table. Gateway `session.*` RPC methods continue to use the legacy
+`SessionManager`; every `SessionManager` append is mirrored into
+`SessionService` via a dual-write shim (`src/session/shim.rs`) until
+Phase 6 migrates Gateway RPC directly. `agent_loop` is already
+decoupled from `SessionManager` and will adopt `SessionService` in
+Phase 4.
 
 ---
 
