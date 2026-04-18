@@ -43,7 +43,17 @@ pub mod markdown_skill;
 // Schema strictification for strict-mode tool calling
 pub mod schema_strictify;
 
+// Phase 2 Tool Service façade — consumer-side trait + decorator chain scaffold.
+pub mod dispatch;
+pub mod handlers;
+pub mod middleware;
+pub mod registry;
+pub mod service;
+
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use server::{AlephToolServer, AlephToolServerHandle};
+pub use service::{
+    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+};
 pub use traits::{AlephTool, AlephToolDyn};
 pub use types::{ToolRepairInfo, ToolRepairType, ToolUpdateInfo};
