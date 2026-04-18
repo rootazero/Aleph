@@ -1,7 +1,8 @@
 //! SessionEventStore trait and SQLite schema for the session event log.
 //!
-//! Phase 1 Task 2 adds the backing table. The `SessionEventStore` trait itself
-//! and the `SqliteEventStore` concrete implementation are introduced in Task 4.
+//! Phase 1 Task 2 adds the backing table. Task 3 introduces the
+//! `SessionEventStore` trait defined below. The `SqliteEventStore` concrete
+//! implementation is introduced in Task 4.
 //!
 //! # Schema
 //!
@@ -14,8 +15,41 @@
 //!
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md` §7.
 
-use crate::error::AlephError;
+use async_trait::async_trait;
 use rusqlite::Connection;
+
+use crate::error::AlephError;
+use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::service::{SessionError, SessionId};
+
+#[async_trait]
+pub trait SessionEventStore: Send + Sync + 'static {
+    /// Append a single event at the given seq. Fails if (session_id, seq) already exists.
+    async fn append(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+        event: &SessionEvent,
+        created_at_ms: i64,
+    ) -> Result<(), SessionError>;
+
+    /// Load all events for a session, ordered by seq ascending.
+    async fn load_all_events(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<SessionEventRecord>, SessionError>;
+
+    /// Load events with seq in [from..=to]. Either bound may be None.
+    async fn load_events_range(
+        &self,
+        session_id: &SessionId,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<SessionEventRecord>, SessionError>;
+
+    /// Return the highest seq stored for this session, or 0 if none.
+    async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError>;
+}
 
 /// Create the `session_events` table and its indexes if missing.
 ///

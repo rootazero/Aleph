@@ -19,11 +19,11 @@ pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent,
     SessionEventRecord, Timestamp, ToolOutput, TurnId, TurnOutcome, TurnTrigger,
 };
-// The following re-exports are filled in by later Phase 1 tasks (2–12).
+pub use service::{SessionError, SessionHandle, SessionId, SessionService};
+pub use store::SessionEventStore;
+// The following re-exports are filled in by later Phase 1 tasks.
 // They are commented out here so the scaffold compiles; uncomment as each
 // module type is introduced.
-// pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 // pub use state::SessionState;
-// pub use store::SessionEventStore;
 // pub use actor::{ActorCommand, SessionActor};
 // pub use in_process::InProcessActorSessionService;
