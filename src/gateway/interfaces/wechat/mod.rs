@@ -61,7 +61,7 @@ impl WeChatChannel {
             typing_indicator: true,
             read_receipts: false,
             rich_text: false,
-            max_message_length: 2000,
+            max_message_length: 4000,
             max_attachment_size: 10 * 1024 * 1024,
             stream_protocol: crate::gateway::channel::StreamProtocol::EditBased,
         }
@@ -89,8 +89,11 @@ impl Channel for WeChatChannel {
 
         let runtime = Arc::new(runtime::WeChatRuntime::new(
             self.config.clone(),
-            auth::ContextTokenStore::new(""),
+            auth::ContextTokenStore::new(&self.config.data_dir),
         ));
+
+        let sender = self.channel_state.sender();
+        runtime.start(sender).await;
         self.runtime = Some(runtime.clone());
 
         self.channel_state
@@ -120,18 +123,33 @@ impl Channel for WeChatChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
 
-        let payload = outbound::mapper::build_send_payload(
-            &self.config.account_id,
-            message.conversation_id.as_str(),
-            &self.config.account_id,
-            &message.text,
-            None,
+        let context_token = runtime
+            .get_context_token(
+                &self.config.account_id,
+                message.conversation_id.as_str(),
+            )
+            .await;
+
+        let text = outbound::markdown::markdown_to_wechat(&message.text);
+        let chunks = crate::gateway::channel_chunking::WhatsAppChunker::chunk_by_length(
+            &text,
+            self.info.capabilities.max_message_length,
         );
 
-        runtime
-            .send_message(&self.config.token, payload)
-            .await
-            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        for chunk in &chunks {
+            let payload = outbound::mapper::build_send_payload(
+                &self.config.account_id,
+                message.conversation_id.as_str(),
+                &self.config.account_id,
+                chunk,
+                context_token.as_deref(),
+            );
+
+            runtime
+                .send_message(&self.config.token, payload)
+                .await
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+        }
 
         Ok(SendResult {
             message_id: MessageId::new(""),
@@ -139,7 +157,17 @@ impl Channel for WeChatChannel {
         })
     }
 
-    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
+    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
+
+        runtime
+            .send_typing(&self.config.token, conversation_id.as_str())
+            .await
+            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+
         Ok(())
     }
 
@@ -191,7 +219,7 @@ impl ChannelFactory for WeChatChannelFactory {
 
         config
             .validate()
-            .map_err(|e| ChannelError::ConfigError(e))?;
+            .map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(WeChatChannel::new("wechat", config)))
     }

@@ -10,8 +10,7 @@ pub fn should_accept_message(msg: &Message, config: &WeChatConfig) -> bool {
     let room_id = msg.room_id.as_deref().or(msg.chat_room_id.as_deref());
     let from_user_id = &msg.from_user_id;
 
-    if room_id.is_some() {
-        let group_id = room_id.unwrap();
+    if let Some(group_id) = room_id {
         if group_id.is_empty() {
             return config.is_user_allowed(from_user_id);
         }

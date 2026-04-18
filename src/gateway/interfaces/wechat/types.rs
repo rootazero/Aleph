@@ -9,7 +9,7 @@ pub const ILINK_BASE_URL: &str = "https://ilinkai.weixin.qq.com";
 pub const WEIXIN_CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 pub const ILINK_APP_ID: &str = "bot";
 pub const CHANNEL_VERSION: &str = "2.2.0";
-pub const ILINK_APP_CLIENT_VERSION: u32 = (2 << 16) | (2 << 8) | 0;
+pub const ILINK_APP_CLIENT_VERSION: u32 = (2 << 16) | (2 << 8);
 
 /// Message item types
 pub const ITEM_TEXT: u32 = 1;

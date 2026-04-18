@@ -125,6 +125,7 @@ pub fn build_merge_user_prompt(profile: &UserProfile, signal: &SessionSignal) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::notes::profile::types::ProfileSection;
     use std::collections::BTreeMap;
 
     fn test_profile() -> UserProfile {

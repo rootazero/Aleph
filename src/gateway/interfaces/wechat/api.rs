@@ -8,6 +8,39 @@ use std::collections::HashMap;
 
 use super::types::*;
 
+const SESSION_EXPIRED_CODE: i32 = -14;
+
+/// Structured error type for iLink API operations.
+#[derive(Debug, thiserror::Error)]
+pub enum WeChatApiError {
+    /// HTTP request failed.
+    #[error("HTTP request failed: {0}")]
+    Http(#[from] reqwest::Error),
+
+    /// JSON serialization/deserialization failed.
+    #[error("JSON parse failed: {0}")]
+    Parse(#[from] serde_json::Error),
+
+    /// API returned a non-zero status code.
+    #[error("API returned error: ret={ret}, errcode={errcode:?}, errmsg={errmsg:?}")]
+    Api {
+        ret: i32,
+        errcode: Option<i32>,
+        errmsg: Option<String>,
+    },
+
+    /// Session expired (errcode -14).
+    #[error("Session expired (errcode -14)")]
+    SessionExpired,
+
+    /// Invalid or unexpected response.
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+}
+
+/// Result type alias for iLink API operations.
+pub type ApiResult<T> = Result<T, WeChatApiError>;
+
 fn random_wechat_uin() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let value = SystemTime::now()
@@ -97,7 +130,7 @@ impl ILinkApi {
         token: &str,
         sync_buf: &str,
         timeout_ms: u64,
-    ) -> Result<GetUpdatesResponse, String> {
+    ) -> ApiResult<GetUpdatesResponse> {
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_GET_UPDATES);
         let payload = serde_json::json!({
             "get_updates_buf": sync_buf,
@@ -109,18 +142,32 @@ impl ILinkApi {
         let client = Client::builder()
             .timeout(std::time::Duration::from_millis(timeout_ms))
             .build()
-            .map_err(|e| format!("Client error: {}", e))?;
+            .map_err(WeChatApiError::Http)?;
 
-        client
+        let resp = client
             .post(&url)
             .headers(headers)
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .json::<GetUpdatesResponse>()
             .await
-            .map_err(|e| format!("Parse error: {}", e))
+            .map_err(WeChatApiError::Http)?;
+
+        if resp.ret == SESSION_EXPIRED_CODE {
+            return Err(WeChatApiError::SessionExpired);
+        }
+
+        if resp.ret != 0 {
+            return Err(WeChatApiError::Api {
+                ret: resp.ret,
+                errcode: resp.errcode,
+                errmsg: resp.errmsg.clone(),
+            });
+        }
+
+        Ok(resp)
     }
 
     /// Send a message.
@@ -128,14 +175,13 @@ impl ILinkApi {
         &self,
         token: &str,
         payload: SendMessagePayload,
-    ) -> Result<(), String> {
+    ) -> ApiResult<()> {
         let url = format!(
             "{}/{}",
             self.base_url.trim_end_matches('/'),
             EP_SEND_MESSAGE
         );
-        let body =
-            serde_json::to_string(&payload).map_err(|e| format!("Serialize error: {}", e))?;
+        let body = serde_json::to_string(&payload).map_err(WeChatApiError::Parse)?;
         let headers = build_headers(Some(token), &body);
 
         self.http
@@ -144,18 +190,17 @@ impl ILinkApi {
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .error_for_status()
-            .map_err(|e| format!("API error: {}", e))?;
+            .map_err(WeChatApiError::Http)?;
 
         Ok(())
     }
 
     /// Send typing indicator.
-    pub async fn send_typing(&self, token: &str, payload: SendTypingPayload) -> Result<(), String> {
+    pub async fn send_typing(&self, token: &str, payload: SendTypingPayload) -> ApiResult<()> {
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_SEND_TYPING);
-        let body =
-            serde_json::to_string(&payload).map_err(|e| format!("Serialize error: {}", e))?;
+        let body = serde_json::to_string(&payload).map_err(WeChatApiError::Parse)?;
         let headers = build_headers(Some(token), &body);
 
         self.http
@@ -164,9 +209,9 @@ impl ILinkApi {
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .error_for_status()
-            .map_err(|e| format!("API error: {}", e))?;
+            .map_err(WeChatApiError::Http)?;
 
         Ok(())
     }
@@ -177,7 +222,7 @@ impl ILinkApi {
         token: &str,
         user_id: &str,
         context_token: Option<&str>,
-    ) -> Result<ConfigResponse, String> {
+    ) -> ApiResult<ConfigResponse> {
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), EP_GET_CONFIG);
         let mut payload = serde_json::json!({
             "ilink_user_id": user_id,
@@ -195,14 +240,14 @@ impl ILinkApi {
             .body(body)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .json::<ConfigResponse>()
             .await
-            .map_err(|e| format!("Parse error: {}", e))
+            .map_err(WeChatApiError::Http)
     }
 
     /// Get QR code for login.
-    pub async fn get_bot_qr(&self, bot_type: &str) -> Result<QrCodeResponse, String> {
+    pub async fn get_bot_qr(&self, bot_type: &str) -> ApiResult<QrCodeResponse> {
         use reqwest::header::HeaderName;
 
         let url = format!(
@@ -226,14 +271,14 @@ impl ILinkApi {
             .headers(headers)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .json::<QrCodeResponse>()
             .await
-            .map_err(|e| format!("Parse error: {}", e))
+            .map_err(WeChatApiError::Http)
     }
 
     /// Get QR code status.
-    pub async fn get_qr_status(&self, qrcode: &str) -> Result<QrStatusResponse, String> {
+    pub async fn get_qr_status(&self, qrcode: &str) -> ApiResult<QrStatusResponse> {
         use reqwest::header::HeaderName;
 
         let url = format!(
@@ -257,10 +302,10 @@ impl ILinkApi {
             .headers(headers)
             .send()
             .await
-            .map_err(|e| format!("HTTP error: {}", e))?
+            .map_err(WeChatApiError::Http)?
             .json::<QrStatusResponse>()
             .await
-            .map_err(|e| format!("Parse error: {}", e))
+            .map_err(WeChatApiError::Http)
     }
 }
 

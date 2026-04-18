@@ -76,6 +76,10 @@ pub struct WeChatConfig {
     /// Number of retries for failed chunk sends.
     #[serde(default = "default_chunk_retries")]
     pub send_chunk_retries: u32,
+
+    /// Data directory for persistent storage.
+    #[serde(default = "default_data_dir")]
+    pub data_dir: String,
 }
 
 fn default_base_url() -> String {
@@ -94,6 +98,14 @@ fn default_chunk_retries() -> u32 {
     2
 }
 
+fn default_data_dir() -> String {
+    std::env::var("ALEPH_DATA_DIR").unwrap_or_else(|_| {
+        dirs::home_dir()
+            .map(|p| p.join(".aleph").to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string())
+    })
+}
+
 impl Default for WeChatConfig {
     fn default() -> Self {
         Self {
@@ -108,6 +120,7 @@ impl Default for WeChatConfig {
             split_multiline_messages: false,
             send_chunk_delay_seconds: default_chunk_delay(),
             send_chunk_retries: default_chunk_retries(),
+            data_dir: default_data_dir(),
         }
     }
 }
