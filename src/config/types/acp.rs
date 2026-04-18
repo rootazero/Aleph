@@ -26,7 +26,8 @@ pub struct AcpConfig {
     /// Preset harnesses are always present; user entries are merged on top.
     #[serde(
         default = "default_adapters",
-        deserialize_with = "deserialize_harnesses_with_presets"
+        alias = "harnesses",
+        deserialize_with = "deserialize_adapters_with_presets"
     )]
     pub adapters: HashMap<String, AcpAdapterEntry>,
 }
@@ -36,7 +37,7 @@ fn default_adapters() -> HashMap<String, AcpAdapterEntry> {
 }
 
 /// Deserialize harnesses and merge with presets (presets fill missing entries).
-fn deserialize_harnesses_with_presets<'de, D>(
+fn deserialize_adapters_with_presets<'de, D>(
     deserializer: D,
 ) -> std::result::Result<HashMap<String, AcpAdapterEntry>, D::Error>
 where
@@ -519,6 +520,40 @@ mod tests {
         let json = r#"{"display_name":"Test","enabled":true}"#;
         let entry: AcpAdapterEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.trust_level, TrustLevel::Confirm);
+    }
+
+    #[test]
+    fn old_harnesses_toml_key_still_loads_as_adapters() {
+        // Back-compat: pre-Phase-0 configs used [acp.harnesses]; post-Phase-0
+        // the Rust field is `adapters` but we accept the old TOML key via
+        // #[serde(alias = "harnesses")].
+        let old_toml = r#"
+            enabled = true
+
+            [harnesses.claude-code]
+            display_name = "Claude Code"
+            executable = "claude"
+        "#;
+        let cfg: AcpConfig =
+            toml::from_str(old_toml).expect("old-key TOML must still parse via serde alias");
+        assert!(
+            cfg.adapters.contains_key("claude-code"),
+            "claude-code entry must deserialize from old harnesses key"
+        );
+        assert_eq!(cfg.adapters["claude-code"].display_name, "Claude Code");
+    }
+
+    #[test]
+    fn new_adapters_toml_key_loads() {
+        let new_toml = r#"
+            enabled = true
+
+            [adapters.claude-code]
+            display_name = "Claude Code"
+            executable = "claude"
+        "#;
+        let cfg: AcpConfig = toml::from_str(new_toml).expect("new-key TOML must parse");
+        assert!(cfg.adapters.contains_key("claude-code"));
     }
 
     #[test]

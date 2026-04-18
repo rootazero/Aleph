@@ -249,15 +249,15 @@ impl AcpAdapterManager {
         // Each is_available() can take up to 5s — holding the lock would block all writers.
         let snapshot: Vec<(String, Arc<dyn AcpAdapter>)> = {
             let adapters = self.adapters.read().await;
-            harnesses
+            adapters
                 .iter()
                 .map(|(id, h)| (id.clone(), Arc::clone(h)))
                 .collect()
         };
 
         let mut available = Vec::new();
-        for (id, harness) in snapshot {
-            if harness.is_available().await {
+        for (id, adapter) in snapshot {
+            if adapter.is_available().await {
                 available.push(id);
             }
         }
