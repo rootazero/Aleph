@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **ACP:** renamed `AcpHarness` trait and type family (`HarnessMode`, `HarnessConfig`, `AcpHarnessEntry`, `GenericAcpHarness`, `CustomHarness`) to the `AcpAdapter` family, freeing "Harness" for its Anthropic managed-agents meaning (the Think→Act loop) in upcoming phases. Module paths renamed: `src/acp/harness.rs` → `adapter.rs`, `src/acp/harnesses/` → `adapters/`. Legacy `[acp.harnesses]` TOML key remains accepted via `#[serde(alias = "harnesses")]` — no user config changes required. Phase 0 of the managed-agents refactor ([roadmap](docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md)).
+
+### Added
+- **Docs:** canonical glossary at `docs/reference/GLOSSARY.md` aligning Harness / Sandbox / Session / Tools / Orchestrator / AcpAdapter with Anthropic's managed-agents paradigm.
+
 ## [2026.04.18]
 
 This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v2026.04.08.

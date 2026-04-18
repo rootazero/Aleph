@@ -73,7 +73,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     memory_db: &alephcore::memory::store::MemoryBackend,
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
-    acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
+    acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
     cron_service: Option<alephcore::tasks::cron::SharedCronService>,
     heartbeat_service: Option<alephcore::tasks::heartbeat::SharedHeartbeatService>,
     daemon: bool,

@@ -455,7 +455,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     // ACP delegate tool — unified delegation to any external CLI agent.
-    // Requires AcpHarnessManager; execution returns clear error if harness unavailable.
+    // Requires AcpAdapterManager; execution returns clear error if harness unavailable.
     BuiltinToolDefinition {
         name: "acp_delegate",
         description: "Delegate a task to an external CLI agent via ACP. Use 'claude-code', 'codex', or 'gemini' as the harness parameter, or any custom harness registered via acp.create.",

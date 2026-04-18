@@ -4,7 +4,7 @@ use crate::sync_primitives::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::acp::manager::AcpHarnessManager;
+use crate::acp::manager::AcpAdapterManager;
 use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
 use crate::gateway::context::GatewayContext;
@@ -53,7 +53,7 @@ pub struct BuiltinToolConfig {
     /// Extension manager for plugin tool execution
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
     /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
-    pub acp_manager: Option<Arc<AcpHarnessManager>>,
+    pub acp_manager: Option<Arc<AcpAdapterManager>>,
     /// Cron service for scheduled task management
     pub cron_service: Option<crate::tasks::cron::SharedCronService>,
     /// Heartbeat service for monitoring task management

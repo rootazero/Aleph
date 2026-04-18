@@ -3,7 +3,7 @@
 //! Covers protocol serialization/deserialization, NDJSON format,
 //! text_content extraction, streaming_text, and manager configuration.
 
-use super::manager::AcpHarnessManager;
+use super::manager::AcpAdapterManager;
 use super::mock_server::mock::run_mock_inline;
 use super::protocol::{AcpError, AcpRequest, AcpResponse, AcpSessionState};
 
@@ -330,9 +330,9 @@ fn session_state_serde_all_variants() {
 
 #[tokio::test]
 async fn manager_default_has_all_preset_harnesses() {
-    let mgr = AcpHarnessManager::new();
+    let mgr = AcpAdapterManager::new();
     let ids = mgr.harness_ids().await;
-    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
     assert_eq!(ids.len(), preset_ids.len());
     for id in preset_ids {
         assert!(ids.contains(&id.to_string()), "missing preset: {}", id);
@@ -341,7 +341,7 @@ async fn manager_default_has_all_preset_harnesses() {
 
 #[tokio::test]
 async fn manager_has_harness_returns_false_for_unknown() {
-    let mgr = AcpHarnessManager::new();
+    let mgr = AcpAdapterManager::new();
     assert!(!mgr.has_harness("gpt-5").await);
     assert!(!mgr.has_harness("").await);
     assert!(!mgr.has_harness("Claude-Code").await); // case-sensitive
@@ -349,7 +349,7 @@ async fn manager_has_harness_returns_false_for_unknown() {
 
 #[tokio::test]
 async fn manager_display_names_correct() {
-    let mgr = AcpHarnessManager::new();
+    let mgr = AcpAdapterManager::new();
     assert_eq!(
         mgr.display_name("claude-code").await,
         Some("Claude Code".to_string())
@@ -361,17 +361,17 @@ async fn manager_display_names_correct() {
 
 #[tokio::test]
 async fn manager_harness_modes_correct() {
-    use super::harness::HarnessMode;
-    let mgr = AcpHarnessManager::new();
+    use super::adapter::AdapterMode;
+    let mgr = AcpAdapterManager::new();
     assert_eq!(
         mgr.harness_mode("gemini").await,
-        Some(HarnessMode::NativeAcp)
+        Some(AdapterMode::NativeAcp)
     );
     assert_eq!(
         mgr.harness_mode("claude-code").await,
-        Some(HarnessMode::Oneshot)
+        Some(AdapterMode::Oneshot)
     );
-    assert_eq!(mgr.harness_mode("codex").await, Some(HarnessMode::Oneshot));
+    assert_eq!(mgr.harness_mode("codex").await, Some(AdapterMode::Oneshot));
     assert_eq!(mgr.harness_mode("unknown").await, None);
 }
 
@@ -381,14 +381,14 @@ async fn manager_harness_modes_correct() {
 
 #[tokio::test]
 async fn manager_disable_single_harness() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
-        crate::config::types::acp::AcpHarnessEntry::all_presets()
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpAdapterEntry> =
+        crate::config::types::acp::AcpAdapterEntry::all_presets()
             .into_iter()
             .collect();
     entries.get_mut("codex").unwrap().enabled = false;
-    let mgr = AcpHarnessManager::from_entries(entries);
+    let mgr = AcpAdapterManager::from_entries(entries);
     assert!(!mgr.has_harness("codex").await);
-    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
     assert_eq!(mgr.harness_ids().await.len(), preset_ids.len() - 1);
     for id in preset_ids {
         if id == "codex" {
@@ -400,25 +400,25 @@ async fn manager_disable_single_harness() {
 
 #[tokio::test]
 async fn manager_disable_all_harnesses() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
-        crate::config::types::acp::AcpHarnessEntry::all_presets()
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpAdapterEntry> =
+        crate::config::types::acp::AcpAdapterEntry::all_presets()
             .into_iter()
             .collect();
-    for id in crate::config::types::acp::AcpHarnessEntry::preset_ids() {
+    for id in crate::config::types::acp::AcpAdapterEntry::preset_ids() {
         entries.get_mut(id).unwrap().enabled = false;
     }
-    let mgr = AcpHarnessManager::from_entries(entries);
+    let mgr = AcpAdapterManager::from_entries(entries);
     assert!(mgr.harness_ids().await.is_empty());
 }
 
 #[tokio::test]
 async fn manager_explicit_enable_is_noop() {
-    let entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
-        crate::config::types::acp::AcpHarnessEntry::all_presets()
+    let entries: std::collections::HashMap<String, crate::config::types::acp::AcpAdapterEntry> =
+        crate::config::types::acp::AcpAdapterEntry::all_presets()
             .into_iter()
             .collect();
-    let mgr = AcpHarnessManager::from_entries(entries);
-    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    let mgr = AcpAdapterManager::from_entries(entries);
+    let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
     assert_eq!(mgr.harness_ids().await.len(), preset_ids.len());
     for id in preset_ids {
         assert!(mgr.has_harness(id).await, "preset should be enabled: {}", id);
@@ -427,12 +427,12 @@ async fn manager_explicit_enable_is_noop() {
 
 #[tokio::test]
 async fn manager_custom_executable_path() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
-        crate::config::types::acp::AcpHarnessEntry::all_presets()
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpAdapterEntry> =
+        crate::config::types::acp::AcpAdapterEntry::all_presets()
             .into_iter()
             .collect();
     entries.get_mut("gemini").unwrap().executable = Some("/opt/bin/gemini-custom".to_string());
-    let mgr = AcpHarnessManager::from_entries(entries);
+    let mgr = AcpAdapterManager::from_entries(entries);
     assert!(mgr.has_harness("gemini").await);
     // Verify the override took effect via display_name (harness still registered)
     assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));
@@ -440,7 +440,7 @@ async fn manager_custom_executable_path() {
 
 #[tokio::test]
 async fn manager_harness_ids_sorted() {
-    let mgr = AcpHarnessManager::new();
+    let mgr = AcpAdapterManager::new();
     let ids = mgr.harness_ids().await;
     let mut sorted = ids.clone();
     sorted.sort();

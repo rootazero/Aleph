@@ -2,6 +2,8 @@
 
 > Complete system architecture overview
 
+> **Terminology:** See [GLOSSARY.md](./GLOSSARY.md) for canonical Anthropic-aligned definitions of Harness, Sandbox, Session, Tools, Orchestrator, and AcpAdapter.
+
 ---
 
 ## System Diagram

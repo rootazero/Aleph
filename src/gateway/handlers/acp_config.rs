@@ -16,8 +16,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::acp::manager::AcpHarnessManager;
-use crate::config::types::acp::AcpHarnessEntry;
+use crate::acp::manager::AcpAdapterManager;
+use crate::config::types::acp::AcpAdapterEntry;
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -29,7 +29,7 @@ use tokio::sync::RwLock;
 // =============================================================================
 
 #[derive(Debug, Serialize)]
-struct AcpHarnessInfo {
+struct AcpAdapterInfo {
     id: String,
     display_name: String,
     executable: String,
@@ -37,7 +37,7 @@ struct AcpHarnessInfo {
     enabled: bool,
     available: bool,
     preset: Option<String>,
-    config: AcpHarnessEntry,
+    config: AcpAdapterEntry,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,13 +59,13 @@ struct IdParam {
 #[derive(Debug, Deserialize)]
 struct CreateParams {
     id: String,
-    config: AcpHarnessEntry,
+    config: AcpAdapterEntry,
 }
 
 #[derive(Debug, Deserialize)]
 struct UpdateParams {
     id: String,
-    config: AcpHarnessEntry,
+    config: AcpAdapterEntry,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,13 +78,13 @@ struct SetEnabledParams {
 // Helpers
 // =============================================================================
 
-/// Build an AcpHarnessInfo from the manager state for a single harness.
+/// Build an AcpAdapterInfo from the manager state for a single harness.
 async fn build_harness_info(
     id: &str,
-    entry: &AcpHarnessEntry,
+    entry: &AcpAdapterEntry,
     available_ids: &[String],
-    manager: &AcpHarnessManager,
-) -> AcpHarnessInfo {
+    manager: &AcpAdapterManager,
+) -> AcpAdapterInfo {
     let display_name = manager
         .display_name(id)
         .await
@@ -95,14 +95,14 @@ async fn build_harness_info(
         .await
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| {
-            crate::acp::harness::HarnessMode::from_serde(&entry.default_mode)
+            crate::acp::adapter::AdapterMode::from_serde(&entry.default_mode)
                 .as_str()
                 .to_string()
         });
 
     let executable = entry.executable.clone().unwrap_or_default();
 
-    AcpHarnessInfo {
+    AcpAdapterInfo {
         id: id.to_string(),
         display_name,
         executable,
@@ -149,20 +149,20 @@ fn broadcast_acp_changed(event_bus: &GatewayEventBus, action: &str) {
 /// Availability checks run sequentially (fine for 3-5 harnesses).
 pub async fn handle_list(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     tracing::debug!("acp.list: loading harness list");
     // Collect all configs: presets merged with user overrides
-    let all_presets: std::collections::HashMap<String, AcpHarnessEntry> =
-        AcpHarnessEntry::all_presets().into_iter().collect();
+    let all_presets: std::collections::HashMap<String, AcpAdapterEntry> =
+        AcpAdapterEntry::all_presets().into_iter().collect();
 
     let cfg = config.read().await;
-    let user_harnesses = &cfg.acp.harnesses;
+    let user_adapters = &cfg.acp.adapters;
 
     // Build merged map: presets first, then user overrides, then custom entries
-    let mut merged: std::collections::HashMap<String, AcpHarnessEntry> = all_presets;
-    for (id, entry) in user_harnesses {
+    let mut merged: std::collections::HashMap<String, AcpAdapterEntry> = all_presets;
+    for (id, entry) in user_adapters {
         merged.insert(id.clone(), entry.clone());
     }
     drop(cfg);
@@ -191,7 +191,7 @@ pub async fn handle_list(
 /// Handle acp.get — get a single harness by ID.
 pub async fn handle_get(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
 ) -> JsonRpcResponse {
     let params: IdParam = match super::parse_params(&request) {
@@ -204,12 +204,12 @@ pub async fn handle_get(
         e
     } else {
         let cfg = config.read().await;
-        if let Some(e) = cfg.acp.harnesses.get(&params.id) {
+        if let Some(e) = cfg.acp.adapters.get(&params.id) {
             e.clone()
         } else {
             // Check presets
-            let presets: std::collections::HashMap<String, AcpHarnessEntry> =
-                AcpHarnessEntry::all_presets().into_iter().collect();
+            let presets: std::collections::HashMap<String, AcpAdapterEntry> =
+                AcpAdapterEntry::all_presets().into_iter().collect();
             match presets.get(&params.id) {
                 Some(e) => e.clone(),
                 None => {
@@ -240,7 +240,7 @@ pub async fn handle_get(
 /// Handle acp.create — register a new custom harness.
 pub async fn handle_create(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
@@ -259,7 +259,7 @@ pub async fn handle_create(
     }
 
     // Reject if it's a preset ID
-    if AcpHarnessEntry::is_preset_id(&params.id) {
+    if AcpAdapterEntry::is_preset_id(&params.id) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
@@ -283,7 +283,7 @@ pub async fn handle_create(
     {
         let mut cfg = config.write().await;
         cfg.acp
-            .harnesses
+            .adapters
             .insert(params.id.clone(), params.config.clone());
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
@@ -313,7 +313,7 @@ pub async fn handle_create(
 /// Handle acp.update — update an existing harness configuration.
 pub async fn handle_update(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
@@ -340,7 +340,7 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
         cfg.acp
-            .harnesses
+            .adapters
             .insert(params.id.clone(), params.config.clone());
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
@@ -372,7 +372,7 @@ pub async fn handle_update(
 /// Preset harnesses cannot be deleted — disable them via acp.set_enabled instead.
 pub async fn handle_delete(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
@@ -381,7 +381,7 @@ pub async fn handle_delete(
         Err(e) => return e,
     };
 
-    if AcpHarnessEntry::is_preset_id(&params.id) {
+    if AcpAdapterEntry::is_preset_id(&params.id) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
@@ -404,7 +404,7 @@ pub async fn handle_delete(
     // Remove from config
     {
         let mut cfg = config.write().await;
-        cfg.acp.harnesses.remove(&params.id);
+        cfg.acp.adapters.remove(&params.id);
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -422,7 +422,7 @@ pub async fn handle_delete(
 /// Handle acp.test — test harness availability and report timing.
 pub async fn handle_test(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
 ) -> JsonRpcResponse {
     let params: IdParam = match super::parse_params(&request) {
         Ok(p) => p,
@@ -471,7 +471,7 @@ pub async fn handle_test(
 /// Handle acp.set_enabled — enable or disable a harness.
 pub async fn handle_set_enabled(
     request: JsonRpcRequest,
-    acp_manager: Arc<AcpHarnessManager>,
+    acp_manager: Arc<AcpAdapterManager>,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
@@ -485,14 +485,14 @@ pub async fn handle_set_enabled(
         e
     } else {
         // Check presets for disabled harnesses not in manager
-        let presets: std::collections::HashMap<String, AcpHarnessEntry> =
-            AcpHarnessEntry::all_presets().into_iter().collect();
+        let presets: std::collections::HashMap<String, AcpAdapterEntry> =
+            AcpAdapterEntry::all_presets().into_iter().collect();
         match presets.get(&params.id) {
             Some(e) => e.clone(),
             None => {
                 // Check user config
                 let cfg = config.read().await;
-                match cfg.acp.harnesses.get(&params.id) {
+                match cfg.acp.adapters.get(&params.id) {
                     Some(e) => e.clone(),
                     None => {
                         return JsonRpcResponse::error(
@@ -520,7 +520,7 @@ pub async fn handle_set_enabled(
     // Persist to config
     {
         let mut cfg = config.write().await;
-        cfg.acp.harnesses.insert(params.id.clone(), entry);
+        cfg.acp.adapters.insert(params.id.clone(), entry);
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -544,7 +544,7 @@ pub async fn handle_set_enabled(
 
 /// Handle acp.presets — return all built-in harness presets.
 pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
-    let presets: Vec<(String, AcpHarnessEntry)> = AcpHarnessEntry::all_presets();
+    let presets: Vec<(String, AcpAdapterEntry)> = AcpAdapterEntry::all_presets();
     let result: Vec<serde_json::Value> = presets
         .into_iter()
         .map(|(id, entry)| {
@@ -594,8 +594,8 @@ mod tests {
     use serial_test::serial;
     use std::collections::HashMap;
 
-    fn make_manager() -> Arc<AcpHarnessManager> {
-        Arc::new(AcpHarnessManager::new())
+    fn make_manager() -> Arc<AcpAdapterManager> {
+        Arc::new(AcpAdapterManager::new())
     }
 
     fn make_config() -> Arc<RwLock<Config>> {
@@ -650,7 +650,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_handle_create_custom() {
-        let manager = Arc::new(AcpHarnessManager::from_entries(HashMap::new()));
+        let manager = Arc::new(AcpAdapterManager::from_entries(HashMap::new()));
         let config = make_config();
         let event_bus = make_event_bus();
 
@@ -710,12 +710,12 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_handle_delete_custom() {
-        let manager = Arc::new(AcpHarnessManager::from_entries(HashMap::new()));
+        let manager = Arc::new(AcpAdapterManager::from_entries(HashMap::new()));
         let config = make_config();
         let event_bus = make_event_bus();
 
         // Register first
-        let entry = AcpHarnessEntry {
+        let entry = AcpAdapterEntry {
             display_name: "Temp".to_string(),
             executable: Some("temp".to_string()),
             enabled: true,
@@ -727,7 +727,7 @@ mod tests {
             .unwrap();
         {
             let mut cfg = config.write().await;
-            cfg.acp.harnesses.insert("temp-tool".to_string(), entry);
+            cfg.acp.adapters.insert("temp-tool".to_string(), entry);
         }
 
         let params = json!({ "id": "temp-tool" });
@@ -757,7 +757,7 @@ mod tests {
 
         let result = response.result.unwrap();
         let items = result.as_array().unwrap();
-        let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+        let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
         assert_eq!(items.len(), preset_ids.len());
         for id in preset_ids {
             assert!(
@@ -776,7 +776,7 @@ mod tests {
 
         let result = response.result.unwrap();
         let items = result.as_array().unwrap();
-        let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+        let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
         assert_eq!(items.len(), preset_ids.len());
         for id in preset_ids {
             let item = items

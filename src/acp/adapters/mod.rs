@@ -3,5 +3,5 @@
 mod custom;
 mod generic;
 
-pub use custom::CustomHarness;
-pub use generic::GenericAcpHarness;
+pub use custom::CustomAcpAdapter;
+pub use generic::GenericAcpAdapter;

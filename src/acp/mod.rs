@@ -1,12 +1,12 @@
 //! ACP (Agent Client Protocol) module
 //!
-//! Manages external CLI tools (Claude Code, Codex, Gemini) as ACP harnesses.
+//! Manages external CLI tools (Claude Code, Codex, Gemini) as ACP adapters.
 //! Supports Tool mode (LLM-dispatched) and Agent mode (direct conversation).
 
 use crate::sync_primitives::Arc;
 
-pub mod harness;
-pub mod harnesses;
+pub mod adapter;
+pub mod adapters;
 pub mod manager;
 #[cfg(test)]
 pub mod mock_server;

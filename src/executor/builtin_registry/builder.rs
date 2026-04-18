@@ -374,7 +374,7 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
-        // Add ACP delegate tools (if AcpHarnessManager is provided)
+        // Add ACP delegate tools (if AcpAdapterManager is provided)
         let (acp_delegate_tool, acp_switch_tool) = if let Some(ref manager) = config.acp_manager {
             use crate::builtin_tools::acp_tools::{AcpDelegateTool, AcpSwitchTool};
             use crate::tools::AlephTool;

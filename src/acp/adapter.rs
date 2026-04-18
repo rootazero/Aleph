@@ -1,57 +1,57 @@
-//! AcpHarness trait — abstraction over external CLI tools that speak ACP.
+//! AcpAdapter trait — abstraction over external CLI tools that speak ACP.
 
 use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::debug;
 
-use crate::acp::session::{AcpSession, HarnessConfig};
+use crate::acp::session::{AcpSession, AdapterConfig};
 use crate::error::Result;
 
 /// Execution mode for a harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HarnessMode {
+pub enum AdapterMode {
     /// Full ACP protocol over persistent stdio (e.g. Gemini CLI `--acp`).
     NativeAcp,
     /// Oneshot execution: spawn a new process per prompt (e.g. Claude `--print`, Codex `exec`).
     Oneshot,
 }
 
-impl HarnessMode {
+impl AdapterMode {
     /// Return a stable string representation (matches serde rename).
     pub fn as_str(&self) -> &'static str {
         match self {
-            HarnessMode::NativeAcp => "native_acp",
-            HarnessMode::Oneshot => "oneshot",
+            AdapterMode::NativeAcp => "native_acp",
+            AdapterMode::Oneshot => "oneshot",
         }
     }
 
     /// Convert to the serde-friendly config enum.
-    pub fn to_serde(&self) -> crate::config::types::acp::HarnessModeSerde {
+    pub fn to_serde(&self) -> crate::config::types::acp::AdapterModeSerde {
         match self {
-            HarnessMode::NativeAcp => crate::config::types::acp::HarnessModeSerde::NativeAcp,
-            HarnessMode::Oneshot => crate::config::types::acp::HarnessModeSerde::Oneshot,
+            AdapterMode::NativeAcp => crate::config::types::acp::AdapterModeSerde::NativeAcp,
+            AdapterMode::Oneshot => crate::config::types::acp::AdapterModeSerde::Oneshot,
         }
     }
 
     /// Convert from the serde-friendly config enum.
-    pub fn from_serde(s: &crate::config::types::acp::HarnessModeSerde) -> Self {
+    pub fn from_serde(s: &crate::config::types::acp::AdapterModeSerde) -> Self {
         match s {
-            crate::config::types::acp::HarnessModeSerde::NativeAcp => HarnessMode::NativeAcp,
-            crate::config::types::acp::HarnessModeSerde::Oneshot => HarnessMode::Oneshot,
+            crate::config::types::acp::AdapterModeSerde::NativeAcp => AdapterMode::NativeAcp,
+            crate::config::types::acp::AdapterModeSerde::Oneshot => AdapterMode::Oneshot,
         }
     }
 }
 
 /// Trait for ACP-capable CLI harnesses (Claude Code, Codex, Gemini, etc.).
 ///
-/// Each harness knows how to build a `HarnessConfig` for its CLI tool
+/// Each harness knows how to build a `AdapterConfig` for its CLI tool
 /// and can spawn an initialized `AcpSession`.
 ///
 /// Harnesses can operate in two modes:
 /// - `NativeAcp`: Full ACP protocol (initialize → session/new → session/prompt)
 /// - `Oneshot`: Spawn a new process per prompt, read stdout, done
 #[async_trait]
-pub trait AcpHarness: Send + Sync {
+pub trait AcpAdapter: Send + Sync {
     /// Unique identifier (e.g. "claude-code", "codex", "gemini").
     fn id(&self) -> &str;
 
@@ -59,15 +59,15 @@ pub trait AcpHarness: Send + Sync {
     fn display_name(&self) -> &str;
 
     /// Execution mode for this harness.
-    fn mode(&self) -> HarnessMode;
+    fn mode(&self) -> AdapterMode;
 
     /// Modes this harness supports. Used by Manager for runtime validation.
-    fn supported_modes(&self) -> Vec<HarnessMode> {
+    fn supported_modes(&self) -> Vec<AdapterMode> {
         vec![self.mode()]
     }
 
     /// Build the spawn configuration for this harness.
-    fn build_config(&self, cwd: Option<&str>) -> HarnessConfig;
+    fn build_config(&self, cwd: Option<&str>) -> AdapterConfig;
 
     /// Check whether the harness executable is available on the system.
     ///

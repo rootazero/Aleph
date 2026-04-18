@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::{notify_tool_result, notify_tool_start, notify_tool_streaming_chunk};
-use crate::acp::harness::HarnessMode;
-use crate::acp::manager::AcpHarnessManager;
+use crate::acp::adapter::AdapterMode;
+use crate::acp::manager::AcpAdapterManager;
 use crate::acp::AcpChunkCallback;
 use crate::config::types::acp::TrustLevel;
 use crate::error::{AlephError, Result};
@@ -48,11 +48,11 @@ pub struct AcpDelegateOutput {
 /// Unified ACP delegate tool — delegates tasks to any registered ACP harness.
 #[derive(Clone)]
 pub struct AcpDelegateTool {
-    manager: Arc<AcpHarnessManager>,
+    manager: Arc<AcpAdapterManager>,
 }
 
 impl AcpDelegateTool {
-    pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
+    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
         Self { manager }
     }
 }
@@ -167,11 +167,11 @@ pub struct AcpSwitchOutput {
 /// Switch to direct conversation with an external CLI agent, or switch back to Aleph.
 #[derive(Clone)]
 pub struct AcpSwitchTool {
-    manager: Arc<AcpHarnessManager>,
+    manager: Arc<AcpAdapterManager>,
 }
 
 impl AcpSwitchTool {
-    pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
+    pub fn new(manager: Arc<AcpAdapterManager>) -> Self {
         Self { manager }
     }
 }
@@ -208,7 +208,7 @@ impl AlephTool for AcpSwitchTool {
         }
 
         if self.manager.harness_mode(&args.target).await
-            == Some(crate::acp::harness::HarnessMode::NativeAcp)
+            == Some(crate::acp::adapter::AdapterMode::NativeAcp)
         {
             let cwd = resolve_cwd(None);
             self.manager.ensure_session(&args.target, &cwd).await?;
@@ -238,10 +238,10 @@ impl AlephTool for AcpSwitchTool {
 // Helpers
 // =============================================================================
 
-fn parse_mode(s: &str) -> Result<HarnessMode> {
+fn parse_mode(s: &str) -> Result<AdapterMode> {
     match s {
-        "oneshot" => Ok(HarnessMode::Oneshot),
-        "native_acp" => Ok(HarnessMode::NativeAcp),
+        "oneshot" => Ok(AdapterMode::Oneshot),
+        "native_acp" => Ok(AdapterMode::NativeAcp),
         _ => Err(AlephError::tool(format!(
             "Invalid mode '{}'. Use 'oneshot' or 'native_acp'.",
             s
@@ -322,10 +322,10 @@ mod tests {
 
     #[test]
     fn test_parse_mode_valid() {
-        assert!(matches!(parse_mode("oneshot"), Ok(HarnessMode::Oneshot)));
+        assert!(matches!(parse_mode("oneshot"), Ok(AdapterMode::Oneshot)));
         assert!(matches!(
             parse_mode("native_acp"),
-            Ok(HarnessMode::NativeAcp)
+            Ok(AdapterMode::NativeAcp)
         ));
     }
 
