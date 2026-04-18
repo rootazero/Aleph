@@ -1,11 +1,7 @@
 //! Concrete ACP harness adapters for supported CLI tools.
 
-mod claude_code;
-mod codex;
 mod custom;
-mod gemini;
+mod generic;
 
-pub use claude_code::ClaudeCodeHarness;
-pub use codex::CodexHarness;
 pub use custom::CustomHarness;
-pub use gemini::GeminiHarness;
+pub use generic::GenericAcpHarness;

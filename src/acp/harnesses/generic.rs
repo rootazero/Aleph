@@ -1,0 +1,313 @@
+//! Generic ACP harness — configuration-driven preset adapter.
+//!
+//! Covers ~90% of preset agents (Claude Code, Codex, Gemini, OpenCode, etc.)
+//! that differ only in executable name, CLI args, and output format.
+
+use async_trait::async_trait;
+use tokio::process::Command;
+use tracing::{debug, error};
+
+use crate::acp::harness::{AcpHarness, HarnessMode};
+use crate::acp::session::{AcpSession, HarnessConfig};
+use crate::config::types::acp::{AcpHarnessEntry, OutputFormatSerde};
+use crate::error::{AlephError, Result};
+
+/// How to parse stdout from a oneshot harness.
+#[derive(Debug, Clone)]
+pub enum OutputFormat {
+    /// Return stdout as-is (trimmed).
+    PlainText,
+    /// Parse stdout as JSON and extract a specific field.
+    /// Falls back to full JSON string if field missing, then raw text if not JSON.
+    JsonField { field: String },
+}
+
+impl OutputFormat {
+    /// Parse stdout according to the format specification.
+    fn parse(&self, stdout: &str) -> String {
+        let trimmed = stdout.trim();
+        match self {
+            OutputFormat::PlainText => trimmed.to_string(),
+            OutputFormat::JsonField { field } => {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(value) = json.get(field).and_then(|v| v.as_str()) {
+                        return value.to_string();
+                    }
+                    // Field not found or not a string — return full JSON
+                    return json.to_string();
+                }
+                // Not valid JSON — return raw text
+                trimmed.to_string()
+            }
+        }
+    }
+}
+
+impl From<&OutputFormatSerde> for OutputFormat {
+    fn from(fmt: &OutputFormatSerde) -> Self {
+        match fmt {
+            OutputFormatSerde::PlainText => OutputFormat::PlainText,
+            OutputFormatSerde::Json { field } => {
+                OutputFormat::JsonField { field: field.clone() }
+            }
+        }
+    }
+}
+
+/// Generic ACP harness built from configuration.
+///
+/// Covers agents that follow the standard pattern:
+/// - Executable name from config
+/// - Fixed args per mode (oneshot vs native_acp)
+/// - Standard output parsing (plain text or JSON field extraction)
+pub struct GenericAcpHarness {
+    id: String,
+    display_name: String,
+    executable: String,
+    default_mode: HarnessMode,
+    supported_modes: Vec<HarnessMode>,
+    oneshot_args: Vec<String>,
+    native_acp_args: Vec<String>,
+    output_format: OutputFormat,
+}
+
+impl GenericAcpHarness {
+    /// Create from an AcpHarnessEntry config.
+    pub fn from_entry(entry: &AcpHarnessEntry) -> Self {
+        let id = entry.preset.clone().unwrap_or_default();
+        let display_name = entry.display_name.clone();
+        let executable = entry.executable.clone().unwrap_or_else(|| id.clone());
+        let default_mode = HarnessMode::from_serde(&entry.default_mode);
+
+        // All generic presets support both modes
+        let supported_modes = vec![HarnessMode::Oneshot, HarnessMode::NativeAcp];
+
+        Self {
+            id,
+            display_name,
+            executable,
+            default_mode,
+            supported_modes,
+            oneshot_args: entry.args.clone(),
+            native_acp_args: vec!["--acp".to_string()],
+            output_format: OutputFormat::from(&entry.output_format),
+        }
+    }
+
+    /// Create from individual fields (for programmatic construction).
+    #[allow(dead_code)]
+    pub fn new(
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+        executable: impl Into<String>,
+        default_mode: HarnessMode,
+        oneshot_args: Vec<String>,
+        native_acp_args: Vec<String>,
+        output_format: OutputFormat,
+    ) -> Self {
+        let id = id.into();
+        let supported_modes = vec![HarnessMode::Oneshot, HarnessMode::NativeAcp];
+        Self {
+            id,
+            display_name: display_name.into(),
+            executable: executable.into(),
+            default_mode,
+            supported_modes,
+            oneshot_args,
+            native_acp_args,
+            output_format,
+        }
+    }
+
+    /// Resolve effective args based on mode.
+    fn resolve_args(&self, mode: HarnessMode) -> Vec<String> {
+        match mode {
+            HarnessMode::Oneshot => self.oneshot_args.clone(),
+            HarnessMode::NativeAcp => self.native_acp_args.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl AcpHarness for GenericAcpHarness {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    fn mode(&self) -> HarnessMode {
+        self.default_mode
+    }
+
+    fn supported_modes(&self) -> Vec<HarnessMode> {
+        self.supported_modes.clone()
+    }
+
+    fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
+        HarnessConfig {
+            executable: self.executable.clone(),
+            args: self.resolve_args(self.default_mode),
+            cwd: cwd.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    async fn execute_oneshot(&self,
+        prompt: &str,
+        cwd: &str,
+    ) -> Result<String> {
+        let mut cmd = Command::new(&self.executable);
+
+        // Append oneshot args, then the prompt
+        cmd.args(&self.oneshot_args)
+            .arg(prompt)
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        debug!(
+            harness = %self.id,
+            executable = %self.executable,
+            "Spawning oneshot generic harness process"
+        );
+
+        let output = cmd.output().await.map_err(|e| {
+            AlephError::tool(format!(
+                "Failed to execute harness '{}' (executable: '{}'): {}. \
+                 Is the executable installed and in PATH?",
+                self.id, self.executable, e
+            ))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(
+                harness = %self.id,
+                stderr = %stderr,
+                "Generic harness process failed"
+            );
+            return Err(AlephError::tool(format!(
+                "Harness '{}' exited with {}: {}",
+                self.id,
+                output.status,
+                stderr.chars().take(500).collect::<String>()
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(self.output_format.parse(&stdout))
+    }
+
+    async fn spawn_session(&self,
+        cwd: Option<&str>,
+    ) -> Result<AcpSession> {
+        let config = HarnessConfig {
+            executable: self.executable.clone(),
+            args: self.native_acp_args.clone(),
+            cwd: cwd.map(String::from),
+            ..Default::default()
+        };
+        let timeout = config.timeout;
+        let mut session = AcpSession::spawn(self.id(), &config).await?;
+        session.initialize(timeout).await?;
+        Ok(session)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_output_format_plain_text() {
+        let fmt = OutputFormat::PlainText;
+        assert_eq!(fmt.parse("  hello world  "), "hello world");
+        assert_eq!(fmt.parse("no trim needed"), "no trim needed");
+    }
+
+    #[test]
+    fn test_output_format_json_field() {
+        let fmt = OutputFormat::JsonField {
+            field: "result".to_string(),
+        };
+        let json = r#"{"result": "success", "other": 123}"#;
+        assert_eq!(fmt.parse(json), "success");
+    }
+
+    #[test]
+    fn test_output_format_json_field_missing() {
+        let fmt = OutputFormat::JsonField {
+            field: "missing".to_string(),
+        };
+        let json = r#"{"result": "success"}"#;
+        // Falls back to full JSON string
+        assert_eq!(fmt.parse(json), r#"{"result":"success"}"#);
+    }
+
+    #[test]
+    fn test_output_format_invalid_json() {
+        let fmt = OutputFormat::JsonField {
+            field: "result".to_string(),
+        };
+        let text = "not json at all";
+        // Falls back to raw text
+        assert_eq!(fmt.parse(text), "not json at all");
+    }
+
+    #[test]
+    fn test_generic_harness_build_config() {
+        let harness = GenericAcpHarness::new(
+            "test",
+            "Test",
+            "test-exe",
+            HarnessMode::Oneshot,
+            vec!["exec".to_string()],
+            vec!["--acp".to_string()],
+            OutputFormat::PlainText,
+        );
+
+        let config = harness.build_config(Some("/tmp"));
+        assert_eq!(config.executable, "test-exe");
+        assert_eq!(config.args, vec!["exec"]);
+        assert_eq!(config.cwd, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_generic_harness_build_config_native_acp() {
+        let harness = GenericAcpHarness::new(
+            "test",
+            "Test",
+            "test-exe",
+            HarnessMode::NativeAcp,
+            vec!["exec".to_string()],
+            vec!["--acp".to_string()],
+            OutputFormat::PlainText,
+        );
+
+        let config = harness.build_config(None);
+        assert_eq!(config.args, vec!["--acp"]);
+    }
+
+    #[test]
+    fn test_generic_harness_from_entry() {
+        let entry = AcpHarnessEntry {
+            display_name: "My Tool".to_string(),
+            executable: Some("my-tool".to_string()),
+            args: vec!["run".to_string()],
+            default_mode: crate::config::types::acp::HarnessModeSerde::Oneshot,
+            output_format: OutputFormatSerde::PlainText,
+            preset: Some("my-tool".to_string()),
+            ..Default::default()
+        };
+
+        let harness = GenericAcpHarness::from_entry(&entry);
+        assert_eq!(harness.id(), "my-tool");
+        assert_eq!(harness.display_name(), "My Tool");
+        assert_eq!(harness.executable, "my-tool");
+        assert_eq!(harness.oneshot_args, vec!["run"]);
+        assert_eq!(harness.native_acp_args, vec!["--acp"]);
+    }
+}

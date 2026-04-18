@@ -1558,6 +1558,7 @@ pub(in crate::commands::start) fn register_config_handlers(
             event_bus
         );
         register_handler!(server, "acp.presets", acp_config::handle_presets);
+        register_handler!(server, "acp.presets_meta", acp_config::handle_presets_meta);
     }
 }
 

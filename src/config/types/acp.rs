@@ -189,76 +189,287 @@ impl Default for AcpHarnessEntry {
 }
 
 // =============================================================================
-// Preset factories
+// Preset specification
 // =============================================================================
 
-/// Well-known preset identifiers
-const PRESET_CLAUDE_CODE: &str = "claude-code";
-const PRESET_CODEX: &str = "codex";
-const PRESET_GEMINI: &str = "gemini";
+/// Specification for a built-in preset harness.
+///
+/// Defines the configuration for well-known ACP agents (Claude Code, Codex, etc.)
+/// that follow the standard pattern: executable name, per-mode args, output format.
+/// Preset output format specification (const-compatible).
+#[derive(Debug, Clone)]
+pub enum PresetOutputFormat {
+    PlainText,
+    JsonField(&'static str),
+}
+
+#[derive(Debug, Clone)]
+pub struct PresetSpec {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub executable: &'static str,
+    pub oneshot_args: &'static [&'static str],
+    pub native_acp_args: &'static [&'static str],
+    pub default_mode: HarnessModeSerde,
+    pub output_format: PresetOutputFormat,
+    pub trust_level: TrustLevel,
+}
+
+impl From<&PresetSpec> for AcpHarnessEntry {
+    fn from(spec: &PresetSpec) -> Self {
+        Self {
+            display_name: spec.display_name.into(),
+            executable: Some(spec.executable.into()),
+            args: spec.oneshot_args.iter().map(|s| (*s).into()).collect(),
+            default_mode: spec.default_mode.clone(),
+            output_format: match spec.output_format {
+                PresetOutputFormat::PlainText => OutputFormatSerde::PlainText,
+                PresetOutputFormat::JsonField(field) => OutputFormatSerde::Json {
+                    field: field.into(),
+                },
+            },
+            preset: Some(spec.id.into()),
+            trust_level: spec.trust_level.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Built-in preset harnesses.
+///
+/// Covers agents from acpx's AGENT_REGISTRY that follow the standard
+/// executable + args pattern. Each entry maps to a GenericAcpHarness.
+pub const HARNESS_PRESETS: &[PresetSpec] = &[
+    // Claude Code — supports both oneshot (--print) and native ACP (--acp)
+    PresetSpec {
+        id: "claude-code",
+        display_name: "Claude Code",
+        executable: "claude",
+        oneshot_args: &["--print", "--output-format", "json", "-p"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::JsonField("result"),
+        trust_level: TrustLevel::Full,
+    },
+    // Codex — OpenAI CLI
+    PresetSpec {
+        id: "codex",
+        display_name: "Codex",
+        executable: "codex",
+        oneshot_args: &["exec"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Gemini — Google CLI, defaults to native ACP
+    PresetSpec {
+        id: "gemini",
+        display_name: "Gemini",
+        executable: "gemini",
+        oneshot_args: &["-p"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::NativeAcp,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // OpenCode
+    PresetSpec {
+        id: "opencode",
+        display_name: "OpenCode",
+        executable: "opencode",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Kimi
+    PresetSpec {
+        id: "kimi",
+        display_name: "Kimi",
+        executable: "kimi",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Cursor
+    PresetSpec {
+        id: "cursor",
+        display_name: "Cursor",
+        executable: "cursor-agent",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Copilot
+    PresetSpec {
+        id: "copilot",
+        display_name: "Copilot",
+        executable: "copilot",
+        oneshot_args: &["--acp", "--stdio"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Droid
+    PresetSpec {
+        id: "droid",
+        display_name: "Droid",
+        executable: "droid",
+        oneshot_args: &["exec", "--output-format", "acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Pi
+    PresetSpec {
+        id: "pi",
+        display_name: "Pi",
+        executable: "pi-acp",
+        oneshot_args: &[],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // iFlow
+    PresetSpec {
+        id: "iflow",
+        display_name: "iFlow",
+        executable: "iflow",
+        oneshot_args: &["--experimental-acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // KiloCode
+    PresetSpec {
+        id: "kilocode",
+        display_name: "KiloCode",
+        executable: "kilocode",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Kiro
+    PresetSpec {
+        id: "kiro",
+        display_name: "Kiro",
+        executable: "kiro-cli-chat",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Qoder
+    PresetSpec {
+        id: "qoder",
+        display_name: "Qoder",
+        executable: "qodercli",
+        oneshot_args: &["--acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Qwen
+    PresetSpec {
+        id: "qwen",
+        display_name: "Qwen",
+        executable: "qwen",
+        oneshot_args: &["--acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // Trae
+    PresetSpec {
+        id: "trae",
+        display_name: "Trae",
+        executable: "traecli",
+        oneshot_args: &["acp", "serve"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+    // OpenClaw
+    PresetSpec {
+        id: "openclaw",
+        display_name: "OpenClaw",
+        executable: "openclaw",
+        oneshot_args: &["acp"],
+        native_acp_args: &["--acp"],
+        default_mode: HarnessModeSerde::Oneshot,
+        output_format: PresetOutputFormat::PlainText,
+        trust_level: TrustLevel::Full,
+    },
+];
 
 impl AcpHarnessEntry {
     /// Preset: Claude Code (Anthropic CLI)
     pub fn preset_claude_code() -> Self {
-        Self {
-            display_name: "Claude Code".into(),
-            executable: Some("claude".into()),
-            args: vec!["--print".into(), "--output-format".into(), "json".into()],
-            default_mode: HarnessModeSerde::Oneshot,
-            output_format: OutputFormatSerde::Json {
-                field: "result".into(),
-            },
-            preset: Some(PRESET_CLAUDE_CODE.into()),
-            trust_level: TrustLevel::Full,
-            ..Default::default()
-        }
+        Self::from(
+            HARNESS_PRESETS
+                .iter()
+                .find(|p| p.id == "claude-code")
+                .expect("claude-code preset must exist"),
+        )
     }
 
     /// Preset: Codex (OpenAI CLI)
     pub fn preset_codex() -> Self {
-        Self {
-            display_name: "Codex".into(),
-            executable: Some("codex".into()),
-            args: vec!["exec".into()],
-            default_mode: HarnessModeSerde::Oneshot,
-            output_format: OutputFormatSerde::PlainText,
-            preset: Some(PRESET_CODEX.into()),
-            trust_level: TrustLevel::Full,
-            ..Default::default()
-        }
+        Self::from(
+            HARNESS_PRESETS
+                .iter()
+                .find(|p| p.id == "codex")
+                .expect("codex preset must exist"),
+        )
     }
 
     /// Preset: Gemini (Google CLI)
     pub fn preset_gemini() -> Self {
-        Self {
-            display_name: "Gemini".into(),
-            executable: Some("gemini".into()),
-            args: vec!["--acp".into()],
-            default_mode: HarnessModeSerde::NativeAcp,
-            output_format: OutputFormatSerde::PlainText,
-            preset: Some(PRESET_GEMINI.into()),
-            trust_level: TrustLevel::Full,
-            ..Default::default()
-        }
+        Self::from(
+            HARNESS_PRESETS
+                .iter()
+                .find(|p| p.id == "gemini")
+                .expect("gemini preset must exist"),
+        )
     }
 
-    /// Return all built-in presets as (id, entry) pairs
+    /// Look up a preset by ID.
+    pub fn preset_by_id(id: &str) -> Option<Self> {
+        HARNESS_PRESETS.iter().find(|p| p.id == id).map(Self::from)
+    }
+
+    /// Return all built-in presets as (id, entry) pairs.
     pub fn all_presets() -> Vec<(String, Self)> {
-        vec![
-            (PRESET_CLAUDE_CODE.into(), Self::preset_claude_code()),
-            (PRESET_CODEX.into(), Self::preset_codex()),
-            (PRESET_GEMINI.into(), Self::preset_gemini()),
-        ]
+        HARNESS_PRESETS
+            .iter()
+            .map(|p| (p.id.to_string(), Self::from(p)))
+            .collect()
     }
 
-    /// Return all known preset identifiers
-    pub fn preset_ids() -> &'static [&'static str] {
-        &[PRESET_CLAUDE_CODE, PRESET_CODEX, PRESET_GEMINI]
+    /// Return all known preset identifiers.
+    pub fn preset_ids() -> Vec<&'static str> {
+        HARNESS_PRESETS.iter().map(|p| p.id).collect()
     }
 
-    /// Check whether a string is a known preset id
+    /// Check whether a string is a known preset id.
     pub fn is_preset_id(id: &str) -> bool {
-        Self::preset_ids().contains(&id)
+        HARNESS_PRESETS.iter().any(|p| p.id == id)
     }
 }
 

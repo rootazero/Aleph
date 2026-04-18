@@ -45,6 +45,15 @@ pub struct AcpTestResult {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcpPresetMeta {
+    pub id: String,
+    pub display_name: String,
+    pub executable: String,
+    pub default_mode: String,
+    pub trust_level: String,
+}
+
 pub struct AcpApi;
 
 impl AcpApi {
@@ -120,6 +129,12 @@ impl AcpApi {
     pub async fn presets(state: &DashboardState) -> Result<serde_json::Value, String> {
         let result = state.rpc_call("acp.presets", Value::Null).await?;
         Ok(result)
+    }
+
+    pub async fn presets_meta(state: &DashboardState) -> Result<Vec<AcpPresetMeta>, String> {
+        let result = state.rpc_call("acp.presets_meta", Value::Null).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse preset metadata: {}", e))
     }
 
     /// Get the top-level ACP enabled state from config.

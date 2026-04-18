@@ -561,6 +561,28 @@ pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
     )
 }
 
+/// Handle acp.presets_meta — return lightweight metadata for all presets.
+pub async fn handle_presets_meta(request: JsonRpcRequest) -> JsonRpcResponse {
+    let presets = crate::config::types::acp::HARNESS_PRESETS;
+    let result: Vec<serde_json::Value> = presets
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "display_name": p.display_name,
+                "executable": p.executable,
+                "default_mode": p.default_mode,
+                "trust_level": p.trust_level,
+            })
+        })
+        .collect();
+
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::to_value(&result).unwrap_or_else(|_| json!([])),
+    )
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -735,7 +757,44 @@ mod tests {
 
         let result = response.result.unwrap();
         let items = result.as_array().unwrap();
-        assert_eq!(items.len(), 3);
+        let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+        assert_eq!(items.len(), preset_ids.len());
+        for id in preset_ids {
+            assert!(
+                items.iter().any(|v| v.get("id").and_then(|i| i.as_str()) == Some(id)),
+                "missing preset in response: {}",
+                id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_presets_meta() {
+        let request = JsonRpcRequest::with_id("acp.presets_meta", None, json!(1));
+        let response = handle_presets_meta(request).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        let items = result.as_array().unwrap();
+        let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+        assert_eq!(items.len(), preset_ids.len());
+        for id in preset_ids {
+            let item = items
+                .iter()
+                .find(|v| v.get("id").and_then(|i| i.as_str()) == Some(id));
+            assert!(item.is_some(), "missing preset in response: {}", id);
+            let item = item.unwrap();
+            assert!(
+                item.get("display_name").is_some(),
+                "missing display_name for preset: {}",
+                id
+            );
+            assert!(
+                item.get("executable").is_some(),
+                "missing executable for preset: {}",
+                id
+            );
+        }
     }
 
     #[test]

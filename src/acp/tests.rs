@@ -329,13 +329,14 @@ fn session_state_serde_all_variants() {
 // =============================================================================
 
 #[tokio::test]
-async fn manager_default_has_all_three_harnesses() {
+async fn manager_default_has_all_preset_harnesses() {
     let mgr = AcpHarnessManager::new();
     let ids = mgr.harness_ids().await;
-    assert_eq!(ids.len(), 3);
-    assert!(ids.contains(&"claude-code".to_string()));
-    assert!(ids.contains(&"codex".to_string()));
-    assert!(ids.contains(&"gemini".to_string()));
+    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    assert_eq!(ids.len(), preset_ids.len());
+    for id in preset_ids {
+        assert!(ids.contains(&id.to_string()), "missing preset: {}", id);
+    }
 }
 
 #[tokio::test]
@@ -387,9 +388,14 @@ async fn manager_disable_single_harness() {
     entries.get_mut("codex").unwrap().enabled = false;
     let mgr = AcpHarnessManager::from_entries(entries);
     assert!(!mgr.has_harness("codex").await);
-    assert!(mgr.has_harness("claude-code").await);
-    assert!(mgr.has_harness("gemini").await);
-    assert_eq!(mgr.harness_ids().await.len(), 2);
+    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    assert_eq!(mgr.harness_ids().await.len(), preset_ids.len() - 1);
+    for id in preset_ids {
+        if id == "codex" {
+            continue;
+        }
+        assert!(mgr.has_harness(id).await, "preset should be enabled: {}", id);
+    }
 }
 
 #[tokio::test]
@@ -398,9 +404,9 @@ async fn manager_disable_all_harnesses() {
         crate::config::types::acp::AcpHarnessEntry::all_presets()
             .into_iter()
             .collect();
-    entries.get_mut("claude-code").unwrap().enabled = false;
-    entries.get_mut("codex").unwrap().enabled = false;
-    entries.get_mut("gemini").unwrap().enabled = false;
+    for id in crate::config::types::acp::AcpHarnessEntry::preset_ids() {
+        entries.get_mut(id).unwrap().enabled = false;
+    }
     let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.harness_ids().await.is_empty());
 }
@@ -412,8 +418,11 @@ async fn manager_explicit_enable_is_noop() {
             .into_iter()
             .collect();
     let mgr = AcpHarnessManager::from_entries(entries);
-    assert!(mgr.has_harness("claude-code").await);
-    assert_eq!(mgr.harness_ids().await.len(), 3);
+    let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+    assert_eq!(mgr.harness_ids().await.len(), preset_ids.len());
+    for id in preset_ids {
+        assert!(mgr.has_harness(id).await, "preset should be enabled: {}", id);
+    }
 }
 
 #[tokio::test]
