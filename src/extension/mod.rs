@@ -173,6 +173,17 @@ pub struct ExtensionManager {
     memory_registry: std::sync::RwLock<
         Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
+
+    /// Phase 2 Tool Service shared registry (Task 4).
+    /// When set, plugin load / unload lifecycle will populate the registry
+    /// with `ExtensionHandler` entries via
+    /// `tools::handlers::registration::register_extension_tools`. Actual
+    /// lifecycle wiring is deferred to Task 10 (AppContext wiring) per the
+    /// Phase 2 plan — this field + setter ship now so the registration helper
+    /// has a stable injection point.
+    tool_registry: std::sync::RwLock<
+        Option<std::sync::Arc<crate::tools::registry::ToolRegistry>>,
+    >,
 }
 
 impl ExtensionManager {
@@ -203,6 +214,7 @@ impl ExtensionManager {
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
             memory_registry: std::sync::RwLock::new(None),
+            tool_registry: std::sync::RwLock::new(None),
         })
     }
 
@@ -239,6 +251,32 @@ impl ExtensionManager {
             .memory_registry
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(registry);
+    }
+
+    /// Inject the Phase 2 shared `ToolRegistry` (Task 4).
+    ///
+    /// Call once from AppContext setup. Once wired (Task 10), plugin
+    /// load/unload will populate and tear down registry entries via
+    /// `tools::handlers::registration`.
+    pub fn set_tool_registry(
+        &self,
+        registry: std::sync::Arc<crate::tools::registry::ToolRegistry>,
+    ) {
+        *self
+            .tool_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
+    }
+
+    /// Snapshot of the injected `ToolRegistry`, if any (Task 4).
+    #[allow(dead_code)] // Consumed from Task 10 when lifecycle wiring lands.
+    pub(crate) fn tool_registry(
+        &self,
+    ) -> Option<std::sync::Arc<crate::tools::registry::ToolRegistry>> {
+        self.tool_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────

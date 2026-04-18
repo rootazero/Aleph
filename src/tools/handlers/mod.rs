@@ -7,8 +7,9 @@ use crate::session::events::ToolOutput;
 use crate::tools::service::{ToolDefinition, ToolError};
 
 pub mod builtin;
-pub mod mcp;
 pub mod extension;
+pub mod mcp;
+pub mod registration;
 
 #[async_trait]
 pub trait ToolHandler: Send + Sync + 'static {
