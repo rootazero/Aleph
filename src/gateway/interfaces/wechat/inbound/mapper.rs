@@ -89,6 +89,7 @@ pub fn map_message_to_inbound(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::interfaces::wechat::types::TextItem;
 
     #[test]
     fn test_extract_text_from_text_item() {

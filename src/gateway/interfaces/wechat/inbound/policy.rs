@@ -24,6 +24,7 @@ pub fn should_accept_message(msg: &Message, config: &WeChatConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::interfaces::wechat::config::GroupPolicy;
 
     #[test]
     fn test_should_accept_dm_open_policy() {
