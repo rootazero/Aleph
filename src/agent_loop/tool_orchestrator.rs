@@ -3,8 +3,9 @@
 //! Concurrent-safe tools run in parallel via `futures::future::join_all`;
 //! exclusive tools run one at a time. Original order is always preserved.
 
-use std::sync::Arc;
 use std::time::Instant;
+
+use crate::sync_primitives::Arc;
 
 use tokio_util::sync::CancellationToken;
 

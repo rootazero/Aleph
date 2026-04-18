@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::time::Duration;
 
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
