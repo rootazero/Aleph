@@ -38,7 +38,7 @@ pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
-pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
+pub use config::{PairingEntry, TelegramConfig, WebhookConfig, parse_telegram_channel_config};
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config_v2::TelegramConfigV2;
 pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
@@ -869,7 +869,7 @@ impl ChannelFactory for TelegramChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: TelegramConfigV2 = serde_json::from_value(config)
+        let config = config::parse_telegram_channel_config(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {}", e)))?;
 
         Ok(Box::new(TelegramChannel::new("telegram", config)))

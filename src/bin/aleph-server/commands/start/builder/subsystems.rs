@@ -13,7 +13,7 @@ use std::sync::Arc;
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::interfaces::telegram::offset::OffsetTracker;
-use alephcore::gateway::interfaces::telegram::TelegramConfigV2;
+use alephcore::gateway::interfaces::telegram::parse_telegram_channel_config;
 use alephcore::gateway::interfaces::TelegramChannel;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
@@ -259,9 +259,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-                if let Ok(tg_config) =
-                    serde_json::from_value::<TelegramConfigV2>(config_with_secrets.clone())
-                {
+                if let Ok(tg_config) = parse_telegram_channel_config(config_with_secrets.clone()) {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
                         tg_channel.set_tool_registry(reg.clone());
@@ -412,7 +410,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             cfg.channels
                 .iter()
                 .find_map(|(_, val)| {
-                    serde_json::from_value::<TelegramConfigV2>(val.clone())
+                    parse_telegram_channel_config(val.clone())
                         .ok()
                         .and_then(|tc| tc.coalescing)
                 })

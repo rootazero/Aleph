@@ -409,14 +409,14 @@ impl InboundMessageRouter {
         _reply_config: ReplyEmitterConfig,
         _pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter> {
-        use crate::gateway::interfaces::telegram::config_v2::TelegramConfigV2;
+        use crate::gateway::interfaces::telegram::parse_telegram_channel_config;
         use crate::gateway::interfaces::telegram::streaming::TelegramEventEmitter;
 
         let tg_cfg = {
             let cfg = self.app_config.as_ref()?.read().await;
             let channel_id = ctx.reply_route.channel_id.as_str();
             let raw = cfg.channels.get(channel_id)?;
-            serde_json::from_value::<TelegramConfigV2>(raw.clone()).ok()?
+            parse_telegram_channel_config(raw.clone()).ok()?
         };
 
         let account = tg_cfg.accounts.first()?;

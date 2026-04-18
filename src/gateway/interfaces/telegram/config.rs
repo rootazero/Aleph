@@ -262,6 +262,30 @@ impl TelegramConfig {
     }
 }
 
+/// Parse a Telegram channel config JSON value, accepting either:
+/// - the new V2 format (with an `accounts` array), or
+/// - the legacy V1 flat format (with top-level `bot_token`).
+///
+/// V1 configs are auto-upgraded to V2 so existing user configs keep working
+/// without forcing a migration. V2 is preferred and tried first; the V1
+/// fallback is only attempted when V2 deserialization fails.
+pub fn parse_telegram_channel_config(
+    value: serde_json::Value,
+) -> Result<TelegramConfigV2, serde_json::Error> {
+    match serde_json::from_value::<TelegramConfigV2>(value.clone()) {
+        Ok(v2) => Ok(v2),
+        Err(v2_err) => match serde_json::from_value::<TelegramConfig>(value) {
+            Ok(v1) => {
+                tracing::debug!(
+                    "Telegram channel config: auto-upgraded legacy v1 (flat) format to v2"
+                );
+                Ok(v1.upgrade_to_v2())
+            }
+            Err(_) => Err(v2_err),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +352,43 @@ mod tests {
         assert!(!entry.is_expired());
         assert_eq!(entry.code, "ABC123");
         assert_eq!(entry.ttl_secs, 3600);
+    }
+
+    #[test]
+    fn parse_v2_config_directly() {
+        let raw = serde_json::json!({
+            "accounts": [{
+                "id": "default",
+                "bot_token": "123:ABC",
+            }]
+        });
+        let parsed = parse_telegram_channel_config(raw).expect("v2 parses");
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].bot_token, "123:ABC");
+    }
+
+    #[test]
+    fn parse_v1_flat_config_upgrades_to_v2() {
+        // Legacy flat config — what users with old [channels.AlephzBot] entries have.
+        let raw = serde_json::json!({
+            "bot_username": "AlephzBot",
+            "bot_token": "123:ABC",
+        });
+        let parsed = parse_telegram_channel_config(raw).expect("v1 fallback parses");
+        assert_eq!(parsed.accounts.len(), 1);
+        assert_eq!(parsed.accounts[0].bot_token, "123:ABC");
+        assert_eq!(
+            parsed.accounts[0].bot_username.as_deref(),
+            Some("AlephzBot")
+        );
+    }
+
+    #[test]
+    fn parse_invalid_config_surfaces_v2_error() {
+        // Neither v2 (no accounts) nor v1 (no bot_token) — should fail.
+        let raw = serde_json::json!({ "bot_username": "AlephzBot" });
+        let err = parse_telegram_channel_config(raw).unwrap_err();
+        assert!(err.to_string().contains("accounts"));
     }
 
     #[test]
