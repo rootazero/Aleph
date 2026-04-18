@@ -1,6 +1,6 @@
 use crate::gateway::channel::ChannelResult;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 
 use super::lane_tracker::{LaneDeliveryTracker, LaneId};
@@ -86,7 +86,7 @@ mod tests {
     use super::*;
     use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
     use crate::gateway::interfaces::telegram::error_cooldown::ErrorCooldown;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[tokio::test]
     async fn test_lane_handle_creation() {

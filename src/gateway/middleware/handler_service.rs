@@ -5,7 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};

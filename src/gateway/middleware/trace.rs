@@ -143,7 +143,7 @@ where
 mod tests {
     use super::*;
     use crate::gateway::protocol::JsonRpcResponse;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use crate::sync_primitives::{AtomicU64, Ordering};
 
     #[derive(Clone)]
     struct MockService {

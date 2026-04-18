@@ -4,7 +4,7 @@
 
 use crate::gateway::interfaces::discord::handlers::approval::ApprovalQueue;
 use serde::Deserialize;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Message component interaction
 #[derive(Debug, Clone, Deserialize)]

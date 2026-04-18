@@ -13,7 +13,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 
 #[async_trait]
 pub trait NoteOrientation: Send + Sync {

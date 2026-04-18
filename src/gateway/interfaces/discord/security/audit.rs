@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Audit event types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

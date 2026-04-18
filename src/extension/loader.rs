@@ -19,8 +19,8 @@
 //! via `get_mcp_configs()`. The caller (ExtensionManager or Gateway) is
 //! responsible for registering these configs with `McpManager`.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::extension::error::{ExtensionError, ExtensionResult};

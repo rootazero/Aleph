@@ -4,9 +4,9 @@
 //! when consecutive misses suggest the stable prompt hash has changed
 //! unexpectedly.
 
+use crate::sync_primitives::Mutex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
 
 // =============================================================================
 // Internal state

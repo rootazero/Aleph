@@ -1,5 +1,5 @@
 use reqwest::multipart;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::auth::TokenManager;
 use super::types::*;

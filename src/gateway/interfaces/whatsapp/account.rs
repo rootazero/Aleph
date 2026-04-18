@@ -6,7 +6,7 @@ use crate::gateway::channel::ChannelHealth;
 use crate::gateway::channel_policy::E164Number;
 use crate::gateway::interfaces::whatsapp::pairing::PairingState;
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, Default)]

@@ -8,7 +8,7 @@ use super::config_resolver::ResolvedConfig;
 use super::config_v2::{DmPolicy, GroupPolicy};
 use crate::resilience::StateDatabase;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 

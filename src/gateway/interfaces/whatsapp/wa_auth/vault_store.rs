@@ -1,8 +1,8 @@
 //! Vault-backed WhatsApp auth storage
 
 use crate::secrets::vault::SecretVault;
+use crate::sync_primitives::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WaAuthData {

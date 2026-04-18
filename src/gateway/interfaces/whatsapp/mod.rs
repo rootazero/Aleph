@@ -50,7 +50,7 @@ use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::sync_primitives::{AtomicBool, Ordering};
 use tokio::sync::{oneshot, RwLock};
 
 use pairing::PairingState;

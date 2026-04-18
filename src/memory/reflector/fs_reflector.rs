@@ -195,7 +195,7 @@ mod llm_path_tests {
     use crate::memory::reflector::packet_adapter::{NoteMeta, SynthesisContext};
     use crate::providers::recording_mock::RecordingMockProvider;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     fn ctx_with_lookup(entries: &[(&str, &str, f32)]) -> SynthesisContext {
         let mut lookup = HashMap::new();

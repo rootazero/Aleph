@@ -1265,7 +1265,7 @@ mod spec1_tests {
     use crate::memory::store::raw_memory::{
         RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
     };
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[derive(Default)]
     struct FakeWriter(std::sync::Mutex<Vec<RawMemory>>);

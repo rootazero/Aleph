@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;

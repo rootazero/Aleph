@@ -4,7 +4,7 @@
 //! Each channel can optionally expose a capability to deliver approval UI to users
 //! and authorize approval actions based on channel-specific rules (e.g., paired users).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

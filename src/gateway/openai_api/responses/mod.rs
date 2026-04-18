@@ -2,7 +2,7 @@
 
 pub mod sse;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::body::Body;
 use axum::extract::State;

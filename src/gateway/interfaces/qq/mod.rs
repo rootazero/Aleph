@@ -15,7 +15,7 @@ use crate::gateway::channel::{
 };
 use crate::gateway::interfaces::qq::types::QQEvent;
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub struct QQChannel {
     info: ChannelInfo,

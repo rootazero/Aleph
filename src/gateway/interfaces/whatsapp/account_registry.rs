@@ -4,7 +4,7 @@
 
 use crate::gateway::interfaces::whatsapp::account::{AccountId, WhatsAppAccount};
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 pub struct WhatsAppAccountRegistry {

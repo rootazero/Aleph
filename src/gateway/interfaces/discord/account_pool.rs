@@ -5,7 +5,7 @@
 use crate::gateway::interfaces::discord::config::{AccountConfig, DiscordChannelConfig};
 use serenity::all::Http;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Discord bot instance wrapper

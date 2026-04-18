@@ -1,6 +1,6 @@
 //! Axum router for the OpenAI-compatible API.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;

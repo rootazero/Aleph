@@ -1,5 +1,5 @@
+use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 pub struct PairingRequest {
     pub sender_id: String,

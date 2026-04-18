@@ -4,7 +4,7 @@ use crate::gateway::interfaces::matrix::{
 };
 use futures::StreamExt;
 use matrix_sdk::config::SyncSettings;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 

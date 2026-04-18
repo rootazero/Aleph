@@ -96,7 +96,7 @@ mod resolve_tests {
     use super::*;
     use crate::memory::notes::KnowledgeNote;
     use crate::memory::store::SqliteMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use uuid::Uuid;
 
     fn create_test_db() -> Arc<SqliteMemoryBackend> {

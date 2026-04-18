@@ -13,7 +13,7 @@ pub mod sync_buf;
 pub mod types;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,

@@ -5,7 +5,7 @@
 //! - `JwtValidator`: inbound JWT validation for Bot Framework webhook requests
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};

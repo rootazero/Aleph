@@ -1,5 +1,5 @@
 use crate::resilience::StateDatabase;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub struct StickerPipeline {
     db: Option<Arc<StateDatabase>>,

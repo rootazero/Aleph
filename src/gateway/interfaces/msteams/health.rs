@@ -3,7 +3,7 @@
 //! Provides health status tracking, stale detection, and automatic recovery
 //! for Teams channel connections.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use crate::sync_primitives::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::gateway::channel::ChannelError;

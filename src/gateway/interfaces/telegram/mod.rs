@@ -56,7 +56,7 @@ use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
 use error_cooldown::ErrorCooldown;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use teloxide::{prelude::*, types::CallbackQuery as TgCallbackQuery};

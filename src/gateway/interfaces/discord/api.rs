@@ -5,7 +5,7 @@
 //! panel action in the Discord management UI.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::permissions::{self, PermissionAudit};
 

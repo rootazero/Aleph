@@ -4,8 +4,8 @@
 //! integration. Channels and long-running operations use this to coordinate
 //! graceful shutdown without `std::task:: CancellationToken` (unstable).
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
 
 /// A shared cancellation flag that can be cloned and subscribed to.

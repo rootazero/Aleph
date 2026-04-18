@@ -1,6 +1,6 @@
 //! Middleware chain builder for the gateway JSON-RPC handler pipeline.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tower::{Layer, Service};
 

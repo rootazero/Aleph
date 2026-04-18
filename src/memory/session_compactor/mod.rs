@@ -11,7 +11,7 @@
 //!   chunk compressible messages, generate d0 summaries, and trigger hierarchical
 //!   condensation (d0→d1→d2) when fanout thresholds are met.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

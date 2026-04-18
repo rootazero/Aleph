@@ -5,7 +5,7 @@ use crate::memory::assembler::envelope::MemoryEnvelope;
 use crate::memory::extensions::traits::MemoryExtension;
 use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
 use crate::memory::store::raw_memory::RawMemory;
-use std::sync::{Arc, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::warn;
