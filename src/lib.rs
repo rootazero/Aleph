@@ -1,11 +1,5 @@
 // Aleph Core Library
 //
-// matrix-sdk 0.16 generic compositions exceed the default 128 query/recursion
-// depth on some target+profile combinations (Linux release in CI hits +130
-// inside Client::sync). Bumping the limit on the consumer crate raises the
-// budget available during type-checking of monomorphized matrix types.
-#![recursion_limit = "512"]
-
 //! Aleph is a system-level AI middleware that acts as an invisible "ether"
 //! connecting user intent with AI models through a frictionless, native interface.
 //!

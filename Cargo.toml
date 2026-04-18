@@ -287,3 +287,13 @@ harness = false
 # Release profile
 [profile.release]
 strip = true
+
+# Patch matrix-sdk with a fork of matrix-sdk-0.16.0 that adds
+# #![recursion_limit = "512"] to crates/matrix-sdk/src/lib.rs.
+# The default 128 overflows when async fn body of Client::sync() is
+# monomorphized in CI Linux release builds (+130 observed). Setting
+# recursion_limit on the consumer crate (alephcore) does NOT propagate
+# to matrix-sdk's compilation — the compiler hint explicitly asks for
+# the attribute on `matrix_sdk` itself — so we vendor the fix via patch.
+[patch.crates-io]
+matrix-sdk = { git = "https://github.com/rootazero/matrix-rust-sdk", branch = "aleph-0.16.0-recursion-fix" }
