@@ -77,6 +77,7 @@ pub mod providers;
 pub mod routing;
 pub mod runtimes;
 pub mod search;
+pub mod session;
 pub mod skill;
 
 pub(crate) mod supervisor;
