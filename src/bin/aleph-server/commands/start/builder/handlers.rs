@@ -71,6 +71,20 @@ macro_rules! register_handler {
             async move { $handler(req, ctx1, ctx2, ctx3).await }
         });
     }};
+    // 4 context args
+    ($server:expr, $method:expr, $handler:path, $ctx1:expr, $ctx2:expr, $ctx3:expr, $ctx4:expr) => {{
+        let ctx1 = ::std::sync::Arc::clone(&$ctx1);
+        let ctx2 = ::std::sync::Arc::clone(&$ctx2);
+        let ctx3 = ::std::sync::Arc::clone(&$ctx3);
+        let ctx4 = ::std::sync::Arc::clone(&$ctx4);
+        $server.handlers_mut().register($method, move |req| {
+            let ctx1 = ::std::sync::Arc::clone(&ctx1);
+            let ctx2 = ::std::sync::Arc::clone(&ctx2);
+            let ctx3 = ::std::sync::Arc::clone(&ctx3);
+            let ctx4 = ::std::sync::Arc::clone(&ctx4);
+            async move { $handler(req, ctx1, ctx2, ctx3, ctx4).await }
+        });
+    }};
 }
 
 // ─── register_auth_handlers ──────────────────────────────────────────────────
@@ -1046,7 +1060,9 @@ pub(in crate::commands::start) fn register_config_handlers(
         event_bus,
         shared_token_mgr
     );
-    // providers.setDefault needs the swappable registry for hot-switching
+    // providers.setDefault needs the swappable registry for hot-switching.
+    // Pass vault so the runtime swap can inject api_key from vault into the cloned ProviderConfig
+    // (api_key is #[serde(skip)] and never lives on disk).
     if let Some(ref registry) = multi_registry {
         register_handler!(
             server,
@@ -1054,7 +1070,8 @@ pub(in crate::commands::start) fn register_config_handlers(
             providers::handle_set_default,
             config,
             event_bus,
-            registry
+            registry,
+            shared_token_mgr
         );
     } else {
         // Fallback: config-only update without runtime provider swap

@@ -415,9 +415,9 @@ mod tests {
         deepseek_config.protocol = Some("openai".to_string());
         deepseek_config.base_url = Some("https://api.deepseek.com".to_string());
 
-        let mut moonshot_config = ProviderConfig::test_config("moonshot-v1-8k");
+        let mut moonshot_config = ProviderConfig::test_config("kimi-k2-0905-preview");
         moonshot_config.protocol = Some("openai".to_string());
-        moonshot_config.base_url = Some("https://api.moonshot.cn/v1".to_string());
+        moonshot_config.base_url = Some("https://api.moonshot.ai/v1".to_string());
         moonshot_config.max_tokens = Some(8192);
 
         let deepseek = create_provider("deepseek", deepseek_config);

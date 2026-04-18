@@ -92,9 +92,13 @@ impl AnthropicProtocol {
                             "Anthropic multimodal message converted"
                         );
                     }
+                    // Anthropic API rejects messages with empty content (HTTP 400:
+                    // "must not be empty"). Emit a single-space placeholder so historical
+                    // empty-turn artifacts (e.g. tokens=0 streaming aborts) don't poison
+                    // subsequent requests.
                     if blocks.is_empty() {
                         blocks.push(ContentBlock::Text {
-                            text: String::new(),
+                            text: " ".to_string(),
                         });
                     }
                     if blocks.len() == 1 {
@@ -120,7 +124,13 @@ impl AnthropicProtocol {
                     for block in content {
                         match block {
                             crate::providers::message::ContentBlock::Text { text, .. } => {
-                                blocks.push(ContentBlock::Text { text: text.clone() });
+                                // Skip empty / whitespace-only text blocks: Anthropic-compatible
+                                // backends (e.g. Kimi for Coding) reject them with HTTP 400
+                                // "must not be empty". The empty-blocks fallback below inserts
+                                // a placeholder if the entire turn ends up empty.
+                                if !text.trim().is_empty() {
+                                    blocks.push(ContentBlock::Text { text: text.clone() });
+                                }
                             }
                             crate::providers::message::ContentBlock::ToolCall {
                                 id,
@@ -154,9 +164,13 @@ impl AnthropicProtocol {
                             _ => {}
                         }
                     }
+                    // Anthropic API rejects messages with empty content (HTTP 400:
+                    // "must not be empty"). Emit a single-space placeholder so historical
+                    // empty-turn artifacts (e.g. tokens=0 streaming aborts) don't poison
+                    // subsequent requests.
                     if blocks.is_empty() {
                         blocks.push(ContentBlock::Text {
-                            text: String::new(),
+                            text: " ".to_string(),
                         });
                     }
                     result.push(Message {

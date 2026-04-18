@@ -448,7 +448,24 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
-    // Resolve API keys from vault into runtime Config (api_key is #[serde(skip)], never persisted)
+    // Safety net: detect plaintext secrets in config (manual edits or LLM writes)
+    // and relocate them to the encrypted vault before runtime hydration runs.
+    // Strips api_key from in-memory config and persists the cleaned config.
+    {
+        let vault = &auth_bundle.auth_ctx.shared_token_mgr;
+        let migrated = alephcore::gateway::handlers::secret_migration::migrate_all_secrets_to_vault(
+            &mut loaded_app_config,
+            vault,
+        );
+        if migrated > 0 && !args.daemon {
+            println!(
+                "  Secrets migrated to vault: {} (config plaintext stripped)",
+                migrated
+            );
+        }
+    }
+
+    // Resolve API keys from vault into runtime Config (api_key is #[serde(skip_serializing)], never persisted)
     {
         let vault = &auth_bundle.auth_ctx.shared_token_mgr;
 

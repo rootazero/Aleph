@@ -55,23 +55,46 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
-    // Moonshot / Kimi
+    // Moonshot / Kimi — standard chat API (OpenAI-compatible)
     m.insert(
         "moonshot",
         ProviderPreset {
-            base_url: "https://api.moonshot.cn/v1",
+            base_url: "https://api.moonshot.ai/v1",
             protocol: "openai",
             color: "#6366f1",
-            default_model: "moonshot-v1-8k",
+            default_model: "kimi-k2-0905-preview",
         },
     );
     m.insert(
         "kimi",
         ProviderPreset {
-            base_url: "https://api.moonshot.cn/v1",
+            base_url: "https://api.moonshot.ai/v1",
             protocol: "openai",
             color: "#6366f1",
-            default_model: "moonshot-v1-8k",
+            default_model: "kimi-k2-0905-preview",
+        },
+    );
+
+    // Kimi for Coding — Anthropic-compatible endpoint optimized for IDE/agent
+    // tool use (Claude Code, Cline, Roo Code). Outputs tool-call JSON by design,
+    // not free-form chat. Use this only when wiring Aleph as a coding agent
+    // backend; for general conversation, use the `moonshot` preset above.
+    m.insert(
+        "kimi-for-coding",
+        ProviderPreset {
+            base_url: "https://api.kimi.com/coding/v1",
+            protocol: "anthropic",
+            color: "#6366f1",
+            default_model: "Kimi-K2.6",
+        },
+    );
+    m.insert(
+        "kimi-coding",
+        ProviderPreset {
+            base_url: "https://api.kimi.com/coding/v1",
+            protocol: "anthropic",
+            color: "#6366f1",
+            default_model: "Kimi-K2.6",
         },
     );
 
@@ -432,6 +455,20 @@ mod tests {
         let moonshot = get_preset("moonshot").unwrap();
         let kimi = get_preset("kimi").unwrap();
         assert_eq!(moonshot.base_url, kimi.base_url);
+        assert_eq!(moonshot.protocol, "openai");
+    }
+
+    #[test]
+    fn test_kimi_for_coding_preset_distinct_from_moonshot() {
+        let coding = get_preset("kimi-for-coding").unwrap();
+        let coding_alias = get_preset("kimi-coding").unwrap();
+        let moonshot = get_preset("moonshot").unwrap();
+
+        assert_eq!(coding.base_url, "https://api.kimi.com/coding/v1");
+        assert_eq!(coding.protocol, "anthropic");
+        assert_eq!(coding.base_url, coding_alias.base_url);
+        assert_ne!(coding.base_url, moonshot.base_url);
+        assert_ne!(coding.protocol, moonshot.protocol);
     }
 
     #[test]

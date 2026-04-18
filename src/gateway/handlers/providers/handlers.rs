@@ -526,7 +526,7 @@ pub async fn handle_set_default_config_only(
         Err(e) => return e,
     };
 
-    set_default_provider_inner(&request, &params, &config, &event_bus, None).await
+    set_default_provider_inner(&request, &params, &config, &event_bus, None, None).await
 }
 
 /// Set the default provider with runtime hot-swap
@@ -535,6 +535,7 @@ pub async fn handle_set_default(
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
     multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params: SetDefaultParams = match parse_params(&request) {
         Ok(p) => p,
@@ -547,6 +548,7 @@ pub async fn handle_set_default(
         &config,
         &event_bus,
         Some(&multi_registry),
+        Some(&vault),
     )
     .await
 }
@@ -558,6 +560,7 @@ async fn set_default_provider_inner(
     config: &Arc<RwLock<Config>>,
     event_bus: &Arc<GatewayEventBus>,
     multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
+    vault: Option<&Arc<SharedTokenManager>>,
 ) -> JsonRpcResponse {
     // Resolve canonical name (e.g. "codex" → "chatgpt")
     let name = match params.name.to_lowercase().as_str() {
@@ -592,11 +595,18 @@ async fn set_default_provider_inner(
             _ => {}
         }
 
-        // Capture provider config before setting default (for runtime swap)
+        // Capture provider config before setting default (for runtime swap).
+        // api_key is #[serde(skip)] so it's None on the in-memory config — inject from vault.
         provider_config_for_swap = if multi_registry.is_some() {
-            cfg.providers
-                .get(&name)
-                .map(|pc| (name.clone(), pc.clone()))
+            cfg.providers.get(&name).map(|pc| {
+                let mut pc = pc.clone();
+                if pc.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+                    if let Some(v) = vault {
+                        pc.api_key = resolve_api_key(&name, v);
+                    }
+                }
+                (name.clone(), pc)
+            })
         } else {
             None
         };

@@ -520,18 +520,44 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         });
     }
 
-    // Build MultiProviderRegistry: register ALL configured providers
+    // Build MultiProviderRegistry: register ALL configured providers.
+    //
+    // ProviderConfig.api_key is #[serde(skip)] and never lives on disk — keys live
+    // in the vault under "ai:{provider_name}". We must inject from vault before
+    // calling create_provider, otherwise the runtime provider has no key and chat
+    // requests fail with "API key is required" (test path resolves vault separately,
+    // hence the test/runtime asymmetry users hit on Telegram/Feishu paths).
     let provider_registry = {
         use alephcore::providers::create_provider;
+
+        // Read api_key from vault for a given provider name
+        let vault_key_for = |name: &str| format!("ai:{}", name);
+        let vault_lookup = |name: &str| -> Option<String> {
+            match shared_token_mgr.get_secret(&vault_key_for(name)) {
+                Ok(Some(secret)) => Some(secret.expose().to_string()),
+                _ => None,
+            }
+        };
+        // Hydrate a ProviderConfig clone with its vault api_key (if present)
+        let hydrate = |name: &str, cfg: &alephcore::ProviderConfig|
+            -> alephcore::ProviderConfig {
+            let mut c = cfg.clone();
+            if c.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+                c.api_key = vault_lookup(name);
+            }
+            c
+        };
+        let has_key = |name: &str, cfg: &alephcore::ProviderConfig| -> bool {
+            cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+                || vault_lookup(name).is_some()
+        };
 
         // Determine default provider name
         let default_name = app_config.general.default_provider.clone().or_else(|| {
             app_config
                 .providers
                 .iter()
-                .find(|(_, cfg)| {
-                    cfg.enabled && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
-                })
+                .find(|(name, cfg)| cfg.enabled && has_key(name, cfg))
                 .map(|(name, _)| name.clone())
         });
 
@@ -557,15 +583,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 if !provider_cfg.enabled || name.as_str() == env_name {
                     continue;
                 }
-                if provider_cfg
-                    .api_key
-                    .as_ref()
-                    .map(|k| k.is_empty())
-                    .unwrap_or(true)
-                {
+                if !has_key(name, provider_cfg) {
                     continue;
                 }
-                if let Ok(p) = create_provider(name, provider_cfg.clone()) {
+                let hydrated = hydrate(name, provider_cfg);
+                if let Ok(p) = create_provider(name, hydrated) {
                     registry.register(name.clone(), p);
                     tracing::info!(provider = %name, "Registered provider from config");
                 }
@@ -581,7 +603,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         } else if let Some(def_name) = default_name {
             // No env provider — create from config
             if let Some(provider_cfg) = app_config.providers.get(&def_name) {
-                if let Ok(default_prov) = create_provider(&def_name, provider_cfg.clone()) {
+                let default_hydrated = hydrate(&def_name, provider_cfg);
+                if let Ok(default_prov) = create_provider(&def_name, default_hydrated) {
                     let registry = Arc::new(alephcore::MultiProviderRegistry::new(
                         def_name.clone(),
                         default_prov,
@@ -591,10 +614,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         if !pcfg.enabled || name == &def_name {
                             continue;
                         }
-                        if pcfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+                        if !has_key(name, pcfg) {
                             continue;
                         }
-                        if let Ok(p) = create_provider(name, pcfg.clone()) {
+                        let hydrated = hydrate(name, pcfg);
+                        if let Ok(p) = create_provider(name, hydrated) {
                             registry.register(name.clone(), p);
                             tracing::info!(provider = %name, "Registered provider from config");
                         }

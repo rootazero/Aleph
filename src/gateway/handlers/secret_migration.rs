@@ -14,53 +14,48 @@
 //! - Channels (`channels.*`)               → vault prefix `channel:`
 
 use crate::gateway::security::SharedTokenManager;
-use crate::sync_primitives::Arc;
 use crate::Config;
-use tokio::sync::RwLock;
 
 /// Migrate all plaintext secrets from config to vault at startup.
 ///
-/// Returns the total number of secrets migrated. Saves config only if
-/// any migrations occurred (incremental save per affected section).
-pub async fn migrate_all_secrets_to_vault(
-    app_config: &Arc<RwLock<Config>>,
-    vault: &SharedTokenManager,
-) {
-    let mut cfg = app_config.write().await;
+/// Operates directly on a mutable Config — caller is responsible for any
+/// surrounding lock. Saves config only if any migrations occurred
+/// (incremental save per affected section).
+///
+/// Returns the total number of secrets migrated.
+pub fn migrate_all_secrets_to_vault(cfg: &mut Config, vault: &SharedTokenManager) -> usize {
     let mut sections_to_save: Vec<&str> = Vec::new();
 
     // 1. AI providers: providers.{name}.api_key → ai:{name}
-    let ai_migrated = migrate_ai_providers(&mut cfg, vault);
+    let ai_migrated = migrate_ai_providers(cfg, vault);
     if ai_migrated > 0 {
         sections_to_save.push("providers");
     }
 
     // 2. Generation providers: generation.{type}_providers.{name}.api_key → gen:{name}
-    let gen_migrated = migrate_generation_providers(&mut cfg, vault);
+    let gen_migrated = migrate_generation_providers(cfg, vault);
     if gen_migrated > 0 {
         sections_to_save.push("generation");
     }
 
     // 3. Embedding providers: memory.embedding.providers[].api_key → embed:{id}
-    let embed_migrated = migrate_embedding_providers(&mut cfg, vault);
+    let embed_migrated = migrate_embedding_providers(cfg, vault);
 
     // 4. Rerank: memory.rerank.api_key → rerank:{provider}
-    let rerank_migrated = migrate_rerank(&mut cfg, vault);
+    let rerank_migrated = migrate_rerank(cfg, vault);
 
     if embed_migrated + rerank_migrated > 0 {
         sections_to_save.push("memory");
     }
 
     // 5. Search backends: search.backends.{name}.api_key → search:{name}
-    let search_migrated = migrate_search_backends(&mut cfg, vault);
+    let search_migrated = migrate_search_backends(cfg, vault);
     if search_migrated > 0 {
         sections_to_save.push("search");
     }
 
     // 6. Channels: channels.{id}.bot_token etc → channel:{id}:{field}
-    //    (handled by channel::migrate_channel_secrets_to_vault, called separately)
-    //    We include it here for unified logging.
-    let channel_migrated = migrate_channels(&mut cfg, vault);
+    let channel_migrated = migrate_channels(cfg, vault);
     if channel_migrated > 0 {
         sections_to_save.push("channels");
     }
@@ -82,6 +77,8 @@ pub async fn migrate_all_secrets_to_vault(
             tracing::error!(error = %e, "Failed to save config after secret migration");
         }
     }
+
+    total
 }
 
 // ── AI providers ────────────────────────────────────────────────────────────
