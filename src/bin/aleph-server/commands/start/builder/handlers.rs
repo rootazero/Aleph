@@ -971,7 +971,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
     multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
-    acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
+    acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
 ) {
     use alephcore::gateway::handlers::agent_config;
     use alephcore::gateway::handlers::behavior_config;

@@ -171,7 +171,7 @@ pub struct BuiltinToolRegistry {
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Extension manager for plugin tool execution
     pub(super) extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
-    /// ACP delegate tool (optional - requires AcpHarnessManager)
+    /// ACP delegate tool (optional - requires AcpAdapterManager)
     pub(crate) acp_delegate_tool: Option<crate::builtin_tools::acp_tools::AcpDelegateTool>,
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     /// ClawHub tool instance

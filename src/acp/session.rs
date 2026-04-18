@@ -10,12 +10,12 @@ use crate::acp::AcpChunkCallback;
 use crate::error::{AlephError, Result};
 
 // =============================================================================
-// HarnessConfig
+// AdapterConfig
 // =============================================================================
 
 /// Configuration for spawning an ACP harness subprocess.
 #[derive(Debug, Clone)]
-pub struct HarnessConfig {
+pub struct AdapterConfig {
     /// Executable name or path (e.g. "claude", "codex", "gemini").
     pub executable: String,
     /// CLI arguments for ACP mode.
@@ -28,7 +28,7 @@ pub struct HarnessConfig {
     pub timeout: Duration,
 }
 
-impl Default for HarnessConfig {
+impl Default for AdapterConfig {
     fn default() -> Self {
         Self {
             executable: String::new(),
@@ -74,7 +74,7 @@ pub struct AcpSession {
 
 impl AcpSession {
     /// Spawn a new ACP subprocess from the given config.
-    pub async fn spawn(harness_id: &str, config: &HarnessConfig) -> Result<Self> {
+    pub async fn spawn(harness_id: &str, config: &AdapterConfig) -> Result<Self> {
         let mut cmd = Command::new(&config.executable);
         cmd.args(&config.args)
             .stdin(std::process::Stdio::piped())
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_harness_config_defaults() {
-        let config = HarnessConfig::default();
+        let config = AdapterConfig::default();
         assert!(config.executable.is_empty());
         assert!(config.args.is_empty());
         assert!(config.cwd.is_none());
@@ -400,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_nonexistent_executable() {
-        let config = HarnessConfig {
+        let config = AdapterConfig {
             executable: "definitely-not-a-real-acp-executable-xyz".to_string(),
             ..Default::default()
         };
@@ -418,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_drop_kills_child() {
         // Spawn a simple long-running process
-        let config = HarnessConfig {
+        let config = AdapterConfig {
             executable: "cat".to_string(),
             ..Default::default()
         };

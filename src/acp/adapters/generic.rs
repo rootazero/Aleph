@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::{debug, error};
 
-use crate::acp::harness::{AcpHarness, HarnessMode};
-use crate::acp::session::{AcpSession, HarnessConfig};
-use crate::config::types::acp::{AcpHarnessEntry, OutputFormatSerde};
+use crate::acp::adapter::{AcpAdapter, AdapterMode};
+use crate::acp::session::{AcpSession, AdapterConfig};
+use crate::config::types::acp::{AcpAdapterEntry, OutputFormatSerde};
 use crate::error::{AlephError, Result};
 
 /// How to parse stdout from a oneshot harness.
@@ -60,27 +60,27 @@ impl From<&OutputFormatSerde> for OutputFormat {
 /// - Executable name from config
 /// - Fixed args per mode (oneshot vs native_acp)
 /// - Standard output parsing (plain text or JSON field extraction)
-pub struct GenericAcpHarness {
+pub struct GenericAcpAdapter {
     id: String,
     display_name: String,
     executable: String,
-    default_mode: HarnessMode,
-    supported_modes: Vec<HarnessMode>,
+    default_mode: AdapterMode,
+    supported_modes: Vec<AdapterMode>,
     oneshot_args: Vec<String>,
     native_acp_args: Vec<String>,
     output_format: OutputFormat,
 }
 
-impl GenericAcpHarness {
-    /// Create from an AcpHarnessEntry config.
-    pub fn from_entry(entry: &AcpHarnessEntry) -> Self {
+impl GenericAcpAdapter {
+    /// Create from an AcpAdapterEntry config.
+    pub fn from_entry(entry: &AcpAdapterEntry) -> Self {
         let id = entry.preset.clone().unwrap_or_default();
         let display_name = entry.display_name.clone();
         let executable = entry.executable.clone().unwrap_or_else(|| id.clone());
-        let default_mode = HarnessMode::from_serde(&entry.default_mode);
+        let default_mode = AdapterMode::from_serde(&entry.default_mode);
 
         // All generic presets support both modes
-        let supported_modes = vec![HarnessMode::Oneshot, HarnessMode::NativeAcp];
+        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
 
         Self {
             id,
@@ -100,13 +100,13 @@ impl GenericAcpHarness {
         id: impl Into<String>,
         display_name: impl Into<String>,
         executable: impl Into<String>,
-        default_mode: HarnessMode,
+        default_mode: AdapterMode,
         oneshot_args: Vec<String>,
         native_acp_args: Vec<String>,
         output_format: OutputFormat,
     ) -> Self {
         let id = id.into();
-        let supported_modes = vec![HarnessMode::Oneshot, HarnessMode::NativeAcp];
+        let supported_modes = vec![AdapterMode::Oneshot, AdapterMode::NativeAcp];
         Self {
             id,
             display_name: display_name.into(),
@@ -120,16 +120,16 @@ impl GenericAcpHarness {
     }
 
     /// Resolve effective args based on mode.
-    fn resolve_args(&self, mode: HarnessMode) -> Vec<String> {
+    fn resolve_args(&self, mode: AdapterMode) -> Vec<String> {
         match mode {
-            HarnessMode::Oneshot => self.oneshot_args.clone(),
-            HarnessMode::NativeAcp => self.native_acp_args.clone(),
+            AdapterMode::Oneshot => self.oneshot_args.clone(),
+            AdapterMode::NativeAcp => self.native_acp_args.clone(),
         }
     }
 }
 
 #[async_trait]
-impl AcpHarness for GenericAcpHarness {
+impl AcpAdapter for GenericAcpAdapter {
     fn id(&self) -> &str {
         &self.id
     }
@@ -138,16 +138,16 @@ impl AcpHarness for GenericAcpHarness {
         &self.display_name
     }
 
-    fn mode(&self) -> HarnessMode {
+    fn mode(&self) -> AdapterMode {
         self.default_mode
     }
 
-    fn supported_modes(&self) -> Vec<HarnessMode> {
+    fn supported_modes(&self) -> Vec<AdapterMode> {
         self.supported_modes.clone()
     }
 
-    fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
-        HarnessConfig {
+    fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
+        AdapterConfig {
             executable: self.executable.clone(),
             args: self.resolve_args(self.default_mode),
             cwd: cwd.map(String::from),
@@ -204,7 +204,7 @@ impl AcpHarness for GenericAcpHarness {
     async fn spawn_session(&self,
         cwd: Option<&str>,
     ) -> Result<AcpSession> {
-        let config = HarnessConfig {
+        let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),
             cwd: cwd.map(String::from),
@@ -259,11 +259,11 @@ mod tests {
 
     #[test]
     fn test_generic_harness_build_config() {
-        let harness = GenericAcpHarness::new(
+        let harness = GenericAcpAdapter::new(
             "test",
             "Test",
             "test-exe",
-            HarnessMode::Oneshot,
+            AdapterMode::Oneshot,
             vec!["exec".to_string()],
             vec!["--acp".to_string()],
             OutputFormat::PlainText,
@@ -277,11 +277,11 @@ mod tests {
 
     #[test]
     fn test_generic_harness_build_config_native_acp() {
-        let harness = GenericAcpHarness::new(
+        let harness = GenericAcpAdapter::new(
             "test",
             "Test",
             "test-exe",
-            HarnessMode::NativeAcp,
+            AdapterMode::NativeAcp,
             vec!["exec".to_string()],
             vec!["--acp".to_string()],
             OutputFormat::PlainText,
@@ -293,17 +293,17 @@ mod tests {
 
     #[test]
     fn test_generic_harness_from_entry() {
-        let entry = AcpHarnessEntry {
+        let entry = AcpAdapterEntry {
             display_name: "My Tool".to_string(),
             executable: Some("my-tool".to_string()),
             args: vec!["run".to_string()],
-            default_mode: crate::config::types::acp::HarnessModeSerde::Oneshot,
+            default_mode: crate::config::types::acp::AdapterModeSerde::Oneshot,
             output_format: OutputFormatSerde::PlainText,
             preset: Some("my-tool".to_string()),
             ..Default::default()
         };
 
-        let harness = GenericAcpHarness::from_entry(&entry);
+        let harness = GenericAcpAdapter::from_entry(&entry);
         assert_eq!(harness.id(), "my-tool");
         assert_eq!(harness.display_name(), "My Tool");
         assert_eq!(harness.executable, "my-tool");

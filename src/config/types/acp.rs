@@ -2,8 +2,8 @@
 //!
 //! Contains configuration for ACP harness management:
 //! - AcpConfig: Top-level ACP settings (enable/disable, harness registry)
-//! - AcpHarnessEntry: Individual harness configuration
-//! - HarnessModeSerde: Communication mode (NativeAcp vs Oneshot)
+//! - AcpAdapterEntry: Individual harness configuration
+//! - AdapterModeSerde: Communication mode (NativeAcp vs Oneshot)
 //! - OutputFormatSerde: Output parsing format (PlainText vs Json)
 //! - Preset factory methods for well-known harnesses (Claude Code, Codex, Gemini)
 
@@ -25,26 +25,26 @@ pub struct AcpConfig {
     /// Registered ACP harnesses keyed by name.
     /// Preset harnesses are always present; user entries are merged on top.
     #[serde(
-        default = "default_harnesses",
+        default = "default_adapters",
         deserialize_with = "deserialize_harnesses_with_presets"
     )]
-    pub harnesses: HashMap<String, AcpHarnessEntry>,
+    pub adapters: HashMap<String, AcpAdapterEntry>,
 }
 
-fn default_harnesses() -> HashMap<String, AcpHarnessEntry> {
-    AcpHarnessEntry::all_presets().into_iter().collect()
+fn default_adapters() -> HashMap<String, AcpAdapterEntry> {
+    AcpAdapterEntry::all_presets().into_iter().collect()
 }
 
 /// Deserialize harnesses and merge with presets (presets fill missing entries).
 fn deserialize_harnesses_with_presets<'de, D>(
     deserializer: D,
-) -> std::result::Result<HashMap<String, AcpHarnessEntry>, D::Error>
+) -> std::result::Result<HashMap<String, AcpAdapterEntry>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let mut map: HashMap<String, AcpHarnessEntry> = HashMap::deserialize(deserializer)?;
+    let mut map: HashMap<String, AcpAdapterEntry> = HashMap::deserialize(deserializer)?;
     // Fill in any missing presets
-    for (id, entry) in AcpHarnessEntry::all_presets() {
+    for (id, entry) in AcpAdapterEntry::all_presets() {
         map.entry(id).or_insert(entry);
     }
     Ok(map)
@@ -54,19 +54,19 @@ impl Default for AcpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            harnesses: default_harnesses(),
+            adapters: default_adapters(),
         }
     }
 }
 
 // =============================================================================
-// HarnessModeSerde
+// AdapterModeSerde
 // =============================================================================
 
 /// Communication mode for an ACP harness
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum HarnessModeSerde {
+pub enum AdapterModeSerde {
     /// Full ACP protocol (bidirectional JSON-RPC over stdio)
     NativeAcp,
     /// Single-shot: send prompt via CLI args/stdin, read stdout
@@ -113,12 +113,12 @@ fn default_trust_level() -> TrustLevel {
 }
 
 // =============================================================================
-// AcpHarnessEntry
+// AcpAdapterEntry
 // =============================================================================
 
 /// Configuration for a single ACP harness
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AcpHarnessEntry {
+pub struct AcpAdapterEntry {
     /// Human-readable display name
     #[serde(default)]
     pub display_name: String,
@@ -133,7 +133,7 @@ pub struct AcpHarnessEntry {
 
     /// Default communication mode (LLM may override at call time)
     #[serde(default, alias = "mode")]
-    pub default_mode: HarnessModeSerde,
+    pub default_mode: AdapterModeSerde,
 
     /// How to parse stdout output
     #[serde(default)]
@@ -170,13 +170,13 @@ fn default_timeout() -> u64 {
     300
 }
 
-impl Default for AcpHarnessEntry {
+impl Default for AcpAdapterEntry {
     fn default() -> Self {
         Self {
             display_name: String::new(),
             executable: None,
             args: Vec::new(),
-            default_mode: HarnessModeSerde::default(),
+            default_mode: AdapterModeSerde::default(),
             output_format: OutputFormatSerde::default(),
             env: HashMap::new(),
             cwd: None,
@@ -210,12 +210,12 @@ pub struct PresetSpec {
     pub executable: &'static str,
     pub oneshot_args: &'static [&'static str],
     pub native_acp_args: &'static [&'static str],
-    pub default_mode: HarnessModeSerde,
+    pub default_mode: AdapterModeSerde,
     pub output_format: PresetOutputFormat,
     pub trust_level: TrustLevel,
 }
 
-impl From<&PresetSpec> for AcpHarnessEntry {
+impl From<&PresetSpec> for AcpAdapterEntry {
     fn from(spec: &PresetSpec) -> Self {
         Self {
             display_name: spec.display_name.into(),
@@ -235,10 +235,10 @@ impl From<&PresetSpec> for AcpHarnessEntry {
     }
 }
 
-/// Built-in preset harnesses.
+/// Built-in preset adapters.
 ///
 /// Covers agents from acpx's AGENT_REGISTRY that follow the standard
-/// executable + args pattern. Each entry maps to a GenericAcpHarness.
+/// executable + args pattern. Each entry maps to a GenericAcpAdapter.
 pub const HARNESS_PRESETS: &[PresetSpec] = &[
     // Claude Code — supports both oneshot (--print) and native ACP (--acp)
     PresetSpec {
@@ -247,7 +247,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "claude",
         oneshot_args: &["--print", "--output-format", "json", "-p"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::JsonField("result"),
         trust_level: TrustLevel::Full,
     },
@@ -258,7 +258,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "codex",
         oneshot_args: &["exec"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -269,7 +269,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "gemini",
         oneshot_args: &["-p"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::NativeAcp,
+        default_mode: AdapterModeSerde::NativeAcp,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -280,7 +280,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "opencode",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -291,7 +291,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "kimi",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -302,7 +302,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "cursor-agent",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -313,7 +313,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "copilot",
         oneshot_args: &["--acp", "--stdio"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -324,7 +324,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "droid",
         oneshot_args: &["exec", "--output-format", "acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -335,7 +335,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "pi-acp",
         oneshot_args: &[],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -346,7 +346,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "iflow",
         oneshot_args: &["--experimental-acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -357,7 +357,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "kilocode",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -368,7 +368,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "kiro-cli-chat",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -379,7 +379,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "qodercli",
         oneshot_args: &["--acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -390,7 +390,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "qwen",
         oneshot_args: &["--acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -401,7 +401,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "traecli",
         oneshot_args: &["acp", "serve"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
@@ -412,13 +412,13 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
         executable: "openclaw",
         oneshot_args: &["acp"],
         native_acp_args: &["--acp"],
-        default_mode: HarnessModeSerde::Oneshot,
+        default_mode: AdapterModeSerde::Oneshot,
         output_format: PresetOutputFormat::PlainText,
         trust_level: TrustLevel::Full,
     },
 ];
 
-impl AcpHarnessEntry {
+impl AcpAdapterEntry {
     /// Preset: Claude Code (Anthropic CLI)
     pub fn preset_claude_code() -> Self {
         Self::from(
@@ -495,52 +495,52 @@ mod tests {
     #[test]
     fn test_preset_trust_levels() {
         assert_eq!(
-            AcpHarnessEntry::preset_claude_code().trust_level,
+            AcpAdapterEntry::preset_claude_code().trust_level,
             TrustLevel::Full
         );
         assert_eq!(
-            AcpHarnessEntry::preset_codex().trust_level,
+            AcpAdapterEntry::preset_codex().trust_level,
             TrustLevel::Full
         );
         assert_eq!(
-            AcpHarnessEntry::preset_gemini().trust_level,
+            AcpAdapterEntry::preset_gemini().trust_level,
             TrustLevel::Full
         );
     }
 
     #[test]
     fn test_custom_harness_default_trust() {
-        let entry = AcpHarnessEntry::default();
+        let entry = AcpAdapterEntry::default();
         assert_eq!(entry.trust_level, TrustLevel::Confirm);
     }
 
     #[test]
     fn test_trust_level_deserialize_missing() {
         let json = r#"{"display_name":"Test","enabled":true}"#;
-        let entry: AcpHarnessEntry = serde_json::from_str(json).unwrap();
+        let entry: AcpAdapterEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.trust_level, TrustLevel::Confirm);
     }
 
     #[test]
     fn test_preset_modes() {
-        let claude_code = AcpHarnessEntry::preset_claude_code();
+        let claude_code = AcpAdapterEntry::preset_claude_code();
         assert_eq!(
             claude_code.default_mode,
-            HarnessModeSerde::Oneshot,
+            AdapterModeSerde::Oneshot,
             "Claude Code preset should have default_mode=Oneshot"
         );
 
-        let codex = AcpHarnessEntry::preset_codex();
+        let codex = AcpAdapterEntry::preset_codex();
         assert_eq!(
             codex.default_mode,
-            HarnessModeSerde::Oneshot,
+            AdapterModeSerde::Oneshot,
             "Codex preset should have default_mode=Oneshot"
         );
 
-        let gemini = AcpHarnessEntry::preset_gemini();
+        let gemini = AcpAdapterEntry::preset_gemini();
         assert_eq!(
             gemini.default_mode,
-            HarnessModeSerde::NativeAcp,
+            AdapterModeSerde::NativeAcp,
             "Gemini preset should have default_mode=NativeAcp"
         );
     }

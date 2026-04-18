@@ -1,6 +1,6 @@
-//! Custom harness adapter — user-defined CLI tools as ACP harnesses.
+//! Custom ACP adapter — user-defined CLI tools as ACP adapters.
 //!
-//! Built from `AcpHarnessEntry` config, allowing arbitrary executables
+//! Built from `AcpAdapterEntry` config, allowing arbitrary executables
 //! to participate as ACP harnesses via configuration alone.
 
 use std::time::Duration;
@@ -9,23 +9,23 @@ use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::{debug, error};
 
-use crate::acp::harness::{AcpHarness, HarnessMode};
-use crate::acp::session::HarnessConfig;
-use crate::config::types::acp::{AcpHarnessEntry, OutputFormatSerde};
+use crate::acp::adapter::{AcpAdapter, AdapterMode};
+use crate::acp::session::AdapterConfig;
+use crate::config::types::acp::{AcpAdapterEntry, OutputFormatSerde};
 use crate::error::{AlephError, Result};
 
-/// ACP harness built from user-provided `AcpHarnessEntry` configuration.
+/// ACP harness built from user-provided `AcpAdapterEntry` configuration.
 ///
 /// This enables arbitrary CLI tools to act as ACP harnesses without
 /// writing a dedicated Rust adapter — just configure and go.
-pub struct CustomHarness {
+pub struct CustomAcpAdapter {
     harness_id: String,
-    config: AcpHarnessEntry,
+    config: AcpAdapterEntry,
 }
 
-impl CustomHarness {
+impl CustomAcpAdapter {
     /// Create a new custom harness from config.
-    pub fn new(harness_id: String, config: AcpHarnessEntry) -> Self {
+    pub fn new(harness_id: String, config: AcpAdapterEntry) -> Self {
         Self { harness_id, config }
     }
 
@@ -39,7 +39,7 @@ impl CustomHarness {
 }
 
 #[async_trait]
-impl AcpHarness for CustomHarness {
+impl AcpAdapter for CustomAcpAdapter {
     fn id(&self) -> &str {
         &self.harness_id
     }
@@ -48,11 +48,11 @@ impl AcpHarness for CustomHarness {
         &self.config.display_name
     }
 
-    fn mode(&self) -> HarnessMode {
-        HarnessMode::from_serde(&self.config.default_mode)
+    fn mode(&self) -> AdapterMode {
+        AdapterMode::from_serde(&self.config.default_mode)
     }
 
-    fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
+    fn build_config(&self, cwd: Option<&str>) -> AdapterConfig {
         let env: Vec<(String, String)> = self
             .config
             .env
@@ -60,7 +60,7 @@ impl AcpHarness for CustomHarness {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        HarnessConfig {
+        AdapterConfig {
             executable: self.executable().to_string(),
             args: self.config.args.clone(),
             cwd: cwd.map(String::from).or_else(|| self.config.cwd.clone()),

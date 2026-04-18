@@ -126,7 +126,7 @@ pub use crate::config::{
     guides::deploy_guides,
     patcher::ConfigPatcher,
     policies::CompressionPolicy,
-    types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
+    types::acp::{AcpConfig, AcpAdapterEntry, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
