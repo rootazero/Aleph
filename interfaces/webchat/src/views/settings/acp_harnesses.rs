@@ -1,34 +1,24 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{AcpApi, AcpHarnessConfig, AcpHarnessInfo};
+use crate::api::{AcpApi, AcpHarnessConfig, AcpHarnessInfo, AcpPresetMeta};
 use crate::context::DashboardState;
 use crate::i18n::*;
 
-/// Preset harness metadata for the left panel cards
-struct HarnessPreset {
-    id: &'static str,
-    name: &'static str,
-    icon_color: &'static str,
-}
-
-const HARNESS_PRESETS: &[HarnessPreset] = &[
-    HarnessPreset {
-        id: "claude-code",
-        name: "Claude Code",
-        icon_color: "#F97316",
-    },
-    HarnessPreset {
-        id: "codex",
-        name: "Codex",
-        icon_color: "#3B82F6",
-    },
-    HarnessPreset {
-        id: "gemini",
-        name: "Gemini CLI",
-        icon_color: "#10B981",
-    },
+const PRESET_ICON_COLORS: &[&str] = &[
+    "#F97316", "#3B82F6", "#10B981", "#8B5CF6", "#EF4444",
+    "#06B6D4", "#F59E0B", "#EC4899", "#6366F1", "#14B8A6",
+    "#84CC16", "#D946EF", "#F43F5E", "#0EA5E9", "#A855F7",
+    "#22C55E",
 ];
+
+fn preset_icon_color(id: &str) -> &'static str {
+    let hash = id.bytes().fold(0u32, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(b as u32)
+    });
+    let idx = (hash as usize) % PRESET_ICON_COLORS.len();
+    PRESET_ICON_COLORS[idx]
+}
 
 /// ACP Harnesses settings page — manages external CLI tools
 #[component]
@@ -37,26 +27,29 @@ pub fn AcpHarnessesView() -> impl IntoView {
     let i18n = use_i18n();
 
     let harnesses = RwSignal::new(Vec::<AcpHarnessInfo>::new());
+    let preset_metas = RwSignal::new(Vec::<AcpPresetMeta>::new());
     let loading = RwSignal::new(true);
     let selected_id = RwSignal::new(Option::<String>::None);
     let show_add_form = RwSignal::new(false);
     let acp_enabled = RwSignal::new(true);
     let toggling = RwSignal::new(false);
 
-    // Load ACP enabled state + harness list on mount
+    // Load ACP enabled state + harness list + preset metadata on mount
     Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
-                // Load ACP enabled state
                 if let Ok(enabled) = AcpApi::get_acp_enabled(&state).await {
                     acp_enabled.set(enabled);
                 }
 
-                // Load harness list (will be empty if ACP disabled)
+                match AcpApi::presets_meta(&state).await {
+                    Ok(metas) => preset_metas.set(metas),
+                    Err(_) => preset_metas.set(vec![]),
+                }
+
                 loading.set(true);
                 match AcpApi::list(&state).await {
                     Ok(list) => {
-                        // Auto-select first harness if none selected
                         if selected_id.get_untracked().is_none() {
                             if let Some(first) = list.first() {
                                 selected_id.set(Some(first.id.clone()));
@@ -134,9 +127,9 @@ pub fn AcpHarnessesView() -> impl IntoView {
                             }.into_any()
                         } else {
                             let all = harnesses.get();
+                            let metas = preset_metas.get();
 
-                            // Split into preset and custom
-                            let preset_ids: Vec<&str> = HARNESS_PRESETS.iter().map(|p| p.id).collect();
+                            let preset_ids: Vec<&str> = metas.iter().map(|p| p.id.as_str()).collect();
                             let preset_harnesses: Vec<AcpHarnessInfo> = all.iter()
                                 .filter(|h| preset_ids.contains(&h.id.as_str()))
                                 .cloned()
@@ -154,10 +147,10 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                             {t!(i18n, settings.acp.preset_cli)}
                                         </h2>
                                         <div class="grid grid-cols-1 gap-2">
-                                            {HARNESS_PRESETS.iter().map(|preset| {
-                                                let pid = preset.id.to_string();
-                                                let pname = preset.name.to_string();
-                                                let color = preset.icon_color.to_string();
+                                            {metas.into_iter().map(|preset| {
+                                                let pid = preset.id.clone();
+                                                let pname = preset.display_name.clone();
+                                                let color = preset_icon_color(&preset.id).to_string();
                                                 let first_char = pname.chars().next().unwrap_or('?').to_uppercase().to_string();
 
                                                 // Find matching harness info
@@ -350,6 +343,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                 harness_id=sel_id
                                 harnesses=harnesses
                                 selected_id=selected_id
+                                preset_metas=preset_metas
                             />
                         }.into_any()
                     } else {
@@ -377,6 +371,7 @@ fn HarnessDetailPanel(
     harness_id: String,
     harnesses: RwSignal<Vec<AcpHarnessInfo>>,
     selected_id: RwSignal<Option<String>>,
+    preset_metas: RwSignal<Vec<AcpPresetMeta>>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let info = harnesses.get().into_iter().find(|h| h.id == harness_id);
@@ -389,8 +384,7 @@ fn HarnessDetailPanel(
         .into_any();
     };
 
-    let preset = HARNESS_PRESETS.iter().find(|p| p.id == harness_id);
-    let is_preset = preset.is_some();
+    let is_preset = preset_metas.get().iter().any(|p| p.id == harness_id);
     let display_name_label = info.display_name.clone();
 
     // Form state

@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::acp::harness::{AcpHarness, HarnessMode};
-use crate::acp::harnesses::{ClaudeCodeHarness, CodexHarness, CustomHarness, GeminiHarness};
+use crate::acp::harnesses::{CustomHarness, GenericAcpHarness};
 use crate::acp::session::AcpSession;
 use crate::acp::AcpChunkCallback;
 use crate::config::types::acp::AcpHarnessEntry;
@@ -204,19 +204,12 @@ impl AcpHarnessManager {
 
     /// Factory: build the right harness implementation from an entry.
     fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Arc<dyn AcpHarness> {
-        let default_mode = HarnessMode::from_serde(&entry.default_mode);
-        let preset = entry.preset.as_deref().unwrap_or("");
-        match preset {
-            "claude-code" => Arc::new(ClaudeCodeHarness::new(
-                entry.executable.clone(),
-                default_mode,
-            )),
-            "codex" => Arc::new(CodexHarness::new(entry.executable.clone(), default_mode)),
-            "gemini" => Arc::new(GeminiHarness::new(entry.executable.clone(), default_mode)),
-            _ => {
-                // Custom or unknown preset — use CustomHarness
-                Arc::new(CustomHarness::new(id.to_string(), entry.clone()))
-            }
+        if entry.preset.is_some() {
+            // All preset harnesses use the generic configuration-driven adapter
+            Arc::new(GenericAcpHarness::from_entry(entry))
+        } else {
+            // Custom or unknown preset — use CustomHarness
+            Arc::new(CustomHarness::new(id.to_string(), entry.clone()))
         }
     }
 
@@ -935,11 +928,22 @@ mod tests {
     async fn test_list_configs() {
         let manager = AcpHarnessManager::new();
         let configs = manager.list_configs().await;
-        assert_eq!(configs.len(), 3);
+        let preset_ids = crate::config::types::acp::AcpHarnessEntry::preset_ids();
+        assert_eq!(configs.len(), preset_ids.len());
         // Should be sorted
-        assert_eq!(configs[0].0, "claude-code");
-        assert_eq!(configs[1].0, "codex");
-        assert_eq!(configs[2].0, "gemini");
+        for i in 1..configs.len() {
+            assert!(
+                configs[i - 1].0 <= configs[i].0,
+                "configs should be sorted by id"
+            );
+        }
+        for id in preset_ids {
+            assert!(
+                configs.iter().any(|(k, _)| k == id),
+                "missing preset config: {}",
+                id
+            );
+        }
     }
 
     #[tokio::test]
