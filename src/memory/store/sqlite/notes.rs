@@ -250,6 +250,14 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<Vec<NoteIndexEntry>, AlephError> {
         let conn = lock_conn!(self)?;
 
+        // FTS5 reserves `[`, `]`, `^`, `*`, `:`, `(`, `)`, `"` and operator
+        // keywords (`AND`, `OR`, `NOT`, `NEAR`). Raw user/transcript queries
+        // routinely contain brackets (`[user]`, code snippets, JSON), which
+        // makes the unquoted MATCH binding raise `fts5: syntax error near "["`.
+        // Wrapping the whole query as a single FTS5 phrase keeps it literal —
+        // we double-up any embedded quotes per FTS5 phrase escaping rules.
+        let phrase = format!("\"{}\"", query.replace('"', "\"\""));
+
         let mut stmt = conn
             .prepare(
                 "SELECT n.*, \
@@ -262,7 +270,7 @@ impl NoteStore for SqliteMemoryBackend {
             .map_err(|e| AlephError::config(format!("search_notes_fts prepare: {e}")))?;
 
         let rows = stmt
-            .query_map(params![query, agent_id, limit as i64], row_to_entry)
+            .query_map(params![phrase, agent_id, limit as i64], row_to_entry)
             .map_err(|e| AlephError::config(format!("search_notes_fts query: {e}")))?;
 
         let mut entries = Vec::new();

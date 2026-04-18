@@ -701,6 +701,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
 
+        // Wire L0 raw-memory writer so every gateway-mediated agent turn is
+        // captured into raw_memories. Without this, only session-compaction
+        // residue and SessionEnd writes reach L0; short conversations under
+        // the WS path never persist and the L1 pipeline starves.
+        agent_registry
+            .set_raw_memory_writer(memory_db.clone() as std::sync::Arc<
+                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+            >)
+            .await;
+
         // Capture embedder before it's moved into tool_config
         embedder_out = embedder.clone();
 

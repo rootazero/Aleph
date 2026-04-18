@@ -363,6 +363,20 @@ pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
 
 /// Initialize the core relational schema.
 pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
+    // Migrate legacy `recall_signals.fact_id` → `note_path` BEFORE applying the
+    // DDL, since RECALL_SIGNALS_DDL creates an index on the new `note_path`
+    // column. On a fresh DB the migration is a no-op (table absent); on an
+    // older DB it renames the column so the subsequent CREATE INDEX succeeds.
+    migrate_recall_signals_note_path(conn)?;
+
+    // Drop stale indexes that reference the old column name. Both will be
+    // recreated under the new `idx_recall_*` names by RECALL_SIGNALS_DDL.
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_recall_fact_id; \
+         DROP INDEX IF EXISTS idx_recall_dedup;",
+    )
+    .map_err(|e| AlephError::config(format!("Drop legacy recall indexes failed: {e}")))?;
+
     conn.execute_batch(RECALL_SIGNALS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create recall_signals table: {e}")))?;
 
@@ -409,8 +423,6 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
-
-    migrate_recall_signals_note_path(conn)?;
 
     conn.execute_batch(ASSEMBLY_LOGS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;

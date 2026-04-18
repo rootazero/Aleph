@@ -171,6 +171,15 @@ pub trait RawMemoryStore: Send + Sync {
     /// Count unprocessed raw memories for an agent.
     async fn count_unprocessed(&self, agent_id: &str) -> Result<usize, AlephError>;
 
+    /// List the distinct `agent_id` values that have at least one unprocessed
+    /// raw memory. Used by `CompressionService::compress` to fan out across
+    /// every agent rather than only the historical "main" default.
+    /// Default impl returns just `["main"]` for backwards compatibility with
+    /// in-memory test stores; the SQLite backend overrides with a real query.
+    async fn unprocessed_agent_ids(&self) -> Result<Vec<String>, AlephError> {
+        Ok(vec!["main".to_string()])
+    }
+
     /// Get raw memories whose `path` starts with the given prefix, scoped to an agent.
     /// Used for session data retrieval (e.g. "aleph://session/{id}/").
     async fn get_raw_by_path_prefix(

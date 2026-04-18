@@ -141,8 +141,22 @@ impl CompressionService {
     /// `compress_in_workspace` path only when the notes directory cannot be
     /// determined.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
-        self.compress_default_notes(crate::memory::DEFAULT_AGENT)
-            .await
+        use crate::memory::store::raw_memory::RawMemoryStore;
+
+        let mut agent_ids = self.database.unprocessed_agent_ids().await?;
+        if agent_ids.is_empty() {
+            agent_ids.push(crate::memory::DEFAULT_AGENT.to_string());
+        }
+
+        let mut total = CompressionResult::empty();
+        for agent_id in &agent_ids {
+            let result = self.compress_default_notes(agent_id).await?;
+            total.memories_processed += result.memories_processed;
+            total.facts_extracted += result.facts_extracted;
+            total.facts_invalidated += result.facts_invalidated;
+            total.duration_ms += result.duration_ms;
+        }
+        Ok(total)
     }
 
     /// Internal helper: build a `NoteIndexer` from the data directory and
@@ -184,11 +198,11 @@ impl CompressionService {
             .await
             .map_err(|e| AlephError::other(format!("Failed to fetch raw memories: {e}")))?;
 
-        let raw_memories: Vec<_> = raw_memories
-            .into_iter()
-            .filter(|r| r.source != crate::memory::store::raw_memory::RawMemorySource::Transcript)
-            .collect();
-
+        // Spec 1 G3-B: Transcript raws (per-turn captures from the gateway
+        // agent loop) ARE eligible for compression alongside SessionEnd /
+        // PreCompress / Delegation. The historical filter excluded them on
+        // the assumption a separate per-turn pipeline existed; that pipeline
+        // never landed, so excluding Transcript starves the L1 layer.
         if raw_memories.is_empty() {
             tracing::debug!("No uncompressed session memories for note-based compression");
             return Ok(CompressionResult::empty());

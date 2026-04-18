@@ -148,6 +148,8 @@ pub struct AgentCreateTool {
     workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
+    raw_memory_writer:
+        Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl AgentCreateTool {
@@ -161,11 +163,20 @@ impl AgentCreateTool {
             workspace_mgr,
             agent_manager: None,
             session_store,
+            raw_memory_writer: None,
         }
     }
 
     pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
         self.agent_manager = Some(manager);
+        self
+    }
+
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
         self
     }
 }
@@ -330,13 +341,19 @@ impl AlephTool for AgentCreateTool {
             ..Default::default()
         };
 
-        let instance =
-            AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
-                crate::error::AlephError::other(format!(
-                    "Failed to create agent instance '{}': {}",
-                    args.id, e
-                ))
-            })?;
+        let instance = {
+            let mut inst = AgentInstance::new(config, Arc::clone(&self.session_store))
+                .map_err(|e| {
+                    crate::error::AlephError::other(format!(
+                        "Failed to create agent instance '{}': {}",
+                        args.id, e
+                    ))
+                })?;
+            if let Some(ref writer) = self.raw_memory_writer {
+                inst = inst.with_raw_memory_writer(Arc::clone(writer));
+            }
+            inst
+        };
 
         // 8. Register in AgentRegistry (runtime)
         self.registry.register(instance).await;

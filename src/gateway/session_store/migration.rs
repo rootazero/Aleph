@@ -1,10 +1,8 @@
 use std::path::Path;
 
-use rusqlite::{params, Connection};
-use tracing::{info, warn};
+use rusqlite::Connection;
+use tracing::info;
 
-use crate::gateway::router::SessionKey;
-use crate::gateway::session_manager::SessionState;
 use crate::gateway::session_store::file_backend::FileSessionStore;
 use crate::gateway::session_store::types::{MessageRecord, SessionMetadata};
 
@@ -43,6 +41,12 @@ pub async fn export_legacy_messages(store: &FileSessionStore) -> Result<usize, c
         message: format!("Failed to open legacy session DB: {}", e),
         suggestion: None,
     })?;
+
+    // Defensive: older legacy DBs may be missing columns the SELECT below
+    // expects. PRAGMA-guard each ADD COLUMN so the migration succeeds against
+    // any historical schema. SQLite's ALTER TABLE ADD COLUMN is fast, has no
+    // table-rewrite cost, and is idempotent here because we check first.
+    ensure_sessions_columns(&conn)?;
 
     // -----------------------------------------------------------------------
     // 1. Migrate sessions -> metadata.json
@@ -243,6 +247,58 @@ pub async fn export_legacy_messages(store: &FileSessionStore) -> Result<usize, c
     );
 
     Ok(total_messages)
+}
+
+/// Add columns the migration SELECT depends on, if missing. PRAGMA-guarded
+/// per column so this is safe to run on any historical legacy schema.
+fn ensure_sessions_columns(conn: &Connection) -> Result<(), crate::error::AlephError> {
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if table_exists == 0 {
+        return Ok(());
+    }
+
+    let existing: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(sessions)")
+        .map_err(|e| crate::error::AlephError::ConfigError {
+            message: format!("PRAGMA table_info(sessions) prepare failed: {}", e),
+            suggestion: None,
+        })?
+        .query_map([], |row| row.get::<usize, String>(1))
+        .map_err(|e| crate::error::AlephError::ConfigError {
+            message: format!("PRAGMA table_info(sessions) query failed: {}", e),
+            suggestion: None,
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let needed: &[(&str, &str)] = &[
+        ("auto_reset_at", "INTEGER"),
+        ("state", "TEXT"),
+        ("metadata", "TEXT"),
+        ("label", "TEXT"),
+        ("input_tokens", "INTEGER"),
+        ("output_tokens", "INTEGER"),
+        ("model", "TEXT"),
+        ("model_provider", "TEXT"),
+        ("parent_session_key", "TEXT"),
+        ("compaction_count", "INTEGER"),
+    ];
+    for (col, ty) in needed {
+        if !existing.contains(*col) {
+            let sql = format!("ALTER TABLE sessions ADD COLUMN {} {}", col, ty);
+            conn.execute(&sql, []).map_err(|e| crate::error::AlephError::ConfigError {
+                message: format!("ALTER TABLE sessions ADD COLUMN {} failed: {}", col, e),
+                suggestion: None,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 async fn write_batch(

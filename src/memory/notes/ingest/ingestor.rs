@@ -73,6 +73,14 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 });
             }
         };
+
+        // Defensive: drop ops missing the `kind` discriminator before strict
+        // parsing. The LLM occasionally omits it despite the prompt; rather
+        // than failing the whole batch (which leaves the raws unprocessed
+        // forever), we silently skip the malformed op and proceed with the
+        // rest of the plan.
+        let json = strip_kindless_ops(json);
+
         let mut plan: IngestPlan = serde_json::from_value(json).map_err(|e| {
             warn!("compound plan: parse failed: {e}");
             AlephError::other(format!("compound plan parse: {e}"))
@@ -81,6 +89,22 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         plan.ops.retain(valid_op);
         Ok(plan)
     }
+}
+
+fn strip_kindless_ops(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(ops) = obj.get_mut("ops") {
+            if let Some(arr) = ops.as_array_mut() {
+                arr.retain(|op| {
+                    op.as_object()
+                        .and_then(|o| o.get("kind"))
+                        .and_then(|k| k.as_str())
+                        .is_some()
+                });
+            }
+        }
+    }
+    value
 }
 
 #[async_trait]

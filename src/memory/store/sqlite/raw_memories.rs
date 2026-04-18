@@ -148,6 +148,29 @@ impl RawMemoryStore for SqliteMemoryBackend {
         Ok(count.max(0) as usize)
     }
 
+    async fn unprocessed_agent_ids(&self) -> Result<Vec<String>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT agent_id FROM raw_memories \
+                 WHERE is_processed = 0 AND agent_id IS NOT NULL \
+                 ORDER BY agent_id ASC",
+            )
+            .map_err(|e| AlephError::config(format!("unprocessed_agent_ids prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| AlephError::config(format!("unprocessed_agent_ids query: {e}")))?;
+
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(
+                row.map_err(|e| AlephError::config(format!("unprocessed_agent_ids row: {e}")))?,
+            );
+        }
+        Ok(ids)
+    }
+
     async fn get_raw_by_path_prefix(
         &self,
         path_prefix: &str,

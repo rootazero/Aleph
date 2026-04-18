@@ -138,6 +138,12 @@ pub struct AgentInstance {
     agent_dir: PathBuf,
     /// Session store for persistence
     session_store: Arc<dyn SessionStore>,
+    /// Optional L0 raw-memory writer. When set, every persisted user/assistant
+    /// message is also captured into the raw_memories table as a `Transcript`
+    /// entry so the compression pipeline (CompressionService) can later promote
+    /// it to L1 notes. None falls back to compaction-only capture, which means
+    /// short conversations never reach L0.
+    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 /// A message in a session
@@ -192,7 +198,18 @@ impl AgentInstance {
             state: Arc::new(RwLock::new(AgentState::Idle)),
             agent_dir,
             session_store,
+            raw_memory_writer: None,
         })
+    }
+
+    /// Attach an L0 raw-memory writer so every persisted message is also
+    /// captured to `raw_memories`. Wired at gateway startup.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
     }
 
     /// Get the agent ID
@@ -269,7 +286,8 @@ impl AgentInstance {
         }
     }
 
-    /// Add a message to a session (delegated to session store)
+    /// Add a message to a session (delegated to session store) and capture
+    /// it into the L0 raw_memories buffer when a writer is wired.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
         let key_str = key.to_key_string();
         let role_str = match role {
@@ -302,6 +320,25 @@ impl AgentInstance {
             .await
         {
             warn!("Failed to persist message to store '{}': {}", key_str, e);
+        }
+
+        // L0 capture: only persist user and assistant turns. System messages
+        // are prompt scaffolding (re-built each turn) and tool messages are
+        // captured separately via RawMemorySource::ToolOutput in the agent
+        // loop. Skipping them keeps L0 focused on conversational signal.
+        if matches!(role, MessageRole::User | MessageRole::Assistant) {
+            if let Some(writer) = self.raw_memory_writer.as_ref() {
+                let body = format!("[{}] {}", role_str, content);
+                let raw = crate::memory::store::raw_memory::RawMemory::new(
+                    body,
+                    crate::memory::store::raw_memory::RawMemorySource::Transcript,
+                )
+                .with_agent(self.config.agent_id.clone())
+                .with_session(key_str.clone());
+                if let Err(e) = writer.insert_raw_memory(&raw).await {
+                    warn!("L0 raw_memory write failed for {}: {}", key_str, e);
+                }
+            }
         }
     }
 
@@ -457,6 +494,10 @@ enum AgentEntry {
 pub struct AgentRegistry {
     agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
     default_agent: String,
+    /// Optional L0 writer applied to every lazily-instantiated agent so
+    /// gateway-mediated turns reach `raw_memories`. Set once at startup.
+    raw_memory_writer:
+        Arc<RwLock<Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>>>,
 }
 
 impl AgentRegistry {
@@ -465,12 +506,35 @@ impl AgentRegistry {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
             default_agent: "main".to_string(),
+            raw_memory_writer: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Register an already-instantiated agent (for tests and dynamic creation)
+    /// Wire an L0 raw-memory writer that will be applied to every agent
+    /// instantiated through this registry. Idempotent; the latest writer wins.
+    pub async fn set_raw_memory_writer(
+        &self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) {
+        let mut slot = self.raw_memory_writer.write().await;
+        *slot = Some(writer);
+    }
+
+    /// Register an already-instantiated agent (for tests and dynamic creation).
+    /// If a raw-memory writer has been set on the registry and the instance
+    /// does not already carry one, attach it here so dynamically-created agents
+    /// also fill `raw_memories`.
     pub async fn register(&self, instance: AgentInstance) {
         let id = instance.id().to_string();
+        let instance = if instance.raw_memory_writer.is_none() {
+            if let Some(writer) = self.raw_memory_writer.read().await.clone() {
+                instance.with_raw_memory_writer(writer)
+            } else {
+                instance
+            }
+        } else {
+            instance
+        };
         let mut agents = self.agents.write().await;
         agents.insert(id.clone(), AgentEntry::Instance(Arc::new(instance)));
         info!("Registered agent: {}", id);
@@ -529,7 +593,10 @@ impl AgentRegistry {
 
         let id = config.agent_id.clone();
         match AgentInstance::new(config, session_store) {
-            Ok(instance) => {
+            Ok(mut instance) => {
+                if let Some(writer) = self.raw_memory_writer.read().await.clone() {
+                    instance = instance.with_raw_memory_writer(writer);
+                }
                 let arc = Arc::new(instance);
                 agents.insert(id, AgentEntry::Instance(Arc::clone(&arc)));
                 Some(arc)
