@@ -1,7 +1,15 @@
-//! Session Manager
+//! Session Manager — Phase 1 compatibility layer for Gateway `session.*` RPC.
 //!
-//! Manages sessions with SQLite persistence, automatic compaction,
-//! and lifecycle management.
+//! Agent execution (`agent_loop`) no longer reads or writes SessionManager
+//! directly; it uses `crate::session::SessionService`. Every SessionManager
+//! append is mirrored into SessionService via `src/session/shim.rs` so
+//! `session_events` remains the authoritative log.
+//!
+//! Phase 6 migrates Gateway RPC to SessionService directly and removes this
+//! layer.
+//!
+//! Until then, this module continues to manage sessions with SQLite
+//! persistence, automatic compaction, and lifecycle management.
 
 pub(crate) mod ops;
 #[cfg(test)]
