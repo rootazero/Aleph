@@ -471,7 +471,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // references a single instance. Boot never aborts if `enabled = false`
     // — tests / CI override via config and get a NoopSandbox that refuses
     // execution with a structured error.
-    let _sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
+    let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
         use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
         use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
         use alephcore::exec::sandbox::platforms::MacOSSandbox;
@@ -868,6 +868,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         Some(wiki.clone()),
         Some(note_memory_dir.clone()),
+        Some(sandbox.clone()),
     )
     .await;
 

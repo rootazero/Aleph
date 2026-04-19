@@ -68,8 +68,16 @@ impl BuiltinToolRegistry {
         } else {
             FileEditTool::new()
         };
-        let bash_tool = BashExecTool::new();
-        let code_exec_tool = CodeExecTool::new();
+        let bash_tool = if let Some(ref sb) = config.sandbox {
+            BashExecTool::new().with_sandbox(sb.clone())
+        } else {
+            BashExecTool::new()
+        };
+        let code_exec_tool = if let Some(ref sb) = config.sandbox {
+            CodeExecTool::new().with_sandbox(sb.clone())
+        } else {
+            CodeExecTool::new()
+        };
         let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
             PdfGenerateTool::new().with_tool_context(std::sync::Arc::clone(tc))
         } else {
