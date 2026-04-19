@@ -52,7 +52,7 @@ pub mod registry;
 pub mod service;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
-pub use facade::build_tool_service;
+pub use facade::{build_tool_service, build_tool_service_with_handles, ToolServiceHandles};
 pub use registry::ToolRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use service::{
