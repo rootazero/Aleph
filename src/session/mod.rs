@@ -8,6 +8,7 @@
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md`.
 
 pub mod actor;
+pub mod driver;
 pub mod events;
 pub mod in_process;
 pub mod ingress_safety;
@@ -20,6 +21,7 @@ pub mod streaming;
 pub mod tool_trace;
 
 pub use actor::{ActorCommand, SessionActor};
+pub use driver::SessionDriver;
 pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
     Timestamp, ToolOutput, TurnId, TurnOutcome, TurnTrigger,

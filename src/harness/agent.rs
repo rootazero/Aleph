@@ -27,6 +27,12 @@ impl AgentHarness {
         Self { deps }
     }
 
+    /// Convenience: wrap this harness as an `Arc<dyn SessionDriver>` so it
+    /// can be stored in containers that don't depend on the concrete type.
+    pub fn into_session_driver(self) -> std::sync::Arc<dyn crate::session::SessionDriver> {
+        std::sync::Arc::new(self)
+    }
+
     /// Act phase: execute each tool_call sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
     /// or `ToolError` event after. A failure short-circuits the rest of the
@@ -87,6 +93,20 @@ impl AgentHarness {
             }
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::session::SessionDriver for AgentHarness {
+    async fn drive(&self, session_id: &SessionId) -> crate::error::Result<()> {
+        // `Harness::run` produces `HarnessError`; `SessionDriver::drive`
+        // surfaces `AlephError`. `AlephError::provider` is the matching
+        // variant used throughout the harness / provider pipeline when
+        // wrapping LLM- or tool-origin failures into the crate-wide error
+        // type (consistent with `HarnessError::Llm` wrapping `AlephError`).
+        self.run(session_id)
+            .await
+            .map_err(|e| crate::error::AlephError::provider(format!("harness drive failed: {e}")))
     }
 }
 
