@@ -61,6 +61,7 @@ impl ToolRegistry {
     }
 
     /// Internal subscribe — not re-exported through ToolService yet. YAGNI per design §5.1.
+    #[cfg(test)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
         self.change_tx.subscribe()
     }
