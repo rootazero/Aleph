@@ -69,6 +69,7 @@ pub mod mcp;
 pub mod media;
 pub mod memory;
 pub mod metrics;
+pub mod orchestrator;
 pub mod payload;
 pub mod permission;
 pub mod pii;
