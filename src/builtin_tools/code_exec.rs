@@ -96,7 +96,7 @@ impl CodeExecArgs {
     /// Derive the `SandboxCapabilities` this invocation is asking for.
     /// Baseline (`strict()`) stays in-session; escalations route through the
     /// approval gate inside `WorkspaceSandbox::execute`.
-    fn into_capabilities(&self) -> SandboxCapabilities {
+    fn as_capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities {
             fs_read: Vec::new(),
             fs_write: self.extra_writable_paths.clone(),
@@ -250,7 +250,7 @@ Examples:
             env,
             stdin: None,
             cwd,
-            capabilities: args.into_capabilities(),
+            capabilities: args.as_capabilities(),
             timeout: Some(Duration::from_secs(timeout_secs)),
         };
 
