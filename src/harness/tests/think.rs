@@ -287,8 +287,12 @@ async fn think_llm_error_maps_to_harness_llm() {
     assert!(matches!(err, HarnessError::Llm(_)), "got: {err:?}");
 }
 
+/// NOTE: This pins the Task 8 stub behavior (return Continue immediately on any
+/// tool_call response, no Act dispatch). Task 9 will replace this with a test
+/// that asserts Continue only after successful tool execution; at that point,
+/// either rewrite this test or delete it.
 #[tokio::test]
-async fn think_with_tool_use_returns_continue() {
+async fn think_tool_use_pre_act_stub_returns_continue() {
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
         session: session.clone(),
