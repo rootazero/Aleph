@@ -10,3 +10,8 @@ pub mod trait_def;
 pub use agent::AgentHarness;
 pub use deps::HarnessDeps;
 pub use trait_def::{Harness, HarnessError, TurnState};
+
+#[cfg(test)]
+mod tests {
+    mod think;
+}
