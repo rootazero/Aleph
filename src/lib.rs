@@ -81,6 +81,7 @@ pub mod search;
 pub mod session;
 pub mod skill;
 
+pub mod harness;
 pub(crate) mod supervisor;
 pub mod thinker;
 pub(crate) mod tool_output;
@@ -128,7 +129,7 @@ pub use crate::config::{
     guides::deploy_guides,
     patcher::ConfigPatcher,
     policies::CompressionPolicy,
-    types::acp::{AcpConfig, AcpAdapterEntry, AdapterModeSerde, OutputFormatSerde},
+    types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
