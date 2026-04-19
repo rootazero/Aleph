@@ -381,23 +381,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // can cause corruption and permanent vault data loss (all API keys).
     let _instance_lock = crate::daemon::acquire_instance_lock()?;
 
-    // Phase 4: read ALEPH_HARNESS_V2 for discoverability. Production code path
-    // still routes through AgentLoop; the v2 Harness is exercised only by
-    // integration tests (`tests/harness_run_e2e.rs`) until Phase 5 adds the
-    // orchestration bridge to translate user input + streaming callbacks into
-    // session events.
-    let harness_v2_opt_in = std::env::var("ALEPH_HARNESS_V2")
-        .ok()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    if harness_v2_opt_in {
-        tracing::warn!(
-            "ALEPH_HARNESS_V2=1 is set but the production driver swap lands in \
-             Phase 5 — the v2 Harness is currently integration-test-only. No \
-             runtime behavior change in this release."
-        );
-    }
-
     // Ensure ~/.aleph/ directory structure exists
     if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {
         let _ = std::fs::create_dir_all(&config_dir);
@@ -413,6 +396,28 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Daemonization is handled in main() before tokio starts (fork safety).
 
     initialize_tracing(args);
+
+    // Phase 4: read ALEPH_HARNESS_V2 for discoverability. Production code path
+    // still routes through AgentLoop; the v2 Harness is exercised only by
+    // integration tests (`tests/harness_run_e2e.rs`) until Phase 5 adds the
+    // orchestration bridge to translate user input + streaming callbacks into
+    // session events.
+    //
+    // NOTE: this block must stay AFTER `initialize_tracing(args)` — otherwise
+    // the warn writes to a no-op subscriber and never lands (see E2E report
+    // 2026-04-19 Bug #1).
+    let harness_v2_opt_in = std::env::var("ALEPH_HARNESS_V2")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if harness_v2_opt_in {
+        tracing::warn!(
+            "ALEPH_HARNESS_V2=1 is set but the production driver swap lands in \
+             Phase 5 — the v2 Harness is currently integration-test-only. No \
+             runtime behavior change in this release."
+        );
+    }
+
     tokio::spawn(runtime_startup_warmup());
     validate_bind_address(args)?;
 
