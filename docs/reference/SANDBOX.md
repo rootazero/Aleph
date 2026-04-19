@@ -74,7 +74,7 @@ Each `SessionWorkspace` carries:
 
 ## The six-step `execute` pipeline
 
-`WorkspaceSandbox::execute` (`src/sandbox/workspace.rs:122`) implements the
+`WorkspaceSandbox::execute` (`src/sandbox/workspace.rs:124`) implements the
 spec §8 pipeline:
 
 1. **Session resolve** — `self.for_session(&cmd.session_id)` → lazy dir
@@ -177,12 +177,33 @@ pub fn build_sandbox(
 ) -> Arc<dyn Sandbox>;
 ```
 
-`src/bin/aleph-server/commands/start/mod.rs:479` wires this during start-up:
-build the `OsSandboxAdapter` → wrap in `OsSandboxDriver` → call
-`build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate)`. The
-resulting `Arc<dyn Sandbox>` is threaded through tool registration into every
-exec-class tool constructor (`CodeExecTool::with_sandbox`,
-`BashExecTool::with_sandbox`, …).
+`src/bin/aleph-server/commands/start/mod.rs` wires this during start-up:
+build a single `ApprovalGate` (currently requesterless — see *Known
+Limitations* in `CHANGELOG.md`) → build the `OsSandboxAdapter` → wrap in
+`OsSandboxDriver` → call `build_sandbox(&loaded_app_config.sandbox,
+os_driver, approval_gate)`. The resulting `Arc<dyn Sandbox>` is threaded
+through tool registration into every exec-class tool constructor
+(`CodeExecTool::with_sandbox`, `BashExecTool::with_sandbox`, …).
+
+The same `approval_gate` is also attached to the `PermissionLayer` via
+`PermissionLayer::set_approver`, so Ask-tier tool confirmations and
+sandbox capability escalations share one gate. The global
+`[policies.tool_permissions]` table plus an empty per-agent default are
+merged into a `LayeredPermissionResolver` (via
+`AgentPermissionFilter::build`) and attached via
+`PermissionLayer::set_smart_filter`. Boot logs
+`"wired LayeredPermissionResolver into PermissionLayer..."` on success.
+Per-agent overrides plug in at Phase 4 session activation.
+
+### Exec-class double-prompt risk (H4)
+
+When `bash` / `code_exec` are classified `Ask` in
+`[policies.tool_permissions]`, `PermissionLayer` and `WorkspaceSandbox`
+would each request approval independently — two prompts. The current
+global-default `Allow` for exec tools avoids this in practice. A Phase 4
+follow-up will add an exec-class exclude-list to
+`LayeredPermissionResolver` so the sandbox owns the prompt for those
+tools.
 
 ## Relation to `ExecSecurityGate`
 
