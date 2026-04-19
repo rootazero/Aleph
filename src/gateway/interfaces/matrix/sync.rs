@@ -2,9 +2,9 @@ use crate::gateway::channel::{ChannelId, ChannelStatus, InboundMessageSender};
 use crate::gateway::interfaces::matrix::{
     client::MatrixSdkClient, config::MatrixConfig, dedupe::EventDeduper, events,
 };
+use crate::sync_primitives::Arc;
 use futures::StreamExt;
 use matrix_sdk::config::SyncSettings;
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, RwLock};
 

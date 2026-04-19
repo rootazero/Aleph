@@ -1,9 +1,5 @@
-use crate::gateway::channel::{
-    ConversationId, MessageId,
-};
-use crate::gateway::event_emitter::{
-    EventEmitError, EventEmitter, StreamEvent,
-};
+use crate::gateway::channel::{ConversationId, MessageId};
+use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::interfaces::telegram::config_v2::StreamingOptions;
 use crate::gateway::interfaces::telegram::delivery::TelegramDelivery;
 use crate::gateway::interfaces::telegram::error_cooldown::ErrorCooldown;

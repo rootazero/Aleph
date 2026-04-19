@@ -228,12 +228,8 @@ mod tests {
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
 
-        let context = GatewayContext::new(
-            session_store,
-            agent_registry,
-            execution_adapter,
-            a2a_policy,
-        );
+        let context =
+            GatewayContext::new(session_store, agent_registry, execution_adapter, a2a_policy);
 
         let debug_str = format!("{:?}", context);
         assert!(debug_str.contains("GatewayContext"));

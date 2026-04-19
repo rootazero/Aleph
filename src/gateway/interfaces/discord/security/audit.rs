@@ -2,9 +2,9 @@
 //!
 //! Audit logging for Discord channel events.
 
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 
 /// Audit event types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -2,9 +2,9 @@
 //!
 //! Manages exec command approval workflow with Discord interactions.
 
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Pending exec request

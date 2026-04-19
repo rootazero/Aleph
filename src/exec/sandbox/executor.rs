@@ -12,8 +12,7 @@ use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxCommand};
 use crate::exec::sandbox::audit::{ExecutionStatus, SandboxAuditLog};
 use crate::exec::sandbox::capabilities::{
-    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
-    ProcessCapability,
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
 };
 use crate::sandbox::capabilities::{
     NetworkPolicy as NewNetworkPolicy, SandboxCapabilities as NewSandboxCapabilities,

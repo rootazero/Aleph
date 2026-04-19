@@ -3,8 +3,8 @@
 //! Returns virtual agent IDs (aleph/default, aleph/{agent_id}) plus
 //! real model names from all configured providers.
 
-use std::collections::HashSet;
 use crate::sync_primitives::Arc;
+use std::collections::HashSet;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;

@@ -308,10 +308,22 @@ mod tests {
         let mut gate = MutationGate::new();
         gate.activate_cooldown(3);
         let d = gate.evaluate();
-        assert!(matches!(d, GateDecision::Conserve { cooldown_remaining: 3, .. }));
+        assert!(matches!(
+            d,
+            GateDecision::Conserve {
+                cooldown_remaining: 3,
+                ..
+            }
+        ));
         gate.tick_cooldown();
         let d = gate.evaluate();
-        assert!(matches!(d, GateDecision::Conserve { cooldown_remaining: 2, .. }));
+        assert!(matches!(
+            d,
+            GateDecision::Conserve {
+                cooldown_remaining: 2,
+                ..
+            }
+        ));
         gate.tick_cooldown();
         gate.tick_cooldown();
         gate.clear_after_cooldown();
@@ -326,6 +338,12 @@ mod tests {
         };
         let json = serde_json::to_string(&d).unwrap();
         let back: GateDecision = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, GateDecision::Conserve { cooldown_remaining: 2, .. }));
+        assert!(matches!(
+            back,
+            GateDecision::Conserve {
+                cooldown_remaining: 2,
+                ..
+            }
+        ));
     }
 }

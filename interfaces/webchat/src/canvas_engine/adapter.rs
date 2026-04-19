@@ -1,6 +1,6 @@
+use super::types::*;
 use serde::Deserialize;
 use std::collections::HashMap;
-use super::types::*;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NoteNodeDto {

@@ -148,8 +148,7 @@ pub struct AgentCreateTool {
     workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
     session_store: Arc<dyn crate::gateway::session_store::SessionStore>,
-    raw_memory_writer:
-        Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl AgentCreateTool {
@@ -342,8 +341,8 @@ impl AlephTool for AgentCreateTool {
         };
 
         let instance = {
-            let mut inst = AgentInstance::new(config, Arc::clone(&self.session_store))
-                .map_err(|e| {
+            let mut inst =
+                AgentInstance::new(config, Arc::clone(&self.session_store)).map_err(|e| {
                     crate::error::AlephError::other(format!(
                         "Failed to create agent instance '{}': {}",
                         args.id, e

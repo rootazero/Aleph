@@ -89,8 +89,7 @@ mod tests {
 
     #[test]
     fn deserialises_with_enabled_false() {
-        let cfg: SandboxConfig =
-            toml::from_str("enabled = false").expect("enabled = false parses");
+        let cfg: SandboxConfig = toml::from_str("enabled = false").expect("enabled = false parses");
         assert!(!cfg.enabled);
         // Other fields still default.
         assert_eq!(cfg.default_timeout_seconds, 60);

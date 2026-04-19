@@ -46,10 +46,7 @@ impl WeChatRuntime {
         }
     }
 
-    pub async fn start(
-        &self,
-        sender: InboundMessageSender,
-    ) {
+    pub async fn start(&self, sender: InboundMessageSender) {
         {
             let mut running = self.running.write().await;
             if *running {
@@ -87,12 +84,8 @@ impl WeChatRuntime {
                         let mut buf = self.sync_buf.write().await;
                         *buf = new_buf.clone();
                         drop(buf);
-                        save_sync_buf(
-                            &self.config.account_id,
-                            &self.config.account_id,
-                            &new_buf,
-                        )
-                        .await;
+                        save_sync_buf(&self.config.account_id, &self.config.account_id, &new_buf)
+                            .await;
                     }
 
                     if !resp.msgs.is_empty() {
@@ -102,12 +95,14 @@ impl WeChatRuntime {
                     backoff_ms = INITIAL_BACKOFF_MS;
                 }
                 Err(WeChatApiError::SessionExpired) => {
-                    tracing::error!(
-                        "WeChat session expired — re-authentication required"
-                    );
+                    tracing::error!("WeChat session expired — re-authentication required");
                     backoff_ms = (backoff_ms * 2).min(MAX_BACKOFF_MS);
                 }
-                Err(WeChatApiError::Api { ret, errcode, errmsg }) => {
+                Err(WeChatApiError::Api {
+                    ret,
+                    errcode,
+                    errmsg,
+                }) => {
                     tracing::warn!(
                         ret = ret,
                         errcode = ?errcode,
@@ -168,29 +163,16 @@ impl WeChatRuntime {
         self.api.send_message(token, payload).await
     }
 
-    pub async fn get_context_token(
-        &self,
-        account_id: &str,
-        user_id: &str,
-    ) -> Option<String> {
+    pub async fn get_context_token(&self, account_id: &str, user_id: &str) -> Option<String> {
         self.token_store.get(account_id, user_id).await
     }
 
-    pub async fn send_typing(
-        &self,
-        token: &str,
-        user_id: &str,
-    ) -> ApiResult<()> {
-        let resp = self
-            .api
-            .get_config(token, user_id, None)
-            .await?;
+    pub async fn send_typing(&self, token: &str, user_id: &str) -> ApiResult<()> {
+        let resp = self.api.get_config(token, user_id, None).await?;
 
-        let ticket = resp
-            .typing_ticket
-            .ok_or_else(|| WeChatApiError::InvalidResponse(
-                "No typing ticket available".to_string()
-            ))?;
+        let ticket = resp.typing_ticket.ok_or_else(|| {
+            WeChatApiError::InvalidResponse("No typing ticket available".to_string())
+        })?;
 
         let payload = super::types::SendTypingPayload {
             ilink_user_id: user_id.to_string(),

@@ -7,7 +7,7 @@ pub mod cron;
 pub mod home;
 pub mod logs;
 pub mod memory;
-pub mod settings;
 pub mod runtimes;
+pub mod settings;
 pub mod tasks;
 pub mod teams;

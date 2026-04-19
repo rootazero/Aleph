@@ -26,10 +26,7 @@ pub use factory::{build_sandbox, NoopSandbox};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {
-    async fn execute(
-        &self,
-        command: SandboxCommand,
-    ) -> Result<SandboxOutput, SandboxError>;
+    async fn execute(&self, command: SandboxCommand) -> Result<SandboxOutput, SandboxError>;
 }
 
 /// Test helpers exposed under `#[cfg(test)]` so unit tests across the crate
@@ -63,10 +60,7 @@ pub mod test_util {
 
     #[async_trait]
     impl Sandbox for MockSandbox {
-        async fn execute(
-            &self,
-            cmd: SandboxCommand,
-        ) -> Result<SandboxOutput, SandboxError> {
+        async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
             self.calls.lock().await.push(cmd);
             Ok(self.response.clone())
         }

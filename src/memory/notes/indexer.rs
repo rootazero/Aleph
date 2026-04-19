@@ -3,8 +3,8 @@
 //! Scans `memory_dir/{agent_id}/{category}/*.md` files, parses them into
 //! `KnowledgeNote`s, and maintains the SQLite index via a `NoteStore` implementation.
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use tokio::fs;

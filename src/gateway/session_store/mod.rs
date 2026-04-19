@@ -4,17 +4,14 @@ pub mod migration;
 pub mod sqlite_backend;
 pub mod types;
 
-use async_trait::async_trait;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::*;
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    async fn get_or_create(
-        &self,
-        key: &SessionKey,
-    ) -> Result<SessionMetadata, SessionStoreError>;
+    async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError>;
     async fn get_metadata(
         &self,
         key: &SessionKey,
@@ -117,10 +114,12 @@ pub trait SessionStore: Send + Sync {
         &self,
         state: crate::gateway::session_manager::SessionState,
     ) -> Result<Vec<SessionMetadata>, SessionStoreError>;
-    async fn set_error(&self, key: &SessionKey, error_msg: Option<&str>) -> Result<(), SessionStoreError>;
+    async fn set_error(
+        &self,
+        key: &SessionKey,
+        error_msg: Option<&str>,
+    ) -> Result<(), SessionStoreError>;
     async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
 }
-
-

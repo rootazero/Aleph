@@ -38,7 +38,9 @@ impl ToolRegistry {
         let source = handler.definition().source.clone();
         next.insert(name.clone(), handler);
         self.inner.store(Arc::new(next));
-        let _ = self.change_tx.send(RegistryChange::Registered { name, source });
+        let _ = self
+            .change_tx
+            .send(RegistryChange::Registered { name, source });
         Ok(())
     }
 
@@ -154,8 +156,8 @@ mod tests {
         reg.register("x".into(), fake("x")).unwrap();
         let snap1 = reg.snapshot();
         reg.register("y".into(), fake("y")).unwrap();
-        assert_eq!(snap1.len(), 1);              // snap1 frozen
-        assert_eq!(reg.snapshot().len(), 2);     // new snapshot sees both
+        assert_eq!(snap1.len(), 1); // snap1 frozen
+        assert_eq!(reg.snapshot().len(), 2); // new snapshot sees both
     }
 
     #[test]

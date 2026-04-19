@@ -4,8 +4,8 @@ use crate::gateway::interfaces::whatsapp::wa_runtime::http_client::ReqwestHttpCl
 use crate::gateway::interfaces::whatsapp::wa_runtime::state::{
     AtomicConnectionState, ConnectionState,
 };
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, info, warn};
 

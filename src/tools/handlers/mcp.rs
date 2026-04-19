@@ -68,9 +68,9 @@ impl ToolHandler for McpHandler {
                 } else {
                     Err(ToolError::Execution {
                         name: qualified,
-                        cause: result
-                            .error
-                            .unwrap_or_else(|| "MCP tool returned failure without message".to_string()),
+                        cause: result.error.unwrap_or_else(|| {
+                            "MCP tool returned failure without message".to_string()
+                        }),
                     })
                 }
             }
@@ -225,13 +225,7 @@ mod tests {
         // Empty McpClient: call_tool on unknown tool yields
         // AlephError::McpToolNotFound, which map_mcp_error routes to NotFound.
         let client = Arc::new(McpClient::new());
-        let h = McpHandler::new(
-            client,
-            "svr".into(),
-            "ghost".into(),
-            "d".into(),
-            json!({}),
-        );
+        let h = McpHandler::new(client, "svr".into(), "ghost".into(), "d".into(), json!({}));
         let err = h.invoke(json!({})).await.expect_err("should fail");
         match err {
             ToolError::NotFound { name } => assert_eq!(name, "ghost"),

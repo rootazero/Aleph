@@ -394,7 +394,11 @@ async fn manager_disable_single_harness() {
         if id == "codex" {
             continue;
         }
-        assert!(mgr.has_harness(id).await, "preset should be enabled: {}", id);
+        assert!(
+            mgr.has_harness(id).await,
+            "preset should be enabled: {}",
+            id
+        );
     }
 }
 
@@ -421,7 +425,11 @@ async fn manager_explicit_enable_is_noop() {
     let preset_ids = crate::config::types::acp::AcpAdapterEntry::preset_ids();
     assert_eq!(mgr.harness_ids().await.len(), preset_ids.len());
     for id in preset_ids {
-        assert!(mgr.has_harness(id).await, "preset should be enabled: {}", id);
+        assert!(
+            mgr.has_harness(id).await,
+            "preset should be enabled: {}",
+            id
+        );
     }
 }
 

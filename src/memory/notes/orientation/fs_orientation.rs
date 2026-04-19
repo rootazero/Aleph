@@ -10,10 +10,10 @@ use crate::memory::notes::orientation::types::{
 use crate::memory::notes::store::NoteStore;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::Mutex;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use crate::sync_primitives::Mutex;
 
 #[async_trait]
 pub trait NoteOrientation: Send + Sync {

@@ -13,10 +13,10 @@
 
 use crate::gateway::interfaces::telegram::context::{ConversationKey, SessionState};
 use crate::resilience::StateDatabase;
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 /// Configuration for session behavior.

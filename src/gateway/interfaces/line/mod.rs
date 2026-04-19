@@ -8,8 +8,8 @@ pub mod message_ops;
 pub mod types;
 pub mod webhook;
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::watch;
 
 use crate::gateway::channel::{

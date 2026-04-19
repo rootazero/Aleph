@@ -9,8 +9,8 @@ use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
-use std::path::Path;
 use crate::sync_primitives::{AtomicBool, Ordering};
+use std::path::Path;
 use tracing::{info, warn};
 
 /// Progress of a running re-embed operation.

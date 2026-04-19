@@ -499,7 +499,10 @@ mod tests {
         let cmd = &calls[0];
         assert_eq!(cmd.session_id, session);
         assert_eq!(cmd.program, "python3");
-        assert_eq!(cmd.args, vec!["-c".to_string(), "print('hello')".to_string()]);
+        assert_eq!(
+            cmd.args,
+            vec!["-c".to_string(), "print('hello')".to_string()]
+        );
         assert_eq!(cmd.capabilities.network, NetworkPolicy::None);
         assert!(!cmd.capabilities.spawn_subprocess);
         assert_eq!(cmd.timeout, Some(Duration::from_secs(3)));
@@ -570,7 +573,11 @@ mod tests {
 
         assert!(!out.success);
         assert_eq!(out.exit_code, -1);
-        assert!(out.stderr.contains("timed out"), "unexpected stderr: {}", out.stderr);
+        assert!(
+            out.stderr.contains("timed out"),
+            "unexpected stderr: {}",
+            out.stderr
+        );
         assert_eq!(out.duration_ms, 1234);
     }
 }

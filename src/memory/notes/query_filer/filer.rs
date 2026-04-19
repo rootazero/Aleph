@@ -2,11 +2,11 @@
 //!
 //! Two-tier gating pipeline: cheap heuristic gate → LLM novelty gate → write note.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 
 use crate::config::types::memory::QueryFilerConfig;
 use crate::error::AlephError;

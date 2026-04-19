@@ -151,8 +151,7 @@ mod tests {
 
         let registry = Arc::new(ChannelRegistry::new());
         let bridge = Arc::new(ChannelApprovalBridge::new(registry));
-        let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager())
-            .with_timeout_ms(50);
+        let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager()).with_timeout_ms(50);
 
         let sid = test_session_id();
         let out = with_session_scope(&sid, async {

@@ -9,8 +9,8 @@ pub mod feishu_outbound;
 pub mod feishu_policy;
 pub mod feishu_runtime;
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::watch;
 

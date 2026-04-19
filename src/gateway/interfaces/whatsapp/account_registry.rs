@@ -3,8 +3,8 @@
 //! Multi-account support for WhatsApp channels.
 
 use crate::gateway::interfaces::whatsapp::account::{AccountId, WhatsAppAccount};
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 pub struct WhatsAppAccountRegistry {

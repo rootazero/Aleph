@@ -103,8 +103,7 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
         RuntimeStatus::Stale => ("?", "text-warning"),
     };
 
-    let can_install =
-        matches!(info.status, RuntimeStatus::Missing) && info.supported_on_current_os;
+    let can_install = matches!(info.status, RuntimeStatus::Missing) && info.supported_on_current_os;
 
     let install_handler = {
         let state = state;

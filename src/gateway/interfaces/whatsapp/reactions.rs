@@ -3,8 +3,8 @@
 //! Provides reaction handling with configurable levels and ack reactions.
 
 use crate::gateway::channel::InboundMessage;
-use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

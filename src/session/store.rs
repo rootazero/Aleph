@@ -101,12 +101,10 @@ pub fn migrate_add_session_events(conn: &Connection) -> Result<(), AlephError> {
         )));
     }
 
-    conn.execute_batch("RELEASE migration_session_events").map_err(|e| {
-        AlephError::config(format!(
-            "Failed to commit session_events migration: {}",
-            e
-        ))
-    })?;
+    conn.execute_batch("RELEASE migration_session_events")
+        .map_err(|e| {
+            AlephError::config(format!("Failed to commit session_events migration: {}", e))
+        })?;
 
     Ok(())
 }
@@ -189,9 +187,7 @@ impl SessionEventStore for SqliteEventStore {
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
         let session_key = session_id_to_string(session_id);
         let from_val = from.unwrap_or(0) as i64;
-        let to_val = to
-            .map(|v| v as i64)
-            .unwrap_or(i64::MAX);
+        let to_val = to.map(|v| v as i64).unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;
         let mut stmt = conn
@@ -325,9 +321,7 @@ mod tests {
         // Table exists with expected columns in the expected order.
         let columns: Vec<String> = {
             let mut stmt = conn
-                .prepare(
-                    "SELECT name FROM pragma_table_info('session_events') ORDER BY cid ASC",
-                )
+                .prepare("SELECT name FROM pragma_table_info('session_events') ORDER BY cid ASC")
                 .unwrap();
             stmt.query_map([], |row| row.get::<_, String>(0))
                 .unwrap()

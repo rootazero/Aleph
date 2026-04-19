@@ -277,9 +277,7 @@ impl CompressionService {
                                 session_id: String::new(),
                             };
                             if let Err(e) = ps.update(&agent, signal).await {
-                                tracing::warn!(
-                                    "profile update after session end failed: {e}"
-                                );
+                                tracing::warn!("profile update after session end failed: {e}");
                             } else {
                                 tracing::info!(
                                     agent_id = %agent,

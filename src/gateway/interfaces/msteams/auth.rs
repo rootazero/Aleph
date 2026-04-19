@@ -4,8 +4,8 @@
 //! - `TokenCache`: outbound OAuth2 token cache for Bot Framework REST API calls
 //! - `JwtValidator`: inbound JWT validation for Bot Framework webhook requests
 
-use std::path::PathBuf;
 use crate::sync_primitives::{Arc, RwLock};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};

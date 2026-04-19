@@ -97,10 +97,7 @@ fn map_extension_error(name: String, err: ExtensionError) -> ToolError {
             cause: io_err.to_string(),
         },
         ExtensionError::PluginNotFound(plugin) => ToolError::NotFound { name: plugin },
-        ExtensionError::PermissionDenied(reason) => ToolError::PermissionDenied {
-            name,
-            reason,
-        },
+        ExtensionError::PermissionDenied(reason) => ToolError::PermissionDenied { name, reason },
         other => ToolError::Execution {
             name,
             cause: other.to_string(),

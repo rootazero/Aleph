@@ -29,9 +29,7 @@ use crate::config::types::tools::ToolServiceConfig;
 use crate::tools::dispatch::CoreDispatch;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::ToolHandler;
-use crate::tools::middleware::{
-    ContextRuleLayer, ExecAuditLayer, PermissionLayer, TimeoutLayer,
-};
+use crate::tools::middleware::{ContextRuleLayer, ExecAuditLayer, PermissionLayer, TimeoutLayer};
 use crate::tools::registry::ToolRegistry;
 use crate::tools::service::ToolService;
 use crate::tools::AlephToolServer;
@@ -87,16 +85,13 @@ pub async fn build_tool_service_with_handles(
     let permission_layer = Arc::new(PermissionLayer::new(ctxrule));
     let perm: Arc<dyn ToolService> = permission_layer.clone();
     let audit: Arc<dyn ToolService> = Arc::new(ExecAuditLayer::new(perm));
-    let handles = ToolServiceHandles {
-        permission_layer,
-    };
+    let handles = ToolServiceHandles { permission_layer };
     (audit, registry, handles)
 }
 
 async fn register_builtins_into(registry: &ToolRegistry, server: &AlephToolServer) {
     for (name, tool) in server.all_builtin_handlers().await {
-        let handler: Arc<dyn ToolHandler> =
-            Arc::new(BuiltinHandler::new(name.clone(), tool));
+        let handler: Arc<dyn ToolHandler> = Arc::new(BuiltinHandler::new(name.clone(), tool));
         if let Err(e) = registry.register(name.clone(), handler) {
             tracing::warn!(error = ?e, tool = %name, "builtin register failed");
         }

@@ -3,9 +3,9 @@
 //! Wraps `HandlerRegistry` as a Tower `Service` so it can serve as the
 //! terminal service in the middleware chain.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};

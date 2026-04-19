@@ -186,7 +186,7 @@ mod tests {
     use crate::routing::session_key::SessionKey;
     use crate::session::events::SessionEvent;
     use crate::session::in_process::InProcessActorSessionService;
-    use crate::session::store::{migrate_add_session_events, SqliteEventStore, SessionEventStore};
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
     async fn fresh_service() -> Arc<dyn SessionService> {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

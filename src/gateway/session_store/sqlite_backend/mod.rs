@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{params, OptionalExtension};
 
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionState};
@@ -21,9 +21,7 @@ fn map_err(e: crate::gateway::session_manager::SessionManagerError) -> SessionSt
     }
 }
 
-fn search_result_to_hit(
-    r: crate::gateway::session_manager::SessionSearchResult,
-) -> SearchHit {
+fn search_result_to_hit(r: crate::gateway::session_manager::SessionSearchResult) -> SearchHit {
     SearchHit {
         session_key: r.session_key,
         agent_id: r.agent_id,
@@ -72,10 +70,7 @@ fn map_session_metadata(
 
 #[async_trait]
 impl SessionStore for SessionManager {
-    async fn get_or_create(
-        &self,
-        key: &SessionKey,
-    ) -> Result<SessionMetadata, SessionStoreError> {
+    async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         self.get_or_create(key).await.map_err(map_err)
     }
 
@@ -123,10 +118,7 @@ impl SessionStore for SessionManager {
         Ok(sessions)
     }
 
-    async fn delete_session(
-        &self,
-        key: &SessionKey,
-    ) -> Result<DeleteResult, SessionStoreError> {
+    async fn delete_session(&self, key: &SessionKey) -> Result<DeleteResult, SessionStoreError> {
         self.delete_session(key)
             .await
             .map_err(map_err)
@@ -143,7 +135,10 @@ impl SessionStore for SessionManager {
         key: &SessionKey,
         msg: MessageRecord,
     ) -> Result<(), SessionStoreError> {
-        let metadata_str = msg.metadata.as_ref().and_then(|v| serde_json::to_string(v).ok());
+        let metadata_str = msg
+            .metadata
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok());
         self.add_message_with_meta(
             key,
             &msg.role,
@@ -304,10 +299,7 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
-    async fn get_current_epoch(
-        &self,
-        base_key_pattern: &str,
-    ) -> Result<u32, SessionStoreError> {
+    async fn get_current_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
         self.get_current_epoch(base_key_pattern)
             .await
             .map_err(map_err)
@@ -340,15 +332,9 @@ impl SessionStore for SessionManager {
         model: Option<&str>,
         model_provider: Option<&str>,
     ) -> Result<(), SessionStoreError> {
-        self.update_session_usage(
-            key,
-            input_tokens,
-            output_tokens,
-            model,
-            model_provider,
-        )
-        .await
-        .map_err(map_err)
+        self.update_session_usage(key, input_tokens, output_tokens, model, model_provider)
+            .await
+            .map_err(map_err)
     }
 
     async fn get_session_preview(
@@ -361,10 +347,7 @@ impl SessionStore for SessionManager {
             .map_err(map_err)
     }
 
-    async fn count_by_state(
-        &self,
-        state: SessionState,
-    ) -> Result<usize, SessionStoreError> {
+    async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
         self.count_by_state(state).await.map_err(map_err)
     }
 
@@ -395,5 +378,3 @@ impl SessionStore for SessionManager {
         self.set_running(key).await.map_err(map_err)
     }
 }
-
-

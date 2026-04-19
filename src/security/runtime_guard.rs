@@ -59,10 +59,21 @@ pub struct SecurityContext {
 /// Result of guard processing.
 #[derive(Debug, Clone)]
 pub enum GuardResult {
-    Clean { text: String },
-    Redacted { text: String, reasons: Vec<String> },
-    Blocked { reason: String, redacted_text: Option<String> },
-    Warned { text: String, warnings: Vec<String> },
+    Clean {
+        text: String,
+    },
+    Redacted {
+        text: String,
+        reasons: Vec<String>,
+    },
+    Blocked {
+        reason: String,
+        redacted_text: Option<String>,
+    },
+    Warned {
+        text: String,
+        warnings: Vec<String>,
+    },
 }
 
 /// Central orchestrator for runtime security checks.
@@ -194,12 +205,15 @@ impl RuntimeSecurityGuard {
                 detector.scan_outbound(&current_text)
             };
 
-            let has_blocks = exec_scan.has_blocks()
-                || matches!(secret_scan, LeakDecision::Block { .. });
+            let has_blocks =
+                exec_scan.has_blocks() || matches!(secret_scan, LeakDecision::Block { .. });
 
             if has_blocks {
                 let redacted_text = match secret_scan {
-                    LeakDecision::Block { ref redacted_content, .. } => Some(redacted_content.clone()),
+                    LeakDecision::Block {
+                        ref redacted_content,
+                        ..
+                    } => Some(redacted_content.clone()),
                     _ => Some(current_text.clone()),
                 };
                 let detail = format!(
@@ -207,7 +221,12 @@ impl RuntimeSecurityGuard {
                     exec_scan.findings.len(),
                     matches!(secret_scan, LeakDecision::Block { .. })
                 );
-                self.log_audit(&context, AuditEventType::ExecBlocked, AuditSeverity::Critical, detail);
+                self.log_audit(
+                    &context,
+                    AuditEventType::ExecBlocked,
+                    AuditSeverity::Critical,
+                    detail,
+                );
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in outbound content".to_string(),
                     redacted_text,
@@ -216,7 +235,12 @@ impl RuntimeSecurityGuard {
 
             if exec_scan.has_warnings() {
                 warnings.push("Outbound leak detector warning".to_string());
-                self.log_audit(&context, AuditEventType::LeakWarning, AuditSeverity::Warn, "outbound leak detector warning".to_string());
+                self.log_audit(
+                    &context,
+                    AuditEventType::LeakWarning,
+                    AuditSeverity::Warn,
+                    "outbound leak detector warning".to_string(),
+                );
             }
         }
 
@@ -226,9 +250,8 @@ impl RuntimeSecurityGuard {
                 let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
 
                 let should_filter = match &context.provider_name {
-                    Some(provider) => {
-                        !engine_guard.is_platform_excluded(context.platform_name.as_deref(), provider)
-                    }
+                    Some(provider) => !engine_guard
+                        .is_platform_excluded(context.platform_name.as_deref(), provider),
                     None => true,
                 };
 
@@ -239,10 +262,20 @@ impl RuntimeSecurityGuard {
                     let warned = result.warned_count;
                     current_text = Self::apply_filter_result(result, &mut reasons, &mut warnings);
                     if blocked > 0 {
-                        self.log_audit(&context, AuditEventType::PiiDetected, AuditSeverity::Critical, format!("PII filter blocked {} detection(s)", blocked));
+                        self.log_audit(
+                            &context,
+                            AuditEventType::PiiDetected,
+                            AuditSeverity::Critical,
+                            format!("PII filter blocked {} detection(s)", blocked),
+                        );
                     }
                     if warned > 0 {
-                        self.log_audit(&context, AuditEventType::PiiDetected, AuditSeverity::Warn, format!("PII filter warned {} detection(s)", warned));
+                        self.log_audit(
+                            &context,
+                            AuditEventType::PiiDetected,
+                            AuditSeverity::Warn,
+                            format!("PII filter warned {} detection(s)", warned),
+                        );
                     }
                 }
             }
@@ -298,10 +331,7 @@ impl RuntimeSecurityGuard {
 
     /// Process inbound content received from LLM.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn process_inbound(
-        &self,
-        text: &str,
-    ) -> Result<GuardResult, SecurityGuardError> {
+    pub fn process_inbound(&self, text: &str) -> Result<GuardResult, SecurityGuardError> {
         let context = SecurityContext::default();
         if !self.config.leak_detection {
             return Ok(GuardResult::Clean {
@@ -331,7 +361,12 @@ impl RuntimeSecurityGuard {
             redacted_content,
         } = secret_scan
         {
-            self.log_audit(&context, AuditEventType::EnvInjectionDetected, AuditSeverity::Critical, format!("inbound secret leak blocked: {}", reason));
+            self.log_audit(
+                &context,
+                AuditEventType::EnvInjectionDetected,
+                AuditSeverity::Critical,
+                format!("inbound secret leak blocked: {}", reason),
+            );
             return Ok(GuardResult::Blocked {
                 reason: format!("Secret leak detector: {}", reason),
                 redacted_text: Some(redacted_content),
@@ -343,7 +378,12 @@ impl RuntimeSecurityGuard {
                 "inbound exec leak blocked; findings={}",
                 exec_scan.findings.len()
             );
-            self.log_audit(&context, AuditEventType::ExecBlocked, AuditSeverity::Critical, detail);
+            self.log_audit(
+                &context,
+                AuditEventType::ExecBlocked,
+                AuditSeverity::Critical,
+                detail,
+            );
             return Ok(GuardResult::Blocked {
                 reason: "Leak detector found sensitive data in inbound content".to_string(),
                 redacted_text: Some(text.to_string()),
@@ -351,7 +391,12 @@ impl RuntimeSecurityGuard {
         }
 
         if exec_scan.has_warnings() {
-            self.log_audit(&context, AuditEventType::LeakWarning, AuditSeverity::Warn, "inbound leak detector warning".to_string());
+            self.log_audit(
+                &context,
+                AuditEventType::LeakWarning,
+                AuditSeverity::Warn,
+                "inbound leak detector warning".to_string(),
+            );
             return Ok(GuardResult::Warned {
                 text: text.to_string(),
                 warnings: vec!["Inbound leak detector warning".to_string()],
@@ -420,7 +465,9 @@ mod tests {
         let context = SecurityContext::default();
         // This contains a real-looking API key that should be caught by leak detection
         let input = "My key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
-        let result = guard.process_outbound(input, Some(&MockResolver), context).await;
+        let result = guard
+            .process_outbound(input, Some(&MockResolver), context)
+            .await;
 
         match result {
             Ok(GuardResult::Blocked { .. }) => {
@@ -436,7 +483,10 @@ mod tests {
         let context = SecurityContext::default();
         // Placeholder should be resolved AFTER leak detection, so this should be Clean
         let input = "Use key {{secret:test_key}} and call 13812345678";
-        let result = guard.process_outbound(input, Some(&MockResolver), context).await.unwrap();
+        let result = guard
+            .process_outbound(input, Some(&MockResolver), context)
+            .await
+            .unwrap();
 
         // Leak detection runs on text with placeholders, so no accidental secret leak.
         // PII filter should catch the phone number.
@@ -482,7 +532,9 @@ mod tests {
     #[test]
     fn test_inbound_clean_for_normal_text() {
         let guard = RuntimeSecurityGuard::default_guard();
-        let result = guard.process_inbound("Hello, this is normal text.").unwrap();
+        let result = guard
+            .process_inbound("Hello, this is normal text.")
+            .unwrap();
         assert!(
             matches!(result, GuardResult::Clean { .. }),
             "Expected Clean, got {:?}",

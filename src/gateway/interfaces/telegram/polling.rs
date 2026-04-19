@@ -9,8 +9,8 @@
 use super::error_cooldown::ErrorCooldown;
 use super::offset::OffsetTracker;
 use crate::gateway::channel::ChannelStatus;
-use rand::Rng;
 use crate::sync_primitives::Arc;
+use rand::Rng;
 use std::time::Instant;
 use teloxide::dispatching::UpdateHandler;
 use teloxide::prelude::*;

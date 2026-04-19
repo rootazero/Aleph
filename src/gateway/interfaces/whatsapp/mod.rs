@@ -49,8 +49,8 @@ use crate::gateway::channel::{
 use crate::gateway::interfaces::whatsapp::wa_auth::WaAuthManager;
 use crate::gateway::interfaces::whatsapp::wa_runtime::{ConnectionState, WaRuntime};
 use crate::sync_primitives::Arc;
-use async_trait::async_trait;
 use crate::sync_primitives::{AtomicBool, Ordering};
+use async_trait::async_trait;
 use tokio::sync::{oneshot, RwLock};
 
 use pairing::PairingState;

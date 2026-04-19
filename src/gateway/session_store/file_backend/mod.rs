@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
-use crate::sync_primitives::Arc;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionIdentityMeta, SessionState};
 use crate::gateway::session_store::error::SessionStoreError;
 use crate::gateway::session_store::types::*;
 use crate::gateway::session_store::SessionStore;
+use crate::sync_primitives::Arc;
 
 #[derive(Debug, Clone)]
 pub struct FileSessionStoreConfig {
@@ -59,12 +59,7 @@ impl FileSessionStore {
         self
     }
 
-    fn emit_session_changed(
-        &self,
-        key: &str,
-        reason: &str,
-        meta: Option<&SessionMetadata>,
-    ) {
+    fn emit_session_changed(&self, key: &str, reason: &str, meta: Option<&SessionMetadata>) {
         let bus_opt = self.event_bus.read().unwrap().clone();
         if let Some(bus) = bus_opt {
             let event = SessionChangedEvent {
@@ -109,7 +104,8 @@ impl FileSessionStore {
     }
 
     fn checkpoint_path(&self, key: &str, checkpoint_id: &str) -> PathBuf {
-        self.checkpoint_dir(key).join(format!("{}.jsonl", checkpoint_id))
+        self.checkpoint_dir(key)
+            .join(format!("{}.jsonl", checkpoint_id))
     }
 
     pub(crate) async fn read_metadata(
@@ -216,7 +212,9 @@ impl FileSessionStore {
             .append(true)
             .open(&path)
             .await
-            .map_err(|e| SessionStoreError::DatabaseError(format!("Open transcript failed: {}", e)))?
+            .map_err(|e| {
+                SessionStoreError::DatabaseError(format!("Open transcript failed: {}", e))
+            })?
             .write_all(line.as_bytes())
             .await
             .map_err(|e| {
@@ -257,15 +255,15 @@ impl FileSessionStore {
 
 #[async_trait]
 impl SessionStore for FileSessionStore {
-    async fn get_or_create(
-        &self,
-        key: &SessionKey,
-    ) -> Result<SessionMetadata, SessionStoreError> {
+    async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             let now = chrono::Utc::now().timestamp();
             meta.last_active_at = now;
-            if matches!(meta.state, Some(SessionState::Created) | Some(SessionState::Idle)) {
+            if matches!(
+                meta.state,
+                Some(SessionState::Created) | Some(SessionState::Idle)
+            ) {
                 meta.state = Some(SessionState::Active);
             }
             self.write_metadata(&key_str, &meta).await?;
@@ -317,14 +315,18 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn list_sessions(
-        &self, filter: SessionFilter) -> Result<Vec<SessionMetadata>, SessionStoreError> {
-        let mut entries = tokio::fs::read_dir(&self.config.base_dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Read dir failed: {}", e))
-        })?;
+        &self,
+        filter: SessionFilter,
+    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
+        let mut entries = tokio::fs::read_dir(&self.config.base_dir)
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {}", e)))?;
         let mut sessions = Vec::new();
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e))
-        })? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e)))?
+        {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -361,17 +363,19 @@ impl SessionStore for FileSessionStore {
         Ok(sessions)
     }
 
-    async fn delete_session(
-        &self,
-        key: &SessionKey,
-    ) -> Result<DeleteResult, SessionStoreError> {
+    async fn delete_session(&self, key: &SessionKey) -> Result<DeleteResult, SessionStoreError> {
         let key_str = key.to_key_string();
         let dir = self.session_dir(&key_str);
         if !dir.exists() {
             return Ok(DeleteResult { deleted: false });
         }
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let archive_dir = self.config.base_dir.join(".archive").join(date).join(&key_str);
+        let archive_dir = self
+            .config
+            .base_dir
+            .join(".archive")
+            .join(date)
+            .join(&key_str);
         if let Some(parent) = archive_dir.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 SessionStoreError::DatabaseError(format!("Create archive dir failed: {}", e))
@@ -402,7 +406,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn append_message(
-        &self, key: &SessionKey, msg: MessageRecord) -> Result<(), SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        msg: MessageRecord,
+    ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
         self.append_transcript(&key_str, &msg).await?;
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
@@ -434,7 +441,10 @@ impl SessionStore for FileSessionStore {
             } else {
                 preview.to_string()
             });
-            if matches!(meta.state, Some(SessionState::Created) | Some(SessionState::Idle) | Some(SessionState::Active)) {
+            if matches!(
+                meta.state,
+                Some(SessionState::Created) | Some(SessionState::Idle) | Some(SessionState::Active)
+            ) {
                 meta.state = Some(SessionState::Running);
             }
             self.write_metadata(&key_str, &meta).await?;
@@ -444,12 +454,18 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn get_history(
-        &self, key: &SessionKey, limit: Option<usize>) -> Result<Vec<MessageRecord>, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        limit: Option<usize>,
+    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
         self.read_transcript(&key.to_key_string(), limit).await
     }
 
     async fn search_messages(
-        &self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SessionStoreError> {
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SearchHit>, SessionStoreError> {
         let sessions = self.list_sessions(SessionFilter::default()).await?;
         let mut hits = Vec::new();
         for meta in sessions {
@@ -474,7 +490,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn compact(
-        &self, key: &SessionKey, strategy: CompactStrategy) -> Result<CompactResult, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        strategy: CompactStrategy,
+    ) -> Result<CompactResult, SessionStoreError> {
         match strategy {
             CompactStrategy::KeepLastN { n } => {
                 let key_str = key.to_key_string();
@@ -489,7 +508,8 @@ impl SessionStore for FileSessionStore {
                 let checkpoint_id = format!("{}", chrono::Utc::now().timestamp_millis());
                 let removed: Vec<MessageRecord> = messages.drain(0..original - n).collect();
                 let deleted = removed.len();
-                self.write_checkpoint(&key_str, &checkpoint_id, &removed).await?;
+                self.write_checkpoint(&key_str, &checkpoint_id, &removed)
+                    .await?;
                 let path = self.transcript_path(&key_str);
                 let mut contents = String::new();
                 for msg in &messages {
@@ -514,19 +534,28 @@ impl SessionStore for FileSessionStore {
                     self.write_metadata(&key_str, &meta).await?;
                     self.emit_session_changed(&key_str, "compact", Some(&meta));
                 }
-                Ok(CompactResult { compacted: true, deleted })
+                Ok(CompactResult {
+                    compacted: true,
+                    deleted,
+                })
             }
         }
     }
 
     async fn list_checkpoints(
-        &self, key: &SessionKey) -> Result<Vec<CheckpointSummary>, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+    ) -> Result<Vec<CheckpointSummary>, SessionStoreError> {
         let meta = self.read_metadata(&key.to_key_string()).await?;
         Ok(meta.map(|m| m.checkpoints).unwrap_or_default())
     }
 
     async fn branch_from_checkpoint(
-        &self, key: &SessionKey, checkpoint_id: &str, new_key: &SessionKey) -> Result<SessionMetadata, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        checkpoint_id: &str,
+        new_key: &SessionKey,
+    ) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
         let new_key_str = new_key.to_key_string();
         let checkpoint_messages = self.read_checkpoint(&key_str, checkpoint_id).await?;
@@ -579,9 +608,9 @@ impl SessionStore for FileSessionStore {
             contents.push_str(&line);
             contents.push('\n');
         }
-        tokio::fs::create_dir_all(self.session_dir(&new_key_str)).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Create dir failed: {}", e))
-        })?;
+        tokio::fs::create_dir_all(self.session_dir(&new_key_str))
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Create dir failed: {}", e)))?;
         tokio::fs::write(&path, contents).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
         })?;
@@ -591,7 +620,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn restore_checkpoint(
-        &self, key: &SessionKey, checkpoint_id: &str) -> Result<SessionMetadata, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        checkpoint_id: &str,
+    ) -> Result<SessionMetadata, SessionStoreError> {
         let key_str = key.to_key_string();
         let checkpoint_messages = self.read_checkpoint(&key_str, checkpoint_id).await?;
         if checkpoint_messages.is_empty() {
@@ -612,9 +644,10 @@ impl SessionStore for FileSessionStore {
         tokio::fs::write(&path, contents).await.map_err(|e| {
             SessionStoreError::DatabaseError(format!("Write transcript failed: {}", e))
         })?;
-        let mut meta = self.read_metadata(&key_str).await?.ok_or_else(|| {
-            SessionStoreError::NotFound(format!("Session {} not found", key_str))
-        })?;
+        let mut meta = self
+            .read_metadata(&key_str)
+            .await?
+            .ok_or_else(|| SessionStoreError::NotFound(format!("Session {} not found", key_str)))?;
         meta.message_count = checkpoint_messages.len() as i64;
         meta.last_active_at = chrono::Utc::now().timestamp();
         self.write_metadata(&key_str, &meta).await?;
@@ -623,7 +656,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn close_session(
-        &self, key: &SessionKey, topic: Option<&str>) -> Result<(), SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        topic: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             if matches!(meta.state, Some(SessionState::Stopped)) {
@@ -646,7 +682,11 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
-    async fn set_state(&self, key: &SessionKey, state: SessionState) -> Result<(), SessionStoreError> {
+    async fn set_state(
+        &self,
+        key: &SessionKey,
+        state: SessionState,
+    ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             meta.state = Some(state);
@@ -663,9 +703,14 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn get_identity_context(
-        &self, session_key: &str, source_channel: &str) -> Result<aleph_protocol::IdentityContext, SessionStoreError> {
+        &self,
+        session_key: &str,
+        source_channel: &str,
+    ) -> Result<aleph_protocol::IdentityContext, SessionStoreError> {
         let identity_meta = match self.read_metadata(session_key).await? {
-            Some(meta) => meta.identity_meta.unwrap_or_else(|| SessionIdentityMeta::owner(source_channel)),
+            Some(meta) => meta
+                .identity_meta
+                .unwrap_or_else(|| SessionIdentityMeta::owner(source_channel)),
             None => SessionIdentityMeta::owner(source_channel),
         };
         Ok(identity_meta.to_identity_context(session_key.to_string()))
@@ -673,12 +718,14 @@ impl SessionStore for FileSessionStore {
 
     async fn get_current_epoch(&self, base_key_pattern: &str) -> Result<u32, SessionStoreError> {
         let mut max_epoch = 0u32;
-        let mut entries = tokio::fs::read_dir(&self.config.base_dir).await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Read dir failed: {}", e))
-        })?;
-        while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e))
-        })? {
+        let mut entries = tokio::fs::read_dir(&self.config.base_dir)
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Read dir failed: {}", e)))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| SessionStoreError::DatabaseError(format!("Dir entry failed: {}", e)))?
+        {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(base_key_pattern) {
                 if let Some(suffix) = name.rsplit(':').next() {
@@ -693,7 +740,10 @@ impl SessionStore for FileSessionStore {
         Ok(max_epoch)
     }
 
-    async fn get_session_topic(&self, _key: &SessionKey) -> Result<Option<String>, SessionStoreError> {
+    async fn get_session_topic(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<String>, SessionStoreError> {
         Ok(None)
     }
 
@@ -701,7 +751,8 @@ impl SessionStore for FileSessionStore {
         if self.config.session_expiry_secs == 0 {
             return Ok(0);
         }
-        let expiry_threshold = chrono::Utc::now().timestamp() - self.config.session_expiry_secs as i64;
+        let expiry_threshold =
+            chrono::Utc::now().timestamp() - self.config.session_expiry_secs as i64;
         let mut deleted = 0usize;
         let sessions = self.list_sessions(SessionFilter::default()).await?;
         for meta in sessions {
@@ -716,7 +767,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn patch_session(
-        &self, key: &SessionKey, patch: &SessionPatch) -> Result<bool, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        patch: &SessionPatch,
+    ) -> Result<bool, SessionStoreError> {
         let key_str = key.to_key_string();
         match self.read_metadata(&key_str).await? {
             Some(mut meta) => {
@@ -738,7 +792,13 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn update_session_usage(
-        &self, key: &SessionKey, input_tokens: i64, output_tokens: i64, model: Option<&str>, model_provider: Option<&str>) -> Result<(), SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        input_tokens: i64,
+        output_tokens: i64,
+        model: Option<&str>,
+        model_provider: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
         let key_str = key.to_key_string();
         if let Some(mut meta) = self.read_metadata(&key_str).await? {
             meta.input_tokens += input_tokens;
@@ -756,7 +816,10 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn get_session_preview(
-        &self, key: &SessionKey, message_limit: usize) -> Result<SessionPreview, SessionStoreError> {
+        &self,
+        key: &SessionKey,
+        message_limit: usize,
+    ) -> Result<SessionPreview, SessionStoreError> {
         let key_str = key.to_key_string();
         let meta = self.read_metadata(&key_str).await?;
         let messages = self.read_transcript(&key_str, Some(message_limit)).await?;
@@ -765,15 +828,28 @@ impl SessionStore for FileSessionStore {
 
     async fn count_by_state(&self, state: SessionState) -> Result<usize, SessionStoreError> {
         let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions.into_iter().filter(|m| m.state == Some(state)).count())
+        Ok(sessions
+            .into_iter()
+            .filter(|m| m.state == Some(state))
+            .count())
     }
 
-    async fn list_by_state(&self, state: SessionState) -> Result<Vec<SessionMetadata>, SessionStoreError> {
+    async fn list_by_state(
+        &self,
+        state: SessionState,
+    ) -> Result<Vec<SessionMetadata>, SessionStoreError> {
         let sessions = self.list_sessions(SessionFilter::default()).await?;
-        Ok(sessions.into_iter().filter(|m| m.state == Some(state)).collect())
+        Ok(sessions
+            .into_iter()
+            .filter(|m| m.state == Some(state))
+            .collect())
     }
 
-    async fn set_error(&self, key: &SessionKey, _error_msg: Option<&str>) -> Result<(), SessionStoreError> {
+    async fn set_error(
+        &self,
+        key: &SessionKey,
+        _error_msg: Option<&str>,
+    ) -> Result<(), SessionStoreError> {
         self.set_state(key, SessionState::Error).await
     }
 

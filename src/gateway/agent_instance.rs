@@ -450,9 +450,9 @@ impl SessionMessage {
         };
         let timestamp =
             chrono::DateTime::from_timestamp(record.timestamp, 0).unwrap_or_else(chrono::Utc::now);
-        let metadata = record.metadata.and_then(|v| {
-            serde_json::from_value::<HashMap<String, String>>(v).ok()
-        });
+        let metadata = record
+            .metadata
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v).ok());
         Self {
             role,
             content: record.content,

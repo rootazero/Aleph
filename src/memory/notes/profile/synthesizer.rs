@@ -4,9 +4,9 @@
 //! `USER.md` via LLM calls.  It owns the merge algorithm: rate-limiting,
 //! hash-guarded writes, diff computation, and optional orientation logging.
 
+use crate::sync_primitives::Mutex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;

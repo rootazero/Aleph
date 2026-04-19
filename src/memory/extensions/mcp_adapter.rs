@@ -6,9 +6,9 @@ use crate::memory::assembler::envelope::{EnvelopeItem, MemoryEnvelope};
 use crate::memory::extensions::traits::MemoryExtension;
 use crate::memory::extensions::types::{CaptureCtx, CaptureDecision, ProduceCtx, RetrieveCtx};
 use crate::memory::store::raw_memory::RawMemory;
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 
 /// Minimal trait the adapter needs to talk to a plugin. Tests use an
 /// in-memory implementation; production wires it to the real MCP client.

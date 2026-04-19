@@ -38,7 +38,7 @@ pub mod streaming;
 
 pub use access::AccessController;
 pub use bot_instance::BotInstance;
-pub use config::{PairingEntry, TelegramConfig, WebhookConfig, parse_telegram_channel_config};
+pub use config::{parse_telegram_channel_config, PairingEntry, TelegramConfig, WebhookConfig};
 pub use config_resolver::{ConfigResolver, ResolvedConfig};
 pub use config_v2::TelegramConfigV2;
 pub use config_v2::{DmPolicy, GroupPolicy, StatusReactionConfig, StreamingOptions};
@@ -52,11 +52,11 @@ use crate::gateway::channel::{
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     MessageId, MessageMeta, OutboundMessage, PairingData, SendResult, UserId,
 };
+use crate::sync_primitives::Arc;
 use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
 use error_cooldown::ErrorCooldown;
-use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use teloxide::{prelude::*, types::CallbackQuery as TgCallbackQuery};

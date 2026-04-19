@@ -67,11 +67,7 @@ pub struct ToolDefinition {
 
 #[async_trait]
 pub trait ToolService: Send + Sync + 'static {
-    async fn execute(
-        &self,
-        name: &str,
-        input: serde_json::Value,
-    ) -> Result<ToolOutput, ToolError>;
+    async fn execute(&self, name: &str, input: serde_json::Value) -> Result<ToolOutput, ToolError>;
 
     async fn list(&self) -> Vec<ToolDefinition>;
 

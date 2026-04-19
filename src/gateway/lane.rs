@@ -10,9 +10,9 @@
 //! - **Mutate**: State mutations (config.patch, memory.store, etc.)
 //! - **System**: System management (plugins.install, skills.delete, etc.)
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::fmt;
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};

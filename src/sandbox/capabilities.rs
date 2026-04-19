@@ -22,7 +22,9 @@ pub enum NetworkPolicy {
     #[default]
     None,
     AllowAll,
-    AllowHosts { hosts: Vec<String> },
+    AllowHosts {
+        hosts: Vec<String>,
+    },
 }
 
 impl SandboxCapabilities {

@@ -118,9 +118,7 @@ pub fn unregister_extension_tools(registry: &ToolRegistry, plugin_id: &str) -> V
     let victims: Vec<String> = snapshot
         .iter()
         .filter_map(|(name, handler)| match handler.definition().source {
-            ToolSource::Extension {
-                plugin_id: ref pid,
-            } if pid == plugin_id => Some(name.clone()),
+            ToolSource::Extension { plugin_id: ref pid } if pid == plugin_id => Some(name.clone()),
             _ => None,
         })
         .collect();

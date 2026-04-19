@@ -2,9 +2,9 @@
 //!
 //! Handles Discord presence updates for streaming status preview.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

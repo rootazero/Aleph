@@ -14,15 +14,16 @@ pub fn migration_needed(base_dir: &Path) -> bool {
     if marker.exists() {
         return false;
     }
-    let legacy_db = crate::utils::paths::get_sessions_db_path().unwrap_or_else(|_| {
-        std::env::temp_dir().join("aleph_data").join("sessions.db")
-    });
+    let legacy_db = crate::utils::paths::get_sessions_db_path()
+        .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data").join("sessions.db"));
     legacy_db.exists()
 }
 
 /// Export legacy SQLite sessions and messages into the file backend.
 /// Writes a marker file on success so the migration is not re-run.
-pub async fn export_legacy_messages(store: &FileSessionStore) -> Result<usize, crate::error::AlephError> {
+pub async fn export_legacy_messages(
+    store: &FileSessionStore,
+) -> Result<usize, crate::error::AlephError> {
     let legacy_db = crate::utils::paths::get_sessions_db_path().map_err(|e| {
         crate::error::AlephError::ConfigError {
             message: format!("Failed to resolve legacy DB path: {}", e),
@@ -31,7 +32,10 @@ pub async fn export_legacy_messages(store: &FileSessionStore) -> Result<usize, c
     })?;
 
     if !legacy_db.exists() {
-        info!("No legacy SQLite session database found at {:?}; skipping migration.", legacy_db);
+        info!(
+            "No legacy SQLite session database found at {:?}; skipping migration.",
+            legacy_db
+        );
         return Ok(0);
     }
 
@@ -232,7 +236,12 @@ pub async fn export_legacy_messages(store: &FileSessionStore) -> Result<usize, c
     // 4. Write marker
     // -----------------------------------------------------------------------
     let marker = store.config().base_dir.join(MIGRATION_MARKER);
-    let marker_content = format!("migrated_at={}\nsessions={}\nmessages={}", chrono::Utc::now().to_rfc3339(), migrated_count, total_messages);
+    let marker_content = format!(
+        "migrated_at={}\nsessions={}\nmessages={}",
+        chrono::Utc::now().to_rfc3339(),
+        migrated_count,
+        total_messages
+    );
     tokio::fs::write(&marker, marker_content)
         .await
         .map_err(|e| crate::error::AlephError::ConfigError {
@@ -292,10 +301,11 @@ fn ensure_sessions_columns(conn: &Connection) -> Result<(), crate::error::AlephE
     for (col, ty) in needed {
         if !existing.contains(*col) {
             let sql = format!("ALTER TABLE sessions ADD COLUMN {} {}", col, ty);
-            conn.execute(&sql, []).map_err(|e| crate::error::AlephError::ConfigError {
-                message: format!("ALTER TABLE sessions ADD COLUMN {} failed: {}", col, e),
-                suggestion: None,
-            })?;
+            conn.execute(&sql, [])
+                .map_err(|e| crate::error::AlephError::ConfigError {
+                    message: format!("ALTER TABLE sessions ADD COLUMN {} failed: {}", col, e),
+                    suggestion: None,
+                })?;
         }
     }
     Ok(())

@@ -79,7 +79,10 @@ impl SessionState {
                 if let Some(turn) = self.current_turn.as_mut() {
                     turn.pending_tool_calls.insert(
                         call_id.clone(),
-                        PendingToolCall { name: name.clone(), approved: None },
+                        PendingToolCall {
+                            name: name.clone(),
+                            approved: None,
+                        },
                     );
                 }
             }
@@ -113,7 +116,11 @@ impl SessionState {
                 // Tracked via events; no parent-state mutation needed in Phase 1.
             }
 
-            SessionEvent::BudgetUpdated { tokens_used, tokens_budget, .. } => {
+            SessionEvent::BudgetUpdated {
+                tokens_used,
+                tokens_budget,
+                ..
+            } => {
                 self.tokens_used = *tokens_used;
                 self.tokens_budget = *tokens_budget;
             }
@@ -135,11 +142,19 @@ mod tests {
     use crate::session::events::{now_ms, MessageContent, ToolOutput, TurnTrigger};
 
     fn turn_started(tid: TurnId) -> SessionEvent {
-        SessionEvent::TurnStarted { turn_id: tid, trigger: TurnTrigger::UserMessage, at: now_ms() }
+        SessionEvent::TurnStarted {
+            turn_id: tid,
+            trigger: TurnTrigger::UserMessage,
+            at: now_ms(),
+        }
     }
 
     fn turn_ended_completed(tid: TurnId) -> SessionEvent {
-        SessionEvent::TurnEnded { turn_id: tid, outcome: TurnOutcome::Completed, at: now_ms() }
+        SessionEvent::TurnEnded {
+            turn_id: tid,
+            outcome: TurnOutcome::Completed,
+            at: now_ms(),
+        }
     }
 
     #[test]
@@ -202,7 +217,10 @@ mod tests {
             turn_started(tid),
             SessionEvent::UserMessage {
                 turn_id: tid,
-                content: MessageContent { text: "hi".into(), blocks: vec![] },
+                content: MessageContent {
+                    text: "hi".into(),
+                    blocks: vec![],
+                },
                 at: now_ms(),
             },
             turn_ended_completed(tid),
@@ -220,8 +238,14 @@ mod tests {
     #[test]
     fn wake_count_increments() {
         let mut s = SessionState::default();
-        s.apply(&SessionEvent::SessionWoken { at: now_ms(), prior_head: 10 });
-        s.apply(&SessionEvent::SessionWoken { at: now_ms(), prior_head: 20 });
+        s.apply(&SessionEvent::SessionWoken {
+            at: now_ms(),
+            prior_head: 10,
+        });
+        s.apply(&SessionEvent::SessionWoken {
+            at: now_ms(),
+            prior_head: 20,
+        });
         assert_eq!(s.wake_count, 2);
     }
 

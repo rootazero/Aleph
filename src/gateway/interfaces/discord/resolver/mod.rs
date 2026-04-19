@@ -10,8 +10,8 @@ pub use error::{Candidate, ChannelResolutionError};
 pub use input::ParsedInput;
 
 use super::api::{list_channels, list_guilds, ChannelSummary, GuildSummary};
-use serenity::http::Http;
 use crate::sync_primitives::Arc;
+use serenity::http::Http;
 use strategy::search_in_guilds;
 
 #[derive(Debug, Clone)]

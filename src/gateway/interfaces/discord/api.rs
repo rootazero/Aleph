@@ -4,8 +4,8 @@
 //! the Control Plane RPC handlers. Each function maps roughly to one
 //! panel action in the Discord management UI.
 
-use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
 
 use super::permissions::{self, PermissionAudit};
 

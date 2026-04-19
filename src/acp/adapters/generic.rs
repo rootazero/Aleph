@@ -47,9 +47,9 @@ impl From<&OutputFormatSerde> for OutputFormat {
     fn from(fmt: &OutputFormatSerde) -> Self {
         match fmt {
             OutputFormatSerde::PlainText => OutputFormat::PlainText,
-            OutputFormatSerde::Json { field } => {
-                OutputFormat::JsonField { field: field.clone() }
-            }
+            OutputFormatSerde::Json { field } => OutputFormat::JsonField {
+                field: field.clone(),
+            },
         }
     }
 }
@@ -155,10 +155,7 @@ impl AcpAdapter for GenericAcpAdapter {
         }
     }
 
-    async fn execute_oneshot(&self,
-        prompt: &str,
-        cwd: &str,
-    ) -> Result<String> {
+    async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
         let mut cmd = Command::new(&self.executable);
 
         // Append oneshot args, then the prompt
@@ -201,9 +198,7 @@ impl AcpAdapter for GenericAcpAdapter {
         Ok(self.output_format.parse(&stdout))
     }
 
-    async fn spawn_session(&self,
-        cwd: Option<&str>,
-    ) -> Result<AcpSession> {
+    async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
         let config = AdapterConfig {
             executable: self.executable.clone(),
             args: self.native_acp_args.clone(),

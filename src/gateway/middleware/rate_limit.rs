@@ -1,8 +1,8 @@
 //! Rate limit middleware for the gateway JSON-RPC handler pipeline.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};

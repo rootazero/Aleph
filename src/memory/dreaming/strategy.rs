@@ -35,10 +35,7 @@ impl DreamStrategy {
                 "skill_distill",
                 "daily_digest",
             ],
-            Self::Conserve => vec![
-                "note_lint",
-                "index_refresher",
-            ],
+            Self::Conserve => vec!["note_lint", "index_refresher"],
         }
     }
 }
@@ -62,7 +59,13 @@ mod tests {
         let names = DreamStrategy::Consolidate.stage_names();
         assert_eq!(
             names,
-            vec!["note_lint", "note_consolidate", "note_drift", "index_refresher", "note_decay"]
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_drift",
+                "index_refresher",
+                "note_decay"
+            ]
         );
     }
 
@@ -71,7 +74,13 @@ mod tests {
         let names = DreamStrategy::Synthesize.stage_names();
         assert_eq!(
             names,
-            vec!["note_lint", "note_consolidate", "note_synthesis", "skill_distill", "daily_digest"]
+            vec![
+                "note_lint",
+                "note_consolidate",
+                "note_synthesis",
+                "skill_distill",
+                "daily_digest"
+            ]
         );
     }
 
@@ -83,7 +92,11 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        for strategy in [DreamStrategy::Consolidate, DreamStrategy::Synthesize, DreamStrategy::Conserve] {
+        for strategy in [
+            DreamStrategy::Consolidate,
+            DreamStrategy::Synthesize,
+            DreamStrategy::Conserve,
+        ] {
             let s = serde_json::to_string(&strategy).unwrap();
             let back: DreamStrategy = serde_json::from_str(&s).unwrap();
             assert_eq!(back, strategy);

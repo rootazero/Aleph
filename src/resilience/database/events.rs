@@ -6,9 +6,9 @@
 use super::StateDatabase;
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
+use crate::sync_primitives::{AtomicBool, Ordering as AtomicOrdering};
 use rusqlite::params;
 use rusqlite::OptionalExtension;
-use crate::sync_primitives::{AtomicBool, Ordering as AtomicOrdering};
 
 static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
 

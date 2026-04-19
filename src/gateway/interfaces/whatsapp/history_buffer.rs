@@ -3,10 +3,10 @@
 //! Buffers recent group messages for context injection before agent responses.
 
 use crate::gateway::channel::{ConversationId, InboundMessage};
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use crate::sync_primitives::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BufferedMessage {

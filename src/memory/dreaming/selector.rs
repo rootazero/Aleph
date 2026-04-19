@@ -207,7 +207,9 @@ mod tests {
     #[test]
     fn gate_skip_returns_conserve() {
         let snapshot = snapshot_from(&RawMetrics::default());
-        let gate = GateDecision::Skip { reason: "cooldown".into() };
+        let gate = GateDecision::Skip {
+            reason: "cooldown".into(),
+        };
         let decision = StrategySelector::new().select(&snapshot, &gate);
         assert_eq!(decision.strategy, DreamStrategy::Conserve);
     }

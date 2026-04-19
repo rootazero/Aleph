@@ -55,8 +55,6 @@ pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use facade::{build_tool_service, build_tool_service_with_handles, ToolServiceHandles};
 pub use registry::ToolRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
-pub use service::{
-    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
-};
+pub use service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
 pub use traits::{AlephTool, AlephToolDyn};
 pub use types::{ToolRepairInfo, ToolRepairType, ToolUpdateInfo};

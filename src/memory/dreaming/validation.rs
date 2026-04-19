@@ -204,7 +204,8 @@ mod tests {
 
     #[test]
     fn empty_content_fails_l1() {
-        let content = "---\ncategory: learning\ntags: []\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n";
+        let content =
+            "---\ncategory: learning\ntags: []\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n";
         let issues = validate_frontmatter(content, "learning/test");
         assert!(issues.iter().any(|i| i.message.contains("empty")));
     }

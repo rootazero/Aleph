@@ -2,9 +2,9 @@
 //!
 //! Manages thread bindings with sub-agent support.
 
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 /// Thread info entry

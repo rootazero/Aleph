@@ -77,18 +77,51 @@ pub struct ToolOutputMetadata {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SessionEvent {
-    SessionCreated { identity: SessionIdentityMeta, at: Timestamp },
-    SessionWoken { at: Timestamp, prior_head: EventSeq },
-    SessionDetached { at: Timestamp },
+    SessionCreated {
+        identity: SessionIdentityMeta,
+        at: Timestamp,
+    },
+    SessionWoken {
+        at: Timestamp,
+        prior_head: EventSeq,
+    },
+    SessionDetached {
+        at: Timestamp,
+    },
 
-    TurnStarted { turn_id: TurnId, trigger: TurnTrigger, at: Timestamp },
-    TurnEnded { turn_id: TurnId, outcome: TurnOutcome, at: Timestamp },
+    TurnStarted {
+        turn_id: TurnId,
+        trigger: TurnTrigger,
+        at: Timestamp,
+    },
+    TurnEnded {
+        turn_id: TurnId,
+        outcome: TurnOutcome,
+        at: Timestamp,
+    },
 
-    UserMessage { turn_id: TurnId, content: MessageContent, at: Timestamp },
-    AssistantMessage { turn_id: TurnId, content: MessageContent, at: Timestamp },
-    SystemMessage { turn_id: TurnId, content: String, at: Timestamp },
+    UserMessage {
+        turn_id: TurnId,
+        content: MessageContent,
+        at: Timestamp,
+    },
+    AssistantMessage {
+        turn_id: TurnId,
+        content: MessageContent,
+        at: Timestamp,
+    },
+    SystemMessage {
+        turn_id: TurnId,
+        content: String,
+        at: Timestamp,
+    },
 
-    LlmCallStarted { turn_id: TurnId, provider: String, model: String, at: Timestamp },
+    LlmCallStarted {
+        turn_id: TurnId,
+        provider: String,
+        model: String,
+        at: Timestamp,
+    },
     LlmCallEnded {
         turn_id: TurnId,
         tokens_in: u32,
@@ -104,10 +137,30 @@ pub enum SessionEvent {
         input: serde_json::Value,
         at: Timestamp,
     },
-    ToolCallApproved { turn_id: TurnId, call_id: String, by: ApprovalSource, at: Timestamp },
-    ToolCallDenied { turn_id: TurnId, call_id: String, reason: String, at: Timestamp },
-    ToolResult { turn_id: TurnId, call_id: String, output: ToolOutput, at: Timestamp },
-    ToolError { turn_id: TurnId, call_id: String, error: String, at: Timestamp },
+    ToolCallApproved {
+        turn_id: TurnId,
+        call_id: String,
+        by: ApprovalSource,
+        at: Timestamp,
+    },
+    ToolCallDenied {
+        turn_id: TurnId,
+        call_id: String,
+        reason: String,
+        at: Timestamp,
+    },
+    ToolResult {
+        turn_id: TurnId,
+        call_id: String,
+        output: ToolOutput,
+        at: Timestamp,
+    },
+    ToolError {
+        turn_id: TurnId,
+        call_id: String,
+        error: String,
+        at: Timestamp,
+    },
 
     SubagentSpawned {
         turn_id: TurnId,

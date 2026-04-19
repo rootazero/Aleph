@@ -13,8 +13,8 @@
 //!
 //! This allows different sessions to proceed concurrently.
 
-use serde_json::{json, Value};
 use crate::sync_primitives::Arc;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};

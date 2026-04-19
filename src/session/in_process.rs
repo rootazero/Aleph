@@ -93,7 +93,11 @@ impl SessionService for InProcessActorSessionService {
         };
         let (tx, rx) = oneshot::channel();
         sender
-            .send(ActorCommand::GetEvents { from, to, reply: tx })
+            .send(ActorCommand::GetEvents {
+                from,
+                to,
+                reply: tx,
+            })
             .await
             .map_err(|_| SessionError::ActorShutdown)?;
         rx.await.map_err(|_| SessionError::ActorShutdown)?

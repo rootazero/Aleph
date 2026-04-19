@@ -6,16 +6,14 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 
 const PRESET_ICON_COLORS: &[&str] = &[
-    "#F97316", "#3B82F6", "#10B981", "#8B5CF6", "#EF4444",
-    "#06B6D4", "#F59E0B", "#EC4899", "#6366F1", "#14B8A6",
-    "#84CC16", "#D946EF", "#F43F5E", "#0EA5E9", "#A855F7",
-    "#22C55E",
+    "#F97316", "#3B82F6", "#10B981", "#8B5CF6", "#EF4444", "#06B6D4", "#F59E0B", "#EC4899",
+    "#6366F1", "#14B8A6", "#84CC16", "#D946EF", "#F43F5E", "#0EA5E9", "#A855F7", "#22C55E",
 ];
 
 fn preset_icon_color(id: &str) -> &'static str {
-    let hash = id.bytes().fold(0u32, |acc, b| {
-        acc.wrapping_mul(31).wrapping_add(b as u32)
-    });
+    let hash = id
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     let idx = (hash as usize) % PRESET_ICON_COLORS.len();
     PRESET_ICON_COLORS[idx]
 }

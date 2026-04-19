@@ -2,7 +2,7 @@
 //!
 //! Handles downloading media from WeChat CDN and decrypting with AES-128-ECB.
 
-use aes::cipher::{BlockCipherDecrypt, KeyInit, array::Array, consts::U16};
+use aes::cipher::{array::Array, consts::U16, BlockCipherDecrypt, KeyInit};
 use aes::Aes128;
 use reqwest::Client;
 

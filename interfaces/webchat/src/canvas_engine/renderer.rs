@@ -30,7 +30,14 @@ impl Renderer {
         let _ = ctx.scale(viewport.scale, viewport.scale);
 
         Self::draw_edges(ctx, nodes, edges, selected, hovered, kind_filter);
-        Self::draw_nodes(ctx, nodes, selected, hovered, kind_filter, highlighted_neighbors);
+        Self::draw_nodes(
+            ctx,
+            nodes,
+            selected,
+            hovered,
+            kind_filter,
+            highlighted_neighbors,
+        );
 
         ctx.restore();
     }
@@ -62,8 +69,7 @@ impl Renderer {
                 None => continue,
             };
 
-            if !Self::is_node_visible(from, kind_filter)
-                || !Self::is_node_visible(to, kind_filter)
+            if !Self::is_node_visible(from, kind_filter) || !Self::is_node_visible(to, kind_filter)
             {
                 continue;
             }
@@ -71,9 +77,7 @@ impl Renderer {
             let is_selected_edge = selected
                 .map(|s| from.id == s || to.id == s)
                 .unwrap_or(false);
-            let is_hovered_edge = hovered
-                .map(|h| from.id == h || to.id == h)
-                .unwrap_or(false);
+            let is_hovered_edge = hovered.map(|h| from.id == h || to.id == h).unwrap_or(false);
             let is_highlighted = is_selected_edge || is_hovered_edge;
 
             // Dim edges not connected to the hovered node when hovering

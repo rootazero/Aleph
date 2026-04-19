@@ -51,7 +51,11 @@ mod tests {
     use crate::session::events::{now_ms, MessageContent};
 
     fn rec(seq: u64, ev: SessionEvent) -> SessionEventRecord {
-        SessionEventRecord { seq, event: ev, created_at_ms: now_ms() }
+        SessionEventRecord {
+            seq,
+            event: ev,
+            created_at_ms: now_ms(),
+        }
     }
 
     #[test]
@@ -70,7 +74,10 @@ mod tests {
                 2,
                 SessionEvent::UserMessage {
                     turn_id: tid,
-                    content: MessageContent { text: "hi".into(), blocks: vec![] },
+                    content: MessageContent {
+                        text: "hi".into(),
+                        blocks: vec![],
+                    },
                     at: now_ms(),
                 },
             ),
@@ -78,7 +85,10 @@ mod tests {
                 3,
                 SessionEvent::AssistantMessage {
                     turn_id: tid,
-                    content: MessageContent { text: "hello".into(), blocks: vec![] },
+                    content: MessageContent {
+                        text: "hello".into(),
+                        blocks: vec![],
+                    },
                     at: now_ms(),
                 },
             ),

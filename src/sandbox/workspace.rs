@@ -20,10 +20,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::agent_loop::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
-use crate::sandbox::Sandbox;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::driver::OsSandboxDriverTrait;
+use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
 /// Lazy per-session workspace + capability-aware sandbox implementation.

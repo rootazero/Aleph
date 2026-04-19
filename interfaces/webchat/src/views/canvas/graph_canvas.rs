@@ -167,11 +167,9 @@ pub fn GraphCanvas(
                 } else {
                     // Ease-out interpolation
                     let t = 1.0 - (1.0 - state.pan_progress).powi(3);
-                    let current_center_x = (state.viewport.width / 2.0
-                        - state.viewport.offset.x)
+                    let current_center_x = (state.viewport.width / 2.0 - state.viewport.offset.x)
                         / state.viewport.scale;
-                    let current_center_y = (state.viewport.height / 2.0
-                        - state.viewport.offset.y)
+                    let current_center_y = (state.viewport.height / 2.0 - state.viewport.offset.y)
                         / state.viewport.scale;
                     let new_x = current_center_x + (target.x - current_center_x) * t;
                     let new_y = current_center_y + (target.y - current_center_y) * t;

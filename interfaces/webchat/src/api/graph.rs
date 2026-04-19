@@ -12,8 +12,7 @@ impl GraphApi {
     ) -> Result<GraphQueryResponse, String> {
         let params = json!({ "limit": limit, "kind_filter": kind_filter });
         let result = state.rpc_call("graph.query", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse graph.query: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.query: {}", e))
     }
 
     pub async fn neighbors(
@@ -45,7 +44,6 @@ impl GraphApi {
     ) -> Result<GraphSearchResponse, String> {
         let params = json!({ "query": query, "limit": limit });
         let result = state.rpc_call("graph.search", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse graph.search: {}", e))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse graph.search: {}", e))
     }
 }

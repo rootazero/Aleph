@@ -171,8 +171,8 @@ impl ToolService for PermissionLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     use crate::session::events::{ToolOutput, ToolOutputMetadata};
 
@@ -359,11 +359,7 @@ mod tests {
             other => panic!("expected PermissionDenied, got {other:?}"),
         }
         assert_eq!(inner.call_count(), 0, "inner must not run after rejection");
-        assert_eq!(
-            approver.call_count(),
-            1,
-            "approver must still be consulted"
-        );
+        assert_eq!(approver.call_count(), 1, "approver must still be consulted");
     }
 
     #[tokio::test]

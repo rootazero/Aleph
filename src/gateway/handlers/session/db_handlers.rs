@@ -94,12 +94,18 @@ pub async fn handle_list_db(
                 .map(|m| {
                     let topic = m.topic.clone().or_else(|| {
                         m.identity_meta.as_ref().and_then(|im| {
-                            im.custom.get("topic").and_then(|v| v.as_str()).map(String::from)
+                            im.custom
+                                .get("topic")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
                         })
                     });
                     let status = m.status.clone().or_else(|| {
                         m.identity_meta.as_ref().and_then(|im| {
-                            im.custom.get("status").and_then(|v| v.as_str()).map(String::from)
+                            im.custom
+                                .get("status")
+                                .and_then(|v| v.as_str())
+                                .map(String::from)
                         })
                     });
 
@@ -370,9 +376,18 @@ pub async fn handle_patch_db(
     };
 
     let patch = crate::gateway::session_manager::SessionPatch {
-        label: params.get("label").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        status: params.get("status").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        model: params.get("model").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        label: params
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        status: params
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        model: params
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         model_provider: params
             .get("model_provider")
             .and_then(|v| v.as_str())
@@ -720,7 +735,13 @@ pub async fn handle_compact_db(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    match manager.compact(&key, crate::gateway::session_store::types::CompactStrategy::KeepLastN { n: 50 }).await {
+    match manager
+        .compact(
+            &key,
+            crate::gateway::session_store::types::CompactStrategy::KeepLastN { n: 50 },
+        )
+        .await
+    {
         Ok(result) => {
             let after_msgs = before_msgs.saturating_sub(result.deleted);
             let tokens_saved = result.deleted * 50; // rough estimate per message
@@ -980,7 +1001,10 @@ pub async fn handle_branch_checkpoint_db(
         }
     };
 
-    match manager.branch_from_checkpoint(&key, checkpoint_id, &new_key).await {
+    match manager
+        .branch_from_checkpoint(&key, checkpoint_id, &new_key)
+        .await
+    {
         Ok(meta) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -998,5 +1022,3 @@ pub async fn handle_branch_checkpoint_db(
         ),
     }
 }
-
-

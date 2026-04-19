@@ -541,8 +541,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         };
         // Hydrate a ProviderConfig clone with its vault api_key (if present)
-        let hydrate = |name: &str, cfg: &alephcore::ProviderConfig|
-            -> alephcore::ProviderConfig {
+        let hydrate = |name: &str, cfg: &alephcore::ProviderConfig| -> alephcore::ProviderConfig {
             let mut c = cfg.clone();
             if c.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
                 c.api_key = vault_lookup(name);
@@ -732,9 +731,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // residue and SessionEnd writes reach L0; short conversations under
         // the WS path never persist and the L1 pipeline starves.
         agent_registry
-            .set_raw_memory_writer(memory_db.clone() as std::sync::Arc<
-                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
-            >)
+            .set_raw_memory_writer(memory_db.clone()
+                as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)
             .await;
 
         // Capture embedder before it's moved into tool_config

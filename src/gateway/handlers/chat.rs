@@ -229,7 +229,9 @@ pub async fn handle_history(
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
                     run_id: m.metadata.and_then(|meta| {
-                        meta.get("run_id").and_then(|r| r.as_str()).map(String::from)
+                        meta.get("run_id")
+                            .and_then(|r| r.as_str())
+                            .map(String::from)
                     }),
                 })
                 .collect();

@@ -25,11 +25,11 @@
 //! - **OutboundMessage**: Message to be sent through a channel
 //! - **ChannelCapabilities**: What a channel supports (attachments, reactions, etc.)
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 
 use crate::gateway::cancellation::CancellationToken;

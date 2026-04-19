@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::config::types::policies::tool_permissions::ToolPermissionsConfig;
 
-use super::SmartFilter;
 use super::resolver::LayeredPermissionResolver;
+use super::SmartFilter;
 
 /// Stateless helper namespace for building per-agent `SmartFilter`s.
 ///
@@ -54,6 +54,9 @@ mod tests {
             Classification::Deny { .. } => {}
             other => panic!("expected Deny, got {other:?}"),
         }
-        assert_eq!(filter.classify("other", &Value::Null), Classification::Allow);
+        assert_eq!(
+            filter.classify("other", &Value::Null),
+            Classification::Allow
+        );
     }
 }

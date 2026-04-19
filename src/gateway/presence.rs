@@ -5,10 +5,10 @@
 //! heartbeat timestamps. The `PresenceTracker` provides concurrent
 //! read/write access via `DashMap`.
 
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::Serialize;
-use crate::sync_primitives::Arc;
 
 /// Connection role for presence classification.
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]

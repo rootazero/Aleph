@@ -306,7 +306,9 @@ mod tests {
             .route(None, Some("gui:window1"), Some("telegram:123"), None)
             .await;
 
-        assert!(matches!(key, SessionKey::DirectMessage { peer_id, .. } if peer_id == "telegram:123"));
+        assert!(
+            matches!(key, SessionKey::DirectMessage { peer_id, .. } if peer_id == "telegram:123")
+        );
     }
 
     #[test]

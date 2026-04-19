@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use crate::gateway::channel::{ChannelConfig, ChannelFactory, ChannelResult};
 

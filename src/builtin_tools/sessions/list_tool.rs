@@ -148,16 +148,16 @@ impl SessionsListTool {
             (meta.session_type.clone(), "unknown".to_string())
         };
 
-        let topic = meta
-            .derived_title
-            .clone()
-            .or_else(|| {
-                meta.topic.clone().or_else(|| {
-                    meta.identity_meta.as_ref().and_then(|im| {
-                        im.custom.get("topic").and_then(|v| v.as_str()).map(String::from)
-                    })
+        let topic = meta.derived_title.clone().or_else(|| {
+            meta.topic.clone().or_else(|| {
+                meta.identity_meta.as_ref().and_then(|im| {
+                    im.custom
+                        .get("topic")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
                 })
-            });
+            })
+        });
 
         SessionListRow {
             key: meta.key.clone(),

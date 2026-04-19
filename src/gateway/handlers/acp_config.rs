@@ -765,7 +765,9 @@ mod tests {
         assert_eq!(items.len(), preset_ids.len());
         for id in preset_ids {
             assert!(
-                items.iter().any(|v| v.get("id").and_then(|i| i.as_str()) == Some(id)),
+                items
+                    .iter()
+                    .any(|v| v.get("id").and_then(|i| i.as_str()) == Some(id)),
                 "missing preset in response: {}",
                 id
             );

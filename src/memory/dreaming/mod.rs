@@ -4,15 +4,15 @@
 //! Each stage implements the `DreamStage` trait and operates on a shared
 //! `DreamContext` that flows through the pipeline.
 
-pub mod gate;
-pub mod report;
-pub mod stages;
-pub mod signals;
-pub mod strategy;
-pub mod selector;
-pub mod mutation_gate;
-pub mod validation;
 pub mod event_log;
+pub mod gate;
+pub mod mutation_gate;
+pub mod report;
+pub mod selector;
+pub mod signals;
+pub mod stages;
+pub mod strategy;
+pub mod validation;
 
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
@@ -38,13 +38,13 @@ pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
 pub use report::{DreamReport, DreamReportStatus};
 
 // Re-export stage trait and shared types
-pub use stages::{DreamStage, MemoryCluster};
-pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
-pub use strategy::DreamStrategy;
-pub use selector::{GateDecision, SelectionDecision, StrategySelector};
-pub use mutation_gate::MutationGate;
-pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
 pub use event_log::{DreamEvent, EventLog};
+pub use mutation_gate::MutationGate;
+pub use selector::{GateDecision, SelectionDecision, StrategySelector};
+pub use signals::{DreamSignal, RawMetrics, SignalSnapshot, SignalType};
+pub use stages::{DreamStage, MemoryCluster};
+pub use strategy::DreamStrategy;
+pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
 
 // ---------------------------------------------------------------------------
 // NoteEntry — metadata for a single note in the dream pipeline
@@ -470,8 +470,7 @@ impl DreamDaemon {
                     {
                         info!(
                             reason = "already_ran_today",
-                            last_run_at,
-                            "DreamDaemon tick: skipped"
+                            last_run_at, "DreamDaemon tick: skipped"
                         );
                         return Ok(());
                     }

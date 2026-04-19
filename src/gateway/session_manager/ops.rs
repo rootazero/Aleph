@@ -7,8 +7,8 @@ use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
     SessionPatch, SessionSearchResult, SessionState,
 };
-use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
 use crate::gateway::router::SessionKey;
+use crate::gateway::session_store::types::{MessageRecord, SessionPreview};
 use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite::Error> {
@@ -141,9 +141,7 @@ impl SessionManager {
     }
 
     /// Add a message to a session with optional metadata and token tracking.
-    #[deprecated(
-        note = "SQLite messages table is legacy; new code should use FileSessionStore"
-    )]
+    #[deprecated(note = "SQLite messages table is legacy; new code should use FileSessionStore")]
     #[allow(clippy::too_many_arguments)]
     pub async fn add_message_with_meta(
         &self,
@@ -217,12 +215,8 @@ impl SessionManager {
             }
             session_update_sql.push_str(" WHERE key = ?");
 
-            let mut params: Vec<&dyn rusqlite::ToSql> = vec![
-                &now,
-                &input_tokens,
-                &output_tokens,
-                &total_delta,
-            ];
+            let mut params: Vec<&dyn rusqlite::ToSql> =
+                vec![&now, &input_tokens, &output_tokens, &total_delta];
             if let Some(ref m) = model_owned {
                 params.push(m);
             }
@@ -298,7 +292,9 @@ impl SessionManager {
                     role: row.get(1)?,
                     content: row.get(2)?,
                     timestamp: row.get(3)?,
-                    metadata: row.get::<_, Option<String>>(4)?.and_then(|s| serde_json::from_str(&s).ok()),
+                    metadata: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
                     input_tokens: row.get(5)?,
                     output_tokens: row.get(6)?,
                     model: None,
@@ -395,7 +391,10 @@ impl SessionManager {
 
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
-                .prepare(&format!("{} WHERE agent_id = ? ORDER BY last_active_at DESC", sql))
+                .prepare(&format!(
+                    "{} WHERE agent_id = ? ORDER BY last_active_at DESC",
+                    sql
+                ))
                 .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
             let rows = stmt
@@ -618,10 +617,9 @@ impl SessionManager {
             .flatten();
 
         let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
-        identity_meta.custom.insert(
-            "status".to_string(),
-            serde_json::json!("closed"),
-        );
+        identity_meta
+            .custom
+            .insert("status".to_string(), serde_json::json!("closed"));
         if let Some(t) = topic {
             identity_meta
                 .custom
@@ -889,12 +887,7 @@ impl SessionManager {
         drop(conn);
 
         debug!("Session {} transitioned to {}", key_str, state);
-        self.emit_session_lifecycle_changed(
-            &key_str,
-            old_state.as_ref(),
-            &state.to_string(),
-            None,
-        );
+        self.emit_session_lifecycle_changed(&key_str, old_state.as_ref(), &state.to_string(), None);
         self.emit_session_updated(&key_str);
         Ok(())
     }
@@ -990,8 +983,7 @@ impl SessionManager {
         let mut sql = String::from(
             "UPDATE sessions SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
         );
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            vec![&input_tokens, &output_tokens, &total];
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&input_tokens, &output_tokens, &total];
 
         if model_owned.is_some() {
             sql.push_str(", model = ?");
@@ -1009,8 +1001,9 @@ impl SessionManager {
         }
         params.push(&key_str);
 
-        conn.execute(&sql, params.as_slice())
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Usage update failed: {}", e)))?;
+        conn.execute(&sql, params.as_slice()).map_err(|e| {
+            SessionManagerError::DatabaseError(format!("Usage update failed: {}", e))
+        })?;
 
         drop(conn);
         self.emit_session_updated(&key_str);
@@ -1059,7 +1052,9 @@ impl SessionManager {
                         role: row.get(1)?,
                         content: row.get(2)?,
                         timestamp: row.get(3)?,
-                        metadata: row.get::<_, Option<String>>(4)?.and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: row
+                            .get::<_, Option<String>>(4)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
                         input_tokens: row.get(5)?,
                         output_tokens: row.get(6)?,
                         model: None,

@@ -241,8 +241,7 @@ pub struct SessionManager {
     /// RPC also migrates onto `SessionService`. `None` until wired in
     /// startup, which keeps test fixtures and callers that don't care
     /// about the new log unaffected.
-    pub(super) session_service:
-        Option<Arc<dyn crate::session::service::SessionService>>,
+    pub(super) session_service: Option<Arc<dyn crate::session::service::SessionService>>,
 }
 
 impl SessionManager {

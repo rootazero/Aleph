@@ -3,8 +3,8 @@
 //! Handles button clicks and select menu interactions.
 
 use crate::gateway::interfaces::discord::handlers::approval::ApprovalQueue;
-use serde::Deserialize;
 use crate::sync_primitives::Arc;
+use serde::Deserialize;
 
 /// Message component interaction
 #[derive(Debug, Clone, Deserialize)]

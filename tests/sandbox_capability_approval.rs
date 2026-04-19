@@ -277,9 +277,5 @@ async fn approval_outcome_is_cached_per_session() {
         1,
         "cached grant must suppress the second approval request"
     );
-    assert_eq!(
-        *runs.read().await,
-        2,
-        "both calls must reach the driver"
-    );
+    assert_eq!(*runs.read().await, 2, "both calls must reach the driver");
 }

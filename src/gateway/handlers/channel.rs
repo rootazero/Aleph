@@ -346,7 +346,7 @@ pub async fn handle_start(
             // Re-attach ToolRegistry for telegram channels so slash commands are registered
             if channel_type == "telegram" {
                 use crate::gateway::interfaces::telegram::{
-                    TelegramChannel, parse_telegram_channel_config,
+                    parse_telegram_channel_config, TelegramChannel,
                 };
                 if let Ok(tg_config) = parse_telegram_channel_config(clean_config) {
                     let mut tg_channel = TelegramChannel::new(channel_id.as_str(), tg_config);

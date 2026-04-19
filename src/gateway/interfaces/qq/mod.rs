@@ -14,8 +14,8 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, OutboundMessage, SendResult,
 };
 use crate::gateway::interfaces::qq::types::QQEvent;
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 
 pub struct QQChannel {
     info: ChannelInfo,

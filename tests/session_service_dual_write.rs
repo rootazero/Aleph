@@ -12,9 +12,7 @@ use alephcore::gateway::{SessionManager, SessionManagerConfig};
 use alephcore::session::events::SessionEvent;
 use alephcore::session::in_process::InProcessActorSessionService;
 use alephcore::session::service::SessionService;
-use alephcore::session::store::{
-    migrate_add_session_events, SessionEventStore, SqliteEventStore,
-};
+use alephcore::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
 /// Build a `SessionManager` on a temp-file SQLite DB and a `SessionService`
 /// on a **dedicated** connection to the same DB. Mirrors the production
@@ -49,11 +47,17 @@ async fn five_sessionmanager_messages_produce_five_events() {
     sm.get_or_create(&key).await.unwrap();
     for i in 0..5 {
         let role = if i % 2 == 0 { "user" } else { "assistant" };
-        sm.add_message(&key, role, &format!("msg-{i}")).await.unwrap();
+        sm.add_message(&key, role, &format!("msg-{i}"))
+            .await
+            .unwrap();
     }
 
     let events = svc.get_events(&key, None, None).await.unwrap();
-    assert_eq!(events.len(), 5, "session_events must receive one record per add_message");
+    assert_eq!(
+        events.len(),
+        5,
+        "session_events must receive one record per add_message"
+    );
 
     // Ordering and role mapping match the call sequence.
     for (i, record) in events.iter().enumerate() {

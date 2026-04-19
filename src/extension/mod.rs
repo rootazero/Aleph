@@ -181,9 +181,7 @@ pub struct ExtensionManager {
     /// lifecycle wiring is deferred to Task 10 (AppContext wiring) per the
     /// Phase 2 plan — this field + setter ship now so the registration helper
     /// has a stable injection point.
-    tool_registry: std::sync::RwLock<
-        Option<std::sync::Arc<crate::tools::registry::ToolRegistry>>,
-    >,
+    tool_registry: std::sync::RwLock<Option<std::sync::Arc<crate::tools::registry::ToolRegistry>>>,
 }
 
 impl ExtensionManager {

@@ -171,11 +171,7 @@ impl ILinkApi {
     }
 
     /// Send a message.
-    pub async fn send_message(
-        &self,
-        token: &str,
-        payload: SendMessagePayload,
-    ) -> ApiResult<()> {
+    pub async fn send_message(&self, token: &str, payload: SendMessagePayload) -> ApiResult<()> {
         let url = format!(
             "{}/{}",
             self.base_url.trim_end_matches('/'),

@@ -138,7 +138,11 @@ impl SignalSnapshot {
 
     /// Get score by signal name, defaulting to 0.0 if not found.
     pub fn score(&self, name: &str) -> f64 {
-        self.signals.iter().find(|s| s.name == name).map(|s| s.score).unwrap_or(0.0)
+        self.signals
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.score)
+            .unwrap_or(0.0)
     }
 }
 
@@ -151,7 +155,10 @@ mod tests {
         let metrics = RawMetrics::default();
         let snapshot = SignalSnapshot::from_metrics(&metrics);
         assert!(!snapshot.signals.is_empty());
-        assert!(snapshot.signals.iter().all(|s| s.score >= 0.0 && s.score <= 1.0));
+        assert!(snapshot
+            .signals
+            .iter()
+            .all(|s| s.score >= 0.0 && s.score <= 1.0));
     }
 
     #[test]
@@ -161,7 +168,10 @@ mod tests {
             ..Default::default()
         };
         let snapshot = SignalSnapshot::from_metrics(&metrics);
-        let sig = snapshot.signals.iter().find(|s| s.name == "high_contradiction_rate");
+        let sig = snapshot
+            .signals
+            .iter()
+            .find(|s| s.name == "high_contradiction_rate");
         assert!(sig.is_some());
         assert!(sig.unwrap().score > 0.5);
     }
@@ -174,7 +184,11 @@ mod tests {
             ..Default::default()
         };
         let snapshot = SignalSnapshot::from_metrics(&metrics);
-        let sig = snapshot.signals.iter().find(|s| s.name == "note_growth_rate").unwrap();
+        let sig = snapshot
+            .signals
+            .iter()
+            .find(|s| s.name == "note_growth_rate")
+            .unwrap();
         assert!((sig.score - 0.5).abs() < 0.01);
     }
 
@@ -186,7 +200,11 @@ mod tests {
             ..Default::default()
         };
         let snapshot = SignalSnapshot::from_metrics(&metrics);
-        let sig = snapshot.signals.iter().find(|s| s.name == "skill_recall_rate").unwrap();
+        let sig = snapshot
+            .signals
+            .iter()
+            .find(|s| s.name == "skill_recall_rate")
+            .unwrap();
         assert_eq!(sig.score, 0.0);
     }
 

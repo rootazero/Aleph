@@ -2,10 +2,10 @@ use alephcore::media::{MediaPlaceholder, MediaPlaceholderType, MediaRecord, Medi
 use alephcore::pii::{PiiAction, PiiEngine, PlatformPiiPolicy, PrivacyConfig};
 use alephcore::secrets::injection::AsyncSecretResolver;
 use alephcore::secrets::types::{DecryptedSecret, SecretError};
+use alephcore::security::audit::{AuditEventType, AuditSeverity};
 use alephcore::security::{
     ContextIdHasher, GuardResult, RuntimeSecurityGuard, SecurityContext, SecurityGuardConfig,
 };
-use alephcore::security::audit::{AuditEventType, AuditSeverity};
 use alephcore::thinker::inbound_context::{
     ChannelContext, InboundContext, MessageMetadata, SenderInfo, SessionContext,
 };
@@ -113,7 +113,10 @@ fn test_inbound_context_hashes_session_identifiers() {
 
     let formatted = ctx.format_for_prompt();
 
-    assert!(!formatted.contains("u123456"), "Raw sender ID should not appear");
+    assert!(
+        !formatted.contains("u123456"),
+        "Raw sender ID should not appear"
+    );
     assert!(
         !formatted.contains("tg:dm:123456"),
         "Raw session key should not appear"
@@ -171,8 +174,14 @@ fn test_inbound_context_preserves_identifiers_when_redact_disabled() {
     let formatted = ctx.format_for_prompt();
 
     assert!(formatted.contains("u123456"), "Raw sender ID should appear");
-    assert!(formatted.contains("tg:dm:123456"), "Raw session key should appear");
-    assert!(formatted.contains("msg:secret:789"), "Raw reply_to should appear");
+    assert!(
+        formatted.contains("tg:dm:123456"),
+        "Raw session key should appear"
+    );
+    assert!(
+        formatted.contains("msg:secret:789"),
+        "Raw reply_to should appear"
+    );
 }
 
 #[test]
@@ -195,7 +204,10 @@ fn test_media_placeholder_format() {
     );
     assert_eq!(ph_file.to_text(), "{{media:file:doc_003}}");
     assert_eq!(ph_file.ty, MediaPlaceholderType::File);
-    assert_eq!(registry.resolve("doc_003").unwrap().original_name, "report.pdf");
+    assert_eq!(
+        registry.resolve("doc_003").unwrap().original_name,
+        "report.pdf"
+    );
 }
 
 #[tokio::test]
@@ -320,7 +332,11 @@ async fn test_audit_inbound_exec_blocked() {
     let resolver = TestResolver;
 
     let _ = guard
-        .process_outbound("Please use {{secret:api_key}}", Some(&resolver), SecurityContext::default())
+        .process_outbound(
+            "Please use {{secret:api_key}}",
+            Some(&resolver),
+            SecurityContext::default(),
+        )
         .await
         .unwrap();
 

@@ -1,9 +1,9 @@
 //! Metrics middleware for the gateway JSON-RPC handler pipeline.
 
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::{AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use std::task::{Context, Poll};
 
 use tower::{Layer, Service};

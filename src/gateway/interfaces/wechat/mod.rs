@@ -12,8 +12,8 @@ pub mod runtime;
 pub mod sync_buf;
 pub mod types;
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -124,10 +124,7 @@ impl Channel for WeChatChannel {
             .ok_or_else(|| ChannelError::NotConnected("Runtime not initialized".to_string()))?;
 
         let context_token = runtime
-            .get_context_token(
-                &self.config.account_id,
-                message.conversation_id.as_str(),
-            )
+            .get_context_token(&self.config.account_id, message.conversation_id.as_str())
             .await;
 
         let text = outbound::markdown::markdown_to_wechat(&message.text);
@@ -217,9 +214,7 @@ impl ChannelFactory for WeChatChannelFactory {
         let config: WeChatConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid WeChat config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(WeChatChannel::new("wechat", config)))
     }

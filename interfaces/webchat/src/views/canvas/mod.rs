@@ -47,15 +47,11 @@ pub fn CanvasView() -> impl IntoView {
 
         spawn_local(async move {
             let result = match &mode {
-                ViewMode::Global { top_k } => {
-                    GraphApi::query(&state, *top_k, vec![]).await
-                }
+                ViewMode::Global { top_k } => GraphApi::query(&state, *top_k, vec![]).await,
                 ViewMode::Local {
                     center_node_id,
                     depth,
-                } => {
-                    GraphApi::neighbors(&state, center_node_id, *depth, 200).await
-                }
+                } => GraphApi::neighbors(&state, center_node_id, *depth, 200).await,
             };
 
             match result {
@@ -69,9 +65,7 @@ pub fn CanvasView() -> impl IntoView {
                     gs.hovered_node = None;
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to load graph: {}", e).into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to load graph: {}", e).into());
                 }
             }
         });
@@ -163,9 +157,7 @@ pub fn CanvasView() -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Search failed: {}", e).into(),
-                    );
+                    web_sys::console::error_1(&format!("Search failed: {}", e).into());
                 }
             }
         });

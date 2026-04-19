@@ -104,7 +104,13 @@ mod tests {
         });
         let layer = TimeoutLayer::new(inner, Duration::from_millis(100), HashMap::new());
         let err = layer.execute("x", serde_json::json!({})).await.unwrap_err();
-        assert!(matches!(err, ToolError::Timeout { elapsed_ms: 100, .. }));
+        assert!(matches!(
+            err,
+            ToolError::Timeout {
+                elapsed_ms: 100,
+                ..
+            }
+        ));
     }
 
     #[tokio::test(start_paused = true)]
@@ -115,7 +121,10 @@ mod tests {
         let mut overrides = HashMap::new();
         overrides.insert("slow".to_string(), Duration::from_millis(50));
         let layer = TimeoutLayer::new(inner, Duration::from_secs(100), overrides);
-        let err = layer.execute("slow", serde_json::json!({})).await.unwrap_err();
+        let err = layer
+            .execute("slow", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::Timeout { elapsed_ms: 50, .. }));
     }
 }
