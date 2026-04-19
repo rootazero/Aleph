@@ -485,3 +485,138 @@ impl ToolService for ScriptedToolsNever {
         None
     }
 }
+
+// -- Regression test for Fix 1: tool-error shadowing -------------------------
+
+/// Wraps a `MockSession` but fails ONLY when the emitted event is
+/// `SessionEvent::ToolError`. All other emits succeed as normal.
+struct ToolErrorFailingSession {
+    inner: Arc<MockSession>,
+}
+
+#[async_trait]
+impl SessionService for ToolErrorFailingSession {
+    async fn attach(&self, id: SessionId) -> Result<SessionHandle, SessionError> {
+        self.inner.attach(id).await
+    }
+
+    async fn get_events(
+        &self,
+        id: &SessionId,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<SessionEventRecord>, SessionError> {
+        self.inner.get_events(id, from, to).await
+    }
+
+    async fn emit_event(
+        &self,
+        id: &SessionId,
+        event: SessionEvent,
+    ) -> Result<EventSeq, SessionError> {
+        if matches!(event, SessionEvent::ToolError { .. }) {
+            return Err(SessionError::Storage(
+                "simulated storage failure on ToolError".into(),
+            ));
+        }
+        self.inner.emit_event(id, event).await
+    }
+
+    async fn subscribe(
+        &self,
+        id: &SessionId,
+    ) -> Result<broadcast::Receiver<SessionEventRecord>, SessionError> {
+        self.inner.subscribe(id).await
+    }
+
+    async fn wake(&self, id: &SessionId) -> Result<SessionHandle, SessionError> {
+        self.inner.wake(id).await
+    }
+
+    async fn detach(&self, id: &SessionId) -> Result<(), SessionError> {
+        self.inner.detach(id).await
+    }
+}
+
+#[tokio::test]
+async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
+    let tool_calls = vec![NativeToolCall {
+        id: "c1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path": "boom.txt"}),
+    }];
+
+    let inner = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let session = Arc::new(ToolErrorFailingSession {
+        inner: inner.clone(),
+    });
+    let tools = ScriptedTools::new(vec![Err(ToolError::Execution {
+        name: "read_file".into(),
+        cause: "nope".into(),
+    })]);
+
+    let deps = HarnessDeps {
+        session,
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let err = harness
+        .run_turn(&sample_session_id())
+        .await
+        .expect_err("expected Err");
+
+    // The original tool failure must surface — not the session write failure.
+    assert!(
+        matches!(err, HarnessError::Tool(_)),
+        "expected HarnessError::Tool, got: {err:?}"
+    );
+}
+
+// -- Round-trip test for Fix 3: writer/reader agreement ----------------------
+
+/// Guards against drift between `tool_use_blocks` (writer in `Think`) and
+/// `parse_tool_use_block` (reader in `build_prompt`): renaming a JSON field
+/// on only one side would break the tool_use continuity across turns.
+#[test]
+fn tool_use_blocks_round_trip_through_parse_tool_use_block() {
+    use crate::harness::agent::{parse_tool_use_block, tool_use_blocks};
+
+    let calls = vec![
+        NativeToolCall {
+            id: "c1".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "/a"}),
+        },
+        NativeToolCall {
+            id: "c2".into(),
+            name: "bash".into(),
+            arguments: serde_json::json!({"cmd": "ls"}),
+        },
+    ];
+
+    let blocks = tool_use_blocks(&calls);
+    assert_eq!(blocks.len(), calls.len(), "one block per call");
+
+    for (i, block) in blocks.iter().enumerate() {
+        let parsed = parse_tool_use_block(block)
+            .unwrap_or_else(|| panic!("parse_tool_use_block rejected block {i}: {block}"));
+        match parsed {
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
+                assert_eq!(id, calls[i].id, "id must round-trip for block {i}");
+                assert_eq!(name, calls[i].name, "name must round-trip for block {i}");
+                assert_eq!(
+                    arguments, calls[i].arguments,
+                    "arguments must round-trip for block {i}"
+                );
+            }
+            other => panic!("expected ContentBlock::ToolCall, got {other:?}"),
+        }
+    }
+}

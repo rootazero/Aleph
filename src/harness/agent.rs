@@ -61,16 +61,27 @@ impl AgentHarness {
                         .await?;
                 }
                 Err(e) => {
+                    // Attempt to persist ToolError; log but do NOT shadow the
+                    // original tool failure if the session write itself fails.
+                    // Using `?` here would convert a `SessionError` into
+                    // `HarnessError::Session` and hide the underlying tool
+                    // error from the caller.
                     let error_event = SessionEvent::ToolError {
                         turn_id,
-                        call_id: call.id,
+                        call_id: call.id.clone(),
                         error: e.to_string(),
                         at: now_ms(),
                     };
-                    self.deps
-                        .session
-                        .emit_event(session_id, error_event)
-                        .await?;
+                    if let Err(emit_err) =
+                        self.deps.session.emit_event(session_id, error_event).await
+                    {
+                        tracing::warn!(
+                            ?session_id,
+                            call_id = %call.id,
+                            ?emit_err,
+                            "failed to persist ToolError event",
+                        );
+                    }
                     return Err(HarnessError::Tool(e));
                 }
             }
@@ -135,7 +146,9 @@ fn tail_start_index(events: &[SessionEventRecord]) -> usize {
 
 /// Serialize each `NativeToolCall` as a JSON `tool_use` block so the full
 /// assistant intent is preserved in the session log.
-fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
+///
+/// `pub(crate)` so round-trip tests can exercise the writer/reader pair.
+pub(crate) fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
     tool_calls
         .iter()
         .map(|c| {
@@ -152,7 +165,9 @@ fn tool_use_blocks(tool_calls: &[NativeToolCall]) -> Vec<Value> {
 /// Parse a previously persisted `tool_use` JSON block back into a
 /// `ContentBlock::ToolCall`. Returns `None` for blocks that don't match
 /// the shape written by `tool_use_blocks`.
-fn parse_tool_use_block(block: &Value) -> Option<ContentBlock> {
+///
+/// `pub(crate)` so round-trip tests can exercise the writer/reader pair.
+pub(crate) fn parse_tool_use_block(block: &Value) -> Option<ContentBlock> {
     let obj = block.as_object()?;
     if obj.get("type").and_then(Value::as_str) != Some("tool_use") {
         return None;
@@ -207,7 +222,7 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
     }
 
     // Walk the tail and emit UserMessage / ToolResult entries.
-    for record in &events[tail_start..] {
+    for (offset, record) in events[tail_start..].iter().enumerate() {
         match &record.event {
             SessionEvent::UserMessage { content, .. } => {
                 messages.push(UnifiedMessage::user(&content.text));
@@ -215,7 +230,12 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
             SessionEvent::ToolResult {
                 call_id, output, ..
             } => {
-                let tool_name = resolve_tool_name(events, call_id).unwrap_or("unknown");
+                // Resolve the tool name by searching strictly BEFORE this
+                // ToolResult, so matching `call_id`s in later turns cannot
+                // win over the correct in-turn `ToolCallRequested`.
+                let tool_result_idx = tail_start + offset;
+                let tool_name =
+                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
                 let text = serde_json::to_string(&output.value).unwrap_or_default();
                 messages.push(UnifiedMessage::ToolResult {
                     tool_call_id: call_id.clone(),
@@ -234,9 +254,21 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
     messages
 }
 
-/// Find the `ToolCallRequested.name` whose `call_id` matches.
-fn resolve_tool_name<'a>(events: &'a [SessionEventRecord], call_id: &str) -> Option<&'a str> {
-    events.iter().rev().find_map(|r| match &r.event {
+/// Find the `ToolCallRequested.name` whose `call_id` matches, searching
+/// strictly BEFORE `before_idx` (i.e. within `events[..before_idx]`).
+///
+/// Scanning from the end of the log would return the most recent match
+/// anywhere, which is wrong when two turns reuse the same `call_id`
+/// (provider retries, deterministic ID schemes). Bounding the search to
+/// the segment preceding the `ToolResult` guarantees we pick the matching
+/// request from the same turn.
+fn resolve_tool_name<'a>(
+    events: &'a [SessionEventRecord],
+    before_idx: usize,
+    call_id: &str,
+) -> Option<&'a str> {
+    let upper = before_idx.min(events.len());
+    events[..upper].iter().rev().find_map(|r| match &r.event {
         SessionEvent::ToolCallRequested {
             call_id: id, name, ..
         } if id == call_id => Some(name.as_str()),
