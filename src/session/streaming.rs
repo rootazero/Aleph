@@ -21,10 +21,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::tool::LoopToolRegistry;
 use crate::agent_loop::tool_execution_context::{CascadePolicy, ToolProgress};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
 use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
+use crate::agent_loop::LoopToolRegistry;
 use crate::providers::delta::ProviderDelta;
 
 // =============================================================================
@@ -232,7 +232,7 @@ impl StreamingToolExecutor {
                         let policy = CascadePolicy::classify(&outcome.outcome.tool_name);
                         if matches!(policy, CascadePolicy::AbortSiblings) {
                             tracing::warn!(
-                                target: "streaming_bridge",
+                                target: "session::streaming",
                                 tool = %outcome.outcome.tool_name,
                                 "Cascading abort: tool failure triggers sibling cancellation"
                             );
@@ -353,10 +353,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::safety::SafetyGuard;
-    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
+    use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
+    use crate::session::ingress_safety::SafetyGuard;
 
     /// A permissive pipeline for tests — allows everything, no hooks.
     fn permissive_pipeline() -> Arc<ToolPipeline> {

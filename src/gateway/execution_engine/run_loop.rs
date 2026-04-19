@@ -175,8 +175,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
         use crate::agent_loop::{
             adapters::build_registry_from_tools, provider_bridge::AiProviderBridge, AgentLoop,
-            LoopConfig, SafetyGuard,
+            LoopConfig,
         };
+        use crate::session::ingress_safety::SafetyGuard;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
         info!(run_id = run_id, "Starting agent loop (think->act)");

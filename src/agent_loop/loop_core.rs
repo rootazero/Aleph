@@ -23,7 +23,6 @@ use super::context_budget::pipeline::{
     CompactionPipeline, ImageStripper, ResultClearing, RoundDrop, ToolCompactStage,
 };
 use super::context_budget::pressure::PressureSensor;
-use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use super::tool_info::ToolInfo;
@@ -39,8 +38,9 @@ use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
-use crate::security::{GuardResult, RuntimeSecurityGuard, SecurityContext};
 use crate::secrets::injection::AsyncSecretResolver;
+use crate::security::{GuardResult, RuntimeSecurityGuard, SecurityContext};
+use crate::session::ingress_safety::{SafetyError, SafetyGuard};
 use crate::thinker::prompt_builder::PromptBuilder;
 use futures::stream::BoxStream;
 
@@ -1235,7 +1235,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
         let delta_stream = loop {
             let active_provider = progress.active_provider;
-            match super::retry::retry_async(
+            match crate::providers::llm_retry::retry_async(
                 || {
                     let p: &dyn LoopProvider = match active_provider {
                         ActiveProvider::Primary => &self.provider,
@@ -1252,9 +1252,11 @@ impl<P: LoopProvider> AgentLoop<P> {
             {
                 Ok(stream) => break stream,
                 Err(e) => {
-                    let verdict = super::retry::classify_exhausted_error(&e);
+                    let verdict = crate::providers::llm_retry::classify_exhausted_error(&e);
                     match verdict {
-                        super::retry::RetryVerdict::CompactAndRetry { token_gap } => {
+                        crate::providers::llm_retry::RetryVerdict::CompactAndRetry {
+                            token_gap,
+                        } => {
                             ptl_attempts += 1;
                             if ptl_attempts > MAX_PTL_RETRIES {
                                 return Err(e);
@@ -1319,7 +1321,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
                             continue;
                         }
-                        super::retry::RetryVerdict::Fallback { reason }
+                        crate::providers::llm_retry::RetryVerdict::Fallback { reason }
                             if self.fallback_provider.is_some()
                                 && matches!(progress.active_provider, ActiveProvider::Primary) =>
                         {
@@ -1340,7 +1342,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         };
 
         let prefetch_handle = self.skill_prefetcher.as_ref().and_then(|p| p.start_scan());
-        let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
+        let (mut bridge, executor) = crate::session::streaming::StreamingToolBridge::new(
             Arc::clone(&self.tool_registry.read().unwrap_or_else(|e| e.into_inner())),
             Arc::clone(&self.tool_pipeline),
             self.cancel_token.clone(),
@@ -1390,10 +1392,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                     ));
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "Security guard inbound error: {}",
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Security guard inbound error: {}", e));
                 }
             }
         }

@@ -14,13 +14,13 @@ mod tests {
 
     use crate::agent_loop::loop_core::{AgentLoop, LoopConfig, NoopCallback};
     use crate::agent_loop::provider_bridge::AiProviderBridge;
-    use crate::agent_loop::safety::SafetyGuard;
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::providers::adapter::{
         NativeToolCall, ProviderResponse, RequestPayload, StopReason, TokenUsage,
     };
     use crate::providers::message::{ContentBlock, UnifiedMessage};
     use crate::providers::AiProvider;
+    use crate::session::ingress_safety::SafetyGuard;
     use crate::sync_primitives::{Arc, Mutex};
     use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 

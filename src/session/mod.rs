@@ -7,26 +7,28 @@
 //!
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md`.
 
+pub mod actor;
 pub mod events;
+pub mod in_process;
+pub mod ingress_safety;
+pub mod projection;
 pub mod service;
+pub mod shim;
 pub mod state;
 pub mod store;
-pub mod actor;
-pub mod in_process;
-pub mod projection;
-pub mod shim;
+pub mod streaming;
 pub mod tool_trace;
 
+pub use actor::{ActorCommand, SessionActor};
 pub use events::{
-    ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent,
-    SessionEventRecord, Timestamp, ToolOutput, TurnId, TurnOutcome, TurnTrigger,
+    ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
+    Timestamp, ToolOutput, TurnId, TurnOutcome, TurnTrigger,
 };
+pub use in_process::InProcessActorSessionService;
+pub use projection::{project_messages, MessageRole, ProjectedMessage};
 pub use service::{SessionError, SessionHandle, SessionId, SessionService};
 pub use state::SessionState;
 pub use store::SessionEventStore;
-pub use actor::{ActorCommand, SessionActor};
-pub use in_process::InProcessActorSessionService;
-pub use projection::{project_messages, MessageRole, ProjectedMessage};
 pub use tool_trace::{invoke_with_session_trace, with_session_scope};
 
 /// Re-export of the `SESSION_ID` task-local defined in `sandbox::context`.

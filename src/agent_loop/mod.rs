@@ -16,12 +16,9 @@ pub mod model_behaviors;
 
 pub mod agent_runtime;
 pub mod provider_bridge;
-pub mod retry;
-mod safety;
 pub mod sections;
 pub mod skill_prefetch;
 pub mod stop_hooks;
-pub mod streaming_bridge;
 pub mod subagent_teammates;
 pub mod subagent_tool;
 mod tool;
@@ -51,17 +48,11 @@ pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, Con
 pub use factory::LoopFactory;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
 pub use provider_bridge::AiProviderBridge;
-pub use retry::{
-    backoff_delay, classify_error, classify_exhausted_error, parse_token_gap, retry_async,
-    RetryVerdict,
-};
-pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 pub use sections::SessionContext;
 pub use skill_prefetch::{SkillDiscoverySource, SkillInfo, SkillPrefetcher};
 pub use stop_hooks::{
     ShellStopHook, StopHookAggregateResult, StopHookContext, StopHookHandler, StopHookVerdict,
 };
-pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};
 pub use tool_info::ToolInfo;
 pub use tool_pipeline::{PipelineOutcome, ToolPipeline};

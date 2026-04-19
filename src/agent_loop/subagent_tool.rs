@@ -741,11 +741,11 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use super::super::safety::SafetyGuard;
     use super::super::tool::LoopToolRegistry;
     use crate::agents::AgentRegistry;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
+    use crate::session::ingress_safety::SafetyGuard;
 
     /// Mock AI provider for unit tests.
     struct MockAiProvider;

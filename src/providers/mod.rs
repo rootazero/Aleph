@@ -65,6 +65,7 @@ pub mod failover;
 pub mod gemini;
 pub mod health;
 pub mod http_provider;
+pub mod llm_retry;
 pub mod message;
 pub mod mock;
 pub mod model_discovery;

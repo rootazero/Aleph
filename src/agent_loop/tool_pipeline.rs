@@ -19,12 +19,12 @@ use tracing::Instrument;
 
 use crate::agent_loop::compaction::file_content_tracker::FileContentTracker;
 use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
-use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
 use crate::agent_loop::tool_result_store::ToolResultStore;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
+use crate::session::ingress_safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use crate::tool_output::compressor::compress_tool_output;
 
 /// Maximum tool result size in estimated tokens. Results exceeding this are truncated

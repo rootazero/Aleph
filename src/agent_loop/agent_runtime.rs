@@ -14,10 +14,10 @@ use tokio_util::sync::CancellationToken;
 use super::chain_context::ChainContext;
 use super::loop_core::{AgentLoop, LoopConfig, LoopRunResult, NoopCallback};
 use super::provider_bridge::AiProviderBridge;
-use super::safety::SafetyGuard;
 use super::tool::LoopToolRegistry;
 use crate::agents::AgentDef;
 use crate::providers::AiProvider;
+use crate::session::ingress_safety::SafetyGuard;
 use crate::sync_primitives::{Arc, RwLock};
 use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig, PromptSnapshot};
 

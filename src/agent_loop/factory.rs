@@ -13,8 +13,8 @@ use crate::tools::AlephToolDyn;
 use super::adapters::BuiltinToolAdapter;
 use super::loop_core::{AgentLoop, LoopConfig};
 use super::provider_bridge::AiProviderBridge;
-use super::safety::SafetyGuard;
 use super::tool::LoopToolRegistry;
+use crate::session::ingress_safety::SafetyGuard;
 use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
 /// Factory that assembles a `AgentLoop` from existing Aleph services.
