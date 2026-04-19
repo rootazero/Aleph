@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tool Service façade:** `src/tools/service.rs` exposes a single
+  `execute(name, input) → Result<ToolOutput, ToolError>` across builtin, MCP,
+  and extension sources. Five-layer decorator chain (audit / permission /
+  context-rule / timeout / core) replaces scattered policy logic. `SmartFilter`
+  and `ContextRule` trait surfaces established for future policy plug-in.
+  `ArcSwap`-backed `ToolRegistry` supports MCP/extension hot-reload. Phase 2
+  of the managed-agents refactor.
+- **Session-event tracing helper:** `crate::session::invoke_with_session_trace`
+  bundles `ToolService::execute` with automatic `ToolCallRequested` /
+  `ToolResult` / `ToolError` / `ToolCallDenied` event emission into the session
+  log. Ready for Phase 4 when Harness rewrites the main loop.
+
+### Changed
+- Extension tool registration now routes into `ToolRegistry` at boot via
+  `ExtensionManager::set_tool_registry`; MCP wiring setter is in place (waits
+  for central `McpClient` instantiation in a future phase).
+
+### Added
 - **Session Service foundation:** `src/session/` introduces `SessionService` + `InProcessActorSessionService` — an append-only event log per session, one tokio actor per session, SQLite-backed via a new `session_events` table (`migrate_add_session_events`), crash-recoverable through `wake(session_id)`. Public surface: `attach` / `emit_event` / `get_events` / `subscribe` / `wake` / `detach`. Event schema lives in `src/session/events.rs` (`SessionEvent`, `#[non_exhaustive]`). Read-side helper `project_messages` in `src/session/projection.rs` provides a classic message-history view over raw events. Phase 1 of the managed-agents refactor ([roadmap](docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md)).
 - **Dual-write shim:** `src/session/shim.rs` mirrors every `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. The shim is removed in Phase 6 when Gateway `session.*` RPC migrates to `SessionService` directly.
 - **Crash-recovery integration test** (`tests/session_wake_recovery.rs`) exercising the `wake(session_id)` replay path.

@@ -24,7 +24,13 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Tools
 **Anthropic meaning:** The "hands" — custom tools, MCP servers, execution environments — all reached through one `execute()` surface. The brain is agnostic to the backing.
 
-**Aleph today:** `ToolService` façade (post-Phase-2, `src/tools/`) unifies builtin / MCP / extension dispatch behind one `execute(name, input) → ToolOutput` call.
+**Aleph today:** `ToolService` trait (`src/tools/service.rs`), backed by
+`CoreDispatch` + `ArcSwap`-backed `ToolRegistry`, with a five-layer decorator
+chain (Audit / Permission / ContextRule / Timeout / Core). Three handler sources
+(`BuiltinHandler`, `McpHandler`, `ExtensionHandler`) adapt existing tools without
+changing their author-side `AlephTool` trait. Gateway `tools.*` RPC still routes
+through the legacy `AlephToolServer` in Phase 2 (future phase migrates).
+See [TOOL_SYSTEM.md](./TOOL_SYSTEM.md).
 
 ### Orchestrator
 **Anthropic meaning:** Infrastructure managing session state, sandbox provisioning, and routing between brains and hands.

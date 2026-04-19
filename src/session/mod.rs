@@ -15,6 +15,7 @@ pub mod actor;
 pub mod in_process;
 pub mod projection;
 pub mod shim;
+pub mod tool_trace;
 
 pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent,
@@ -26,3 +27,4 @@ pub use store::SessionEventStore;
 pub use actor::{ActorCommand, SessionActor};
 pub use in_process::InProcessActorSessionService;
 pub use projection::{project_messages, MessageRole, ProjectedMessage};
+pub use tool_trace::invoke_with_session_trace;
