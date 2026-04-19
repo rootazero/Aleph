@@ -23,7 +23,11 @@ mod tests {
     async fn empty_chain_compiles_and_lists_empty() {
         let registry = Arc::new(ToolRegistry::new());
         let core = Arc::new(CoreDispatch::new(registry));
-        let timeout = Arc::new(TimeoutLayer::new(core));
+        let timeout = Arc::new(TimeoutLayer::new(
+            core,
+            std::time::Duration::from_secs(60),
+            std::collections::HashMap::new(),
+        ));
         let ctx = Arc::new(ContextRuleLayer::new(timeout));
         let perm = Arc::new(PermissionLayer::new(ctx));
         let audit = Arc::new(ExecAuditLayer::new(perm));
