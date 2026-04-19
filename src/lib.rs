@@ -76,6 +76,7 @@ pub mod prompt;
 pub mod providers;
 pub mod routing;
 pub mod runtimes;
+pub mod sandbox;
 pub mod search;
 pub mod session;
 pub mod skill;
