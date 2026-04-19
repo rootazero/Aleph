@@ -19,10 +19,26 @@ use crate::extension::PermissionAction;
 
 use super::{Classification, SmartFilter};
 
-/// Tools whose approval is owned downstream by WorkspaceSandbox.
-/// PermissionLayer must NOT call ApprovalGate for these — doing so
-/// would produce a duplicate prompt for the same action.
+/// Tool names whose approval is owned downstream by WorkspaceSandbox.
+///
+/// Add a tool here iff its execute path goes through WorkspaceSandbox's
+/// capability-approval flow. Anchor entries to the canonical NAME constant
+/// on the corresponding builtin_tools::* struct:
+///   - `"code_exec"` → `CodeExecTool::NAME`
+///   - `"bash"`      → `BashExecTool::NAME`
+///
+/// Tools that use a different approval path (e.g. `"automation"` routes
+/// through `DesktopPlatform::automation()`, not WorkspaceSandbox) must
+/// NOT be listed here — they own their own single prompt in their own
+/// pipeline.
 const EXEC_CLASS_TOOLS: &[&str] = &["code_exec", "bash"];
+
+/// Returns true if `tool_name` is an exec-class tool whose approval is
+/// owned by `WorkspaceSandbox`. Module-level helper (no `self`) because
+/// the check is stateless and lets the classify path stay a single match.
+fn is_exec_class(tool_name: &str) -> bool {
+    EXEC_CLASS_TOOLS.contains(&tool_name)
+}
 
 /// Merges global + per-agent permissions; classifies each tool call.
 ///
@@ -53,13 +69,6 @@ impl LayeredPermissionResolver {
     pub fn swap(&self, new_merged: ToolPermissionsConfig) {
         self.merged.store(Arc::new(new_merged));
     }
-
-    /// Returns true if `tool_name` is an exec-class tool whose approval is
-    /// owned by `WorkspaceSandbox`. `PermissionLayer` must not prompt for
-    /// these tools — doing so would produce a duplicate approval dialog.
-    pub fn is_exec_class(&self, tool_name: &str) -> bool {
-        EXEC_CLASS_TOOLS.contains(&tool_name)
-    }
 }
 
 impl SmartFilter for LayeredPermissionResolver {
@@ -71,7 +80,7 @@ impl SmartFilter for LayeredPermissionResolver {
                 // Exec-class tools (code_exec, bash) own their own approval gate
                 // inside WorkspaceSandbox. Prompting here too would produce a
                 // duplicate dialog for the same action — let them through.
-                if self.is_exec_class(name) {
+                if is_exec_class(name) {
                     Classification::Allow
                 } else {
                     Classification::Confirm {
@@ -93,21 +102,23 @@ mod exec_class_tests {
 
     #[test]
     fn is_exec_class_recognizes_exec_tools() {
-        let resolver = LayeredPermissionResolver::from_merged(Default::default());
-        assert!(resolver.is_exec_class("code_exec"));
-        assert!(resolver.is_exec_class("bash"));
+        assert!(is_exec_class("code_exec"));
+        assert!(is_exec_class("bash"));
     }
 
     #[test]
     fn is_exec_class_rejects_read_only_tools() {
-        let resolver = LayeredPermissionResolver::from_merged(Default::default());
-        assert!(!resolver.is_exec_class("read_file"));
-        assert!(!resolver.is_exec_class("list_dir"));
+        assert!(!is_exec_class("read_file"));
+        assert!(!is_exec_class("list_dir"));
     }
 
     /// Exec-class tools under Ask policy must classify as Allow, not Confirm.
     /// This prevents PermissionLayer from issuing a duplicate approval prompt
     /// for tools that already prompt via WorkspaceSandbox.
+    ///
+    /// Uses `default: Deny` so there's no possibility of an exec-class tool
+    /// falling through to a permissive default — the `Allow` outcome can only
+    /// come from the exec-class carve-out on the `Ask` branch.
     #[test]
     fn exec_class_under_ask_policy_classifies_as_allow() {
         use serde_json::Value;
@@ -116,7 +127,7 @@ mod exec_class_tests {
         overrides.insert("code_exec".to_string(), PermissionAction::Ask);
         overrides.insert("bash".to_string(), PermissionAction::Ask);
         let config = ToolPermissionsConfig {
-            default: PermissionAction::Allow,
+            default: PermissionAction::Deny,
             overrides,
         };
         let resolver = LayeredPermissionResolver::from_merged(config);
@@ -141,7 +152,7 @@ mod exec_class_tests {
         let mut overrides = HashMap::new();
         overrides.insert("web_fetch".to_string(), PermissionAction::Ask);
         let config = ToolPermissionsConfig {
-            default: PermissionAction::Allow,
+            default: PermissionAction::Deny,
             overrides,
         };
         let resolver = LayeredPermissionResolver::from_merged(config);
