@@ -8,22 +8,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sandbox subsystem (Phase 3):** `src/sandbox/` introduces the agent-level
+  `Sandbox` trait and `WorkspaceSandbox` implementation — lazy per-session
+  workspace under `~/.aleph/workspaces/{hash(session_id)}/`, strict
+  capability baseline (`SandboxCapabilities`: fs_read / fs_write / network /
+  spawn_subprocess), `ApprovalGate`-arbitrated escalation with per-session
+  grant cache, `capability_ledger` tracing audit. Composed via
+  `build_sandbox(cfg, driver, approval)` factory; disabled-sandbox path
+  returns a fail-fast `NoopSandbox`. Spec:
+  `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`.
+- **`SESSION_ID` task-local:** `crate::sandbox::context::SESSION_ID` scoped by
+  `invoke_with_session_trace` so exec-class tools discover the current
+  session via `current_session()` without touching the `AlephTool` trait
+  signature.
+- **`LayeredPermissionResolver` + `AgentPermissionFilter`:** backfills the
+  Phase 2 placeholder `SmartFilter` with a concrete policy-backed resolver
+  over merged two-tier (global + per-agent, most-restrictive-wins)
+  `ToolPermissionsConfig`. Live-reloadable via `ArcSwap`. Boot-time wiring
+  attaches the global config + an empty per-agent default to the
+  `PermissionLayer` via `build_tool_service_with_handles`; per-agent
+  overrides plug in at Phase 4 session activation.
+- **`SandboxConfig`:** `[sandbox]` TOML section with `workspace_root`,
+  `enabled`, `default_timeout_seconds`, `max_output_bytes`. Defaults
+  preserve existing behaviour; `enabled = false` switches the subsystem to
+  `NoopSandbox` for tests / CI.
+- **End-to-end integration test** (`tests/sandbox_capability_approval.rs`)
+  covering the six-step pipeline via the public `build_sandbox` surface:
+  strict-cap bypass, network-elevated approve, spawn-denied error,
+  per-session approval cache. 4/4 passing.
+- **Docs:** `docs/reference/SANDBOX.md` reference (architecture, pipeline,
+  capabilities, task-local, tool consumption pattern, testing pattern);
+  GLOSSARY entries for `WorkspaceSandbox`, `OsSandboxDriver`,
+  `OsSandboxDriverTrait`, `SandboxCapabilities`,
+  `LayeredPermissionResolver`, `AgentPermissionFilter`; ARCHITECTURE
+  sandbox paragraph + module summary row.
 - **Tool Service façade:** `src/tools/service.rs` exposes a single
   `execute(name, input) → Result<ToolOutput, ToolError>` across builtin, MCP,
   and extension sources. Five-layer decorator chain (audit / permission /
   context-rule / timeout / core) replaces scattered policy logic. `SmartFilter`
   and `ContextRule` trait surfaces established for future policy plug-in.
   `ArcSwap`-backed `ToolRegistry` supports MCP/extension hot-reload. Phase 2
-  of the managed-agents refactor.
+  of the managed-agents refactor. Phase 3 adds
+  `build_tool_service_with_handles` + `ToolServiceHandles` so boot wiring can
+  attach a live `SmartFilter` / `Approver` to `PermissionLayer` without
+  downcasting.
 - **Session-event tracing helper:** `crate::session::invoke_with_session_trace`
   bundles `ToolService::execute` with automatic `ToolCallRequested` /
   `ToolResult` / `ToolError` / `ToolCallDenied` event emission into the session
   log. Ready for Phase 4 when Harness rewrites the main loop.
 
 ### Changed
+- **`SandboxManager` → `OsSandboxDriver`:** renamed
+  (`src/exec/sandbox/executor.rs`) to reflect OS-level role and free the
+  name for the agent-level `Sandbox` trait. Now implements
+  `OsSandboxDriverTrait` so `WorkspaceSandbox` can drive it.
+- **`SmartFilter` is no longer a placeholder:** production
+  `PermissionLayer` now wraps `LayeredPermissionResolver`; the Phase 2
+  `ScriptedFilter` stub is test-only.
+- **Exec-class tools route through `Arc<dyn Sandbox>`:** `code_exec` and
+  `bash_exec` hold an optional `Arc<dyn Sandbox>` attached via
+  `with_sandbox` at boot and call `sandbox.execute(SandboxCommand)` instead
+  of `Command::new(...)`. Unconfigured tools fail-fast with a structured
+  error rather than bypassing sandboxing.
 - Extension tool registration now routes into `ToolRegistry` at boot via
   `ExtensionManager::set_tool_registry`; MCP wiring setter is in place (waits
   for central `McpClient` instantiation in a future phase).
+
+### Fixed
+- **H3 — `LayeredPermissionResolver` now actually wired.** Phase 3 shipped
+  the resolver but never attached it to `PermissionLayer`, so every call
+  defaulted to `Classification::Allow`. Boot wiring in `aleph-server` now
+  calls `PermissionLayer::set_smart_filter` +
+  `PermissionLayer::set_approver` so global `[policies.tool_permissions]`
+  gates tool invocations. Approver is the same `ApprovalGate` shared with
+  the Sandbox capability-escalation path.
+- **H5 — `OsSandboxDriver::run` honors env, timeout, and max_output_bytes.**
+  Previously `_env`, `_timeout`, and `_max_output_bytes` were bound with
+  underscore (silently dropped). `CodeExecTool`'s carefully-built PATH
+  injection never reached the sandbox child and the 60s
+  `SandboxConfig::default_timeout_seconds` was masked by the legacy 300s
+  pin. Now: `SandboxCommand.env` is threaded into the subprocess via
+  `Command::envs`, timeout is rounded up to u64 seconds (min 1s, non-zero
+  subseconds round up) and flows through the adapter's internal
+  `tokio::time::timeout`, and stdout/stderr are clamped to
+  `max_output_bytes` per stream on UTF-8 char boundaries with the
+  `truncated` flag set. stdin remains unimplemented; `OsSandboxDriver::run`
+  now logs a warn when `stdin: Some(_)` is passed rather than silently
+  dropping bytes.
+
+### Known Limitations
+- **H1 — `ApprovalGate` still has no real `ApprovalRequester` transport.**
+  The shared gate is constructed at boot and wired into both the
+  Sandbox and `PermissionLayer`, but the existing `ChannelApprovalBridge`
+  (Telegram / Discord inline-keyboard approvals) uses the legacy
+  `ApprovalRequest { command, cwd, session_key, ... }` shape and is not
+  trivially adaptable to the tool-level `ApprovalRequester { tool_name,
+  reason }` trait. Until that adapter lands,
+  `ApprovalGate::request_approval_for_tool` falls back to `Denied` —
+  elevated-capability sandbox escalations and Ask-tier tool calls are
+  rejected by policy rather than hanging. Baseline-capability commands
+  and globally-Allow-tier tools are unaffected. A `tracing::warn!` at boot
+  surfaces this state so it is not silent. Follow-up: Phase 4 introduces
+  a `ToolApprovalRequester` adapter over `ChannelApprovalBridge`.
+- **H4 (preview) — exec-class tools own the sandbox-side prompt.** When
+  `bash` / `code_exec` are classified `Ask` in `[policies.tool_permissions]`,
+  `PermissionLayer` and `WorkspaceSandbox` would each request approval
+  independently, yielding two prompts. The current global-default `Allow`
+  for exec tools avoids this in practice; Phase 4 will introduce a
+  first-class exclude-list on `LayeredPermissionResolver` so exec-class
+  tools skip the middleware prompt and defer to sandbox capabilities.
 
 ### Added
 - **Session Service foundation:** `src/session/` introduces `SessionService` + `InProcessActorSessionService` — an append-only event log per session, one tokio actor per session, SQLite-backed via a new `session_events` table (`migrate_add_session_events`), crash-recoverable through `wake(session_id)`. Public surface: `attach` / `emit_event` / `get_events` / `subscribe` / `wake` / `detach`. Event schema lives in `src/session/events.rs` (`SessionEvent`, `#[non_exhaustive]`). Read-side helper `project_messages` in `src/session/projection.rs` provides a classic message-history view over raw events. Phase 1 of the managed-agents refactor ([roadmap](docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md)).

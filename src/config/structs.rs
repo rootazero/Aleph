@@ -76,6 +76,11 @@ pub struct Config {
     /// Phase 2 ToolService runtime tunables (timeouts, per-tool overrides)
     #[serde(default)]
     pub tool_service: ToolServiceConfig,
+    /// Phase 3 Sandbox runtime tunables (workspace root, timeout, output cap,
+    /// enabled toggle). Exec-class tools route through the sandbox built
+    /// from this config at boot.
+    #[serde(default)]
+    pub sandbox: crate::sandbox::SandboxConfig,
     /// Smart conversation flow configuration
     #[serde(default)]
     pub smart_flow: SmartFlowConfig,
@@ -326,6 +331,7 @@ impl Default for Config {
             mcp: McpConfig::default(),
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
             tool_service: ToolServiceConfig::default(),
+            sandbox: crate::sandbox::SandboxConfig::default(),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),

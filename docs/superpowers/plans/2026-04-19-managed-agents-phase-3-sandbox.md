@@ -1705,3 +1705,31 @@ Phase 3 is done when:
 8. User made a merge/release decision at Step 10.8
 
 Proceed to **Phase 4 brainstorming** only after all signals are green.
+
+---
+
+## Status: Complete
+
+All 10 tasks landed on branch `worktree-managed-agents-phase-3`. Final HEAD
+contains the docs commit from Task 10; release decision deferred per the
+Task 10.8 instruction to stop at the release gate.
+
+| Task | Commit | Summary |
+|------|--------|---------|
+| 2 | `d8854cfc1` | `tools: backfill LayeredPermissionResolver wiring SmartFilter to two-tier permissions` |
+| 3 | `eb90858bb` | `sandbox: add module scaffold — trait + types + capabilities` |
+| 4 | `422a506ff` | `sandbox: rename SandboxManager to OsSandboxDriver and impl OsSandboxDriverTrait` |
+| 5 | `8c4ae31f4` | `sandbox: wire SESSION_ID task-local through invoke_with_session_trace` |
+| 6 | `34f5440e2` | `sandbox: implement WorkspaceSandbox with lazy per-session workspace` |
+| 7 | `ddcc36750` | `sandbox: add SandboxConfig, build_sandbox factory, boot wiring` |
+| 8 | `7307fbfb1` | `sandbox: migrate code_exec and bash_exec to Arc<dyn Sandbox>` |
+| 8 (follow-up) | `bc139ec10` | `sandbox: wire Arc<dyn Sandbox> through registration into exec-class tools` |
+| 8 (clippy) | `8c260c2ad` | `sandbox: fix clippy into_* naming on CodeExecArgs::as_capabilities` |
+| 9 | `abd7faa2c` | `tests: capability approval integration flow for WorkspaceSandbox` |
+| 10 | *(docs commit)* | `docs: Phase 3 Sandbox reference, glossary, CHANGELOG` |
+
+Verification at Task 10:
+- `cargo check -p alephcore` — `Finished dev`
+- `cargo test -p alephcore --lib` — 9054 passed / 2 failed (pre-existing) / 20 ignored
+- `cargo test -p alephcore --test sandbox_capability_approval` — 4/4 pass
+- `cargo test -p alephcore --lib sandbox::` — 39/39 pass

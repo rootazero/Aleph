@@ -427,7 +427,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // binding will be threaded into the downstream builders; today it is
     // enough to materialise the registry so MCP + Extension setters can wire
     // into it. Any failure is warn-only — never aborts boot.
-    let (_tool_service, tool_registry_phase2) = {
+    //
+    // Phase 3 H3 fix: use `build_tool_service_with_handles` so we can attach
+    // the Phase 3 `LayeredPermissionResolver` + `ApprovalGate`-as-Approver
+    // onto the `PermissionLayer` below. Previously the layer had a default
+    // `Allow` classifier attached and Ask-tier tools could not route through
+    // a real approver.
+    let (_tool_service, tool_registry_phase2, tool_service_handles) = {
         let tool_cfg = loaded_app_config.tool_service.clone();
         // Use an empty AlephToolServer here: the aleph-server bin currently
         // builds its active tool catalogue via BuiltinToolRegistry inside
@@ -436,11 +442,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // migrates. Builtins register lazily via MCP / Extension lifecycle
         // hooks injected below.
         let server = Arc::new(alephcore::tools::AlephToolServer::new());
-        let (svc, reg) = alephcore::tools::build_tool_service(server, &tool_cfg).await;
+        let (svc, reg, handles) =
+            alephcore::tools::build_tool_service_with_handles(server, &tool_cfg).await;
         if !args.daemon {
             println!("ToolService chain assembled (Phase 2)");
         }
-        (svc, reg)
+        (svc, reg, handles)
     };
 
     // Phase 2 Task 10: inject the shared ToolRegistry into ExtensionManager
@@ -462,6 +469,111 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 );
             }
         }
+    }
+
+    // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
+    //
+    // Exec-class tools will consume this sandbox through their constructors
+    // in Task 8; today we keep it on `AppContext` so all downstream wiring
+    // references a single instance. Boot never aborts if `enabled = false`
+    // — tests / CI override via config and get a NoopSandbox that refuses
+    // execution with a structured error.
+    // Build a single ApprovalGate shared between the Sandbox capability
+    // escalation path and the PermissionLayer's Ask-tier confirm path.
+    //
+    // H1 status: no `ApprovalRequester` is wired into the gate at boot yet.
+    // The existing `ChannelApprovalBridge` transport (Telegram / Discord
+    // inline-keyboard approvals) uses the legacy `ApprovalRequest { command,
+    // cwd, session_key, ... }` shape and is not trivially adaptable to the
+    // tool-level `ApprovalRequester { tool_name, reason }` trait. Until that
+    // adapter lands, `request_approval_for_tool` falls back to `Denied` —
+    // elevated-capability and Ask-tier calls are rejected by policy rather
+    // than hanging. See Known Limitations in CHANGELOG.
+    let approval_gate = {
+        use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
+        use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
+        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+    };
+    if !args.daemon {
+        tracing::warn!(
+            "ApprovalGate has no ApprovalRequester wired — elevated-capability \
+             sandbox escalations and Ask-tier tool calls will be denied until \
+             a channel-level approval transport is adapted to the tool-level \
+             ApprovalRequester trait. Baseline-capability commands are \
+             unaffected."
+        );
+    }
+
+    let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
+        use alephcore::exec::sandbox::platforms::MacOSSandbox;
+        use alephcore::exec::sandbox::OsSandboxDriver;
+        use alephcore::sandbox::{build_sandbox, OsSandboxDriverTrait};
+
+        // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
+        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> =
+            Arc::new(MacOSSandbox::new());
+        let os_driver: Arc<dyn OsSandboxDriverTrait> =
+            Arc::new(OsSandboxDriver::new(os_adapter));
+
+        build_sandbox(
+            &loaded_app_config.sandbox,
+            os_driver,
+            approval_gate.clone(),
+        )
+    };
+    if !args.daemon {
+        if loaded_app_config.sandbox.enabled {
+            println!(
+                "Sandbox: WorkspaceSandbox rooted at {}",
+                loaded_app_config.sandbox.workspace_root.display()
+            );
+        } else {
+            println!("Sandbox: disabled (NoopSandbox) — exec-class tools will refuse execution");
+        }
+    }
+
+    // Phase 3 H3 fix: wire the LayeredPermissionResolver into the
+    // PermissionLayer so global (+ boot-time default per-agent) permissions
+    // actually gate tool invocations instead of defaulting to Allow.
+    //
+    // Per-agent filters plug in when Phase 4 migrates per-session agent
+    // activation; boot uses the global config merged against an empty
+    // per-agent config, which means Deny/Ask in global immediately take
+    // effect for every call. Approver is the shared ApprovalGate above.
+    //
+    // Double-prompt mitigation (H4): exec-class tools (`bash`, `code_exec`)
+    // own their own sandbox-level approval path. PermissionLayer's own
+    // Ask-tier prompt on those tools would produce two prompts. Until H4
+    // introduces a clean exclude-list parameter, we document this risk in
+    // SANDBOX.md. Shipping global default `Allow` for exec tools (the
+    // current config) avoids the double-prompt in practice.
+    {
+        use alephcore::tools::middleware::permission::{AgentPermissionFilter, Approver};
+
+        let global = loaded_app_config.policies.tool_permissions.clone();
+        // Per-agent default: clone and reset so we get a ToolPermissionsConfig
+        // with no overrides (Default impl lives in the private config module).
+        // Phase 4 session activation replaces this with the real per-agent
+        // config via `PermissionLayer::set_smart_filter`.
+        let per_agent_default = {
+            let mut c = global.clone();
+            c.overrides.clear();
+            c
+        };
+        let filter = AgentPermissionFilter::build(&global, &per_agent_default);
+        tool_service_handles
+            .permission_layer
+            .set_smart_filter(Some(filter));
+        tool_service_handles
+            .permission_layer
+            .set_approver(Some(approval_gate.clone() as Arc<dyn Approver>));
+
+        tracing::info!(
+            default = ?global.default,
+            overrides = global.overrides.len(),
+            "wired LayeredPermissionResolver into PermissionLayer with global tool permissions \
+             (per-agent overrides plug in at Phase 4 session activation)"
+        );
     }
 
     // Log desktop capability mode
@@ -829,6 +941,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
         Some(wiki.clone()),
         Some(note_memory_dir.clone()),
+        Some(sandbox.clone()),
     )
     .await;
 

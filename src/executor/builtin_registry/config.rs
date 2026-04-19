@@ -119,4 +119,8 @@ pub struct BuiltinToolConfig {
     /// When set, the `user_profile` tool is registered and dispatched.
     pub profile_synthesizer:
         Option<std::sync::Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
+
+    /// Sandbox for exec-class tools (code_exec, bash_exec).
+    /// `None` → tools return a structured "sandbox not configured" error.
+    pub sandbox: Option<Arc<dyn crate::sandbox::Sandbox>>,
 }

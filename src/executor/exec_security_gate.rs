@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
-use crate::exec::sandbox::SandboxManager;
+use crate::exec::sandbox::OsSandboxDriver;
 use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::exec::{
@@ -36,7 +36,7 @@ pub enum PreExecDecision {
 pub struct ExecSecurityGate {
     security_kernel: SecurityKernel,
     approval_manager: Arc<ExecApprovalManager>,
-    sandbox_manager: Option<Arc<SandboxManager>>,
+    sandbox_manager: Option<Arc<OsSandboxDriver>>,
     masker: SecretMasker,
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
     #[allow(dead_code)]
@@ -48,7 +48,7 @@ impl ExecSecurityGate {
     /// Create a new gate with required approval manager and optional sandbox
     pub fn new(
         approval_manager: Arc<ExecApprovalManager>,
-        sandbox_manager: Option<Arc<SandboxManager>>,
+        sandbox_manager: Option<Arc<OsSandboxDriver>>,
     ) -> Self {
         Self {
             security_kernel: SecurityKernel::default(),
@@ -64,7 +64,7 @@ impl ExecSecurityGate {
     /// Create a new gate with approval manager, sandbox, and channel registry for native delivery.
     pub fn with_channel_registry(
         approval_manager: Arc<ExecApprovalManager>,
-        sandbox_manager: Option<Arc<SandboxManager>>,
+        sandbox_manager: Option<Arc<OsSandboxDriver>>,
         channel_registry: Arc<ChannelRegistry>,
     ) -> Self {
         let channel_bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));

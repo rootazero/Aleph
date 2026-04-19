@@ -20,5 +20,5 @@ pub use audit::{ExecutionStatus, SandboxAuditLog, SandboxViolation};
 pub use capabilities::{
     Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
 };
-pub use executor::{FallbackPolicy, SandboxManager};
+pub use executor::{FallbackPolicy, OsSandboxDriver};
 pub use profile::ProfileGenerator;

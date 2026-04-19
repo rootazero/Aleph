@@ -150,6 +150,13 @@ impl SandboxAdapter for MacOSSandbox {
             cmd.current_dir(working_dir);
         }
 
+        // Apply per-command environment overrides. Empty map = inherit parent
+        // env. Non-empty map layers on top of the inherited env (mirrors
+        // tokio::process::Command::envs semantics).
+        if !command.env.is_empty() {
+            cmd.envs(&command.env);
+        }
+
         // Set timeout
         let timeout =
             std::time::Duration::from_secs(profile.capabilities.process.max_execution_time);
@@ -236,6 +243,7 @@ mod tests {
             program: "echo".to_string(),
             args: vec!["hello".to_string()],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         let result = sandbox.execute_sandboxed(&command, &profile).await.unwrap();

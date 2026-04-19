@@ -81,6 +81,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Spec 5 Task 12: wiki orientation handle for DreamDaemon + MemoryContextProvider + tools.
     orientation: Option<std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation>>,
     note_memory_dir: Option<std::path::PathBuf>,
+    // Phase 3 Task 8: sandbox for exec-class tools.
+    sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
@@ -809,6 +811,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             note_memory_dir: note_memory_dir.clone(),
             // Spec 7 Task 9: user profile tool.
             profile_synthesizer: profile_synth.clone(),
+            // Phase 3 Task 8: sandbox for exec-class tools.
+            sandbox: sandbox.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;

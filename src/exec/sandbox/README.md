@@ -5,7 +5,7 @@ OS-native sandboxing for AI-generated skills with fine-grained permission contro
 ## Architecture
 
 ```
-SandboxManager
+OsSandboxDriver
     ↓
 SandboxAdapter (trait)
     ↓
@@ -24,8 +24,8 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 let adapter = Arc::new(platforms::MacOSSandbox::new());
 
-// Create manager
-let manager = SandboxManager::new(adapter);
+// Create driver
+let manager = OsSandboxDriver::new(adapter);
 
 // Define capabilities
 let capabilities = Capabilities {

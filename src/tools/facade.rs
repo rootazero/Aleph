@@ -42,10 +42,38 @@ use crate::tools::AlephToolServer;
 /// Returns both the top-of-chain `Arc<dyn ToolService>` (what agent_loop
 /// consumes) and the shared `Arc<ToolRegistry>` (what MCP / Extension
 /// lifecycles mutate).
+///
+/// Callers that need to attach a live `SmartFilter` / `Approver` should use
+/// [`build_tool_service_with_handles`] instead — it exposes the inner
+/// `PermissionLayer` so Phase 3 boot wiring can call `set_smart_filter` /
+/// `set_approver` without downcasting.
 pub async fn build_tool_service(
     server: Arc<AlephToolServer>,
     config: &ToolServiceConfig,
 ) -> (Arc<dyn ToolService>, Arc<ToolRegistry>) {
+    let (svc, registry, _handles) = build_tool_service_with_handles(server, config).await;
+    (svc, registry)
+}
+
+/// Handles into the tool-service decorator chain. Exposed so Phase 3 boot
+/// wiring can attach a live `LayeredPermissionResolver` + `ApprovalGate`
+/// approver to the `PermissionLayer` after construction.
+///
+/// The `PermissionLayer` is kept as `Arc<PermissionLayer>` (concrete type)
+/// rather than `Arc<dyn ToolService>` so its `set_smart_filter` /
+/// `set_approver` setters remain reachable without a downcast.
+pub struct ToolServiceHandles {
+    pub permission_layer: Arc<PermissionLayer>,
+}
+
+/// Variant of [`build_tool_service`] that also returns typed handles to
+/// inner middleware layers. The returned `Arc<dyn ToolService>` is the
+/// same top-of-chain service — it wraps the exact `PermissionLayer` that
+/// `handles.permission_layer` points to.
+pub async fn build_tool_service_with_handles(
+    server: Arc<AlephToolServer>,
+    config: &ToolServiceConfig,
+) -> (Arc<dyn ToolService>, Arc<ToolRegistry>, ToolServiceHandles) {
     let registry = Arc::new(ToolRegistry::new());
     register_builtins_into(&registry, &server).await;
 
@@ -56,9 +84,13 @@ pub async fn build_tool_service(
         config.per_tool_durations(),
     ));
     let ctxrule: Arc<dyn ToolService> = Arc::new(ContextRuleLayer::new(timeout));
-    let perm: Arc<dyn ToolService> = Arc::new(PermissionLayer::new(ctxrule));
+    let permission_layer = Arc::new(PermissionLayer::new(ctxrule));
+    let perm: Arc<dyn ToolService> = permission_layer.clone();
     let audit: Arc<dyn ToolService> = Arc::new(ExecAuditLayer::new(perm));
-    (audit, registry)
+    let handles = ToolServiceHandles {
+        permission_layer,
+    };
+    (audit, registry, handles)
 }
 
 async fn register_builtins_into(registry: &ToolRegistry, server: &AlephToolServer) {

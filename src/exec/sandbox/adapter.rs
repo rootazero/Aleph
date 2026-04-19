@@ -1,10 +1,11 @@
 use crate::error::Result;
 use crate::exec::sandbox::capabilities::Capabilities;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Command to execute in sandbox
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SandboxCommand {
     /// Program to execute
     pub program: String,
@@ -12,6 +13,10 @@ pub struct SandboxCommand {
     pub args: Vec<String>,
     /// Working directory
     pub working_dir: Option<PathBuf>,
+    /// Environment variables to set for the subprocess. Empty map = inherit
+    /// parent environment unchanged. Phase 3 H5 fix: previously dropped
+    /// silently by `OsSandboxDriver::run`.
+    pub env: HashMap<String, String>,
 }
 
 /// Sandbox configuration profile
