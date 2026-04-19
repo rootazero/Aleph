@@ -232,26 +232,52 @@ impl OsSandboxDriverTrait for OsSandboxDriver {
         &self,
         program: &str,
         args: &[String],
-        _env: &HashMap<String, String>,
-        _stdin: Option<&[u8]>,
+        env: &HashMap<String, String>,
+        stdin: Option<&[u8]>,
         cwd: &Path,
         profile: &OsSandboxProfile,
-        _timeout: Duration,
-        _max_output_bytes: usize,
+        timeout: Duration,
+        max_output_bytes: usize,
     ) -> std::result::Result<SandboxOutput, SandboxError> {
         use crate::exec::sandbox::adapter::SandboxProfile as LegacySandboxProfile;
 
-        // Persist the profile bytes back to a temp file so the adapter can
-        // pass `-f <path>` to sandbox-exec.
+        // stdin piping isn't natively supported by the legacy
+        // `execute_sandboxed` seam (it uses `Command::output`, which does
+        // not accept stdin bytes). Phase 3 follow-up: thread stdin through
+        // the adapter. For now, warn if the caller passed stdin so bugs
+        // don't hide behind silent drops.
+        if stdin.is_some() {
+            tracing::warn!(
+                program = %program,
+                "OsSandboxDriver::run received stdin bytes but legacy adapter does \
+                 not yet support stdin piping — bytes are ignored"
+            );
+        }
+
+        // Build a legacy profile where `max_execution_time` reflects the
+        // caller-supplied timeout. The adapter's internal `tokio::time::timeout`
+        // consults this field, so this is how the configured SandboxConfig
+        // timeout flows into sandbox-exec without a new API.
         let profile_path = crate::exec::sandbox::profile::ProfileGenerator::write_temp_profile(
             &profile.contents,
             ".sb",
         )
         .map_err(|e| SandboxError::ProfileGeneration(e.to_string()))?;
 
+        // Clamp timeout to u64 seconds, rounding up so a 500ms caller does not
+        // quietly become 0s ("run forever"). Minimum of 1s enforced because
+        // `ExecutionTimeout` carries a `timeout_secs: u64`.
+        let timeout_secs = timeout
+            .as_secs()
+            .saturating_add(if timeout.subsec_nanos() > 0 { 1 } else { 0 })
+            .max(1);
+
+        let mut legacy_caps = Capabilities::default();
+        legacy_caps.process.max_execution_time = timeout_secs;
+
         let legacy_profile = LegacySandboxProfile {
             path: profile_path.clone(),
-            capabilities: Capabilities::default(),
+            capabilities: legacy_caps,
             platform: self.adapter.platform_name().to_string(),
             temp_workspace: None,
         };
@@ -260,6 +286,7 @@ impl OsSandboxDriverTrait for OsSandboxDriver {
             program: program.to_string(),
             args: args.to_vec(),
             working_dir: Some(PathBuf::from(cwd)),
+            env: env.clone(),
         };
 
         let start = Instant::now();
@@ -273,20 +300,56 @@ impl OsSandboxDriverTrait for OsSandboxDriver {
         }
 
         match exec_result {
-            Ok(result) => Ok(SandboxOutput {
-                stdout: result.stdout.into_bytes(),
-                stderr: result.stderr.into_bytes(),
-                exit_code: result.exit_code,
-                signal: None,
-                truncated: false,
-                duration_ms: result.duration_ms,
-            }),
+            Ok(result) => {
+                // Clamp stdout / stderr to `max_output_bytes` per stream.
+                // Streams are truncated independently; `truncated` flips if
+                // either exceeded the cap. We truncate on UTF-8 char boundaries
+                // to avoid producing invalid strings.
+                let (stdout_bytes, stdout_truncated) =
+                    truncate_utf8(result.stdout, max_output_bytes);
+                let (stderr_bytes, stderr_truncated) =
+                    truncate_utf8(result.stderr, max_output_bytes);
+                let truncated = stdout_truncated || stderr_truncated;
+                if truncated {
+                    tracing::warn!(
+                        program = %program,
+                        max_output_bytes,
+                        "Sandbox output truncated to fit max_output_bytes cap"
+                    );
+                }
+                Ok(SandboxOutput {
+                    stdout: stdout_bytes,
+                    stderr: stderr_bytes,
+                    exit_code: result.exit_code,
+                    signal: None,
+                    truncated,
+                    duration_ms: result.duration_ms,
+                })
+            }
             Err(err) => {
                 let _ = start.elapsed();
                 Err(map_exec_error(err))
             }
         }
     }
+}
+
+/// Truncate a string to at most `max_bytes`, returning the resulting bytes
+/// plus a flag indicating whether truncation occurred. Truncates on a UTF-8
+/// char boundary so downstream `String::from_utf8_lossy` callers do not see
+/// a split code point.
+fn truncate_utf8(s: String, max_bytes: usize) -> (Vec<u8>, bool) {
+    if s.len() <= max_bytes {
+        return (s.into_bytes(), false);
+    }
+    // Walk back to the nearest char boundary <= max_bytes.
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut bytes = s.into_bytes();
+    bytes.truncate(cut);
+    (bytes, true)
 }
 
 #[cfg(test)]
@@ -314,6 +377,7 @@ mod tests {
             program: "echo".to_string(),
             args: vec!["test".to_string()],
             working_dir: None,
+            env: HashMap::new(),
         };
 
         let caps = Capabilities::default();
@@ -325,5 +389,113 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("test"));
         assert_eq!(audit_log.skill_id, "test-skill");
+    }
+
+    /// H5 regression: `OsSandboxDriver::run` must pass `env` through to the
+    /// subprocess. Prior to the fix, the field was bound with `_env` and
+    /// silently dropped, so CodeExecTool's carefully-built PATH injection
+    /// never reached the sandboxed child.
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn run_honors_env() {
+        use tempfile::tempdir;
+
+        let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
+        let driver = OsSandboxDriver::new(adapter.clone());
+        if !driver.is_available() {
+            println!("Skipping run_honors_env: sandbox-exec unavailable");
+            return;
+        }
+
+        let caps = NewSandboxCapabilities::strict();
+        let tmp = tempdir().unwrap();
+        let cwd = tmp.path();
+        let profile = driver.profile_for(&caps, cwd).expect("profile");
+
+        let mut env = HashMap::new();
+        env.insert("OMCTEST_FOO".to_string(), "bar".to_string());
+        let output = driver
+            .run(
+                "sh",
+                &["-c".to_string(), "printf %s \"$OMCTEST_FOO\"".to_string()],
+                &env,
+                None,
+                cwd,
+                &profile,
+                Duration::from_secs(5),
+                1024,
+            )
+            .await
+            .expect("run ok");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        assert_eq!(output.exit_code, Some(0));
+        assert!(
+            stdout.contains("bar"),
+            "expected env FOO=bar to reach subprocess, got stdout={stdout:?}"
+        );
+    }
+
+    /// H5 regression: `run` must enforce the caller-supplied timeout. Prior
+    /// to the fix, `_timeout` was ignored and the legacy 300s default was
+    /// used, so per-command budgets never applied.
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn run_honors_timeout() {
+        use tempfile::tempdir;
+
+        let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
+        let driver = OsSandboxDriver::new(adapter);
+        if !driver.is_available() {
+            println!("Skipping run_honors_timeout: sandbox-exec unavailable");
+            return;
+        }
+
+        let caps = NewSandboxCapabilities::strict();
+        let tmp = tempdir().unwrap();
+        let cwd = tmp.path();
+        let profile = driver.profile_for(&caps, cwd).expect("profile");
+
+        // `sleep 5` with a 1s timeout must return `SandboxError::Timeout`.
+        // We sub-second round-up ensures `Duration::from_millis(500)` does
+        // not become 0s (which would disable the timeout entirely).
+        let res = driver
+            .run(
+                "sleep",
+                &["5".to_string()],
+                &HashMap::new(),
+                None,
+                cwd,
+                &profile,
+                Duration::from_millis(500),
+                1024,
+            )
+            .await;
+        match res {
+            Err(SandboxError::Timeout { .. }) => {}
+            other => panic!("expected SandboxError::Timeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_utf8_preserves_short_strings() {
+        let (bytes, truncated) = truncate_utf8("hello".to_string(), 100);
+        assert_eq!(bytes, b"hello");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_utf8_clamps_ascii() {
+        let (bytes, truncated) = truncate_utf8("abcdef".to_string(), 3);
+        assert_eq!(bytes, b"abc");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn truncate_utf8_respects_char_boundary() {
+        // "é" is 2 bytes (0xC3 0xA9). Cutting at 1 byte must walk back to 0.
+        let (bytes, truncated) = truncate_utf8("é".to_string(), 1);
+        assert!(truncated);
+        // Walked back to 0 to avoid splitting the code point.
+        assert!(bytes.is_empty());
     }
 }

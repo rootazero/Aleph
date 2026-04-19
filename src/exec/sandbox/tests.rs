@@ -33,6 +33,7 @@ mod integration_tests {
             program: "echo".to_string(),
             args: vec!["Hello from sandbox".to_string()],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         // Execute with default capabilities
@@ -91,6 +92,7 @@ mod integration_tests {
                 "echo 'test data' > test.txt && cat test.txt".to_string(),
             ],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         let result = manager
@@ -118,6 +120,7 @@ mod integration_tests {
             program: "echo".to_string(),
             args: vec!["audit test".to_string()],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         let caps = Capabilities::default();
@@ -186,6 +189,7 @@ mod integration_tests {
             program: "echo".to_string(),
             args: vec!["test".to_string()],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         let result = manager
@@ -214,6 +218,7 @@ mod integration_tests {
             program: "echo".to_string(),
             args: vec!["test".to_string()],
             working_dir: None,
+            env: std::collections::HashMap::new(),
         };
 
         let result = manager
