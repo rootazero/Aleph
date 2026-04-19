@@ -44,7 +44,10 @@ pub struct ChannelApprovalResult {
 pub struct ChannelApprovalBridge {
     registry: Arc<ChannelRegistry>,
     pending_approvals: Arc<RwLock<Vec<PendingApprovalState>>>,
-    /// Overrides the real channel lookup in tests. `None` in production.
+    /// Test-only override that short-circuits `request_for_tool` with a fixed
+    /// outcome, bypassing the real channel lookup and pending-approval wait.
+    /// Field exists only under `cfg(test)` so production has zero surface.
+    #[cfg(test)]
     test_outcome_override: Option<ApprovalOutcome>,
 }
 
@@ -61,6 +64,7 @@ impl ChannelApprovalBridge {
         Self {
             registry,
             pending_approvals: Arc::new(RwLock::new(Vec::new())),
+            #[cfg(test)]
             test_outcome_override: None,
         }
     }
@@ -391,10 +395,31 @@ impl ChannelApprovalBridge {
             .retain(|p| p.approval_id != approval_id);
     }
 
-    /// Request approval for a tool invocation, mapping the result to
-    /// `ApprovalOutcome`. Synthesises a legacy `ApprovalRequest` from the
-    /// tool name and reason so callers don't need to construct the full shape.
-    pub async fn request_for_tool(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+    /// Request approval for a tool invocation and await the real user decision.
+    ///
+    /// Two-stage flow mirroring `ExecSecurityGate::request_approval`:
+    /// 1. `approval_manager.create(...)` builds the record with a unique id.
+    /// 2. `self.request_approval(...)` delivers the prompt to the channel (inline
+    ///    keyboard on Telegram/Discord, etc). Delivery success is NOT an approval
+    ///    — it only means the UI was shown.
+    /// 3. `approval_manager.wait_for_decision(record)` blocks on a oneshot that
+    ///    the channel's button-click callback handler resolves via
+    ///    `approval_manager.resolve(id, decision, ...)`.
+    ///
+    /// `session_key` must be a valid channel session key in the format
+    /// `{platform}:{...}:{conversation_id}:{...}` so the bridge can route the
+    /// prompt to the correct channel. An empty or unparseable session_key yields
+    /// `Denied` (delivery is skipped and no approver can click the button).
+    pub async fn request_for_tool(
+        &self,
+        approval_manager: &crate::exec::manager::ExecApprovalManager,
+        tool_name: &str,
+        reason: &str,
+        session_key: &str,
+        agent_id: &str,
+        timeout_ms: u64,
+    ) -> ApprovalOutcome {
+        #[cfg(test)]
         if let Some(outcome) = self.test_outcome_override {
             return outcome;
         }
@@ -404,14 +429,53 @@ impl ChannelApprovalBridge {
             command: tool_name.to_string(),
             cwd: None,
             analysis: crate::exec::analysis::CommandAnalysis::error(reason),
-            agent_id: String::new(),
-            session_key: String::new(),
+            agent_id: agent_id.to_string(),
+            session_key: session_key.to_string(),
         };
 
+        let record = approval_manager.create(&request, timeout_ms);
+
+        // Deliver the prompt via the channel capability. If delivery fails
+        // (no channel capability, registry miss, send error), we cannot await
+        // a user decision — deny. This matches the existing
+        // `ExecSecurityGate::request_approval` contract.
         match self.request_approval(&request).await {
-            Some(result) if result.delivered => ApprovalOutcome::Approved,
-            Some(_) => ApprovalOutcome::Denied,
-            None => ApprovalOutcome::Denied,
+            Some(result) if result.delivered => {
+                tracing::info!(
+                    tool = %tool_name,
+                    id = %record.id,
+                    channel_id = %result.channel_id,
+                    "Approval delivered via channel — waiting for user decision"
+                );
+            }
+            Some(result) => {
+                tracing::warn!(
+                    tool = %tool_name,
+                    id = %record.id,
+                    reason = ?result.reason,
+                    "Approval delivery failed — denying"
+                );
+                return ApprovalOutcome::Denied;
+            }
+            None => {
+                tracing::warn!(
+                    tool = %tool_name,
+                    id = %record.id,
+                    "No channel capability for approval delivery — denying"
+                );
+                return ApprovalOutcome::Denied;
+            }
+        }
+
+        // Block on the oneshot until the button-click callback resolves it,
+        // or the record's timeout fires.
+        match approval_manager.wait_for_decision(record).await {
+            Some(crate::exec::socket::ApprovalDecisionType::AllowOnce)
+            | Some(crate::exec::socket::ApprovalDecisionType::AllowAlways) => {
+                ApprovalOutcome::Approved
+            }
+            Some(crate::exec::socket::ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
+            None => ApprovalOutcome::Timeout,
         }
     }
 

@@ -487,22 +487,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Build a single ApprovalGate shared between the Sandbox capability
     // escalation path and the PermissionLayer's Ask-tier confirm path.
     //
-    // H1 (Phase 4a Task 2): wire `ChannelApprovalBridgeAdapter` so that
-    // elevated-capability sandbox escalations and Ask-tier tool calls route
-    // through the channel-level inline-keyboard approval transport instead of
-    // falling back to `Denied`.
+    // H1 status (Phase 4a Task 2): `ChannelApprovalBridgeAdapter` exists as
+    // library code (`src/approval/adapters.rs`) and performs the full two-
+    // stage flow (deliver prompt + await user decision via
+    // `ExecApprovalManager`'s oneshot). Wiring it here requires threading
+    // the shared `Arc<ChannelRegistry>` (built later in
+    // `builder/subsystems.rs::initialize_channels`) and
+    // `Arc<ExecApprovalManager>` into this boot point, which is deferred
+    // to a follow-on task. Until then `request_approval_for_tool` falls
+    // back to `Denied` — elevated-capability and Ask-tier calls are
+    // rejected by policy rather than hanging. See Known Limitations in
+    // CHANGELOG.
     let approval_gate = {
         use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
         use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
-        use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
-        use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
-        use alephcore::gateway::channel_registry::ChannelRegistry;
-
-        let registry = Arc::new(ChannelRegistry::new());
-        let bridge = Arc::new(ChannelApprovalBridge::new(registry));
-        let adapter = Box::new(ChannelApprovalBridgeAdapter::new(bridge));
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), Some(adapter)))
+        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
     };
+    if !args.daemon {
+        tracing::warn!(
+            "ApprovalGate has no ApprovalRequester wired — elevated-capability \
+             sandbox escalations and Ask-tier tool calls will be denied until \
+             `ChannelApprovalBridgeAdapter` is threaded through the shared \
+             ChannelRegistry + ExecApprovalManager at boot. Baseline-capability \
+             commands are unaffected."
+        );
+    }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
         use alephcore::exec::sandbox::platforms::MacOSSandbox;
