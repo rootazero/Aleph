@@ -6,6 +6,7 @@
 //! Emission failures are intentionally ignored (`let _ = ...`) so dual-write
 //! problems never break tool dispatch.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -13,6 +14,23 @@ use serde_json::Value;
 use crate::session::events::{now_ms, SessionEvent, ToolOutput, TurnId};
 use crate::session::service::{SessionId, SessionService};
 use crate::tools::service::{ToolError, ToolService};
+
+/// Run `fut` with `SESSION_ID` scoped to `session_id`.
+///
+/// This is the single entry point for attaching the active session to the
+/// `tokio` task-local that exec-class tools read via
+/// `sandbox::context::current_session()`. Every tool-dispatch call site —
+/// `invoke_with_session_trace`, cron wakeups, heartbeat ticks, direct
+/// dispatches — must funnel through this helper so `CodeExecTool` and
+/// friends never see a missing session context.
+pub async fn with_session_scope<F, T>(session_id: &SessionId, fut: F) -> T
+where
+    F: Future<Output = T>,
+{
+    crate::sandbox::context::SESSION_ID
+        .scope(session_id.clone(), fut)
+        .await
+}
 
 pub async fn invoke_with_session_trace(
     tool_svc: &Arc<dyn ToolService>,
@@ -26,68 +44,67 @@ pub async fn invoke_with_session_trace(
     // Scope SESSION_ID so exec-class tools (reached via tool_svc.execute below)
     // can discover the current session via sandbox::context::current_session()
     // without threading the id through the AlephTool trait.
-    crate::sandbox::context::SESSION_ID
-        .scope(session_id.clone(), async move {
-            let _ = session_svc
-                .emit_event(
-                    session_id,
-                    SessionEvent::ToolCallRequested {
-                        turn_id,
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                        input: input.clone(),
-                        at: now_ms(),
-                    },
-                )
-                .await;
+    with_session_scope(session_id, async move {
+        let _ = session_svc
+            .emit_event(
+                session_id,
+                SessionEvent::ToolCallRequested {
+                    turn_id,
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                    at: now_ms(),
+                },
+            )
+            .await;
 
-            let result = tool_svc.execute(&name, input).await;
+        let result = tool_svc.execute(&name, input).await;
 
-            match &result {
-                Ok(output) => {
-                    let _ = session_svc
-                        .emit_event(
-                            session_id,
-                            SessionEvent::ToolResult {
-                                turn_id,
-                                call_id,
-                                output: output.clone(),
-                                at: now_ms(),
-                            },
-                        )
-                        .await;
-                }
-                Err(ToolError::PermissionDenied { reason, .. }) => {
-                    let _ = session_svc
-                        .emit_event(
-                            session_id,
-                            SessionEvent::ToolCallDenied {
-                                turn_id,
-                                call_id,
-                                reason: reason.clone(),
-                                at: now_ms(),
-                            },
-                        )
-                        .await;
-                }
-                Err(e) => {
-                    let _ = session_svc
-                        .emit_event(
-                            session_id,
-                            SessionEvent::ToolError {
-                                turn_id,
-                                call_id,
-                                error: e.to_string(),
-                                at: now_ms(),
-                            },
-                        )
-                        .await;
-                }
+        match &result {
+            Ok(output) => {
+                let _ = session_svc
+                    .emit_event(
+                        session_id,
+                        SessionEvent::ToolResult {
+                            turn_id,
+                            call_id,
+                            output: output.clone(),
+                            at: now_ms(),
+                        },
+                    )
+                    .await;
             }
+            Err(ToolError::PermissionDenied { reason, .. }) => {
+                let _ = session_svc
+                    .emit_event(
+                        session_id,
+                        SessionEvent::ToolCallDenied {
+                            turn_id,
+                            call_id,
+                            reason: reason.clone(),
+                            at: now_ms(),
+                        },
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let _ = session_svc
+                    .emit_event(
+                        session_id,
+                        SessionEvent::ToolError {
+                            turn_id,
+                            call_id,
+                            error: e.to_string(),
+                            at: now_ms(),
+                        },
+                    )
+                    .await;
+            }
+        }
 
-            result
-        })
-        .await
+        result
+    })
+    .await
 }
 
 #[cfg(test)]

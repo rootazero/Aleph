@@ -27,4 +27,13 @@ pub use store::SessionEventStore;
 pub use actor::{ActorCommand, SessionActor};
 pub use in_process::InProcessActorSessionService;
 pub use projection::{project_messages, MessageRole, ProjectedMessage};
-pub use tool_trace::invoke_with_session_trace;
+pub use tool_trace::{invoke_with_session_trace, with_session_scope};
+
+/// Re-export of the `SESSION_ID` task-local defined in `sandbox::context`.
+///
+/// Consumers should set this exclusively via [`with_session_scope`] /
+/// [`invoke_with_session_trace`] and read it via
+/// `crate::sandbox::current_session()`. The direct re-export exists so that
+/// integration tests can inspect the task-local without pulling in sandbox
+/// internals.
+pub use crate::sandbox::context::SESSION_ID;
