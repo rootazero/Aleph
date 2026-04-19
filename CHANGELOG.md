@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Phase 4b) implements it via blanket delegation to `Harness::run`.
   `ALEPH_HARNESS_V2=1` is read at startup and logged for discoverability;
   production driver swap lands in Phase 5 alongside the Orchestrator bridge.
-  Integration-test coverage: `tests/harness_run_e2e.rs`.
+  Integration-test coverage: `tests/harness_run_e2e.rs` (harness run loop)
+  and `src/harness/tests/driver.rs` (SessionDriver delegation).
 - **Sandbox subsystem (Phase 3):** `src/sandbox/` introduces the agent-level
   `Sandbox` trait and `WorkspaceSandbox` implementation — lazy per-session
   workspace under `~/.aleph/workspaces/{hash(session_id)}/`, strict

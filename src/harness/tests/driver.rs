@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::error::Result as AlephResult;
+use crate::error::{AlephError, Result as AlephResult};
 use crate::harness::{AgentHarness, HarnessDeps};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
@@ -127,5 +127,55 @@ async fn session_driver_delegates_to_harness_run() {
     assert_eq!(
         assistant_count, 1,
         "expected exactly one AssistantMessage after one text-only turn; got events: {events:#?}"
+    );
+}
+
+/// Provider that always returns `AlephError::Cancelled`. Exercises the
+/// `HarnessError::Llm(inner)` → unwrap path of `SessionDriver::drive`:
+/// the error must surface as `AlephError::Cancelled`, not wrapped inside
+/// `AlephError::ProviderError { .. }`, so downstream UI can branch on it.
+struct CancellingProvider;
+
+impl AiProvider for CancellingProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move { Err(AlephError::Cancelled) })
+    }
+
+    fn name(&self) -> &str {
+        "cancelling"
+    }
+
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn session_driver_preserves_cancelled_semantics() {
+    let session = fresh_session_service();
+    let harness = AgentHarness::new(HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTool),
+        sandbox: Arc::new(InertSandbox),
+        llm: Arc::new(CancellingProvider),
+    });
+
+    let sid: SessionId = SessionKey::ephemeral("driver-cancelled");
+    let driver: Arc<dyn SessionDriver> = harness.into_session_driver();
+
+    let err = driver
+        .drive(&sid)
+        .await
+        .expect_err("cancelled provider should propagate as error");
+
+    // Contract: the Llm(AlephError) variant is unwrapped so callers can
+    // match on the original `AlephError::Cancelled` — not rewrapped into
+    // `AlephError::ProviderError` with a stringified prefix.
+    assert!(
+        matches!(err, AlephError::Cancelled),
+        "expected AlephError::Cancelled to surface unchanged; got: {err:?}"
     );
 }

@@ -99,14 +99,28 @@ impl AgentHarness {
 #[async_trait]
 impl crate::session::SessionDriver for AgentHarness {
     async fn drive(&self, session_id: &SessionId) -> crate::error::Result<()> {
-        // `Harness::run` produces `HarnessError`; `SessionDriver::drive`
-        // surfaces `AlephError`. `AlephError::provider` is the matching
-        // variant used throughout the harness / provider pipeline when
-        // wrapping LLM- or tool-origin failures into the crate-wide error
-        // type (consistent with `HarnessError::Llm` wrapping `AlephError`).
-        self.run(session_id)
-            .await
-            .map_err(|e| crate::error::AlephError::provider(format!("harness drive failed: {e}")))
+        // Preserve `HarnessError` variant semantics when lifting into the
+        // crate-wide `AlephError`:
+        //   * `Cancelled` → `AlephError::Cancelled` (downstream UI branches
+        //     on this to render "Operation cancelled." rather than a
+        //     provider-failure banner).
+        //   * `Llm(inner)` → unwrap: `inner` is already an `AlephError`, so
+        //     re-wrapping would hide the structured `AuthenticationError`
+        //     / `NetworkError` / etc. from callers that `match` on it.
+        //   * `Tool` / `Session` → no better variant exists on `AlephError`;
+        //     stringify through `provider` with a discriminating prefix.
+        // Exhaustive match (no wildcard) so new `HarnessError` variants
+        // force a review here.
+        self.run(session_id).await.map_err(|e| match e {
+            HarnessError::Cancelled => crate::error::AlephError::Cancelled,
+            HarnessError::Llm(inner) => inner,
+            HarnessError::Tool(tool_err) => {
+                crate::error::AlephError::provider(format!("harness tool error: {tool_err}"))
+            }
+            HarnessError::Session(sess_err) => {
+                crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
+            }
+        })
     }
 }
 
