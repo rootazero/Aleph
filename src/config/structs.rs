@@ -73,6 +73,9 @@ pub struct Config {
     /// If present, takes precedence over legacy [tools] and [mcp] sections
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_tools: Option<UnifiedToolsConfig>,
+    /// Phase 2 ToolService runtime tunables (timeouts, per-tool overrides)
+    #[serde(default)]
+    pub tool_service: ToolServiceConfig,
     /// Smart conversation flow configuration
     #[serde(default)]
     pub smart_flow: SmartFlowConfig,
@@ -322,6 +325,7 @@ impl Default for Config {
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
             unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
+            tool_service: ToolServiceConfig::default(),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),

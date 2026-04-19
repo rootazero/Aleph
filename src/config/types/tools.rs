@@ -8,12 +8,61 @@
 //! - NativeToolsConfig: Native tool settings container
 //! - Individual tool configs (Fs, Git, Shell, SystemInfo, etc.)
 //! - McpServerConfig: Unified MCP server settings
+//! - ToolServiceConfig: Phase 2 ToolService runtime tunables (timeouts)
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::search::default_true;
+
+// =============================================================================
+// ToolServiceConfig (Phase 2)
+// =============================================================================
+
+/// Runtime configuration for the Phase 2 `ToolService` decorator chain.
+///
+/// Drives the `TimeoutLayer` default timeout and per-tool overrides. Future
+/// tunables (concurrency limits, rate caps) will live here too.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ToolServiceConfig {
+    /// Default timeout applied to every tool invocation (seconds).
+    #[serde(default = "default_tool_service_timeout_seconds")]
+    pub default_timeout_seconds: u64,
+
+    /// Per-tool overrides keyed by tool name (seconds).
+    #[serde(default)]
+    pub per_tool_seconds: HashMap<String, u64>,
+}
+
+pub fn default_tool_service_timeout_seconds() -> u64 {
+    60
+}
+
+impl Default for ToolServiceConfig {
+    fn default() -> Self {
+        Self {
+            default_timeout_seconds: default_tool_service_timeout_seconds(),
+            per_tool_seconds: HashMap::new(),
+        }
+    }
+}
+
+impl ToolServiceConfig {
+    /// Resolve the default timeout as a `Duration`.
+    pub fn default_timeout(&self) -> Duration {
+        Duration::from_secs(self.default_timeout_seconds)
+    }
+
+    /// Resolve the per-tool overrides as `Duration` values.
+    pub fn per_tool_durations(&self) -> HashMap<String, Duration> {
+        self.per_tool_seconds
+            .iter()
+            .map(|(k, v)| (k.clone(), Duration::from_secs(*v)))
+            .collect()
+    }
+}
 
 // =============================================================================
 // ToolsConfig (Legacy)

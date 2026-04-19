@@ -420,6 +420,50 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     initialize_extension_manager(args.daemon).await;
 
+    // Phase 2 Task 10: assemble the ToolService decorator chain.
+    //
+    // The chain is built once here and held as a local `_tool_service`. As
+    // agent_loop migrates to `Arc<dyn ToolService>` dispatch (Task 11+), this
+    // binding will be threaded into the downstream builders; today it is
+    // enough to materialise the registry so MCP + Extension setters can wire
+    // into it. Any failure is warn-only — never aborts boot.
+    let (_tool_service, tool_registry_phase2) = {
+        let tool_cfg = loaded_app_config.tool_service.clone();
+        // Use an empty AlephToolServer here: the aleph-server bin currently
+        // builds its active tool catalogue via BuiltinToolRegistry inside
+        // register_agent_handlers. Handlers synchronised with that catalogue
+        // will flow into the Phase 2 registry in Task 11 when agent_loop
+        // migrates. Builtins register lazily via MCP / Extension lifecycle
+        // hooks injected below.
+        let server = Arc::new(alephcore::tools::AlephToolServer::new());
+        let (svc, reg) = alephcore::tools::build_tool_service(server, &tool_cfg).await;
+        if !args.daemon {
+            println!("ToolService chain assembled (Phase 2)");
+        }
+        (svc, reg)
+    };
+
+    // Phase 2 Task 10: inject the shared ToolRegistry into ExtensionManager
+    // so plugin load/unload lifecycles populate the registry via
+    // `tools::handlers::registration`. Warn-only on failure.
+    {
+        use alephcore::gateway::handlers::plugins::get_extension_manager;
+        match get_extension_manager() {
+            Ok(ext_manager) => {
+                ext_manager.set_tool_registry(tool_registry_phase2.clone());
+                if !args.daemon {
+                    println!("  ExtensionManager: tool registry wired");
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "ExtensionManager not initialised — Phase 2 tool registry \
+                     will not receive plugin tools this run"
+                );
+            }
+        }
+    }
+
     // Log desktop capability mode
     if !args.daemon {
         println!("Desktop capabilities: in-process (native)");

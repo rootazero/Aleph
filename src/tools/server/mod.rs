@@ -192,6 +192,18 @@ impl AlephToolServer {
         list_tools_arc_impl(&self.tools).await
     }
 
+    /// List all registered tools as `(name, Arc<dyn AlephToolDyn>)` pairs.
+    ///
+    /// Used by Phase 2 `build_tool_service` to wrap each builtin in a
+    /// `BuiltinHandler` and register it into the shared `ToolRegistry`.
+    pub async fn all_builtin_handlers(&self) -> Vec<(String, Arc<dyn AlephToolDyn>)> {
+        let guard = self.tools.read().await;
+        guard
+            .iter()
+            .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
+            .collect()
+    }
+
     /// Get the number of registered tools.
     pub async fn len(&self) -> usize {
         len_impl(&self.tools).await

@@ -45,12 +45,15 @@ pub mod schema_strictify;
 
 // Phase 2 Tool Service façade — consumer-side trait + decorator chain scaffold.
 pub mod dispatch;
+pub mod facade;
 pub mod handlers;
 pub mod middleware;
 pub mod registry;
 pub mod service;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
+pub use facade::build_tool_service;
+pub use registry::ToolRegistry;
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use service::{
     ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
