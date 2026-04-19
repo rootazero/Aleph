@@ -201,6 +201,16 @@ Thinker Decision (tool_use)
             • Plugin runtime execution
 ```
 
+Exec-class tools (`code_exec`, `bash_exec`) route through an additional
+**Sandbox layer** (`src/sandbox/`) between the tool and process execution.
+The sandbox owns per-session workspace provisioning
+(`~/.aleph/workspaces/{session_id}/`), capability enforcement, and OS-level
+seatbelt isolation via `OsSandboxDriver`. Tool-level permissions
+(`SmartFilter`) gate *whether* a call runs; the sandbox's capability check
+gates *what the subprocess can do* once it is allowed to run. See
+[SANDBOX.md](./SANDBOX.md) for the six-step execute pipeline and testing
+pattern.
+
 ---
 
 ## Core Modules Summary
@@ -217,7 +227,8 @@ Thinker Decision (tool_use)
 | **builtin_tools** | `src/builtin_tools/` | Built-in tool implementations |
 | **memory** | `src/memory/` | Facts DB, hybrid retrieval |
 | **extension** | `src/extension/` | Plugin system (WASM, Node.js) |
-| **exec** | `src/exec/` | Shell execution, approval system, OS-native sandboxing |
+| **exec** | `src/exec/` | Shell execution, approval system, OS-native sandboxing (`OsSandboxDriver`) |
+| **sandbox** | `src/sandbox/` | `Sandbox` trait + `WorkspaceSandbox` — per-session workspace, capability ledger, `ApprovalGate`-backed escalation ([SANDBOX.md](./SANDBOX.md)) |
 | **mcp** | `src/mcp/` | MCP client implementation |
 | **routing** | `src/routing/` | Session key resolution |
 | **config** | `src/config/` | Configuration management |
@@ -766,4 +777,5 @@ Default `max_total_chars` is 80,000. When the assembled prompt exceeds the budge
 - [Memory System](MEMORY_SYSTEM.md) - RAG and retrieval
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture
 - [Security](SECURITY.md) - Exec approval and permissions
+- [Sandbox](SANDBOX.md) - `Sandbox` trait, `WorkspaceSandbox`, capability pipeline
 - [Skill Sandboxing](SKILL_SANDBOXING.md) - OS-native sandboxing for evolved skills

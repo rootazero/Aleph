@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sandbox subsystem (Phase 3):** `src/sandbox/` introduces the agent-level
+  `Sandbox` trait and `WorkspaceSandbox` implementation — lazy per-session
+  workspace under `~/.aleph/workspaces/{hash(session_id)}/`, strict
+  capability baseline (`SandboxCapabilities`: fs_read / fs_write / network /
+  spawn_subprocess), `ApprovalGate`-arbitrated escalation with per-session
+  grant cache, `capability_ledger` tracing audit. Composed via
+  `build_sandbox(cfg, driver, approval)` factory; disabled-sandbox path
+  returns a fail-fast `NoopSandbox`. Spec:
+  `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`.
+- **`SESSION_ID` task-local:** `crate::sandbox::context::SESSION_ID` scoped by
+  `invoke_with_session_trace` so exec-class tools discover the current
+  session via `current_session()` without touching the `AlephTool` trait
+  signature.
+- **`LayeredPermissionResolver` + `AgentPermissionFilter`:** backfills the
+  Phase 2 placeholder `SmartFilter` with a concrete policy-backed resolver
+  over merged two-tier (global + per-agent, most-restrictive-wins)
+  `ToolPermissionsConfig`. Live-reloadable via `ArcSwap`.
+- **`SandboxConfig`:** `[sandbox]` TOML section with `workspace_root`,
+  `enabled`, `default_timeout_seconds`, `max_output_bytes`. Defaults
+  preserve existing behaviour; `enabled = false` switches the subsystem to
+  `NoopSandbox` for tests / CI.
+- **End-to-end integration test** (`tests/sandbox_capability_approval.rs`)
+  covering the six-step pipeline via the public `build_sandbox` surface:
+  strict-cap bypass, network-elevated approve, spawn-denied error,
+  per-session approval cache. 4/4 passing.
+- **Docs:** `docs/reference/SANDBOX.md` reference (architecture, pipeline,
+  capabilities, task-local, tool consumption pattern, testing pattern);
+  GLOSSARY entries for `WorkspaceSandbox`, `OsSandboxDriver`,
+  `OsSandboxDriverTrait`, `SandboxCapabilities`,
+  `LayeredPermissionResolver`, `AgentPermissionFilter`; ARCHITECTURE
+  sandbox paragraph + module summary row.
+
+### Changed
+- **`SandboxManager` → `OsSandboxDriver`:** renamed
+  (`src/exec/sandbox/executor.rs`) to reflect OS-level role and free the
+  name for the agent-level `Sandbox` trait. Now implements
+  `OsSandboxDriverTrait` so `WorkspaceSandbox` can drive it.
+- **`SmartFilter` is no longer a placeholder:** production
+  `PermissionLayer` now wraps `LayeredPermissionResolver`; the Phase 2
+  `ScriptedFilter` stub is test-only.
+- **Exec-class tools route through `Arc<dyn Sandbox>`:** `code_exec` and
+  `bash_exec` hold an optional `Arc<dyn Sandbox>` attached via
+  `with_sandbox` at boot and call `sandbox.execute(SandboxCommand)` instead
+  of `Command::new(...)`. Unconfigured tools fail-fast with a structured
+  error rather than bypassing sandboxing.
+
+### Added
 - **Tool Service façade:** `src/tools/service.rs` exposes a single
   `execute(name, input) → Result<ToolOutput, ToolError>` across builtin, MCP,
   and extension sources. Five-layer decorator chain (audit / permission /

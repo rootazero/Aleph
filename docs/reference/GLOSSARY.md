@@ -12,9 +12,27 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Sandbox
 **Anthropic meaning:** Execution environment where the agent runs code and edits files. Provisioned on-demand via `execute(name, input) → string`.
 
-**Aleph today:** The agent-level `Sandbox` trait (post-Phase-3, `src/sandbox/`) is the workspace + capability-ledger abstraction. Implementations include `WorkspaceSandbox` (cwd + macOS seatbelt + approval gate).
+**Aleph today:** The agent-level `Sandbox` trait (`src/sandbox/mod.rs`) is the workspace + capability-ledger abstraction. Production boot wires `WorkspaceSandbox` (cwd + macOS seatbelt + approval gate). See [SANDBOX.md](./SANDBOX.md) for the pipeline, capabilities, and testing pattern.
 
-**Do not confuse with:** `SandboxManager` / `ExecSecurityGate` / `ApprovalGate` — these are lower-level OS-sandbox primitives that sit *beneath* the `Sandbox` trait. Their names may change in Phase 3 for clarity.
+**Do not confuse with:** `OsSandboxDriver` / `ExecSecurityGate` / `ApprovalGate` — these are lower-level primitives that sit *beneath* the `Sandbox` trait. `OsSandboxDriver` is the macOS `sandbox-exec` driver invoked by `WorkspaceSandbox`; `ExecSecurityGate` is the pre-exec filesystem guard for `file_write`/`file_edit`; `ApprovalGate` is the user-facing prompt path for capability elevation.
+
+### WorkspaceSandbox
+**Aleph-specific:** Concrete `Sandbox` implementation (`src/sandbox/workspace.rs`). Provisions `~/.aleph/workspaces/{hash(session_id)}/` lazily on first exec-class call, enforces a strict per-session capability baseline, escalates out-of-baseline requests through `ApprovalGate`, caches per-session grants, and delegates OS isolation to an `OsSandboxDriverTrait` implementation. Implements the six-step execute pipeline described in [SANDBOX.md](./SANDBOX.md).
+
+### OsSandboxDriver
+**Aleph-specific:** macOS `sandbox-exec` driver (`src/exec/sandbox/executor.rs`). Implements `OsSandboxDriverTrait` so `WorkspaceSandbox` can generate SBPL profiles and run subprocesses under seatbelt. Formerly named `SandboxManager`; renamed in Phase 3 Task 4 to reflect its OS-level role and free the name for Anthropic's agent-level Sandbox meaning.
+
+### OsSandboxDriverTrait
+**Aleph-specific:** The seam between `WorkspaceSandbox` and OS-level seatbelt (`src/sandbox/driver.rs`). Two methods: `profile_for(caps, cwd) -> OsSandboxProfile` and `run(program, args, env, stdin, cwd, profile, timeout, max_output_bytes) -> SandboxOutput`. Lets tests substitute a fake driver without invoking the real `sandbox-exec` binary.
+
+### SandboxCapabilities
+**Aleph-specific:** What a subprocess is allowed to do (`src/sandbox/capabilities.rs`): `fs_read`, `fs_write`, `network` (`None`/`AllowHosts`/`AllowAll`), `spawn_subprocess`. `::strict()` is the workspace baseline (no fs outside cwd, no network, no spawn). `is_within(&baseline)` enforces monotonic subset semantics: prefix-subset for paths, ordered `None ⊆ AllowHosts ⊆ AllowAll` for network, and `false ⊆ any` for spawn.
+
+### LayeredPermissionResolver
+**Aleph-specific:** Concrete `SmartFilter` implementation (`src/tools/middleware/permission/resolver.rs`) backed by a merged two-tier `ToolPermissionsConfig` (global + per-agent, most-restrictive-wins). Classifies each tool call as `Allow` / `Confirm` / `Deny` by consulting `PermissionAction::Allow/Ask/Deny`. Live-reloadable via `ArcSwap`. Backfills the Phase 2 placeholder filter with real policy.
+
+### AgentPermissionFilter
+**Aleph-specific:** Convenience builder (`src/tools/middleware/permission/agent_filter.rs`) that takes a global + per-agent `ToolPermissionsConfig`, merges them, and returns an `Arc<dyn SmartFilter>` ready to hand to `PermissionLayer::set_smart_filter`. Used by orchestrator paths that know which agent is running.
 
 ### Session
 **Anthropic meaning:** Append-only log recording everything that happened during an agent's work. Persists independently outside the harness; accessed via `getEvents()` / `emitEvent()`.
