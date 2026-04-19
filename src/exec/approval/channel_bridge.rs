@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::agent_loop::exec_approval::gate::ApprovalOutcome;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -43,6 +44,8 @@ pub struct ChannelApprovalResult {
 pub struct ChannelApprovalBridge {
     registry: Arc<ChannelRegistry>,
     pending_approvals: Arc<RwLock<Vec<PendingApprovalState>>>,
+    /// Overrides the real channel lookup in tests. `None` in production.
+    test_outcome_override: Option<ApprovalOutcome>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +61,7 @@ impl ChannelApprovalBridge {
         Self {
             registry,
             pending_approvals: Arc::new(RwLock::new(Vec::new())),
+            test_outcome_override: None,
         }
     }
 
@@ -385,6 +389,50 @@ impl ChannelApprovalBridge {
             .write()
             .await
             .retain(|p| p.approval_id != approval_id);
+    }
+
+    /// Request approval for a tool invocation, mapping the result to
+    /// `ApprovalOutcome`. Synthesises a legacy `ApprovalRequest` from the
+    /// tool name and reason so callers don't need to construct the full shape.
+    pub async fn request_for_tool(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+        if let Some(outcome) = self.test_outcome_override {
+            return outcome;
+        }
+
+        let request = ApprovalRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            command: tool_name.to_string(),
+            cwd: None,
+            analysis: crate::exec::analysis::CommandAnalysis::error(reason),
+            agent_id: String::new(),
+            session_key: String::new(),
+        };
+
+        match self.request_approval(&request).await {
+            Some(result) if result.delivered => ApprovalOutcome::Approved,
+            Some(_) => ApprovalOutcome::Denied,
+            None => ApprovalOutcome::Denied,
+        }
+    }
+
+    /// Test helper: a bridge that always returns `ApprovalOutcome::Approved`.
+    #[cfg(test)]
+    pub fn for_test_always_approved() -> Self {
+        Self {
+            registry: Arc::new(ChannelRegistry::new()),
+            pending_approvals: Arc::new(RwLock::new(Vec::new())),
+            test_outcome_override: Some(ApprovalOutcome::Approved),
+        }
+    }
+
+    /// Test helper: a bridge that always returns `ApprovalOutcome::Denied`.
+    #[cfg(test)]
+    pub fn for_test_always_denied() -> Self {
+        Self {
+            registry: Arc::new(ChannelRegistry::new()),
+            pending_approvals: Arc::new(RwLock::new(Vec::new())),
+            test_outcome_override: Some(ApprovalOutcome::Denied),
+        }
     }
 }
 

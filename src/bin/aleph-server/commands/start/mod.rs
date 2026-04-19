@@ -169,7 +169,8 @@ async fn initialize_session_store(
 ) -> (Arc<dyn SessionStore>, Option<SessionManager>) {
     match backend {
         "file" => {
-            let config = alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
+            let config =
+                alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
             match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
                 Ok(mut store) => {
                     store = store.with_event_bus(event_bus.clone());
@@ -179,7 +180,12 @@ async fn initialize_session_store(
                         if !daemon {
                             println!("Migrating legacy SQLite sessions to file backend ...");
                         }
-                        if let Err(e) = alephcore::gateway::session_store::migration::export_legacy_messages(&store).await {
+                        if let Err(e) =
+                            alephcore::gateway::session_store::migration::export_legacy_messages(
+                                &store,
+                            )
+                            .await
+                        {
                             eprintln!("Warning: Session migration failed: {}", e);
                         }
                     }
@@ -481,28 +487,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Build a single ApprovalGate shared between the Sandbox capability
     // escalation path and the PermissionLayer's Ask-tier confirm path.
     //
-    // H1 status: no `ApprovalRequester` is wired into the gate at boot yet.
-    // The existing `ChannelApprovalBridge` transport (Telegram / Discord
-    // inline-keyboard approvals) uses the legacy `ApprovalRequest { command,
-    // cwd, session_key, ... }` shape and is not trivially adaptable to the
-    // tool-level `ApprovalRequester { tool_name, reason }` trait. Until that
-    // adapter lands, `request_approval_for_tool` falls back to `Denied` —
-    // elevated-capability and Ask-tier calls are rejected by policy rather
-    // than hanging. See Known Limitations in CHANGELOG.
+    // H1 (Phase 4a Task 2): wire `ChannelApprovalBridgeAdapter` so that
+    // elevated-capability sandbox escalations and Ask-tier tool calls route
+    // through the channel-level inline-keyboard approval transport instead of
+    // falling back to `Denied`.
     let approval_gate = {
         use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
         use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
-        Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
+        use alephcore::approval::adapters::ChannelApprovalBridgeAdapter;
+        use alephcore::exec::approval::channel_bridge::ChannelApprovalBridge;
+        use alephcore::gateway::channel_registry::ChannelRegistry;
+
+        let registry = Arc::new(ChannelRegistry::new());
+        let bridge = Arc::new(ChannelApprovalBridge::new(registry));
+        let adapter = Box::new(ChannelApprovalBridgeAdapter::new(bridge));
+        Arc::new(ApprovalGate::new(ApprovalConfig::default(), Some(adapter)))
     };
-    if !args.daemon {
-        tracing::warn!(
-            "ApprovalGate has no ApprovalRequester wired — elevated-capability \
-             sandbox escalations and Ask-tier tool calls will be denied until \
-             a channel-level approval transport is adapted to the tool-level \
-             ApprovalRequester trait. Baseline-capability commands are \
-             unaffected."
-        );
-    }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
         use alephcore::exec::sandbox::platforms::MacOSSandbox;
@@ -512,14 +512,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
         let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> =
             Arc::new(MacOSSandbox::new());
-        let os_driver: Arc<dyn OsSandboxDriverTrait> =
-            Arc::new(OsSandboxDriver::new(os_adapter));
+        let os_driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(OsSandboxDriver::new(os_adapter));
 
-        build_sandbox(
-            &loaded_app_config.sandbox,
-            os_driver,
-            approval_gate.clone(),
-        )
+        build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone())
     };
     if !args.daemon {
         if loaded_app_config.sandbox.enabled {
@@ -612,8 +607,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let event_bus = server.event_bus().clone();
 
-    let (session_store, sqlite_sm) =
-        initialize_session_store(args.daemon, &loaded_app_config.general.session_store_backend, event_bus.clone()).await;
+    let (session_store, sqlite_sm) = initialize_session_store(
+        args.daemon,
+        &loaded_app_config.general.session_store_backend,
+        event_bus.clone(),
+    )
+    .await;
 
     // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
     // disconnect hook captures session-end events (Task 8).
@@ -624,13 +623,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // append-only `session_events` log. Uses a dedicated connection
         // (rather than the one inside SessionManager) to avoid threading
         // an async lock type into the legacy struct.
-        let session_service =
-            build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
+        let session_service = build_sqlite_session_service(
+            &alephcore::gateway::SessionManagerConfig::default().db_path,
+        );
 
         let mut sm = sm
             .with_raw_memory_writer(
-                memory_db.clone()
-                    as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+                memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
             )
             .with_event_bus(event_bus.clone());
         if let Some(svc) = session_service {

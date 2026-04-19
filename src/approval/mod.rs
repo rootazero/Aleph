@@ -42,6 +42,7 @@
 //! # }
 //! ```
 
+pub mod adapters;
 mod config;
 mod policy;
 mod types;
