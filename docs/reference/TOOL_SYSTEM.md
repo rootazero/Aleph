@@ -4,6 +4,38 @@
 
 ---
 
+## ToolService façade (post-Phase-2)
+
+Consumers (future Harness in Phase 4) depend on `Arc<dyn ToolService>` exclusively:
+
+```rust
+pub trait ToolService: Send + Sync + 'static {
+    async fn execute(&self, name: &str, input: Value) -> Result<ToolOutput, ToolError>;
+    async fn list(&self) -> Vec<ToolDefinition>;
+    async fn describe(&self, name: &str) -> Option<ToolDefinition>;
+}
+```
+
+Runtime stack (outer to inner):
+  ExecAuditLayer → PermissionLayer → ContextRuleLayer → TimeoutLayer → CoreDispatch
+
+`CoreDispatch` holds an `ArcSwap`-backed `ToolRegistry` of three handler sources:
+  `BuiltinHandler`, `McpHandler`, `ExtensionHandler`.
+
+Tool authors continue to implement `AlephTool` — the façade adapts them via `BuiltinHandler`.
+No author-side API change.
+
+`SmartFilter` and `ContextRule` are trait surfaces (no concrete policy shipped yet);
+production policy registers against those traits via `PermissionLayer::set_smart_filter`
+and `ContextRuleLayer::set_rules`.
+
+Session-event tracing: callers bundle `ToolService` dispatch + SessionService event
+emission via `crate::session::invoke_with_session_trace(tool_svc, session_svc, ...)`.
+
+See: docs/superpowers/specs/2026-04-18-tool-service-facade-design.md
+
+---
+
 ## Overview
 
 Aleph's tool system provides:
