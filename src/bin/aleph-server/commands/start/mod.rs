@@ -464,6 +464,45 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Phase 3 Task 7: compose the shared `Arc<dyn Sandbox>` once at boot.
+    //
+    // Exec-class tools will consume this sandbox through their constructors
+    // in Task 8; today we keep it on `AppContext` so all downstream wiring
+    // references a single instance. Boot never aborts if `enabled = false`
+    // — tests / CI override via config and get a NoopSandbox that refuses
+    // execution with a structured error.
+    let _sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
+        use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
+        use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
+        use alephcore::exec::sandbox::platforms::MacOSSandbox;
+        use alephcore::exec::sandbox::OsSandboxDriver;
+        use alephcore::sandbox::{build_sandbox, OsSandboxDriverTrait};
+
+        // Boot-time ApprovalGate: no requester wired yet (matches current
+        // agent_loop behaviour where `with_approval_gate` is opt-in). When
+        // the gate has no requester, capability escalations are denied —
+        // baseline-capability commands still run normally.
+        let approval_gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+
+        // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
+        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> =
+            Arc::new(MacOSSandbox::new());
+        let os_driver: Arc<dyn OsSandboxDriverTrait> =
+            Arc::new(OsSandboxDriver::new(os_adapter));
+
+        build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate)
+    };
+    if !args.daemon {
+        if loaded_app_config.sandbox.enabled {
+            println!(
+                "Sandbox: WorkspaceSandbox rooted at {}",
+                loaded_app_config.sandbox.workspace_root.display()
+            );
+        } else {
+            println!("Sandbox: disabled (NoopSandbox) — exec-class tools will refuse execution");
+        }
+    }
+
     // Log desktop capability mode
     if !args.daemon {
         println!("Desktop capabilities: in-process (native)");

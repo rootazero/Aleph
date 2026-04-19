@@ -11,14 +11,18 @@ use async_trait::async_trait;
 
 pub mod capabilities;
 pub mod command;
+pub mod config;
 pub mod context;
 pub mod driver;
+pub mod factory;
 pub mod workspace;
 
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
 pub use command::{SandboxCommand, SandboxError, SandboxOutput};
+pub use config::SandboxConfig;
 pub use context::current_session;
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
+pub use factory::{build_sandbox, NoopSandbox};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {
@@ -34,22 +38,10 @@ mod tests {
 
     use super::*;
 
-    /// Minimal stub that proves the Sandbox trait is object-safe and usable
-    /// behind `Arc<dyn Sandbox>`. Task 6 replaces this with WorkspaceSandbox.
-    struct NoopSandbox;
-
-    #[async_trait]
-    impl Sandbox for NoopSandbox {
-        async fn execute(
-            &self,
-            _command: SandboxCommand,
-        ) -> Result<SandboxOutput, SandboxError> {
-            Err(SandboxError::Other("NoopSandbox".into()))
-        }
-    }
-
     #[test]
     fn sandbox_trait_is_object_safe() {
-        let _sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox);
+        // Exercises trait object assembly via the shared NoopSandbox stub
+        // exported from `factory`. Task 6 provides the real WorkspaceSandbox.
+        let _sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox::default());
     }
 }
