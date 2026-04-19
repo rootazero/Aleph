@@ -1,3 +1,9 @@
+// TODO(Phase 5): move to Orchestrator. See docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md §8 Phase 5.
+// This file is deeply coupled to LoopToolRegistry (loop-internal tool trait) and loop primitives
+// (FileContentTracker, ToolResultStore, RwLock<String> session_id). In Phase 5/6, LoopToolRegistry
+// is retired and all tools route through ToolService; this pipeline is then replaced by ToolService
+// middleware (PermissionLayer + hook middleware), and this file is deleted.
+
 //! ToolPipeline — 7-stage hook-integrated tool execution pipeline.
 //!
 //! Stages:

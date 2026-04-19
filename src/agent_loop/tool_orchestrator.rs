@@ -1,3 +1,8 @@
+// TODO(Phase 5): move to Orchestrator. See docs/superpowers/specs/2026-04-18-managed-agents-refactor-roadmap.md §8 Phase 5.
+// This file is the embryonic Orchestrator: `execute_tool_batch` + `partition_tool_calls` are the
+// primary migration targets. In Phase 5, `LoopToolRegistry` is retired and all tool calls route
+// through `ToolService`; this batch-scheduling logic moves into the new `Orchestrator` struct.
+
 //! Tool orchestrator — partitions tool calls by concurrency safety and executes them.
 //!
 //! Concurrent-safe tools run in parallel via `futures::future::join_all`;
