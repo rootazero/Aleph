@@ -13,5 +13,6 @@ pub use trait_def::{Harness, HarnessError, TurnState};
 
 #[cfg(test)]
 mod tests {
+    mod act;
     mod think;
 }

@@ -287,16 +287,40 @@ async fn think_llm_error_maps_to_harness_llm() {
     assert!(matches!(err, HarnessError::Llm(_)), "got: {err:?}");
 }
 
-/// NOTE: This pins the Task 8 stub behavior (return Continue immediately on any
-/// tool_call response, no Act dispatch). Task 9 will replace this with a test
-/// that asserts Continue only after successful tool execution; at that point,
-/// either rewrite this test or delete it.
+/// With Task 9's Act phase landed, a tool_call response drives a full Act
+/// pass; `Continue` is only returned after the tool executes successfully.
+/// The detailed Act-side assertions live in `harness::tests::act` — this
+/// test keeps a minimal Think-level sanity check on the Continue path.
 #[tokio::test]
-async fn think_tool_use_pre_act_stub_returns_continue() {
+async fn think_tool_use_after_act_returns_continue() {
+    use crate::session::events::ToolOutput;
+
+    // Tool service that succeeds once for the single expected call.
+    struct OkOnceTool;
+    #[async_trait]
+    impl ToolService for OkOnceTool {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            Vec::new()
+        }
+        async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+            None
+        }
+    }
+
     let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
     let deps = HarnessDeps {
         session: session.clone(),
-        tools: Arc::new(EmptyTools),
+        tools: Arc::new(OkOnceTool),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: FixedProvider::with_tool_call("calling…", "echo"),
     };
@@ -307,7 +331,5 @@ async fn think_tool_use_pre_act_stub_returns_continue() {
         .await
         .expect("run_turn should succeed");
 
-    // Until Task 9 lands, a tool_call response short-circuits to Continue
-    // without any actual tool execution.
     assert_eq!(state, TurnState::Continue);
 }
