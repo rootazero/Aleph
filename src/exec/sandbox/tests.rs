@@ -11,7 +11,7 @@ mod integration_tests {
         Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
         ProcessCapability,
     };
-    use crate::exec::sandbox::executor::{FallbackPolicy, SandboxManager};
+    use crate::exec::sandbox::executor::{FallbackPolicy, OsSandboxDriver};
     use crate::exec::sandbox::platforms::macos::MacOSSandbox;
     use crate::sync_primitives::Arc;
 
@@ -20,7 +20,7 @@ mod integration_tests {
     async fn test_end_to_end_sandbox_execution() {
         // Create sandbox manager
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
-        let manager = SandboxManager::new(adapter);
+        let manager = OsSandboxDriver::new(adapter);
 
         // Skip if sandbox not available
         if !manager.is_available() {
@@ -64,7 +64,7 @@ mod integration_tests {
     #[cfg(target_os = "macos")]
     async fn test_sandbox_with_file_system_capabilities() {
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
-        let manager = SandboxManager::new(adapter);
+        let manager = OsSandboxDriver::new(adapter);
 
         if !manager.is_available() {
             println!("Skipping test: sandbox not available");
@@ -107,7 +107,7 @@ mod integration_tests {
     #[cfg(target_os = "macos")]
     async fn test_audit_log_generation() {
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
-        let manager = SandboxManager::new(adapter);
+        let manager = OsSandboxDriver::new(adapter);
 
         if !manager.is_available() {
             println!("Skipping test: sandbox not available");
@@ -180,7 +180,7 @@ mod integration_tests {
         }
 
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(UnsupportedAdapter);
-        let manager = SandboxManager::new(adapter).with_fallback_policy(FallbackPolicy::Deny);
+        let manager = OsSandboxDriver::new(adapter).with_fallback_policy(FallbackPolicy::Deny);
 
         let command = SandboxCommand {
             program: "echo".to_string(),
@@ -206,7 +206,7 @@ mod integration_tests {
     async fn test_sandbox_unavailable_on_unsupported_platform() {
         // On non-macOS platforms, sandbox should report as unavailable
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
-        let manager = SandboxManager::new(adapter);
+        let manager = OsSandboxDriver::new(adapter);
 
         assert!(!manager.is_available());
 

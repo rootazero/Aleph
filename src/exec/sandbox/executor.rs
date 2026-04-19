@@ -1,14 +1,31 @@
-//! High-level sandbox execution orchestration
+//! OsSandboxDriver — OS-level sandbox-exec profile driver (macOS).
 //!
-//! Provides SandboxManager for coordinating sandbox execution with automatic
-//! profile generation, cleanup, and audit logging.
+//! Provides the OS-level sandbox execution orchestration consumed by
+//! `WorkspaceSandbox` in `src/sandbox/`. Owns profile generation, subprocess
+//! spawning, cleanup, and audit logging.
+//!
+//! Previously named `SandboxManager`; renamed in Phase 3 Task 4 so the
+//! "OS driver" role is explicit relative to the higher-level `Sandbox` trait
+//! in `src/sandbox/mod.rs`. Do NOT confuse this with that agent-level trait.
 
 use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxCommand};
 use crate::exec::sandbox::audit::{ExecutionStatus, SandboxAuditLog};
-use crate::exec::sandbox::capabilities::Capabilities;
+use crate::exec::sandbox::capabilities::{
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
+    ProcessCapability,
+};
+use crate::sandbox::capabilities::{
+    NetworkPolicy as NewNetworkPolicy, SandboxCapabilities as NewSandboxCapabilities,
+};
+use crate::sandbox::command::{SandboxError, SandboxOutput};
+use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Policy for handling sandbox unavailability
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -23,17 +40,18 @@ pub enum FallbackPolicy {
     WarnAndExecute,
 }
 
-/// High-level sandbox execution manager
+/// OS-level sandbox driver for exec-class tools.
 ///
 /// Orchestrates sandbox execution with automatic profile generation,
-/// cleanup, and audit logging.
-pub struct SandboxManager {
+/// cleanup, and audit logging. Implements `OsSandboxDriverTrait` so the
+/// higher-level `WorkspaceSandbox` can drive it through a stable seam.
+pub struct OsSandboxDriver {
     adapter: Arc<dyn SandboxAdapter>,
     fallback_policy: FallbackPolicy,
 }
 
-impl SandboxManager {
-    /// Create a new sandbox manager with default fallback policy (Deny)
+impl OsSandboxDriver {
+    /// Create a new OS sandbox driver with default fallback policy (Deny)
     pub fn new(adapter: Arc<dyn SandboxAdapter>) -> Self {
         Self {
             adapter,
@@ -140,6 +158,137 @@ impl SandboxManager {
     }
 }
 
+/// Bridge the higher-level `SandboxCapabilities` (`src/sandbox/capabilities.rs`)
+/// into the legacy `Capabilities` shape consumed by the existing adapter.
+///
+/// Preserves behavior: filesystem paths become `ReadWrite`, network policy is
+/// mapped entry-for-entry, and process/environment settings fall back to
+/// `Capabilities::default()`.
+fn bridge_capabilities(caps: &NewSandboxCapabilities, cwd: &Path) -> Capabilities {
+    let mut filesystem: Vec<FileSystemCapability> = Vec::new();
+    for path in &caps.fs_read {
+        filesystem.push(FileSystemCapability::ReadOnly { path: path.clone() });
+    }
+    for path in &caps.fs_write {
+        filesystem.push(FileSystemCapability::ReadWrite { path: path.clone() });
+    }
+    if filesystem.is_empty() {
+        // Fall back to workspace cwd as the default writable area.
+        filesystem.push(FileSystemCapability::ReadWrite {
+            path: cwd.to_path_buf(),
+        });
+    }
+
+    let network = match &caps.network {
+        NewNetworkPolicy::None => NetworkCapability::Deny,
+        NewNetworkPolicy::AllowAll => NetworkCapability::AllowAll,
+        NewNetworkPolicy::AllowHosts { hosts } => NetworkCapability::AllowDomains(hosts.clone()),
+    };
+
+    Capabilities {
+        filesystem,
+        network,
+        process: ProcessCapability {
+            no_fork: !caps.spawn_subprocess,
+            max_execution_time: 300,
+            max_memory_mb: Some(512),
+        },
+        environment: EnvironmentCapability::Restricted,
+    }
+}
+
+fn map_exec_error(err: AlephError) -> SandboxError {
+    match err {
+        AlephError::ExecutionTimeout { timeout_secs } => SandboxError::Timeout {
+            elapsed_ms: timeout_secs.saturating_mul(1000),
+        },
+        AlephError::SandboxUnavailable { reason } => SandboxError::CapabilityDenied { reason },
+        other => SandboxError::Other(other.to_string()),
+    }
+}
+
+#[async_trait]
+impl OsSandboxDriverTrait for OsSandboxDriver {
+    fn profile_for(
+        &self,
+        capabilities: &NewSandboxCapabilities,
+        cwd: &Path,
+    ) -> std::result::Result<OsSandboxProfile, SandboxError> {
+        let legacy_caps = bridge_capabilities(capabilities, cwd);
+        let generated = self
+            .adapter
+            .generate_profile(&legacy_caps)
+            .map_err(|e| SandboxError::ProfileGeneration(e.to_string()))?;
+        let contents = std::fs::read_to_string(&generated.path)
+            .map_err(|e| SandboxError::ProfileGeneration(e.to_string()))?;
+        // Clean up the scratch profile file now that we've captured its bytes.
+        if let Err(e) = self.adapter.cleanup(&generated) {
+            tracing::warn!("Sandbox profile cleanup failed: {}", e);
+        }
+        Ok(OsSandboxProfile { contents })
+    }
+
+    async fn run(
+        &self,
+        program: &str,
+        args: &[String],
+        _env: &HashMap<String, String>,
+        _stdin: Option<&[u8]>,
+        cwd: &Path,
+        profile: &OsSandboxProfile,
+        _timeout: Duration,
+        _max_output_bytes: usize,
+    ) -> std::result::Result<SandboxOutput, SandboxError> {
+        use crate::exec::sandbox::adapter::SandboxProfile as LegacySandboxProfile;
+
+        // Persist the profile bytes back to a temp file so the adapter can
+        // pass `-f <path>` to sandbox-exec.
+        let profile_path = crate::exec::sandbox::profile::ProfileGenerator::write_temp_profile(
+            &profile.contents,
+            ".sb",
+        )
+        .map_err(|e| SandboxError::ProfileGeneration(e.to_string()))?;
+
+        let legacy_profile = LegacySandboxProfile {
+            path: profile_path.clone(),
+            capabilities: Capabilities::default(),
+            platform: self.adapter.platform_name().to_string(),
+            temp_workspace: None,
+        };
+
+        let command = SandboxCommand {
+            program: program.to_string(),
+            args: args.to_vec(),
+            working_dir: Some(PathBuf::from(cwd)),
+        };
+
+        let start = Instant::now();
+        let exec_result = self
+            .adapter
+            .execute_sandboxed(&command, &legacy_profile)
+            .await;
+
+        if let Err(e) = self.adapter.cleanup(&legacy_profile) {
+            tracing::warn!("Sandbox profile cleanup failed: {}", e);
+        }
+
+        match exec_result {
+            Ok(result) => Ok(SandboxOutput {
+                stdout: result.stdout.into_bytes(),
+                stderr: result.stderr.into_bytes(),
+                exit_code: result.exit_code,
+                signal: None,
+                truncated: false,
+                duration_ms: result.duration_ms,
+            }),
+            Err(err) => {
+                let _ = start.elapsed();
+                Err(map_exec_error(err))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,9 +301,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sandbox_manager_execution() {
+    async fn test_os_sandbox_driver_execution() {
         let adapter: Arc<dyn SandboxAdapter> = Arc::new(MacOSSandbox::new());
-        let manager = SandboxManager::new(adapter);
+        let manager = OsSandboxDriver::new(adapter);
 
         if !manager.is_available() {
             println!("Skipping test: sandbox not available");

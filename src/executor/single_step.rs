@@ -375,7 +375,7 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                                         crate::executor::PreExecDecision::Allow {
                                             use_sandbox: _,
                                         } => {
-                                            // TODO: route through SandboxManager when use_sandbox=true
+                                            // TODO: route through OsSandboxDriver when use_sandbox=true
                                             // Currently executes directly — sandbox integration pending
                                         }
                                     }
