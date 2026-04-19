@@ -5,6 +5,13 @@
 //!
 //! This exists to maintain compatibility with AI prompts and skills that
 //! reference "bash" as a tool name instead of "code_exec".
+//!
+//! Phase 3 Task 8: like `CodeExecTool`, this wrapper now carries the shared
+//! `Arc<dyn Sandbox>` transitively — all subprocess execution routes through
+//! `WorkspaceSandbox::execute`.
+
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -12,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::code_exec::{CodeExecArgs, CodeExecTool, Language};
 use crate::error::Result;
+use crate::sandbox::Sandbox;
 use crate::tools::AlephTool;
 
 /// Arguments for bash execution tool
@@ -19,12 +27,21 @@ use crate::tools::AlephTool;
 pub struct BashExecArgs {
     /// The bash command to execute
     pub cmd: String,
-    /// Working directory (optional, defaults to temp directory)
+    /// Working directory (optional, defaults to session workspace root)
     #[serde(default)]
     pub working_dir: Option<String>,
     /// Timeout in seconds (optional, defaults to 60)
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// Request elevated network access for this call (sandbox approval-gated).
+    #[serde(default)]
+    pub allow_network: bool,
+    /// Request permission to fork subprocesses (sandbox approval-gated).
+    #[serde(default)]
+    pub allow_subprocess: bool,
+    /// Extra writable paths beyond the session workspace (sandbox approval-gated).
+    #[serde(default)]
+    pub extra_writable_paths: Vec<PathBuf>,
 }
 
 /// Bash execution tool - wraps CodeExecTool for bash/shell commands
@@ -34,11 +51,21 @@ pub struct BashExecTool {
 }
 
 impl BashExecTool {
-    /// Create a new bash execution tool
+    /// Create a new bash execution tool without a sandbox wired in yet.
+    /// Boot wiring attaches the shared `Arc<dyn Sandbox>` via
+    /// [`BashExecTool::with_sandbox`]; unconfigured instances refuse execution
+    /// with a structured error (delegated to `CodeExecTool`).
     pub fn new() -> Self {
         Self {
             inner: CodeExecTool::new(),
         }
+    }
+
+    /// Attach a shared `Arc<dyn Sandbox>`. Delegates to the inner
+    /// `CodeExecTool` — both wrappers share the same sandbox instance.
+    pub fn with_sandbox(mut self, sandbox: Arc<dyn Sandbox>) -> Self {
+        self.inner = self.inner.with_sandbox(sandbox);
+        self
     }
 }
 
@@ -81,6 +108,9 @@ Example:
             code: args.cmd,
             working_dir: args.working_dir,
             timeout: args.timeout,
+            allow_network: args.allow_network,
+            allow_subprocess: args.allow_subprocess,
+            extra_writable_paths: args.extra_writable_paths,
         };
 
         // Delegate to CodeExecTool

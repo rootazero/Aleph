@@ -32,6 +32,47 @@ pub trait Sandbox: Send + Sync + 'static {
     ) -> Result<SandboxOutput, SandboxError>;
 }
 
+/// Test helpers exposed under `#[cfg(test)]` so unit tests across the crate
+/// can stand up lightweight `Arc<dyn Sandbox>` fixtures without wiring the
+/// real `WorkspaceSandbox` + OS driver stack. Task 8 consumers use
+/// `MockSandbox` to verify exec-class tools route through the sandbox seam.
+#[cfg(test)]
+pub mod test_util {
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use super::*;
+
+    /// Records every `SandboxCommand` it receives and returns a canned
+    /// `SandboxOutput`. `calls` is exposed for assertions; `response` is
+    /// immutable once constructed.
+    pub struct MockSandbox {
+        pub calls: Mutex<Vec<SandboxCommand>>,
+        pub response: SandboxOutput,
+    }
+
+    impl MockSandbox {
+        pub fn new(response: SandboxOutput) -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                response,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Sandbox for MockSandbox {
+        async fn execute(
+            &self,
+            cmd: SandboxCommand,
+        ) -> Result<SandboxOutput, SandboxError> {
+            self.calls.lock().await.push(cmd);
+            Ok(self.response.clone())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
