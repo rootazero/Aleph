@@ -163,7 +163,11 @@ pub async fn handle_list(
     // Build merged map: presets first, then user overrides, then custom entries
     let mut merged: std::collections::HashMap<String, AcpAdapterEntry> = all_presets;
     for (id, entry) in user_adapters {
-        merged.insert(id.clone(), entry.clone());
+        let mut entry = entry.clone();
+        if entry.preset.is_none() && AcpAdapterEntry::is_preset_id(id) {
+            entry.preset = Some(id.clone());
+        }
+        merged.insert(id.clone(), entry);
     }
     drop(cfg);
 

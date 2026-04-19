@@ -129,13 +129,12 @@ pub fn AcpHarnessesView() -> impl IntoView {
                             let all = harnesses.get();
                             let metas = preset_metas.get();
 
-                            let preset_ids: Vec<&str> = metas.iter().map(|p| p.id.as_str()).collect();
                             let preset_harnesses: Vec<AcpHarnessInfo> = all.iter()
-                                .filter(|h| preset_ids.contains(&h.id.as_str()))
+                                .filter(|h| h.preset.is_some())
                                 .cloned()
                                 .collect();
                             let custom_harnesses: Vec<AcpHarnessInfo> = all.iter()
-                                .filter(|h| !preset_ids.contains(&h.id.as_str()))
+                                .filter(|h| h.preset.is_none())
                                 .cloned()
                                 .collect();
 
@@ -384,7 +383,7 @@ fn HarnessDetailPanel(
         .into_any();
     };
 
-    let is_preset = preset_metas.get().iter().any(|p| p.id == harness_id);
+    let is_preset = info.preset.is_some();
     let display_name_label = info.display_name.clone();
 
     // Form state

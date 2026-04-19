@@ -37,6 +37,7 @@ fn default_adapters() -> HashMap<String, AcpAdapterEntry> {
 }
 
 /// Deserialize harnesses and merge with presets (presets fill missing entries).
+/// Also ensures existing entries that match a preset ID have their `preset` flag set.
 fn deserialize_adapters_with_presets<'de, D>(
     deserializer: D,
 ) -> std::result::Result<HashMap<String, AcpAdapterEntry>, D::Error>
@@ -44,9 +45,18 @@ where
     D: serde::Deserializer<'de>,
 {
     let mut map: HashMap<String, AcpAdapterEntry> = HashMap::deserialize(deserializer)?;
-    // Fill in any missing presets
+    // Fill in any missing presets and fixup existing entries that lack the preset flag
     for (id, entry) in AcpAdapterEntry::all_presets() {
-        map.entry(id).or_insert(entry);
+        match map.entry(id) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if e.get().preset.is_none() {
+                    e.get_mut().preset = entry.preset;
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(entry);
+            }
+        }
     }
     Ok(map)
 }
