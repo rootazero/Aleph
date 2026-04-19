@@ -1677,7 +1677,7 @@ git commit -m "harness: wire AppContext to select v2 via ALEPH_HARNESS_V2 env va
 
 **Context:** Run a real binary with `ALEPH_HARNESS_V2=1` against the usual dev flows and verify nothing regresses. Collect notes; if bugs appear, fix each as its own small commit.
 
-- [ ] **Step 12.1: Kill any running aleph processes before starting**
+- [x] **Step 12.1: Kill any running aleph processes before starting**
 
 Run:
 ```bash
@@ -1688,43 +1688,43 @@ ps aux | grep "[a]leph-server" | grep -v zsh | grep -v cp | grep -v tail
 ```
 Expected: no aleph-server processes listed.
 
-- [ ] **Step 12.2: Build release binary**
+- [x] **Step 12.2: Build release binary**
 
 Run: `cargo build --release --bin aleph-server`
 Expected: build succeeds.
 
-- [ ] **Step 12.3: Start with v2 enabled**
+- [x] **Step 12.3: Start with v2 enabled**
 
 Run: `ALEPH_HARNESS_V2=1 target/release/aleph-server start`
 Expected: server starts; logs show `ALEPH_HARNESS_V2=1; using new AgentHarness`.
 
-- [ ] **Step 12.4: Exercise chat flow**
+- [x] **Step 12.4: Exercise chat flow**
 
 Send a simple chat message via CLI (`aleph chat "hello, what is 2+2?"`) or the configured UI. Verify:
 - Response returns.
 - Session event log contains `AssistantMessage`.
 - No `HarnessError` in logs.
 
-- [ ] **Step 12.5: Exercise tool-using flow**
+- [x] **Step 12.5: Exercise tool-using flow**
 
 Ask the model to use a tool (e.g., "list files in ~"). Verify:
 - Tool is invoked.
 - Session log contains `ToolCallRequested` + `ToolResult`.
 - Response returned after tool result.
 
-- [ ] **Step 12.6: Exercise cron path**
+- [x] **Step 12.6: Exercise cron path**
 
 If a cron job is configured, let one fire (or trigger manually). Verify:
 - No "no active session context" errors (H2 regression check).
 - Tool invoked successfully.
 
-- [ ] **Step 12.7: Exercise exec-class approval flow**
+- [x] **Step 12.7: Exercise exec-class approval flow**
 
 Ask the model to run a shell command. Verify:
 - Exactly **one** approval prompt appears (H4 regression check).
 - Prompt shape is readable (H1 regression check).
 
-- [ ] **Step 12.8: Capture findings**
+- [x] **Step 12.8: Capture findings**
 
 Create `docs/superpowers/plans/2026-04-19-managed-agents-phase-4-harness-manual-e2e-notes.md` with:
 
@@ -1753,7 +1753,7 @@ Create `docs/superpowers/plans/2026-04-19-managed-agents-phase-4-harness-manual-
 
 Fill in rows as you test.
 
-- [ ] **Step 12.9: For each bug found, make a minimal fix commit**
+- [x] **Step 12.9: For each bug found, make a minimal fix commit**
 
 If bugs appear:
 - Write a failing unit/integration test first.
@@ -1761,7 +1761,7 @@ If bugs appear:
 - Verify test passes.
 - Commit: `git commit -m "harness: fix <bug summary>"`
 
-- [ ] **Step 12.10: Kill aleph-server after testing**
+- [x] **Step 12.10: Kill aleph-server after testing**
 
 Run:
 ```bash
@@ -1771,14 +1771,14 @@ ps aux | grep "[a]leph-server" | grep -v zsh | grep -v cp | grep -v tail
 ```
 Expected: clean.
 
-- [ ] **Step 12.11: Commit the notes**
+- [x] **Step 12.11: Commit the notes**
 
 ```bash
 git add docs/superpowers/plans/2026-04-19-managed-agents-phase-4-harness-manual-e2e-notes.md
 git commit -m "docs: Phase 4 manual E2E notes"
 ```
 
-- [ ] **Step 12.12: Stop and ask the user**
+- [x] **Step 12.12: Stop and ask the user**
 
 **DO NOT run `just release`.** Report to the user:
 - Phase 4a + 4b merged to main. Tasks 1–12 complete.
