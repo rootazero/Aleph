@@ -1,14 +1,9 @@
 //! PermissionLayer — SmartFilter classification + ApprovalGate confirmation.
 //!
 //! Phase 2 Task 7: relocate permission evaluation into the middleware layer.
-//!
-//! Note: no concrete `SmartFilter` struct existed in the codebase at the time
-//! of this change (the plan referenced one, but grep shows no matches under
-//! `src/`). Following the same pattern as `ContextRuleLayer` (Task 6), this
-//! file defines a placeholder `SmartFilter` trait plus a `Classification`
-//! enum with three outcomes: `Allow`, `Confirm`, `Deny`. The trait is
-//! intentionally minimal so a production classifier can be plugged in without
-//! modifying the layer.
+//! Phase 3 Task 2: backfill the placeholder `SmartFilter` with a concrete
+//! resolver (`LayeredPermissionResolver`) that consults the merged
+//! (global + per-agent) `ToolPermissionsConfig` — see `resolver.rs`.
 //!
 //! `ApprovalGate` lives at `src/agent_loop/exec_approval/gate.rs` and is not
 //! moved — only the call-site relocates here. To keep the layer unit-testable
@@ -26,6 +21,12 @@ use crate::agent_loop::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::session::events::ToolOutput;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 
+pub mod agent_filter;
+pub mod resolver;
+
+pub use agent_filter::AgentPermissionFilter;
+pub use resolver::LayeredPermissionResolver;
+
 /// Classification outcome for a `(name, input)` pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {
@@ -41,8 +42,8 @@ pub enum Classification {
 /// Classifies a tool invocation into `Allow` / `Confirm` / `Deny`.
 ///
 /// This is the policy hook for `PermissionLayer`. A production classifier
-/// might consult an `always_allow` / `require_confirmation` / `never_allow`
-/// list; the trait intentionally leaves the mechanism abstract.
+/// consults the merged two-tier permission table; see
+/// [`LayeredPermissionResolver`].
 pub trait SmartFilter: Send + Sync {
     fn classify(&self, name: &str, input: &Value) -> Classification;
 }
