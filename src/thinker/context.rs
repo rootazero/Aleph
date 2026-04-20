@@ -71,7 +71,7 @@ use super::interaction::{
     Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 use super::security_context::{SecurityContext, ToolPermission};
-use crate::agent_loop::ToolInfo;
+use crate::tools::info::ToolInfo;
 
 /// Reason why a tool is disabled
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
