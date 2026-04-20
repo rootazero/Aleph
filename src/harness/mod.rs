@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod callback;
+pub mod context_budget;
 pub mod deps;
 pub mod trait_def;
 
