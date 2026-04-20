@@ -5,6 +5,8 @@
 pub mod errors;
 pub mod flow_registry;
 pub mod flow_spec;
+pub mod loader;
+pub mod presets;
 
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};

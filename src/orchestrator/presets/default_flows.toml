@@ -1,0 +1,58 @@
+# 7 preset FlowSpecs, 1:1 with AgentDef builtins in src/agents/registry.rs.
+# All use BrainRef::Default to preserve current provider fallback behavior.
+
+[[flow]]
+id = "default-agent"
+description = "Primary chat agent for user-facing interactions"
+agent = "main"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "reuse" }
+
+[[flow]]
+id = "explore"
+description = "Read-only codebase exploration specialist"
+agent = "explore"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
+
+[[flow]]
+id = "coder"
+description = "Code writing specialist with file operations"
+agent = "coder"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
+
+[[flow]]
+id = "researcher"
+description = "Web and document research specialist"
+agent = "researcher"
+sandbox_kind = "none"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
+
+[[flow]]
+id = "default"
+description = "General-purpose sub-agent"
+agent = "default"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
+
+[[flow]]
+id = "plan"
+description = "Read-only planning and analysis specialist"
+agent = "plan"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
+
+[[flow]]
+id = "verify"
+description = "Adversarial verification specialist"
+agent = "verify"
+sandbox_kind = "workspace"
+brain = { kind = "default" }
+session_strategy = { kind = "child" }
