@@ -68,6 +68,20 @@ pub struct Orchestrator {
     active_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
+/// Removes `key` from `active` on drop — runs even if the spawned
+/// harness task panics.
+struct SessionLockGuard {
+    active: Arc<Mutex<HashSet<String>>>,
+    key: String,
+}
+
+impl Drop for SessionLockGuard {
+    fn drop(&mut self) {
+        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        guard.remove(&self.key);
+    }
+}
+
 #[async_trait::async_trait]
 pub trait HarnessRunner: Send + Sync {
     async fn run(
@@ -161,6 +175,10 @@ impl Orchestrator {
         let session_for_release = session_res.session_key.clone();
 
         tokio::spawn(async move {
+            let _lock = SessionLockGuard {
+                active,
+                key: session_for_release,
+            };
             let outcome = harness
                 .run(
                     session_key,
@@ -172,8 +190,7 @@ impl Orchestrator {
                 )
                 .await;
             let _ = done_tx.send(outcome);
-            let mut guard = active.lock().unwrap_or_else(|e| e.into_inner());
-            guard.remove(&session_for_release);
+            // _lock drops here, releasing the session key regardless of panic.
         });
 
         Ok(FlowHandle {
