@@ -17,13 +17,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentRegistry;
 use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
+use crate::harness::context_budget::ContextBudget;
+use crate::harness::context_compactor::ContextCompactor;
 use crate::harness::deps::HarnessDeps;
+use crate::harness::skill_prefetch::SkillPrefetcher;
+use crate::harness::stop_hooks::StopHookHandler;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
@@ -44,6 +48,16 @@ pub struct AgentHarnessRunner {
     /// Named providers keyed by `ProviderId`. Wired from `AuthProfileRegistry`
     /// by Task 9; empty in early boot.
     pub named_providers: HashMap<String, Arc<dyn AiProvider>>,
+
+    // -- Task 10 (6b) optional collaborators ---------------------------------
+    //
+    // Injected at orchestrator boot; forwarded into `HarnessDeps` on every
+    // `run()` so each `AgentHarness` instance sees the same pressure sensor
+    // / compactor / hook set.
+    pub stop_hooks: Option<Arc<Vec<Arc<dyn StopHookHandler>>>>,
+    pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
+    pub context_compactor: Option<Arc<ContextCompactor>>,
+    pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
 }
 
 #[async_trait]
@@ -96,6 +110,10 @@ impl HarnessRunner for AgentHarnessRunner {
             tools: self.tool_service.clone(),
             sandbox,
             llm,
+            stop_hooks: self.stop_hooks.clone(),
+            context_budget: self.context_budget.clone(),
+            context_compactor: self.context_compactor.clone(),
+            skill_prefetcher: self.skill_prefetcher.clone(),
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
@@ -136,12 +154,14 @@ impl HarnessRunner for AgentHarnessRunner {
         // `BroadcastCallback::on_complete` already fired `Complete` from
         // inside `Harness::run`; do not double-send here.
         //
-        // `total_tokens` / `hit_limit` stay at their defaults until Task 6
-        // wires `ContextBudget` observations into the session log.
+        // `total_tokens` still defaults to 0 — provider-side usage surfacing
+        // is outside Task-10 scope. `hit_limit` is now populated from the
+        // budget sensor via `AgentHarness::hit_limit()`.
         Ok(FlowOutcome {
             final_text,
             iterations,
             tool_calls_made,
+            hit_limit: harness.hit_limit(),
             ..Default::default()
         })
     }

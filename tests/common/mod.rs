@@ -15,8 +15,7 @@ use tokio::sync::Mutex;
 use alephcore::agents::AgentRegistry;
 use alephcore::orchestrator::{
     build_sandbox_factory, AgentHarnessRunner, BrainRef, DenyAllSandbox, FlowOverrides,
-    FlowRegistry, FlowSet, FlowSpec, Orchestrator, RoutingOverrides, SandboxKind,
-    SessionStrategy,
+    FlowRegistry, FlowSet, FlowSpec, Orchestrator, RoutingOverrides, SandboxKind, SessionStrategy,
 };
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
@@ -153,6 +152,10 @@ impl OrchestratorFixture {
             tool_service,
             default_provider: scripted,
             named_providers: HashMap::new(),
+            stop_hooks: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
         });
 
         let orchestrator = Orchestrator::new(

@@ -143,6 +143,10 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         tools: Arc::new(NoopTool),
         sandbox: Arc::new(InertSandbox),
         llm: Scripted::new(),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     })
 }
 

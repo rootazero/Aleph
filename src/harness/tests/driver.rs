@@ -106,6 +106,10 @@ async fn session_driver_delegates_to_harness_run() {
         tools: Arc::new(NoopTool),
         sandbox: Arc::new(InertSandbox),
         llm: Arc::new(TextOnlyProvider),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -161,6 +165,10 @@ async fn session_driver_preserves_cancelled_semantics() {
         tools: Arc::new(NoopTool),
         sandbox: Arc::new(InertSandbox),
         llm: Arc::new(CancellingProvider),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

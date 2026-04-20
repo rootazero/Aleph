@@ -279,6 +279,10 @@ async fn act_executes_tools_sequentially() {
         tools: tools.clone(),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -335,6 +339,10 @@ async fn act_tool_failure_returns_harness_tool_error() {
         tools,
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -411,6 +419,10 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         tools: Arc::new(ScriptedToolsNever),
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: provider.clone(),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -562,6 +574,10 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         tools,
         sandbox: MockSandbox::new(noop_sandbox_output()),
         llm: CapturingProvider::with_tool_calls("calling…", tool_calls),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     };
     let harness = AgentHarness::new(deps);
 
