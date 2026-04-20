@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use crate::agent_loop::compaction::session_summary_source::SessionSummarySource;
-use crate::agent_loop::compaction::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
+use crate::memory::compaction::session_summary_source::SessionSummarySource;
+use crate::memory::compaction::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -309,7 +309,7 @@ fn deterministic_truncation(messages: &[UnifiedMessage]) -> String {
 // CompactionStrategy impl
 // =============================================================================
 
-use crate::agent_loop::compaction::{
+use crate::memory::compaction::{
     CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
 };
 

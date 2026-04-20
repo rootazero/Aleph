@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::tools::AlephToolDyn;
 
-use crate::agent_loop::{LoopTool, ToolResult};
+use crate::tools::runtime::{LoopTool, ToolResult};
 
 /// Adapter that wraps an `AlephToolDyn` as a `LoopTool`.
 ///

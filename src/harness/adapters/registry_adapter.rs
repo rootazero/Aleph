@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
 
-use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolResult};
+use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 
 /// A LoopTool backed by a shared ToolRegistry.
 ///

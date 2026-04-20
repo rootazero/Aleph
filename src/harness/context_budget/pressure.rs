@@ -1,7 +1,7 @@
 //! PressureSensor — token estimation with API usage anchoring.
 
 use super::ContextPressure;
-use crate::agent_loop::ToolDefinition;
+use crate::tools::runtime::ToolDefinition;
 use crate::providers::message::UnifiedMessage;
 
 // =============================================================================

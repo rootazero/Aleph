@@ -2,7 +2,7 @@
 
 use super::pressure::{estimate_tokens_smart, PressureSensor};
 use super::ContextPressure;
-use crate::agent_loop::ToolDefinition;
+use crate::tools::runtime::ToolDefinition;
 use crate::memory::session_compactor::context_window::{
     is_tool_result_consumed, partition_fresh_tail,
 };

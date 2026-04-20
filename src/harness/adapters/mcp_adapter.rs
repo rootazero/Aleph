@@ -7,7 +7,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::agent_loop::{LoopTool, ToolResult};
+use crate::tools::runtime::{LoopTool, ToolResult};
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 
 // =============================================================================
