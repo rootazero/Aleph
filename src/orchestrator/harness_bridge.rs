@@ -151,19 +151,23 @@ impl HarnessRunner for AgentHarnessRunner {
             }
         }
 
-        // `BroadcastCallback::on_complete` already fired `Complete` from
-        // inside `Harness::run`; do not double-send here.
-        //
         // `total_tokens` still defaults to 0 — provider-side usage surfacing
         // is outside Task-10 scope. `hit_limit` is now populated from the
         // budget sensor via `AgentHarness::hit_limit()`.
-        Ok(FlowOutcome {
+        let outcome = FlowOutcome {
             final_text,
             iterations,
             tool_calls_made,
             hit_limit: harness.hit_limit(),
             ..Default::default()
-        })
+        };
+
+        // Emit `Complete(outcome)` as the terminal broadcast event.
+        // `BroadcastCallback::on_complete` is a no-op; this is the only place
+        // that fires the `Complete` variant so it is always last on the channel.
+        let _ = events.send(FlowStreamEvent::Complete(outcome.clone()));
+
+        Ok(outcome)
     }
 }
 
@@ -171,8 +175,15 @@ impl HarnessRunner for AgentHarnessRunner {
 /// orchestrator's `FlowStreamEvent` broadcast channel.
 ///
 /// * `on_delta(text)` → `FlowStreamEvent::Delta(text)`
-/// * `on_tool_call(name)` → `FlowStreamEvent::ToolCall { name }`
-/// * `on_complete()` → `FlowStreamEvent::Complete`
+/// * `on_reasoning(text)` → `FlowStreamEvent::Reasoning(text)`
+/// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
+/// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
+/// * `on_tool_call_done(id, result, error)` → `FlowStreamEvent::ToolCallDone { id, result, error }`
+/// * `on_tool_summary(id, text)` → `FlowStreamEvent::ToolSummary { id, text }`
+/// * `on_safety_block(reason)` → `FlowStreamEvent::SafetyBlock { reason }`
+/// * `on_stop_hook_block(reason)` → `FlowStreamEvent::StopHookBlock { reason }`
+/// * `on_model_fallback(reason, fallback_model)` → `FlowStreamEvent::ModelFallback { reason, fallback_model }`
+/// * `on_complete()` → no-op (`Complete(outcome)` is emitted by `AgentHarnessRunner::run`)
 ///
 /// `broadcast::Sender::send` returns an error only when there are zero
 /// receivers; we deliberately ignore that since a dropped receiver must not
@@ -192,14 +203,73 @@ impl HarnessCallback for BroadcastCallback {
     fn on_delta(&mut self, text: &str) {
         let _ = self.tx.send(FlowStreamEvent::Delta(text.to_string()));
     }
+
+    fn on_reasoning(&mut self, text: &str) {
+        let _ = self.tx.send(FlowStreamEvent::Reasoning(text.to_string()));
+    }
+
+    /// Legacy compatibility shim — fires `ToolCallStart` with a synthetic id.
+    /// Prefer `on_tool_call_start` for structured tool events.
     fn on_tool_call(&mut self, name: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ToolCall {
+        let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
+            id: "legacy".to_string(),
             name: name.to_string(),
+            args: serde_json::Value::Null,
         });
     }
-    fn on_complete(&mut self) {
-        let _ = self.tx.send(FlowStreamEvent::Complete);
+
+    fn on_tool_call_start(&mut self, id: &str, name: &str, args: &serde_json::Value) {
+        let _ = self.tx.send(FlowStreamEvent::ToolCallStart {
+            id: id.to_string(),
+            name: name.to_string(),
+            args: args.clone(),
+        });
     }
+
+    fn on_tool_call_done(
+        &mut self,
+        id: &str,
+        result: Option<&serde_json::Value>,
+        error: Option<&str>,
+    ) {
+        let _ = self.tx.send(FlowStreamEvent::ToolCallDone {
+            id: id.to_string(),
+            result: result.cloned(),
+            error: error.map(|s| s.to_string()),
+        });
+    }
+
+    fn on_tool_summary(&mut self, id: &str, text: &str) {
+        let _ = self.tx.send(FlowStreamEvent::ToolSummary {
+            id: id.to_string(),
+            text: text.to_string(),
+        });
+    }
+
+    fn on_safety_block(&mut self, reason: &str) {
+        let _ = self.tx.send(FlowStreamEvent::SafetyBlock {
+            reason: reason.to_string(),
+        });
+    }
+
+    fn on_stop_hook_block(&mut self, reason: &str) {
+        let _ = self.tx.send(FlowStreamEvent::StopHookBlock {
+            reason: reason.to_string(),
+        });
+    }
+
+    fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
+        let _ = self.tx.send(FlowStreamEvent::ModelFallback {
+            reason: reason.to_string(),
+            fallback_model: fallback_model.to_string(),
+        });
+    }
+
+    // `on_complete` is intentionally a no-op here.
+    // `AgentHarnessRunner::run` emits `Complete(outcome)` after synthesising
+    // the full `FlowOutcome`, ensuring it is always the last event on the
+    // broadcast channel (see Task 1 plan §Step 3).
+    fn on_complete(&mut self) {}
 }
 
 /// Pick the `AiProvider` for a given [`BrainRef`]. `Strict` returns
@@ -355,7 +425,9 @@ mod tests {
 
         cb.on_delta("hello ");
         cb.on_delta("world");
+        // Use legacy on_tool_call — fires ToolCallStart with id="legacy"
         cb.on_tool_call("read_file");
+        // on_complete is now a no-op; Complete(outcome) is emitted by AgentHarnessRunner
         cb.on_complete();
 
         let mut received = Vec::new();
@@ -363,7 +435,8 @@ mod tests {
             received.push(ev);
         }
 
-        assert_eq!(received.len(), 4);
+        // 3 events: two Deltas + one ToolCallStart (on_complete is no-op)
+        assert_eq!(received.len(), 3);
         match &received[0] {
             FlowStreamEvent::Delta(s) => assert_eq!(s, "hello "),
             other => panic!("expected Delta(\"hello \"), got {other:?}"),
@@ -373,14 +446,9 @@ mod tests {
             other => panic!("expected Delta(\"world\"), got {other:?}"),
         }
         match &received[2] {
-            FlowStreamEvent::ToolCall { name } => assert_eq!(name, "read_file"),
-            other => panic!("expected ToolCall, got {other:?}"),
+            FlowStreamEvent::ToolCallStart { name, .. } => assert_eq!(name, "read_file"),
+            other => panic!("expected ToolCallStart, got {other:?}"),
         }
-        assert!(
-            matches!(received[3], FlowStreamEvent::Complete),
-            "expected Complete, got {:?}",
-            received[3]
-        );
     }
 
     #[test]

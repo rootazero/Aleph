@@ -13,17 +13,68 @@
 
 use std::fmt;
 
+/// Hint passed to `on_complete_with_outcome` so `BroadcastCallback` can
+/// construct a `FlowStreamEvent::Complete(outcome)`.  The full `FlowOutcome`
+/// is assembled by `AgentHarnessRunner` after the inner `AgentHarness::run`
+/// returns; `OutcomeHint` carries the fields that are observable at the harness
+/// callback boundary today.
+///
+/// This type is intentionally kept small — `AgentHarnessRunner::run` builds
+/// the authoritative `FlowOutcome` and emits `Complete(outcome)` itself (see
+/// Task 1 plan §Step 3 note). The hint exists as a forward-compatibility shim
+/// for callers that want an early signal before the runner synthesises the full
+/// outcome.
+#[derive(Debug, Clone, Default)]
+pub struct OutcomeHint {
+    pub hit_limit: bool,
+}
+
 pub trait HarnessCallback: Send {
     /// Invoked when the harness produces (or forwards) a chunk of assistant
     /// text. May be called multiple times per turn if the upstream LLM layer
     /// streams partial output.
-    fn on_delta(&mut self, text: &str);
+    fn on_delta(&mut self, _text: &str) {}
+
+    /// Invoked when the harness produces a reasoning/thinking fragment.
+    fn on_reasoning(&mut self, _text: &str) {}
 
     /// Invoked once per tool dispatch, *before* the tool executes.
-    fn on_tool_call(&mut self, name: &str);
+    /// Kept for backward compatibility — prefer `on_tool_call_start`.
+    fn on_tool_call(&mut self, _name: &str) {}
+
+    /// Invoked when a tool call begins. `id` pairs with `on_tool_call_done`
+    /// and `on_tool_summary`.
+    fn on_tool_call_start(&mut self, _id: &str, _name: &str, _args: &serde_json::Value) {}
+
+    /// Invoked when a tool call finishes. `result` and `error` are mutually exclusive.
+    fn on_tool_call_done(
+        &mut self,
+        _id: &str,
+        _result: Option<&serde_json::Value>,
+        _error: Option<&str>,
+    ) {
+    }
+
+    /// Invoked with an LLM-generated one-line summary for a tool call.
+    fn on_tool_summary(&mut self, _id: &str, _text: &str) {}
+
+    /// Invoked when a safety gate blocks the current turn.
+    fn on_safety_block(&mut self, _reason: &str) {}
+
+    /// Invoked when a stop hook blocks the current turn and forces another model turn.
+    fn on_stop_hook_block(&mut self, _reason: &str) {}
+
+    /// Invoked when the primary model is unavailable and a fallback is used.
+    fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
 
     /// Invoked when the harness reaches a terminal `TurnState::Done`.
-    fn on_complete(&mut self);
+    fn on_complete(&mut self) {}
+
+    /// Invoked when the harness completes with an outcome hint. Default
+    /// implementation calls `on_complete()` for backward compatibility.
+    fn on_complete_with_outcome(&mut self, _outcome_hint: &OutcomeHint) {
+        self.on_complete();
+    }
 }
 
 /// Drop-in `HarnessCallback` that ignores every event. Used by call sites
@@ -32,11 +83,7 @@ pub trait HarnessCallback: Send {
 #[derive(Default)]
 pub struct NoopHarnessCallback;
 
-impl HarnessCallback for NoopHarnessCallback {
-    fn on_delta(&mut self, _text: &str) {}
-    fn on_tool_call(&mut self, _name: &str) {}
-    fn on_complete(&mut self) {}
-}
+impl HarnessCallback for NoopHarnessCallback {}
 
 impl fmt::Debug for NoopHarnessCallback {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

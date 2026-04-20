@@ -32,10 +32,35 @@ impl std::fmt::Debug for FlowHandle {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum FlowStreamEvent {
+    /// Incremental assistant text (preserved from original).
     Delta(String),
-    ToolCall { name: String },
-    Complete,
+    /// Thinking/reasoning fragment. Fired when provider returns thinking content.
+    Reasoning(String),
+    /// Tool call started. `id` uniquely identifies this invocation for pairing
+    /// with `ToolCallDone` and `ToolSummary`.
+    ToolCallStart {
+        id: String,
+        name: String,
+        args: serde_json::Value,
+    },
+    /// Tool call completed. `result` and `error` are mutually exclusive.
+    ToolCallDone {
+        id: String,
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+    },
+    /// One-line summary of a tool call (async LLM-generated; silently skipped on failure).
+    ToolSummary { id: String, text: String },
+    /// Safety gate blocked the turn. `reason` is for i18n formatting.
+    SafetyBlock { reason: String },
+    /// Stop-hook blocked the turn; harness has forced another model turn.
+    StopHookBlock { reason: String },
+    /// Model fallback (primary provider unavailable, switched to backup).
+    ModelFallback { reason: String, fallback_model: String },
+    /// Terminal event — carries the complete `FlowOutcome`. Always last.
+    Complete(FlowOutcome),
 }
 
 #[derive(Debug, Clone, Default)]

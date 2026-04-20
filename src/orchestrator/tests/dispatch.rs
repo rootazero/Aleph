@@ -37,7 +37,9 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Delta(
             "hi".into(),
         ));
-        let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete);
+        let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            self.outcome.clone(),
+        ));
         Ok(self.outcome.clone())
     }
 }

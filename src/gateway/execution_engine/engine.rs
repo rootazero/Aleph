@@ -970,12 +970,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .await
             .map_err(|e| ExecutionError::Orchestrator(format!("dispatch: {e}")))?;
 
-        // Drain events; sink wiring is Phase 6. Complete event or channel close
-        // both terminate the drain.
+        // Drain events; sink wiring is Phase 6. Complete(outcome) event or
+        // channel close both terminate the drain.
         let mut events = handle.events;
         loop {
             match events.recv().await {
-                Ok(FlowStreamEvent::Complete) => break,
+                Ok(FlowStreamEvent::Complete(_outcome)) => break,
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
