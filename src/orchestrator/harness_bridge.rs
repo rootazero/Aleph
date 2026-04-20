@@ -12,8 +12,6 @@
 //!   context_mode) into `HarnessDeps`. Requires widening the Phase 4 API.
 //! * Honour [`BrainRef::Strict`] model selection — `AiProvider` does not
 //!   expose `select_model` at this layer yet.
-//! * Wire `CancellationToken` into `Harness::run` once the inner loop supports
-//!   cooperative abort. For now we only early-return if cancelled pre-dispatch.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,8 +57,10 @@ impl HarnessRunner for AgentHarnessRunner {
         events: broadcast::Sender<FlowStreamEvent>,
         cancel: CancellationToken,
     ) -> Result<FlowOutcome, FlowError> {
-        // Step 1: honour pre-dispatch cancellation.
-        // PHASE-6: wire CancellationToken through harness.run once it supports abort.
+        // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
+        // before provider lookup / LLM construction). The same token is also
+        // threaded into `harness.run` below so the inner Think→Act loop
+        // aborts between turns when cancel fires mid-run.
         if cancel.is_cancelled() {
             return Err(FlowError::Cancelled);
         }
@@ -79,8 +79,8 @@ impl HarnessRunner for AgentHarnessRunner {
         // directly; otherwise treat the incoming string as an ephemeral id
         // under `spec.agent` so orchestrator ↔ harness session identity stays
         // deterministic (no fresh-uuid divergence).
-        let session_id: SessionId = SessionKey::from_key_string(&session_key)
-            .unwrap_or_else(|| SessionKey::Ephemeral {
+        let session_id: SessionId =
+            SessionKey::from_key_string(&session_key).unwrap_or_else(|| SessionKey::Ephemeral {
                 agent_id: spec.agent.clone(),
                 ephemeral_id: session_key.clone(),
             });
@@ -103,7 +103,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // equivalent to the retiring AgentLoop StreamingSink.
         let mut cb = BroadcastCallback::new(events.clone());
         harness
-            .run(&session_id, &mut cb)
+            .run(&session_id, &mut cb, &cancel)
             .await
             .map_err(|e| match e {
                 crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
@@ -222,7 +222,15 @@ async fn seed_session(
 ) -> Result<(), FlowError> {
     match input {
         FlowInput::Prompt(text) => {
-            emit_user(service, session_id, MessageContent { text, blocks: Vec::new() }).await?;
+            emit_user(
+                service,
+                session_id,
+                MessageContent {
+                    text,
+                    blocks: Vec::new(),
+                },
+            )
+            .await?;
         }
         FlowInput::Messages(msgs) => {
             for content in msgs {
@@ -259,7 +267,10 @@ async fn seed_session(
                     session_id,
                     SessionEvent::UserMessage {
                         turn_id,
-                        content: MessageContent { text: prompt, blocks: Vec::new() },
+                        content: MessageContent {
+                            text: prompt,
+                            blocks: Vec::new(),
+                        },
                         at: now_ms(),
                     },
                 )
@@ -369,9 +380,7 @@ mod tests {
 
     use crate::routing::session_key::SessionKey;
     use crate::session::in_process::InProcessActorSessionService;
-    use crate::session::store::{
-        migrate_add_session_events, SessionEventStore, SqliteEventStore,
-    };
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
 
     fn fresh_service() -> std::sync::Arc<dyn SessionService> {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

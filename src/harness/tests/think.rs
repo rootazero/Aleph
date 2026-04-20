@@ -368,6 +368,50 @@ async fn callback_fires_on_delta_and_tool_call() {
 }
 
 #[tokio::test]
+async fn run_returns_cancelled_when_token_is_pre_cancelled() {
+    use tokio_util::sync::CancellationToken;
+
+    // LLM that would panic if called — proves run() never entered Think.
+    struct PanicProvider;
+    impl AiProvider for PanicProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async move { panic!("LLM must not be called after cancel") })
+        }
+        fn name(&self) -> &str {
+            "panic"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("hi")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(EmptyTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: Arc::new(PanicProvider),
+    };
+    let harness = AgentHarness::new(deps);
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let err = harness
+        .run(&sample_session_id(), &mut NoopHarnessCallback, &cancel)
+        .await
+        .expect_err("pre-cancelled run should error");
+
+    assert!(
+        matches!(err, HarnessError::Cancelled),
+        "expected Cancelled, got {err:?}",
+    );
+}
+
+#[tokio::test]
 async fn think_tool_use_after_act_returns_continue() {
     use crate::session::events::ToolOutput;
 

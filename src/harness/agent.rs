@@ -115,16 +115,22 @@ impl crate::session::SessionDriver for AgentHarness {
         // Exhaustive match (no wildcard) so new `HarnessError` variants
         // force a review here.
         let mut cb = NoopHarnessCallback;
-        self.run(session_id, &mut cb).await.map_err(|e| match e {
-            HarnessError::Cancelled => crate::error::AlephError::Cancelled,
-            HarnessError::Llm(inner) => inner,
-            HarnessError::Tool(tool_err) => {
-                crate::error::AlephError::provider(format!("harness tool error: {tool_err}"))
-            }
-            HarnessError::Session(sess_err) => {
-                crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
-            }
-        })
+        // SessionDriver path has no external cancel source (legacy entry
+        // point); construct a never-cancelled token so the Harness loop
+        // behaves identically to pre-Task-5 runs.
+        let cancel = tokio_util::sync::CancellationToken::new();
+        self.run(session_id, &mut cb, &cancel)
+            .await
+            .map_err(|e| match e {
+                HarnessError::Cancelled => crate::error::AlephError::Cancelled,
+                HarnessError::Llm(inner) => inner,
+                HarnessError::Tool(tool_err) => {
+                    crate::error::AlephError::provider(format!("harness tool error: {tool_err}"))
+                }
+                HarnessError::Session(sess_err) => {
+                    crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
+                }
+            })
     }
 }
 

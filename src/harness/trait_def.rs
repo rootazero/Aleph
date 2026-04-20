@@ -9,6 +9,7 @@
 //! ```
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::HarnessCallback;
 use crate::session::service::{SessionError, SessionId};
@@ -32,12 +33,21 @@ pub trait Harness: Send + Sync {
     ) -> Result<TurnState, HarnessError>;
 
     /// Loop `run_turn` until `Done`, firing `callback.on_complete()` on exit.
+    ///
+    /// `cancel` is checked before every `run_turn`; a cancelled token aborts
+    /// with [`HarnessError::Cancelled`] without firing `on_complete` — the
+    /// orchestrator needs to distinguish cooperative abort from natural
+    /// completion.
     async fn run(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
+        cancel: &CancellationToken,
     ) -> Result<(), HarnessError> {
         loop {
+            if cancel.is_cancelled() {
+                return Err(HarnessError::Cancelled);
+            }
             match self.run_turn(session_id, callback).await? {
                 TurnState::Continue => continue,
                 TurnState::Done => {

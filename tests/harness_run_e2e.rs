@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use alephcore::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback};
 use alephcore::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
@@ -154,7 +155,7 @@ async fn harness_run_loops_until_done() {
     let sid: SessionId = SessionKey::ephemeral("e2e-1");
 
     harness
-        .run(&sid, &mut NoopHarnessCallback)
+        .run(&sid, &mut NoopHarnessCallback, &CancellationToken::new())
         .await
         .expect("harness.run should complete");
 
@@ -193,12 +194,13 @@ async fn multiple_sessions_do_not_cross_contaminate() {
     let harness_a = make_harness(session.clone());
     let harness_b = make_harness(session.clone());
 
+    let cancel = CancellationToken::new();
     harness_a
-        .run(&sid_a, &mut NoopHarnessCallback)
+        .run(&sid_a, &mut NoopHarnessCallback, &cancel)
         .await
         .expect("run sid_a");
     harness_b
-        .run(&sid_b, &mut NoopHarnessCallback)
+        .run(&sid_b, &mut NoopHarnessCallback, &cancel)
         .await
         .expect("run sid_b");
 
