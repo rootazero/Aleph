@@ -55,7 +55,9 @@ pub mod facade;
 pub mod handlers;
 pub mod middleware;
 pub mod registry;
+pub mod scoped;
 pub mod service;
+pub use scoped::ScopedToolService;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use facade::{build_tool_service, build_tool_service_with_handles, ToolServiceHandles};
