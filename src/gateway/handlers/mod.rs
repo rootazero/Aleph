@@ -66,6 +66,7 @@ pub mod embedding_providers;
 pub mod events;
 pub mod exec_approvals;
 pub mod execution_config;
+pub mod flow_admin;
 pub mod general_config;
 pub mod generation;
 pub mod generation_config;

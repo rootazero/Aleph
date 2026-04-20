@@ -75,9 +75,12 @@ impl AgentRegistry {
 /// Returns the built-in agent definitions
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
-        // Main agent - full access
+        // Main agent - full access. Explicit "flow_run" alongside "*" marks the
+        // sub-flow dispatch tool as an intentional capability in the catalog
+        // (registration wiring lands in Phase 6 — see orchestrator::flow_run_tool).
         AgentDef::new("main", AgentMode::Primary)
-            .with_description("Primary agent that responds directly to user"),
+            .with_description("Primary agent that responds directly to user")
+            .with_allowed_tools(vec!["*".into(), "flow_run".into()]),
         // Explore agent - read-only tools
         AgentDef::new("explore", AgentMode::SubAgent)
             .with_description("Read-only codebase exploration specialist")

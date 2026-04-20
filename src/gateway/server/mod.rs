@@ -175,6 +175,15 @@ pub struct GatewayServer {
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
     pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    /// Phase 5 Orchestrator (flow composition). Populated at boot after
+    /// agent registry + session + tool + provider + sandbox are assembled.
+    /// Task 10 (Gateway run_agent_loop replacement) consumes this.
+    pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
+    /// Bearer token snapshot for OpenAI-compatible `/v1/*` routes.
+    /// Sourced from `SharedTokenManager` at boot. Some → handler rejects
+    /// mismatched bearers with 401; None → dev-open (any bearer accepted).
+    /// Token rotation requires a server restart.
+    pub openai_api_token: Option<String>,
 }
 
 impl GatewayServer {
@@ -214,6 +223,8 @@ impl GatewayServer {
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
+            orchestrator: None,
+            openai_api_token: None,
         }
     }
 
@@ -252,6 +263,8 @@ impl GatewayServer {
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
+            orchestrator: None,
+            openai_api_token: None,
         }
     }
 
@@ -321,7 +334,11 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            api_token: None, // Phase 1: auth intentionally open (self-hosted single-user)
+            // Bearer-token snapshot from SharedTokenManager. `None` leaves the
+            // endpoint open (dev mode); `Some(token)` rejects mismatched
+            // bearers with 401 in completions/mod.rs before reaching the
+            // per-agent busy-lock or the LLM.
+            api_token: self.openai_api_token.clone(),
             execution_adapter: self.execution_adapter.clone(),
             provider_map: self.openai_provider_map.clone(),
             agent_registry: self.openai_agent_registry.clone(),

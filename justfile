@@ -122,7 +122,11 @@ test-loom:
 test-logic: test-proptest test-loom
 
 # Run all tests (core + desktop + proptest)
-test-all: test test-desktop-all test-proptest
+test-all: test test-desktop-all test-proptest check-phase5
+
+# Phase 5 exit criterion 9 gate.
+check-phase5:
+    ./scripts/check-phase5-exit.sh
 
 # ─── Lint ───
 
