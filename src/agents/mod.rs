@@ -19,6 +19,10 @@
 mod registry;
 mod types;
 
+pub mod background_tracker;
+pub mod subagent_tool;
+pub mod teammates;
+
 /// Thinking levels system for LLM reasoning depth control.
 pub mod thinking;
 
