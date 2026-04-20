@@ -4,7 +4,7 @@
 //! that the tool set has changed. The main loop polls cheaply each iteration and
 //! rebuilds the registry only when necessary.
 
-use crate::agent_loop::{LoopTool, LoopToolRegistry};
+use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 
 // =============================================================================
 // ToolRefreshSource trait
@@ -42,7 +42,7 @@ pub fn build_refreshed_registry(tools: Vec<Box<dyn LoopTool>>) -> LoopToolRegist
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::ToolResult;
+    use crate::tools::runtime::ToolResult;
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -23,11 +23,11 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::agent_loop::compaction::file_content_tracker::FileContentTracker;
-use crate::agent_loop::context_budget::pressure::estimate_tokens_smart;
-use crate::agent_loop::{LoopToolRegistry, ToolResult};
-use crate::agent_loop::tool_orchestrator::ToolOutcome;
-use crate::agent_loop::tool_result_store::ToolResultStore;
+use crate::memory::compaction::file_content_tracker::FileContentTracker;
+use crate::harness::context_budget::pressure::estimate_tokens_smart;
+use crate::tools::runtime::{LoopToolRegistry, ToolResult};
+use crate::tools::orchestrator::ToolOutcome;
+use crate::tools::result_store::ToolResultStore;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::session::ingress_safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
@@ -757,7 +757,7 @@ fn truncate_tool_result(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolResult};
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::{
         HookAction, HookConfig, HookEvent, HookKind, HookPriority, PermissionAction,

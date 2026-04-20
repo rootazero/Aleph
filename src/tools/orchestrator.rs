@@ -14,11 +14,11 @@ use crate::sync_primitives::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::LoopToolRegistry;
-use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
-use crate::agent_loop::{
-    LoopCallback, LoopTraceEvent, ToolCallEndEvent, ToolCallStartEvent, ToolResult,
-};
+use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
+use crate::agent_loop::LoopCallback;
+use crate::harness::trace::{LoopTraceEvent, ToolCallEndEvent, ToolCallStartEvent};
+use crate::tools::runtime::ToolResult;
 use crate::providers::adapter::NativeToolCall;
 use crate::session::ingress_safety::ToolCall as SafetyToolCall;
 use serde_json::Value;
@@ -258,7 +258,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::agent_loop::NoopCallback;
-    use crate::agent_loop::{LoopTool, LoopToolRegistry};
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
     use crate::session::ingress_safety::SafetyGuard;

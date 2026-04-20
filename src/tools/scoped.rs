@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolRefreshSource};
+use crate::tools::runtime::{LoopTool, LoopToolRegistry};
+use crate::tools::refresh::ToolRefreshSource;
 use crate::agents::subagent_tool::SubagentTool;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
@@ -122,9 +123,9 @@ impl ScopedToolService {
 
     fn tool_result_to_output(
         name: &str,
-        result: crate::agent_loop::ToolResult,
+        result: crate::tools::runtime::ToolResult,
     ) -> Result<ToolOutput, ToolError> {
-        use crate::agent_loop::ToolResult;
+        use crate::tools::runtime::ToolResult;
         use crate::session::events::ToolOutputMetadata;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -240,7 +241,8 @@ impl ToolService for ScopedToolService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolRefreshSource, ToolResult as LoopToolResult};
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
+    use crate::tools::refresh::ToolRefreshSource;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
@@ -338,7 +340,7 @@ mod tests {
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn list_includes_subagent_tool_when_set() {
-        use crate::agent_loop::chain_context::ChainContext;
+        use crate::harness::chain_context::ChainContext;
         use crate::agent_loop::agent_runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
@@ -396,7 +398,7 @@ mod tests {
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn execute_routes_to_subagent_tool_by_name() {
-        use crate::agent_loop::chain_context::ChainContext;
+        use crate::harness::chain_context::ChainContext;
         use crate::agent_loop::agent_runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
