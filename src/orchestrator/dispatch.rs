@@ -38,10 +38,23 @@ pub enum FlowStreamEvent {
     Complete,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FlowOutcome {
+    /// Final assistant-visible text for this flow run.
     pub final_text: String,
+    /// Number of assistant turns (AssistantMessage events) produced.
     pub iterations: u32,
+    /// Number of tool dispatches (ToolCallRequested events).
+    pub tool_calls_made: u32,
+    /// Sum of provider-reported token usage across the flow run.
+    /// Populated once the LLM layer surfaces usage through the session log;
+    /// today the field is present for Gateway parity with the retiring
+    /// `LoopRunResult` and reads as `0` until Phase 6a task 6 wires
+    /// `ContextBudget` observations into the report.
+    pub total_tokens: u32,
+    /// `true` if the run stopped because it hit an iteration or token cap.
+    /// Defaults to `false`; actual cap tracking lands in Phase 6a task 6.
+    pub hit_limit: bool,
 }
 
 #[derive(Debug, Clone)]

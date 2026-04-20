@@ -147,18 +147,30 @@ impl HarnessRunner for AgentHarnessRunner {
 
         let mut final_text = String::new();
         let mut iterations: u32 = 0;
+        let mut tool_calls_made: u32 = 0;
         for r in &records {
-            if let SessionEvent::AssistantMessage { content, .. } = &r.event {
-                final_text = content.text.clone();
-                iterations = iterations.saturating_add(1);
+            match &r.event {
+                SessionEvent::AssistantMessage { content, .. } => {
+                    final_text = content.text.clone();
+                    iterations = iterations.saturating_add(1);
+                }
+                SessionEvent::ToolCallRequested { .. } => {
+                    tool_calls_made = tool_calls_made.saturating_add(1);
+                }
+                _ => {}
             }
         }
 
         // `BroadcastCallback::on_complete` already fired `Complete` from
         // inside `Harness::run`; do not double-send here.
+        //
+        // `total_tokens` / `hit_limit` stay at their defaults until Task 6
+        // wires `ContextBudget` observations into the session log.
         Ok(FlowOutcome {
             final_text,
             iterations,
+            tool_calls_made,
+            ..Default::default()
         })
     }
 }

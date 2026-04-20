@@ -80,6 +80,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
         outcome: crate::orchestrator::dispatch::FlowOutcome {
             final_text: "ok".into(),
             iterations: 1,
+            ..Default::default()
         },
         invocations: invocations.clone(),
     });
@@ -215,6 +216,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             Ok(crate::orchestrator::dispatch::FlowOutcome {
                 final_text: "cancelled".into(),
                 iterations: 0,
+                ..Default::default()
             })
         }
     }
@@ -273,6 +275,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         outcome: crate::orchestrator::dispatch::FlowOutcome {
             final_text: "ok".into(),
             iterations: 1,
+            ..Default::default()
         },
         invocations: invocations.clone(),
     });
