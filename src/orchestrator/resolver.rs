@@ -9,6 +9,8 @@ use crate::orchestrator::flow_spec::{AgentId, FlowId, SessionStrategy};
 /// Hardcoded maximum depth for `flow_run` recursion. See design §7.
 pub const MAX_FLOW_DEPTH: u8 = 4;
 
+/// Allows `depth ∈ [0, MAX_FLOW_DEPTH]`; rejects strictly greater.
+/// Called at every dispatch + `flow_run` invocation (see design §7).
 pub fn depth_guard(depth: u8) -> Result<(), FlowError> {
     if depth > MAX_FLOW_DEPTH {
         Err(FlowError::RecursionLimit {
@@ -36,7 +38,7 @@ pub fn resolve_flow_id(
     agent_id: &str,
     channel: Option<&str>,
     overrides: &RoutingOverrides,
-    defaults: &HashMap<String, String>,
+    defaults: &HashMap<AgentId, FlowId>,
 ) -> Result<FlowId, FlowError> {
     if let Some(ch) = channel {
         if let Some(id) = overrides

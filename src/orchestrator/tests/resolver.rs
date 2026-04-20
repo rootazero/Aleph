@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use crate::orchestrator::errors::FlowError;
+use crate::orchestrator::flow_spec::{AgentId, FlowId};
 use crate::orchestrator::resolver::{
     depth_guard, resolve_flow_id, RoutingOverrides, MAX_FLOW_DEPTH,
 };
 
-fn default_table() -> HashMap<String, String> {
+fn default_table() -> HashMap<AgentId, FlowId> {
     let mut m = HashMap::new();
     m.insert("main".into(), "default-agent".into());
     m.insert("researcher".into(), "researcher".into());
