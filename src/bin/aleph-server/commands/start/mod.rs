@@ -648,29 +648,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // disconnect hook captures session-end events (Task 8).
     // Only applicable for the SQLite backend; file backend skips this step.
     //
-    // Phase 5 Task 9: hoist `session_service` out of the inner block so the
-    // Orchestrator (`initialize_orchestrator` below) can share the same
-    // `SessionService` used for dual-write. `None` on file-backend fallback.
-    let mut session_service_for_orchestrator: Option<
-        Arc<dyn alephcore::session::service::SessionService>,
-    > = None;
+    // Phase 5 Task 9: build the SessionService unconditionally so the
+    // Orchestrator (`initialize_orchestrator` below) gets wired even when
+    // the chosen SessionStore backend is `file`. The `session_events`
+    // SQLite log lives in a separate DB from the main SessionStore; there
+    // is no reason to couple them. (Prior code gated the build behind
+    // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
+    let session_service_for_orchestrator = build_sqlite_session_service(
+        &alephcore::gateway::SessionManagerConfig::default().db_path,
+    );
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
-        // Phase 1 Task 9: build a SessionService sharing the sessions DB
-        // so every `SessionManager::add_message` mirrors into the new
-        // append-only `session_events` log. Uses a dedicated connection
-        // (rather than the one inside SessionManager) to avoid threading
-        // an async lock type into the legacy struct.
-        let session_service = build_sqlite_session_service(
-            &alephcore::gateway::SessionManagerConfig::default().db_path,
-        );
-
         let mut sm = sm
             .with_raw_memory_writer(
                 memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>
             )
             .with_event_bus(event_bus.clone());
-        if let Some(svc) = session_service {
-            session_service_for_orchestrator = Some(svc.clone());
+        if let Some(svc) = session_service_for_orchestrator.clone() {
             sm = sm.with_session_service(svc);
             if !args.daemon {
                 println!("  Session dual-write enabled (session_events log)");
@@ -1046,6 +1039,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             "Orchestrator: skipped (no default provider or session service available)"
         );
     }
+
+    // P1 fix: close the open-auth gap on `/v1/*`. Snapshot the current
+    // bearer token from SharedTokenManager so the OpenAI-compat handler
+    // can reject mismatched bearers with 401 before they reach the
+    // per-agent busy-lock or upstream LLM. Token rotation requires a
+    // server restart — acceptable trade-off for single-user self-hosted
+    // deployments.
+    server.openai_api_token = auth_bundle
+        .auth_ctx
+        .shared_token_mgr
+        .get_current_token();
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();

@@ -280,25 +280,34 @@ pub async fn handle(
         .and_then(|m| m.content.clone())
         .unwrap_or_default();
 
-    // 6. Build session key and run request
+    // 6. Build session key.
+    // OpenAI stateless semantics: when `messages[]` carries multi-turn
+    // history, the client is authoritative. Route through a fresh ephemeral
+    // session so the persisted peer session does not leak prior server-side
+    // context into the reply. Single-message requests keep the stable peer
+    // session for continuity across successive calls.
     let agent_id = agent.id().to_string();
-    let session_key = SessionKey::peer(&agent_id, &peer_id);
+    let session_key = if req.messages.len() > 1 {
+        SessionKey::Ephemeral {
+            agent_id: agent_id.clone(),
+            ephemeral_id: uuid::Uuid::new_v4().to_string(),
+        }
+    } else {
+        SessionKey::peer(&agent_id, &peer_id)
+    };
 
-    // Seed session with conversation history for stateless clients (e.g. Cursor)
-    // that send the full multi-turn history in every request.
+    // Seed the ephemeral session with the client-supplied prior history so
+    // the agent sees the conversation the client intended.
     if req.messages.len() > 1 {
-        let existing = agent.get_history(&session_key, Some(1)).await;
-        if existing.is_empty() {
-            agent.ensure_session(&session_key).await;
-            for msg in &req.messages[..req.messages.len() - 1] {
-                let role = match msg.role.as_str() {
-                    "user" => MessageRole::User,
-                    "assistant" => MessageRole::Assistant,
-                    _ => continue,
-                };
-                if let Some(content) = &msg.content {
-                    agent.add_message(&session_key, role, content).await;
-                }
+        agent.ensure_session(&session_key).await;
+        for msg in &req.messages[..req.messages.len() - 1] {
+            let role = match msg.role.as_str() {
+                "user" => MessageRole::User,
+                "assistant" => MessageRole::Assistant,
+                _ => continue,
+            };
+            if let Some(content) = &msg.content {
+                agent.add_message(&session_key, role, content).await;
             }
         }
     }
