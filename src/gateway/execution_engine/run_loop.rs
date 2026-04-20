@@ -141,8 +141,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
-        use crate::agent_loop::adapters::build_registry_from_tools;
-        use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
+        use crate::harness::adapters::build_registry_from_tools;
+        use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
         use crate::config::types::policies::ToolSafetyPolicy;
         use crate::session::ingress_safety::SafetyGuard;
 
@@ -457,8 +457,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // SubagentTool is attached to the ScopedToolService (not registered
             // in LoopToolRegistry) so the service surfaces it via `list()`.
             let subagent_tool = {
-                use crate::agent_loop::background_tracker::BackgroundAgentTracker;
-                use crate::agent_loop::subagent_tool::SubagentTool;
+                use crate::agents::background_tracker::BackgroundAgentTracker;
+                use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
                 let sub_provider = self.provider_registry.default_provider();
                 let agent_registry = Arc::new(AgentRegistry::with_builtins());
@@ -1121,7 +1121,8 @@ pub(super) async fn write_conversation_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::{LoopCallback, LoopTraceEvent};
+    use crate::agent_loop::LoopCallback;
+    use crate::harness::trace::LoopTraceEvent;
     use crate::resilience::{AgentTask, RiskLevel};
 
     #[tokio::test]

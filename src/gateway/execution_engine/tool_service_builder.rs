@@ -12,7 +12,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::agent_loop::{LoopToolRegistry, ToolRefreshSource};
+use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::refresh::ToolRefreshSource;
 use crate::agents::subagent_tool::SubagentTool;
 use crate::tools::scoped::ScopedToolService;
 use crate::tools::service::ToolService;
@@ -43,7 +44,7 @@ pub fn build_request_tool_service(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolResult};
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use async_trait::async_trait;
     use serde_json::{json, Value};
 

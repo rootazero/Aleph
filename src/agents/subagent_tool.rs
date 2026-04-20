@@ -20,7 +20,7 @@ use crate::agent_loop::agent_runtime::{
 };
 use crate::agents::background_tracker::BackgroundAgentTracker;
 use crate::agents::teammates::TeammateManager;
-use crate::agent_loop::{LoopTool, ToolResult};
+use crate::tools::runtime::{LoopTool, ToolResult};
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -741,7 +741,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use crate::agent_loop::LoopToolRegistry;
+    use crate::tools::runtime::LoopToolRegistry;
     use crate::agents::AgentRegistry;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
