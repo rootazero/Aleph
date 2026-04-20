@@ -31,7 +31,7 @@
 本计划不是搬迁式修改，而是 **additive migration**：
 
 - Task 1/2/3 都是"字段加法"，旧路径（run_loop.rs:628 的 AgentLoop::new）依然工作。
-- Task 4 是**单次切换 commit** —— 集成测试 + 实现同 commit 落；revert 即回滚。
+- Task 4a/4b 都是"新增文件 + 单元测试"，不触碰 run_loop.rs。Task 4c 才是**单次切换 commit** —— 6 个集成测试 + 实现同 commit 落；revert 即回滚。
 - Task 5 清理 + exit gate。
 - Task 6 人工 smoke，由用户亲自跑。
 
@@ -356,108 +356,205 @@
 
 ---
 
-### Task 4: 切换 run_loop.rs:628
+### Task 4a: Gateway drain helper 抽取
+
+> **拆分原因：** 原 Task 4 规模被低估，无法单 commit 落地。执行 subagent 定位出 4 处真实缺口：(1) ToolService ↔ LoopToolRegistry 无适配层，(2) `execute()` 端到端测试需要巨大 fixture，(3) harness 今天不产生多数 FlowStreamEvent 变体，(4) provider fallback 重试循环包在 AgentLoop 外，dispatch 会丢分类。所以拆成 4a（drain helper）→ 4b（ScopedToolService adapter）→ 4c（切换 + FlowError::Transient + 6 集成测试）。
 
 **Files:**
+- Create: `src/gateway/execution_engine/event_drain.rs` —— 纯函数 `emit_flow_event(event, emitter, state)`：接 `FlowStreamEvent` 9 变体并调用 emitter 对应事件。
+- Modify: `src/gateway/execution_engine/mod.rs` —— `pub(crate) mod event_drain;`
+
+**Goal:** 把"FlowStreamEvent → Gateway emitter"映射从 `StreamCallback` 中提炼成可独立测试的纯辅助函数。不动 run_loop.rs。
+
+- [ ] **Step 1: 创建 `src/gateway/execution_engine/event_drain.rs`**
+
+  核心函数：
+  ```rust
+  pub(crate) async fn emit_flow_event(
+      event: FlowStreamEvent,
+      emitter: &Arc<dyn ChatEventEmitter>,
+      run_id: &str,
+      state: &Arc<Mutex<DrainState>>,
+  ) -> Result<(), EmitError> { /* match 9 variants → emitter calls */ }
+  ```
+
+  对应规范 §5 的逐行映射。`DrainState` 暂存 pending `ToolCallStart` 到 `ToolCallDone` 的匹配 + `has_emitted_text` flag。
+
+- [ ] **Step 2: 单元测试**
+
+  `src/gateway/execution_engine/event_drain.rs` 底部加 `#[cfg(test)] mod tests`：
+  - `delta_goes_to_emitter_text`
+  - `tool_call_start_and_done_pair`
+  - `safety_block_emits_error`
+  - `complete_sets_outcome_hint`
+
+  用 mock emitter（`Arc<MockEmitter>` 捕获调用序列）。
+
+- [ ] **Step 3: `cargo test -p alephcore --lib`** ≥ 9135 + 4 = 9139。
+
+- [ ] **Step 4: Commit**
+
+  ```
+  phase6b-flip: extract event drain helper (task 4a)
+  ```
+
+---
+
+### Task 4b: ScopedToolService adapter
+
+**Files:**
+- Create: `src/tools/scoped.rs` —— `ScopedToolService` struct 实现 `ToolService`，桥接 `LoopToolRegistry + SubagentTool + MCP 动态工具 → Arc<dyn ToolService>`。
+- Modify: `src/tools/mod.rs` —— 导出 `ScopedToolService`。
+
+**Goal:** 桥接今天 Gateway 的 `LoopToolRegistry`（含 SubagentTool 与 MCP）到 harness 要的 `ToolService` trait。切换当前 AgentLoop 路径**不动**；本 task 只 landsdapter + 测试，为 4c 做好准备。
+
+- [ ] **Step 1: 定义 `ScopedToolService`**
+
+  ```rust
+  pub struct ScopedToolService {
+      inner: Arc<dyn LoopToolRegistry>,
+      allowed: BTreeSet<String>,  // 过滤视图
+      subagent_tool: Option<Arc<SubagentTool>>,  // 单独注入
+      refresh: Option<Arc<dyn ToolRefreshSource>>,  // 懒加载触发
+      hook_decorator: Option<Arc<dyn ToolHookDecorator>>,
+  }
+
+  #[async_trait::async_trait]
+  impl ToolService for ScopedToolService {
+      async fn list(&self, ctx: &ToolContext) -> Result<Vec<ToolDefinition>, ToolError> { /* ... */ }
+      async fn describe(&self, name: &str, ctx: &ToolContext) -> Result<ToolDefinition, ToolError> { /* ... */ }
+      async fn execute(&self, call: ToolCall, ctx: &ToolContext) -> Result<ToolOutput, ToolError> { /* ... */ }
+  }
+  ```
+
+- [ ] **Step 2: 实现 `list`**
+
+  - 先触发 `refresh.refresh(ctx).await` 如果有；
+  - 从 inner 拿全量 LoopTool，映射为 ToolDefinition；
+  - append SubagentTool 的 definition；
+  - 按 `allowed` 过滤；
+  - 返回。
+
+- [ ] **Step 3: 实现 `execute`**
+
+  - 如是 `SubagentTool::name()`，走 SubagentTool 路径；
+  - 否则查 inner；
+  - 若 `hook_decorator.is_some()`，用 decorator 包装执行。
+
+- [ ] **Step 4: 单元测试**
+
+  `src/tools/scoped.rs` 底部 `#[cfg(test)] mod tests`：
+  - `list_filters_by_allowed`
+  - `list_includes_subagent_tool`
+  - `list_triggers_refresh_on_first_call`
+  - `execute_routes_to_subagent_tool_by_name`
+  - `execute_applies_hook_decorator`
+  - `describe_returns_from_filtered_set`
+
+  用简单 stub `LoopToolRegistry` + stub `ToolRefreshSource` + stub `ToolHookDecorator`。
+
+- [ ] **Step 5: `cargo test -p alephcore --lib`** ≥ 9139 + 6 = 9145。
+
+- [ ] **Step 6: Commit**
+
+  ```
+  phase6b-flip: add ScopedToolService adapter (task 4b)
+  ```
+
+---
+
+### Task 4c: 实际切换 + FlowError::Transient + 6 集成测试
+
+**Files:**
+- Modify: `src/orchestrator/dispatch.rs` —— `FlowError` 增加 `Transient { provider: String, source: String }` 变体。
+- Modify: `src/orchestrator/harness_bridge.rs` —— 把 harness 返回的可重试错误映射到 `FlowError::Transient`。
 - Create: `tests/gateway_chat_through_orchestrator.rs`
 - Create: `tests/gateway_chat_preserves_hit_limit.rs`
 - Create: `tests/gateway_chat_streams_tool_events.rs`
 - Create: `tests/gateway_chat_dynamic_tools.rs`
 - Create: `tests/gateway_chat_cancellation.rs`
 - Create: `tests/gateway_chat_trace_flush.rs`
-- Create: `src/gateway/execution_engine/trace_sink_adapter.rs`（`GatewayTraceSink` 实现）
-- Create: `src/gateway/execution_engine/tool_service_builder.rs`（`build_request_tool_service` + `ScopedToolService`）
-- Modify: `src/gateway/execution_engine/run_loop.rs` —— 替换 623–731
-- Modify: `src/gateway/execution_engine/mod.rs` —— 导出新模块
+- Create: `src/gateway/execution_engine/trace_sink_adapter.rs`（`GatewayTraceSink`）
+- Create: `src/gateway/execution_engine/tool_service_builder.rs`（`build_request_tool_service` 用 4b 的 `ScopedToolService`）
+- Modify: `src/gateway/execution_engine/run_loop.rs` —— 替换 623–731；retry 循环外层保留，分类改读 `FlowError::Transient`。
+- Modify: `src/gateway/execution_engine/mod.rs`
 
-> **TDD 顺序：** 6 个集成测试先写（全部 red），再实现。切换是一个 commit 因为测试与实现绑定。
+> **TDD 顺序：** 6 个集成测试先写（全部 red），再实现。切换同 commit。
 
-- [ ] **Step 1: 写 `tests/gateway_chat_through_orchestrator.rs`**
-
-  - 构造最小 `AgentHarnessRunner` 或自定义 `HarnessRunner` 递增计数；
-  - 构造 `Orchestrator` + `ExecutionEngine`；
-  - 调 gateway chat 入口；
-  - 断言计数 == 1。
-
-  期望失败（在未切换的 code 上）：`Orchestrator::dispatch` 未被触达，counter = 0。
-
-- [ ] **Step 2: 写其余 5 个集成测试**
-
-  按规范 §6 第 2–6 点。每个测试一份最小 stub harness + mock emitter，聚焦一个断言。
-
-- [ ] **Step 3: 运行测试确认全部红**
-
-  ```bash
-  cargo test --test gateway_chat_through_orchestrator \
-             --test gateway_chat_preserves_hit_limit \
-             --test gateway_chat_streams_tool_events \
-             --test gateway_chat_dynamic_tools \
-             --test gateway_chat_cancellation \
-             --test gateway_chat_trace_flush 2>&1 | grep "test result"
-  ```
-
-  全部 `FAILED` 或编译失败。这是 TDD red 阶段。
-
-- [ ] **Step 4: 实现 `GatewayTraceSink`**
-
-  `src/gateway/execution_engine/trace_sink_adapter.rs`：包装原 `callback_state` 与 emitter；`on_trace` 路由到既有 trace 持久化逻辑；`flush` 触发落盘。
-
-- [ ] **Step 5: 实现 `build_request_tool_service`**
-
-  `src/gateway/execution_engine/tool_service_builder.rs`：输入 global ToolService + AgentDef + ChatRequest + SubagentDeps + extension_manager；输出 `Arc<dyn ToolService>`。内部组合：
-  - 过滤 `allowed_tools` 的视图；
-  - 注入配置好的 `SubagentTool`（作为一个 ToolService 实现，注册进组合器）；
-  - 包装 `tool_refresh` 的懒加载（list/describe 触发 refresh）；
-  - user-configured hook 装饰（对应审计文档 §3.8 的 Gateway-side decorator）。
-
-  新写 `ScopedToolService` struct 实现 `ToolService` trait 完成组合。
-
-- [ ] **Step 6: 替换 `run_loop.rs:623-731`**
-
-  按规范 §4 的伪代码落地。关键点：
-  - `FlowInput::History { turns, prompt }` 来自现有 `history` + `request.input`；
-  - drain 任务覆盖全部 9 个 FlowStreamEvent 变体到 emitter（复用现有 `StreamCallback` 的 emit 逻辑，抽成辅助 fn）；
-  - `completion.await` 用于区分正常结束 vs harness panic/cancel；drained outcome 优先用于响应合成；
-  - `hit_limit` 分支与 i18n `ErrLoopExhausted` 保留。
-
-- [ ] **Step 7: 删除 `run_loop.rs` 的 stale imports**
+- [ ] **Step 1: 扩 `FlowError`**
 
   ```rust
-  use crate::agent_loop::{AgentLoop, LoopConfig, ChainContext, SharedSnapshot, ...};
+  #[derive(Debug, thiserror::Error)]
+  pub enum FlowError {
+      // ...existing...
+      #[error("transient harness error ({provider}): {source}")]
+      Transient { provider: String, source: String },
+  }
   ```
 
-  grep 对应 items 的 usage 在本文件剩零，`cargo check` 会帮忙报 unused import。
+  加单元测试确认 `matches!(err, FlowError::Transient { .. })` 判定工作。
 
-- [ ] **Step 8: 运行 6 个集成测试，确认全部绿**
+- [ ] **Step 2: harness bridge 翻译分类**
 
-  ```bash
-  cargo test --test gateway_chat_through_orchestrator ... 2>&1 | grep "test result"
+  `src/orchestrator/harness_bridge.rs` `AgentHarnessRunner::run` 把 `HarnessError::Internal` 中带有 provider transient 语义（5xx / network / rate limit）的翻译为 `FlowError::Transient { provider, source }`；其他仍走 `FlowError::Internal`。
+
+- [ ] **Step 3: 写 6 个集成测试（`tests/gateway_chat_*.rs`）**
+
+  每个测试用最小 stub `HarnessRunner`（实现 `HarnessRunner` trait，不依赖 `execute()` 全套），通过 `ExecutionEngine::dispatch_via_orchestrator` 或新抽的 `run_agent_loop_via_orchestrator` helper 入口断言：
+  1. `gateway_chat_through_orchestrator` —— HarnessRunner 被调用计数 = 1。
+  2. `gateway_chat_preserves_hit_limit` —— stub 返回 `FlowOutcome { hit_limit: true, final_text: "" }`，响应文本为 i18n `ErrLoopExhausted` 串。
+  3. `gateway_chat_streams_tool_events` —— stub 发 `ToolCallStart → ToolCallDone → ToolSummary`，emitter 收到有序三次调用。
+  4. `gateway_chat_dynamic_tools` —— `FlowRequest.tool_service = Some(ScopedToolService { subagent_tool: Some(_), .. })`，stub HarnessRunner 对 override 的 `list()` 能看到 SubagentTool。
+  5. `gateway_chat_cancellation` —— `CancellationToken::cancel()`，stub 返回 `FlowError::Internal("cancelled")`，drain 任务干净退出。
+  6. `gateway_chat_trace_flush` —— `TestTraceSink::flush_called: Arc<AtomicBool>`，dispatch 完成后为 `true`。
+
+- [ ] **Step 4: 跑 6 个测试确认全红 / 编译失败**
+
+- [ ] **Step 5: 实现 `GatewayTraceSink`**
+
+  `src/gateway/execution_engine/trace_sink_adapter.rs`：包装原 `callback_state` 与 emitter；`on_trace` 路由到既有持久化；`flush` 强制刷盘。
+
+- [ ] **Step 6: 实现 `build_request_tool_service`**
+
+  `src/gateway/execution_engine/tool_service_builder.rs`：组合 global ToolRegistry + `allowed_tools` 过滤 + SubagentTool + tool_refresh + hook decorator → `Arc<ScopedToolService> as Arc<dyn ToolService>`。复用 4b 的 adapter。
+
+- [ ] **Step 7: 替换 `run_loop.rs:623-731`**
+
+  伪代码见规范 §4。保留外层 `for attempt in 0..MAX_FALLBACK_ATTEMPTS` 与 `resolve_with_fallback`；错误分支改为：
+  ```rust
+  Err(e) if matches!(e, FlowError::Transient { .. }) => {
+      self.provider_registry.report_outcome(&resolved.provider_name, Err(e.to_string().into()));
+      continue;  // 重试
+  }
   ```
 
-- [ ] **Step 9: `cargo test -p alephcore --lib`**
+- [ ] **Step 8: 清理 `run_loop.rs` 的 stale `use crate::agent_loop::...` imports**
 
-  baseline ≥ 9135。
+- [ ] **Step 9: 跑 6 个集成测试绿**
 
-- [ ] **Step 10: `cargo clippy -- -D warnings`** 干净。
+- [ ] **Step 10: `cargo test -p alephcore --lib`** ≥ 9145。
 
-- [ ] **Step 11: Commit（切换 + 测试同 commit）**
+- [ ] **Step 11: `cargo clippy -- -D warnings`** 干净。
+
+- [ ] **Step 12: Commit（切换 + 测试同 commit）**
 
   ```
-  phase6b-flip: route Gateway chat through Orchestrator::dispatch (task 4)
+  phase6b-flip: route Gateway chat through Orchestrator::dispatch (task 4c)
 
   Replace run_loop.rs:623-731 AgentLoop builder chain with FlowRequest
   construction, Orchestrator::dispatch, event drain task, and
   FlowOutcome → response mapping. Add 6 integration tests covering
   dispatch wiring, hit_limit preservation, stream ordering, dynamic
-  tools, cancellation, and trace flush.
+  tools, cancellation, and trace flush. Extend FlowError with
+  Transient variant so the outer provider-fallback retry loop survives.
 
   Behavioural parity per resolution design §5: Delta/Reasoning/ToolCall*/
   ToolSummary/Safety/StopHook/ModelFallback all forwarded to gateway
   emitter; TraceSink replaces flush_trace_persistence on the harness
   side; per-request tool_service carries SubagentTool + MCP dynamic
-  tools.
+  tools via ScopedToolService (task 4b).
 
-  Tests: cargo test -p alephcore --lib  ≥9135 passing + 6 new
+  Tests: cargo test -p alephcore --lib ≥9145 passing + 6 new
   gateway_chat_* integration tests green, 2 pre-existing failures
   unchanged.
   ```
@@ -468,7 +565,7 @@
 
 **Files:**
 - Create: `scripts/check-phase6b-flip-exit.sh`
-- Modify: 任何 Task 4 遗漏未清的 `use crate::agent_loop::...` import（在 gateway 子树内）
+- Modify: 任何 Task 4c 遗漏未清的 `use crate::agent_loop::...` import（在 gateway 子树内）
 
 - [ ] **Step 1: 写 `scripts/check-phase6b-flip-exit.sh`**
 
@@ -545,9 +642,9 @@
 - [ ] 规范 §1 的 9 个 FlowStreamEvent 变体，Task 1 Step 1 全部列出。
 - [ ] 规范 §2 的 `tool_service: Option<Arc<dyn ToolService>>` 字段，Task 2 Step 6 已写。
 - [ ] 规范 §3 的 `orchestrator: Arc<Orchestrator>` 字段，Task 3 Step 1 已写。
-- [ ] 规范 §5 行为保留清单每一项，Task 4 Step 4/5/6 都覆盖。
-- [ ] 规范 §6 的 6 个集成测试，Task 4 Step 1/2 全部创建。
-- [ ] Task 4 是单次 commit（测试 + 实现同 commit），便于 revert。
+- [ ] 规范 §5 行为保留清单每一项，Task 4c Step 5/6/7 都覆盖（dynamic tools 由 4b 的 ScopedToolService 承载，retry 由 4c 的 FlowError::Transient 承载）。
+- [ ] 规范 §6 的 6 个集成测试，Task 4c Step 3 全部创建。
+- [ ] Task 4c 是单次 commit（测试 + 实现同 commit），便于 revert。
 - [ ] Exit gate 脚本 7 条，Task 5 Step 1 全部落地。
 - [ ] 不动 `src/agent_loop/loop_core.rs` 内部测试 —— Phase 6c 范围。
 - [ ] 不自动 release —— Task 6 明确由用户决定。
@@ -559,7 +656,9 @@
 **推荐：** 使用 `superpowers:subagent-driven-development`。
 
 - Task 1/2/3 —— 每个用一个 subagent（executor，sonnet/opus 视复杂度），均为"加字段不破坏旧调用"，相对机械。
-- Task 4 —— 用 opus subagent，因为涉及 Gateway 流管道的完整改写 + 6 个 TDD 测试。两阶段 review（spec 先、code 后）务必执行。
+- Task 4a —— sonnet executor 即可（单文件 drain helper + 单元测试）。
+- Task 4b —— sonnet executor（新 adapter + 单元测试，LoopToolRegistry 与 ToolService 表面映射）。
+- Task 4c —— opus executor，涉及 run_loop.rs 改写 + FlowError::Transient 扩展 + 6 TDD 集成测试。两阶段 review 务必执行。
 - Task 5 —— 简单脚本，用 haiku 即可。
 - Task 6 —— **停下来找用户**，不 auto-execute。
 
