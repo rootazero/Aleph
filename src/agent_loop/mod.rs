@@ -47,6 +47,8 @@ pub use context_budget::{
 pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, ContextCompactor};
 pub use factory::LoopFactory;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
+#[cfg(test)]
+pub(crate) use loop_core::NoopCallback;
 pub use provider_bridge::AiProviderBridge;
 pub use sections::SessionContext;
 pub use skill_prefetch::{SkillDiscoverySource, SkillInfo, SkillPrefetcher};

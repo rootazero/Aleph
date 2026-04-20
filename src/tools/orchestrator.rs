@@ -257,7 +257,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::loop_core::NoopCallback;
+    use crate::agent_loop::NoopCallback;
     use crate::agent_loop::{LoopTool, LoopToolRegistry};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;

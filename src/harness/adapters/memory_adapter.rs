@@ -8,7 +8,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::super::tool::{LoopTool, ToolResult};
+use crate::agent_loop::{LoopTool, ToolResult};
 
 // =============================================================================
 // MemoryBackend trait

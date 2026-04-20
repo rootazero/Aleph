@@ -46,7 +46,7 @@ pub struct SessionContext {
 // Dynamic section renderers
 // =============================================================================
 
-use super::tool_info::ToolInfo;
+use crate::agent_loop::ToolInfo;
 
 /// Render environment info section from SessionContext.
 pub fn render_environment(ctx: &SessionContext) -> String {
