@@ -11,6 +11,9 @@ pub enum FlowError {
     #[error("unknown agent id: {0}")]
     UnknownAgent(AgentId),
 
+    #[error("flow dispatch cancelled")]
+    Cancelled,
+
     #[error("flow recursion limit ({max}) exceeded")]
     RecursionLimit { max: u8 },
 

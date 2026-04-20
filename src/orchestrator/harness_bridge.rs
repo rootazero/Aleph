@@ -58,49 +58,64 @@ impl HarnessRunner for AgentHarnessRunner {
         events: broadcast::Sender<FlowStreamEvent>,
         cancel: CancellationToken,
     ) -> Result<FlowOutcome, FlowError> {
-        // Step 1: verify the agent exists. AgentDef itself is not threaded
+        // Step 1: honour pre-dispatch cancellation.
+        // PHASE-6: wire CancellationToken through harness.run once it supports abort.
+        if cancel.is_cancelled() {
+            return Err(FlowError::Cancelled);
+        }
+
+        // Step 2: verify the agent exists. AgentDef itself is not threaded
         // into HarnessDeps at this phase.
         // PHASE-6 FOLLOW-UP: thread AgentDef + FlowOverrides into HarnessDeps.
         if self.agent_registry.get(&spec.agent).is_none() {
             return Err(FlowError::UnknownAgent(spec.agent.clone()));
         }
 
-        // Step 2: brain pick.
+        // Step 3: brain pick.
         let llm = pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
 
-        // Step 3: convert String → SessionId. SessionId is SessionKey; fall
-        // back to an ephemeral key when the string isn't a known serialization.
+        // Step 4: convert String → SessionId. Serialized SessionKeys parse
+        // directly; otherwise treat the incoming string as an ephemeral id
+        // under `spec.agent` so orchestrator ↔ harness session identity stays
+        // deterministic (no fresh-uuid divergence).
         let session_id: SessionId = SessionKey::from_key_string(&session_key)
-            .unwrap_or_else(|| SessionKey::ephemeral("main"));
+            .unwrap_or_else(|| SessionKey::Ephemeral {
+                agent_id: spec.agent.clone(),
+                ephemeral_id: session_key.clone(),
+            });
 
-        // Step 4: honour pre-dispatch cancellation.
-        // PHASE-6: wire CancellationToken through harness.run once it supports abort.
-        if cancel.is_cancelled() {
-            return Err(FlowError::Internal("cancelled before dispatch".into()));
+        // Step 5: seed the session with the input as UserMessage event(s) so
+        // the inner harness Think loop can read it. Preserve per-message
+        // structure for `Messages` — do not flatten via string join.
+        match input {
+            FlowInput::Prompt(text) => {
+                let event = SessionEvent::UserMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text,
+                        blocks: Vec::new(),
+                    },
+                    at: now_ms(),
+                };
+                self.session_service
+                    .emit_event(&session_id, event)
+                    .await
+                    .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+            }
+            FlowInput::Messages(msgs) => {
+                for content in msgs {
+                    let event = SessionEvent::UserMessage {
+                        turn_id: uuid::Uuid::new_v4(),
+                        content,
+                        at: now_ms(),
+                    };
+                    self.session_service
+                        .emit_event(&session_id, event)
+                        .await
+                        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+                }
+            }
         }
-
-        // Step 5: seed the session with the input as a UserMessage so the
-        // inner harness Think loop can read it.
-        let text = match &input {
-            FlowInput::Prompt(s) => s.clone(),
-            FlowInput::Messages(m) => m
-                .iter()
-                .map(|c| c.text.clone())
-                .collect::<Vec<_>>()
-                .join("\n"),
-        };
-        let user_event = SessionEvent::UserMessage {
-            turn_id: uuid::Uuid::new_v4(),
-            content: MessageContent {
-                text,
-                blocks: Vec::new(),
-            },
-            at: now_ms(),
-        };
-        self.session_service
-            .emit_event(&session_id, user_event)
-            .await
-            .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
         let deps = HarnessDeps {
@@ -110,10 +125,10 @@ impl HarnessRunner for AgentHarnessRunner {
             llm,
         };
         let harness = AgentHarness::new(deps);
-        harness
-            .run(&session_id)
-            .await
-            .map_err(|e| FlowError::Internal(format!("harness: {e}")))?;
+        harness.run(&session_id).await.map_err(|e| match e {
+            crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
+            other => FlowError::Internal(format!("harness: {other}")),
+        })?;
 
         // Step 7: read final AssistantMessage text + count assistant turns.
         let records = self
