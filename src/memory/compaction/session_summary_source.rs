@@ -9,7 +9,7 @@ use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::memory::store::MemoryBackend;
 use crate::providers::message::UnifiedMessage;
 
-use crate::agent_loop::context_compactor::{CompactResult, CompactStrategy};
+use crate::harness::context_compactor::{CompactResult, CompactStrategy};
 
 /// Source of zero-cost compaction from pre-existing session summaries.
 ///
