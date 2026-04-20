@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 
+use crate::harness::callback::HarnessCallback;
 use crate::session::service::{SessionError, SessionId};
 use crate::tools::service::ToolError;
 
@@ -20,14 +21,29 @@ use crate::error::AlephError;
 #[async_trait]
 pub trait Harness: Send + Sync {
     /// One Think→Act turn; returns whether the session should continue.
-    async fn run_turn(&self, session_id: &SessionId) -> Result<TurnState, HarnessError>;
+    ///
+    /// The `callback` receives `on_delta` / `on_tool_call` events as the turn
+    /// runs. `on_complete` is fired by [`Harness::run`] when the outer loop
+    /// transitions to `TurnState::Done`, not here.
+    async fn run_turn(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+    ) -> Result<TurnState, HarnessError>;
 
-    /// Loop `run_turn` until Done.
-    async fn run(&self, session_id: &SessionId) -> Result<(), HarnessError> {
+    /// Loop `run_turn` until `Done`, firing `callback.on_complete()` on exit.
+    async fn run(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+    ) -> Result<(), HarnessError> {
         loop {
-            match self.run_turn(session_id).await? {
+            match self.run_turn(session_id, callback).await? {
                 TurnState::Continue => continue,
-                TurnState::Done => return Ok(()),
+                TurnState::Done => {
+                    callback.on_complete();
+                    return Ok(());
+                }
             }
         }
     }

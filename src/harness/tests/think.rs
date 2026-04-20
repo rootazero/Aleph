@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::{AlephError, Result as AlephResult};
-use crate::harness::{AgentHarness, Harness, HarnessDeps, HarnessError, TurnState};
+use crate::harness::{
+    AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
+};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::sandbox::test_util::MockSandbox;
@@ -241,7 +243,7 @@ async fn think_with_no_tool_use_returns_done() {
     let harness = AgentHarness::new(deps);
 
     let state = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
 
@@ -280,7 +282,7 @@ async fn think_llm_error_maps_to_harness_llm() {
     let harness = AgentHarness::new(deps);
 
     let err = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect_err("run_turn should propagate LLM error");
 
@@ -291,6 +293,80 @@ async fn think_llm_error_maps_to_harness_llm() {
 /// pass; `Continue` is only returned after the tool executes successfully.
 /// The detailed Act-side assertions live in `harness::tests::act` — this
 /// test keeps a minimal Think-level sanity check on the Continue path.
+/// Task 1 contract: the `HarnessCallback` fires `on_delta` for assistant text
+/// and `on_tool_call` before each tool dispatch, within a single `run_turn`.
+/// Covers both text-only Done turns and tool_use Continue turns.
+#[tokio::test]
+async fn callback_fires_on_delta_and_tool_call() {
+    use crate::harness::HarnessCallback;
+    use crate::session::events::ToolOutput;
+
+    #[derive(Default)]
+    struct CapturingCallback {
+        deltas: Vec<String>,
+        tools: Vec<String>,
+    }
+
+    impl HarnessCallback for CapturingCallback {
+        fn on_delta(&mut self, text: &str) {
+            self.deltas.push(text.to_string());
+        }
+        fn on_tool_call(&mut self, name: &str) {
+            self.tools.push(name.to_string());
+        }
+        fn on_complete(&mut self) {}
+    }
+
+    struct OkTool;
+    #[async_trait]
+    impl ToolService for OkTool {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: serde_json::json!({"ok": true}),
+                metadata: Default::default(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            Vec::new()
+        }
+        async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+            None
+        }
+    }
+
+    // Turn with one tool_call: expect one on_delta("calling…") + on_tool_call("echo").
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("do it")]);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(OkTool),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: FixedProvider::with_tool_call("calling…", "echo"),
+    };
+    let harness = AgentHarness::new(deps);
+    let mut cb = CapturingCallback::default();
+
+    let state = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn should succeed");
+
+    assert_eq!(state, TurnState::Continue);
+    assert_eq!(
+        cb.deltas,
+        vec!["calling…".to_string()],
+        "on_delta should fire once per assistant turn with full text"
+    );
+    assert_eq!(
+        cb.tools,
+        vec!["echo".to_string()],
+        "on_tool_call should fire once per tool dispatch"
+    );
+}
+
 #[tokio::test]
 async fn think_tool_use_after_act_returns_continue() {
     use crate::session::events::ToolOutput;
@@ -327,7 +403,7 @@ async fn think_tool_use_after_act_returns_continue() {
     let harness = AgentHarness::new(deps);
 
     let state = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
 

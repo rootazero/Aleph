@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::error::Result as AlephResult;
-use crate::harness::{AgentHarness, Harness, HarnessDeps, HarnessError, TurnState};
+use crate::harness::{
+    AgentHarness, Harness, HarnessDeps, HarnessError, NoopHarnessCallback, TurnState,
+};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
@@ -281,7 +283,7 @@ async fn act_executes_tools_sequentially() {
     let harness = AgentHarness::new(deps);
 
     let state = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
 
@@ -337,7 +339,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
     let harness = AgentHarness::new(deps);
 
     let err = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect_err("expected HarnessError::Tool");
     assert!(matches!(err, HarnessError::Tool(_)), "got: {err:?}");
@@ -413,7 +415,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
     let harness = AgentHarness::new(deps);
 
     let state = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect("run_turn should succeed");
     assert_eq!(state, TurnState::Done);
@@ -564,7 +566,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
     let harness = AgentHarness::new(deps);
 
     let err = harness
-        .run_turn(&sample_session_id())
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
         .await
         .expect_err("expected Err");
 

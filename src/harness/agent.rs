@@ -11,6 +11,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::{Harness, HarnessError, TurnState};
 use crate::providers::adapter::{NativeToolCall, RequestPayload};
@@ -42,8 +43,10 @@ impl AgentHarness {
         session_id: &SessionId,
         turn_id: TurnId,
         tool_calls: Vec<NativeToolCall>,
+        callback: &mut dyn HarnessCallback,
     ) -> Result<(), HarnessError> {
         for call in tool_calls {
+            callback.on_tool_call(&call.name);
             let requested = SessionEvent::ToolCallRequested {
                 turn_id,
                 call_id: call.id.clone(),
@@ -111,7 +114,8 @@ impl crate::session::SessionDriver for AgentHarness {
         //     stringify through `provider` with a discriminating prefix.
         // Exhaustive match (no wildcard) so new `HarnessError` variants
         // force a review here.
-        self.run(session_id).await.map_err(|e| match e {
+        let mut cb = NoopHarnessCallback;
+        self.run(session_id, &mut cb).await.map_err(|e| match e {
             HarnessError::Cancelled => crate::error::AlephError::Cancelled,
             HarnessError::Llm(inner) => inner,
             HarnessError::Tool(tool_err) => {
@@ -126,7 +130,11 @@ impl crate::session::SessionDriver for AgentHarness {
 
 #[async_trait]
 impl Harness for AgentHarness {
-    async fn run_turn(&self, session_id: &SessionId) -> Result<TurnState, HarnessError> {
+    async fn run_turn(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+    ) -> Result<TurnState, HarnessError> {
         // 1. Fetch full event log and compute the tail boundary.
         let events = self.deps.session.get_events(session_id, None, None).await?;
         let tail_start = tail_start_index(&events);
@@ -143,6 +151,11 @@ impl Harness for AgentHarness {
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = current_turn_id(&events);
         let text = response.text_content();
+        if !text.is_empty() {
+            // Non-streaming LLM layer emits one chunk per turn; the callback
+            // shape permits finer chunking once `process_stream` is wired.
+            callback.on_delta(&text);
+        }
         let blocks = tool_use_blocks(&response.tool_calls);
         let assistant_event = SessionEvent::AssistantMessage {
             turn_id,
@@ -158,7 +171,8 @@ impl Harness for AgentHarness {
         if response.tool_calls.is_empty() {
             Ok(TurnState::Done)
         } else {
-            self.act(session_id, turn_id, response.tool_calls).await?;
+            self.act(session_id, turn_id, response.tool_calls, callback)
+                .await?;
             Ok(TurnState::Continue)
         }
     }

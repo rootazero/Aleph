@@ -125,10 +125,17 @@ impl HarnessRunner for AgentHarnessRunner {
             llm,
         };
         let harness = AgentHarness::new(deps);
-        harness.run(&session_id).await.map_err(|e| match e {
-            crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
-            other => FlowError::Internal(format!("harness: {other}")),
-        })?;
+        // PHASE 6a Task 2 replaces NoopHarnessCallback with a
+        // `BroadcastCallback` that fans `on_delta`/`on_tool_call` into
+        // `FlowStreamEvent`. Task 1 keeps the surface minimal and correct.
+        let mut cb = crate::harness::NoopHarnessCallback;
+        harness
+            .run(&session_id, &mut cb)
+            .await
+            .map_err(|e| match e {
+                crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
+                other => FlowError::Internal(format!("harness: {other}")),
+            })?;
 
         // Step 7: read final AssistantMessage text + count assistant turns.
         let records = self
