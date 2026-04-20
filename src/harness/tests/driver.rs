@@ -110,6 +110,7 @@ async fn session_driver_delegates_to_harness_run() {
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        trace_sink: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -169,6 +170,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        trace_sink: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");

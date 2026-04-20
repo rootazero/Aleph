@@ -12,6 +12,7 @@ use crate::harness::context_budget::ContextBudget;
 use crate::harness::context_compactor::ContextCompactor;
 use crate::harness::skill_prefetch::SkillPrefetcher;
 use crate::harness::stop_hooks::StopHookHandler;
+use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
@@ -44,4 +45,7 @@ pub struct HarnessDeps {
     /// Think pass so newly available skills are surfaced without adding
     /// latency to the main loop.
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
+    /// Gateway-side observability sink. `None` falls back to no-op tracing.
+    /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
+    pub trace_sink: Option<Arc<dyn TraceSink>>,
 }

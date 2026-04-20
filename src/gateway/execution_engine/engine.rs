@@ -963,6 +963,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             session_hint: Some(session_key),
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         };
 
         let handle = orchestrator

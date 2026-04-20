@@ -70,6 +70,8 @@ impl HarnessRunner for AgentHarnessRunner {
         sandbox: Arc<dyn Sandbox>,
         events: broadcast::Sender<FlowStreamEvent>,
         cancel: CancellationToken,
+        tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
     ) -> Result<FlowOutcome, FlowError> {
         // Step 1: honour pre-dispatch cancellation fast-path (short-circuit
         // before provider lookup / LLM construction). The same token is also
@@ -105,28 +107,34 @@ impl HarnessRunner for AgentHarnessRunner {
         seed_session(self.session_service.as_ref(), &session_id, input).await?;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
+        // Apply per-request tool_service override; fall back to the runner's
+        // default when the caller supplies None.
+        let tools = tool_service_override.unwrap_or_else(|| self.tool_service.clone());
         let deps = HarnessDeps {
             session: self.session_service.clone(),
-            tools: self.tool_service.clone(),
+            tools,
             sandbox,
             llm,
             stop_hooks: self.stop_hooks.clone(),
             context_budget: self.context_budget.clone(),
             context_compactor: self.context_compactor.clone(),
             skill_prefetcher: self.skill_prefetcher.clone(),
+            trace_sink: trace_sink.clone(),
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast
         // channel so downstream Gateway sinks see delta / tool_call cadence
         // equivalent to the retiring AgentLoop StreamingSink.
         let mut cb = BroadcastCallback::new(events.clone());
-        harness
-            .run(&session_id, &mut cb, &cancel)
-            .await
-            .map_err(|e| match e {
-                crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
-                other => FlowError::Internal(format!("harness: {other}")),
-            })?;
+        let run_result = harness.run(&session_id, &mut cb, &cancel).await;
+        // Flush the trace sink regardless of success or error (no-op when None).
+        if let Some(sink) = trace_sink.as_ref() {
+            sink.flush();
+        }
+        run_result.map_err(|e| match e {
+            crate::harness::trait_def::HarnessError::Cancelled => FlowError::Cancelled,
+            other => FlowError::Internal(format!("harness: {other}")),
+        })?;
 
         // Step 7: read final AssistantMessage text + count assistant turns.
         let records = self

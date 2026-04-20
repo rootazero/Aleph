@@ -82,7 +82,7 @@ pub struct FlowOutcome {
     pub hit_limit: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FlowRequest {
     pub flow_id: Option<FlowId>,
     pub agent_id: AgentId,
@@ -91,6 +91,30 @@ pub struct FlowRequest {
     pub session_hint: Option<String>,
     pub parent_session: Option<String>,
     pub depth: u8,
+    /// Per-request tool service override. `None` causes `AgentHarnessRunner`
+    /// to fall back to its default `tool_service`. Gateway production path
+    /// must supply `Some` to carry per-request dynamic tools.
+    /// Not included in `Debug` output because `Arc<dyn ToolService>` is not `Debug`.
+    pub tool_service: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+    /// Gateway-side observability sink. `None` is a no-op.
+    /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
+    pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+}
+
+impl std::fmt::Debug for FlowRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowRequest")
+            .field("flow_id", &self.flow_id)
+            .field("agent_id", &self.agent_id)
+            .field("input", &self.input)
+            .field("channel", &self.channel)
+            .field("session_hint", &self.session_hint)
+            .field("parent_session", &self.parent_session)
+            .field("depth", &self.depth)
+            .field("tool_service", &self.tool_service.as_ref().map(|_| "<dyn ToolService>"))
+            .field("trace_sink", &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"))
+            .finish()
+    }
 }
 
 /// Orchestrator dependencies. Most are behind `Arc<dyn Trait>` so the struct
@@ -130,6 +154,8 @@ pub trait HarnessRunner: Send + Sync {
         sandbox: Arc<dyn crate::sandbox::Sandbox>,
         events: broadcast::Sender<FlowStreamEvent>,
         cancel: CancellationToken,
+        tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -211,6 +237,8 @@ impl Orchestrator {
         let session_key = session_res.session_key.clone();
         let active = self.active_sessions.clone();
         let session_for_release = session_res.session_key.clone();
+        let tool_service_override = req.tool_service.clone();
+        let trace_sink = req.trace_sink.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -225,6 +253,8 @@ impl Orchestrator {
                     sandbox_clone,
                     event_tx,
                     cancel_clone,
+                    tool_service_override,
+                    trace_sink,
                 )
                 .await;
             let _ = done_tx.send(outcome);
