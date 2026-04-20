@@ -33,6 +33,12 @@
 
 mod builtin;
 pub mod context;
+pub mod info;
+pub mod orchestrator;
+pub mod pipeline;
+pub mod refresh;
+pub mod result_store;
+pub mod runtime;
 mod server;
 mod traits;
 mod types;
