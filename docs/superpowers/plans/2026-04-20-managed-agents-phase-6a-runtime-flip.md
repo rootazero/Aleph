@@ -262,21 +262,30 @@ pub enum FlowInput {
 
 ---
 
-### Task 6: Plumb `ContextBudget` + `ContextCompactor` + `StopHooks` into `HarnessDeps`
+### Task 6: ~~Plumb `ContextBudget` + `ContextCompactor` + `StopHooks` into `HarnessDeps`~~ — **DEFERRED to Phase 6b**
 
-**Files:**
-- Modify: `src/harness/deps.rs` — add optional fields
-- Modify: `src/harness/agent.rs` — invoke budget check between iterations;
-  compactor when pressure threshold hits; stop hooks before early-exit
-- Modify: `src/orchestrator/harness_bridge.rs` — read from `HarnessDeps` populated by
-  orchestrator constructor
-- Modify: `src/bin/aleph-server/commands/start/orchestrator_init.rs` — build these and
-  inject on the `AgentHarnessRunner`
-- Test: stop hook triggers; compactor fires on pressure
+**Status: DEFERRED.** Moved to Phase 6b alongside the helper relocations.
+See `docs/superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md`
+§6 "Inherited from Phase 6a — Task 6 deferred" for the full scope that
+Phase 6b MUST implement.
 
-- [ ] **Step 1–5**: Standard TDD per task.
+**Why defer:** These three helpers (`ContextBudget`, `ContextCompactor`,
+`StopHooks`) live in `src/agent_loop/` today. Wiring them into
+`HarnessDeps` during 6a would introduce a reverse `harness → agent_loop`
+dependency that 6b's relocations (§6 Moves table) dissolve in a single
+atomic change. Cleaner to relocate + wire together in 6b.
 
-- [ ] **Step 6: Commit**
+**Regression window:** Between Task 7's gateway flip (landed in 6a) and
+6b's helper-relocation-plus-wiring, the orchestrator path does NOT
+enforce budget / compactor / stop-hook checks. This matches the
+Phase 4 `ALEPH_HARNESS_V2` opt-in path's existing envelope.
+
+**Tracking markers left in the tree:**
+- `PHASE-6b-WIRING` comment in `src/harness/deps.rs` (added below)
+- Explicit §6b spec entry with exact field signatures + test scope
+- `- [x]` here does NOT mean "done", it means "intentionally deferred"
+
+- [x] **DEFERRED to Phase 6b** — do not implement in 6a.
 
 ---
 

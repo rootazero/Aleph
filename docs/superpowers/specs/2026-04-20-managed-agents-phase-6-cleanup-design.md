@@ -149,11 +149,47 @@ Orchestrator builder at boot (`start/mod.rs`) grows: AgentHarnessRunner takes op
 Strangler-fig re-exports from `agent_loop/mod.rs` stay until the end of 6b (so we can
 merge mid-way), removed in 6c.
 
+### Inherited from Phase 6a — Task 6 deferred
+
+**Deferred work from Phase 6a (original plan Task 6):** wire
+`ContextBudget` + `ContextCompactor` + `StopHooks` into `HarnessDeps`
+and invoke them inside `AgentHarness::run_turn`.
+
+Deferred to 6b because:
+- Doing it in 6a would add a reverse `harness → agent_loop` dependency
+  that the 6b moves immediately untangle; cleaner to relocate + wire
+  in one atomic change here.
+- Phase 4's `ALEPH_HARNESS_V2` path also shipped without these checks,
+  so the regression window between 6a's gateway flip and this 6b work
+  is bounded by the same envelope users already tolerate.
+
+**6b wiring scope (MUST NOT be forgotten):**
+
+1. `src/harness/deps.rs` — add optional fields:
+   ```rust
+   pub stop_hooks: Option<Arc<StopHooksExecutor>>,
+   pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
+   pub context_compactor: Option<Arc<ContextCompactor>>,
+   ```
+2. `src/harness/agent.rs` — invoke stop hooks before early-exit;
+   budget check between iterations; compactor when pressure hits
+   threshold. Populate `FlowOutcome::hit_limit` when budget exceeded.
+3. `src/bin/aleph-server/commands/start/orchestrator_init.rs` —
+   construct these helpers and inject on `AgentHarnessRunner`.
+4. Tests: stop hook vetoes `run` with early exit; compactor fires on
+   synthetic pressure signal.
+
+A `PHASE-6b-WIRING` marker left in `src/harness/deps.rs` during 6a
+points here so the work cannot be overlooked during 6b execution.
+
 ### Exit criteria
 
 - Each moved file has only one new canonical path; old path is a thin re-export.
 - `cargo build && cargo test -p alephcore --lib` still green.
-- No net behavior change; pure refactor.
+- No net behavior change from the moves themselves; **the deferred Task-6
+  wiring is net-new behavior and covered by its own tests** (see scope
+  above).
+- The `PHASE-6b-WIRING` marker in `src/harness/deps.rs` is removed.
 - Sub-phase shippable as one PR.
 
 ## 7. Sub-Phase 6c — Delete `loop_core.rs` + Siblings
