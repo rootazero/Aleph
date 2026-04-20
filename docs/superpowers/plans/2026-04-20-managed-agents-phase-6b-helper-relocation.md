@@ -1,5 +1,13 @@
 # Phase 6b Implementation Plan — Helper Relocation + Inherited 6a Tasks
 
+> **Status (2026-04-20):** Tasks 1–11 landed on branch through commit
+> `3fedb1281`. Tests at 9133 passing (two pre-existing failures unchanged:
+> telegram config + notes prompt snapshot). **Tasks 12–14 deferred** —
+> attempting the `run_loop.rs` flip surfaced three design gaps that must
+> be resolved in a fresh spec before implementation can land. See
+> [`../specs/2026-04-20-gateway-orchestrator-flip-design.md`](../specs/2026-04-20-gateway-orchestrator-flip-design.md)
+> for the gap catalogue. Phase 6c and 6d remain blocked on that design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development`
 > to implement this plan task-by-task. Fresh subagent per task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
@@ -254,6 +262,13 @@ Commit: `phase6b: finalize HarnessDeps and remove 6b wiring marker (task 11)`
 
 ### Task 12: Flip `run_loop.rs:628` from `AgentLoop::new` to `Orchestrator::dispatch`
 
+> **DEFERRED (2026-04-20).** Implementation attempted; surfaced three
+> unresolved design questions (per-request tool scoping, FlowStreamEvent
+> vocabulary, `Arc<Orchestrator>` ownership in `ExecutionEngine`). See
+> [`../specs/2026-04-20-gateway-orchestrator-flip-design.md`](../specs/2026-04-20-gateway-orchestrator-flip-design.md).
+> The task body below is retained as historical intent; a fresh plan
+> replaces it once the design spec resolves the gaps.
+
 **Files:**
 - Modify: `src/gateway/execution_engine/run_loop.rs` — replace lines 625–682
   (AgentLoop builder chain) with FlowRequest + dispatch; drain `handle.events`
@@ -278,6 +293,10 @@ Commit: `phase6b: flip run_loop.rs to Orchestrator::dispatch (task 12)`
 
 ### Task 13: Write `scripts/check-phase6b-exit.sh`
 
+> **DEFERRED (2026-04-20).** Exit-gate assertions (no `AgentLoop::new`
+> outside legacy markers, orchestrator live on the gateway path) all
+> depend on Task 12 landing. Re-enter when the flip lands.
+
 - [ ] **Step 1:** Script asserts:
   - `grep -rn 'AgentLoop::new' src/ | grep -v agent_loop/ | grep -v '//'` is empty
   - `grep -rn 'use crate::agent_loop' src/gateway/ src/bin/` is empty
@@ -292,6 +311,9 @@ Commit: `phase6b: add check-phase6b-exit.sh gate (task 13)`
 ---
 
 ### Task 14: Manual smoke test
+
+> **DEFERRED (2026-04-20).** Gated on Task 12; the smoke test exercises
+> the flipped path.
 
 - [ ] Boot `aleph-server` with debug build.
 - [ ] Send one `/v1/chat/completions` request; verify streamed deltas.
