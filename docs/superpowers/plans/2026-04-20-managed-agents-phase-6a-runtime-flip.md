@@ -289,113 +289,91 @@ Phase 4 `ALEPH_HARNESS_V2` opt-in path's existing envelope.
 
 ---
 
-### Task 7: Flip `run_loop.rs` from `AgentLoop::new` to `Orchestrator::dispatch`
+### Task 7: ~~Flip `run_loop.rs` from `AgentLoop::new` to `Orchestrator::dispatch`~~ — **DEFERRED to Phase 6b**
 
-**Files:**
-- Modify: `src/gateway/execution_engine/run_loop.rs` — replace lines 625–682 with
-  orchestrator dispatch; drain `handle.events` into existing `StreamCallback`; await
-  `handle.completion` and convert `FlowOutcome` into the old `LoopRunResult`-shaped
-  response block (lines 684–731).
-- Modify: `src/gateway/execution_engine/engine.rs` — inject `Arc<Orchestrator>` into
-  `ExecutionEngine` (already wired in Phase 5 — just activate use)
+**Status: DEFERRED.** The original Task 7 (hard flip of
+`src/gateway/execution_engine/run_loop.rs:628`) was scoped assuming only
+three behaviours would drop (`context_budget`, `context_compactor`,
+`stop_hooks` — the Task 6 triad). Re-auditing the live `AgentLoop::new`
+builder chain at line 628 during 6a execution surfaced **ten** wired
+behaviours, seven of which are not on any 6a/6b/6c roadmap:
 
-- [ ] **Step 1: Write the failing integration test**
+| Builder method | Original plan assumption |
+|----------------|--------------------------|
+| `with_context_budget` | Covered by Task 6 (now deferred) |
+| `with_context_compactor` | Covered by Task 6 (now deferred) |
+| `with_stop_hooks` | Covered by Task 6 (now deferred) |
+| `with_chain` | **Not planned** — runtime chain context |
+| `with_shared_snapshot` | **Not planned** — context snapshot sharing |
+| `with_provider_name` / `with_platform_name` / `with_session_id` | **Not planned** — observability / routing tags |
+| `with_skill_prefetcher` | **Not planned** — skill system warming |
+| `with_hook_executor` | **Not planned** — user-config hook integration |
+| `with_tool_refresh` | **Not planned** — dynamic tool discovery |
 
-```rust
-// tests/gateway_chat_through_orchestrator.rs
-#[tokio::test]
-async fn gateway_chat_uses_orchestrator_path() {
-    // Boot a test gateway, send a simple `agent.run`, assert:
-    //   - broadcast events reach the ws sink
-    //   - final text returned
-    //   - `iterations` recorded in metrics event
-    //   - no AgentLoop::new on the stack (verified by feature-gated metric)
-}
-```
+A hard flip as originally drafted would drop all ten behaviours at once,
+which is a far larger regression window than 6a's "runtime flip"
+decomposition intended. Phase 6b is the correct home because it already
+relocates the Task-6 helpers, and the other seven behaviours can be
+catalogued + addressed alongside (either wired on the harness side or
+explicitly documented as out-of-scope for the compat flip).
 
-- [ ] **Step 2: FAIL (run_loop still calls AgentLoop)**
+See cleanup-design spec §6 "Inherited from Phase 6a — Task 6 deferred"
+and §6.1 "Inherited from Phase 6a — Task 7 deferred" for the full
+scope + testing requirements 6b MUST complete.
 
-- [ ] **Step 3: Implement flip**
-
-Construct `FlowRequest`:
-```rust
-let req = FlowRequest {
-    flow_id: None,   // agent→flow resolution via default_routing
-    agent_id: agent.id().to_string(),
-    input: if let Some(msgs) = multimodal_messages {
-        FlowInput::Multimodal(msgs)
-    } else if history.is_empty() {
-        FlowInput::Prompt(request.input.clone())
-    } else {
-        FlowInput::History { history: history.clone(), prompt: request.input.clone() }
-    },
-    channel: request.metadata.get("platform").cloned(),
-    session_hint: Some(request.session_key.to_key_string()),
-    parent_session: None,
-    depth: 0,
-};
-let handle = self.orchestrator
-    .as_ref()
-    .ok_or_else(|| anyhow!("orchestrator not provisioned"))?
-    .dispatch(req).await?;
-// Drain events on a tokio task forwarding to StreamCallback ...
-// Await completion:
-let outcome = handle.completion.await??;
-```
-
-- [ ] **Step 4: PASS all integration + lib tests**
-
-- [ ] **Step 5: Remove stale `use crate::agent_loop::{AgentLoop, LoopConfig, ...}` imports**
-
-- [ ] **Step 6: Commit**
+- [x] **DEFERRED to Phase 6b** — do not implement in 6a.
 
 ---
 
-### Task 8: Verify grep guarantees + smoke test
+### Task 8: ~~Verify grep guarantees + smoke test~~ — **DEFERRED to Phase 6b**
 
-- [ ] **Step 1: `grep -rn 'AgentLoop::new' src/ | grep -v agent_loop/ | grep -v '//'`**
+**Status: DEFERRED.** The grep exit criterion (`grep -rn 'AgentLoop::new'
+src/ | grep -v agent_loop/` returning empty) presumes Task 7 has flipped
+`run_loop.rs`. With Task 7 deferred to 6b, this verification gate moves
+with it. The Phase 6b exit criteria must include the full Task 8 grep +
+smoke-test checklist.
 
-Expected: empty.
-
-- [ ] **Step 2: `grep -rn 'use crate::agent_loop' src/gateway/ src/bin/`**
-
-Expected: empty (all helper imports gone or moved to harness side).
-
-- [ ] **Step 3: `cargo test -p alephcore --lib` — ≥ 9076 passing**
-
-- [ ] **Step 4: `tests/harness_run_e2e.rs` — 2/2 passing**
-
-- [ ] **Step 5: `scripts/check-phase5-exit.sh` — green**
-
-- [ ] **Step 6: Manual smoke — boot aleph-server, send a chat via `/v1/chat/completions`,
-  verify: streamed deltas, multi-turn history, iteration-limit messaging path,
-  mid-response cancel**
-
-- [ ] **Step 7: Commit + update `scripts/check-phase6a-exit.sh`** (new gate script
-  mirroring phase5 but also asserting zero AgentLoop::new in run_loop.rs)
+- [x] **DEFERRED to Phase 6b** — do not implement in 6a.
 
 ---
 
 ## Self-Review Checklist
 
-After all 8 tasks:
+**What Phase 6a as-executed delivers (Tasks 1–5 landed; 6/7/8 deferred):**
 
-- [ ] Every `with_*` builder from `AgentLoop` that was active at `run_loop.rs:628`
-  has a corresponding `HarnessDeps` field, `FlowInput` variant, or documented drop
-  (for `hook_executor`/`shared_snapshot`/etc. explicitly deferred to 6d).
-- [ ] `FlowOutcome` covers the 5 fields that `run_loop.rs:684-731` reads from
-  `LoopRunResult`.
-- [ ] StreamCallback sees the same delta cadence as before the flip.
-- [ ] Multi-turn history is preserved across calls.
-- [ ] Cancellation propagates in < 1s.
-- [ ] No new files exceed 400 LOC.
-- [ ] No clippy warnings at `-D warnings`.
+- [x] `HarnessCallback` trait + `NoopHarnessCallback` (Task 1)
+- [x] `BroadcastCallback` fan-out from `HarnessCallback` → `FlowStreamEvent`
+  broadcast (Task 2)
+- [x] `FlowOutcome` parity fields: `iterations`, `tool_calls_made`,
+  `total_tokens`, `hit_limit` populated (Task 3)
+- [x] `FlowInput::History` + `FlowInput::Multimodal` variants with session
+  seeding (Task 4)
+- [x] `CancellationToken` threaded end-to-end through `Harness::run` with
+  `HarnessError::Cancelled → FlowError::Cancelled` mapping (Task 5)
+- [x] Task 6 deferral documented in three places (plan, spec §6, code
+  marker in `src/harness/deps.rs`)
+- [x] Task 7+8 deferral documented in plan + spec §6.1
+
+**What 6a does NOT deliver (intentionally, per the Option-3 scope call):**
+
+- No production runtime flip — `AgentLoop::new` still called from
+  `src/gateway/execution_engine/run_loop.rs`.
+- No behaviour wiring for `context_budget`, `context_compactor`,
+  `stop_hooks`, `chain`, `shared_snapshot`, `provider_name`,
+  `platform_name`, `skill_prefetcher`, `hook_executor`, `tool_refresh`.
+
+The Phase 6a exit line is therefore: **additive plumbing merged, rails
+laid for 6b to relocate helpers + flip + wire behaviours in one
+coherent change.**
 
 ---
 
 ## Exit Handoff
 
-On green exit criteria, hand off to Phase 6b (helper relocation) per
-`docs/superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md` §6.
+On green checklist above, hand off to Phase 6b (helper relocation +
+inherited Task 6/7/8 work) per
+`docs/superpowers/specs/2026-04-20-managed-agents-phase-6-cleanup-design.md`
+§6 + §6.1.
 
-**Ask user before `just release`.** Phase 6a merge only; release waits for 6d.
+**Ask user before `just release`.** Phase 6a merge only; release waits
+for 6d.

@@ -182,14 +182,66 @@ Deferred to 6b because:
 A `PHASE-6b-WIRING` marker left in `src/harness/deps.rs` during 6a
 points here so the work cannot be overlooked during 6b execution.
 
+### Inherited from Phase 6a — Task 7 & 8 deferred (gateway flip + exit gate)
+
+During Phase 6a execution, auditing the live `AgentLoop::new(...)` builder
+chain at `src/gateway/execution_engine/run_loop.rs:628` surfaced **ten**
+wired behaviours — far more than the original Task 6 triad
+(`context_budget`, `context_compactor`, `stop_hooks`). The plan's
+"hard flip in 6a" would have dropped all ten at once, which exceeds 6a's
+"runtime flip" decomposition intent and creates an unplanned regression
+window for seven behaviours not on any roadmap.
+
+**Full audit of `AgentLoop` builder methods at the flip site:**
+
+| Builder | Category | 6b disposition |
+|---|---|---|
+| `with_context_budget` | Inherited §6 Task 6 | wire into `HarnessDeps` + `AgentHarness` |
+| `with_context_compactor` | Inherited §6 Task 6 | wire into `HarnessDeps` + `AgentHarness` |
+| `with_stop_hooks` | Inherited §6 Task 6 | wire into `HarnessDeps` + `AgentHarness` |
+| `with_chain` | New in §6.1 | port `chain_context.rs` as part of §6 Moves; thread into harness deps |
+| `with_shared_snapshot` | New in §6.1 | evaluate whether snapshot semantics are needed on the harness path; document drop if not |
+| `with_provider_name` | New in §6.1 | observability tag — attach to `FlowRequest.metadata` or `HarnessDeps` |
+| `with_platform_name` | New in §6.1 | already threaded as `FlowRequest.channel` in Phase 5 — verify parity |
+| `with_session_id` | New in §6.1 | already threaded as `FlowRequest.session_hint` in Phase 5 — verify parity |
+| `with_skill_prefetcher` | New in §6.1 | port `skill_prefetch.rs` as part of §6 Moves; wire on boot |
+| `with_hook_executor` | New in §6.1 | user-config hooks — decide whether this lives on `HarnessDeps` or on the gateway side |
+| `with_tool_refresh` | New in §6.1 | `ToolRefreshSource` is part of tool-service — plumb via `ToolService` trait extension |
+
+**6b flip scope (MUST complete atomically with the §6 Moves):**
+
+1. Relocate helpers per §6 Moves table.
+2. Wire Task-6 triad (budget/compactor/stop_hooks) into `HarnessDeps` +
+   `AgentHarness::run_turn`.
+3. For each of the other seven builder behaviours in the table above,
+   either:
+   - Wire it onto the harness path (preferred), or
+   - Document it as out-of-scope on the harness path in an
+     `ARCHITECTURE-DECISIONS.md` entry + confirm the drop is safe via
+     targeted tests.
+4. Replace `AgentLoop::new(...).with_*(...)` at
+   `src/gateway/execution_engine/run_loop.rs:628` with
+   `Orchestrator::dispatch(FlowRequest { ... })`, drain
+   `handle.events` → existing `StreamCallback`, await
+   `handle.completion`, convert `FlowOutcome` → `LoopRunResult`-shaped
+   response in the `684–731` block.
+5. Add `tests/gateway_chat_through_orchestrator.rs` integration test.
+6. Add `scripts/check-phase6b-exit.sh` enforcing:
+   - `grep -rn 'AgentLoop::new' src/ | grep -v agent_loop/ | grep -v //` is empty
+   - `grep -rn 'use crate::agent_loop' src/gateway/ src/bin/` is empty
+   - `cargo test -p alephcore --lib` ≥ baseline green
+   - `tests/harness_run_e2e.rs` 2/2 passing
+7. Manual smoke: boot `aleph-server`, send `/v1/chat/completions`,
+   verify streamed deltas + multi-turn history + iteration-limit
+   messaging + mid-response cancel.
+
 ### Exit criteria
 
 - Each moved file has only one new canonical path; old path is a thin re-export.
 - `cargo build && cargo test -p alephcore --lib` still green.
-- No net behavior change from the moves themselves; **the deferred Task-6
-  wiring is net-new behavior and covered by its own tests** (see scope
-  above).
-- The `PHASE-6b-WIRING` marker in `src/harness/deps.rs` is removed.
+- **Task 6 wiring + Task 7 flip + Task 8 grep guarantee all delivered**;
+  the `PHASE-6b-WIRING` marker in `src/harness/deps.rs` is removed.
+- `scripts/check-phase6b-exit.sh` is green.
 - Sub-phase shippable as one PR.
 
 ## 7. Sub-Phase 6c — Delete `loop_core.rs` + Siblings
