@@ -622,6 +622,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             let platform_name = request.metadata.get("platform").cloned();
 
+            // PHASE-6-LEGACY: replaced by orchestrator.dispatch once Gateway sink
+            // infrastructure (StreamCallback, context_budget, stop_hooks, etc.) is
+            // ported to FlowStreamEvent. Kept for production path until Phase 6.
             let mut agent_loop = AgentLoop::new(
                 bridge,
                 tool_registry,

@@ -733,6 +733,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     ExecutionError::RunNotActive(_) => "RUN_NOT_ACTIVE",
                     ExecutionError::Escalated { .. } => "ESCALATED",
                     ExecutionError::Fallthrough { .. } => "FALLTHROUGH",
+                    ExecutionError::Orchestrator(_) => "ORCHESTRATOR",
                 };
                 let _ = emitter
                     .emit(StreamEvent::RunError {
@@ -937,6 +938,57 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         });
 
         Ok(())
+    }
+
+    /// Phase 5 orchestrator-backed dispatch. Used by Task 13 integration tests
+    /// and (eventually) direct Gateway callers. Returns a minimal `FlowOutcome`.
+    /// Full Gateway sink streaming is NOT yet wired — events are consumed but
+    /// not re-emitted. This is Phase 5's "plumbing only" landing.
+    pub async fn dispatch_via_orchestrator(
+        &self,
+        orchestrator: Arc<crate::orchestrator::Orchestrator>,
+        agent_id: String,
+        input_text: String,
+        session_key: String,
+        channel: Option<String>,
+    ) -> Result<crate::orchestrator::FlowOutcome, ExecutionError> {
+        use crate::orchestrator::{FlowInput, FlowRequest, FlowStreamEvent};
+        use tokio::sync::broadcast;
+
+        let req = FlowRequest {
+            flow_id: None,
+            agent_id,
+            input: FlowInput::Prompt(input_text),
+            channel,
+            session_hint: Some(session_key),
+            parent_session: None,
+            depth: 0,
+        };
+
+        let handle = orchestrator
+            .dispatch(req)
+            .await
+            .map_err(|e| ExecutionError::Orchestrator(format!("dispatch: {e}")))?;
+
+        // Drain events; sink wiring is Phase 6. Complete event or channel close
+        // both terminate the drain.
+        let mut events = handle.events;
+        loop {
+            match events.recv().await {
+                Ok(FlowStreamEvent::Complete) => break,
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(n, "orchestrator event stream lagged; dropping");
+                }
+            }
+        }
+
+        handle
+            .completion
+            .await
+            .map_err(|e| ExecutionError::Orchestrator(format!("completion dropped: {e}")))?
+            .map_err(|e| ExecutionError::Orchestrator(format!("flow: {e}")))
     }
 }
 

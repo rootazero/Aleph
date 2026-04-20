@@ -152,4 +152,7 @@ pub enum ExecutionError {
         context: crate::routing::EscalationSnapshot,
         completed_steps: usize,
     },
+
+    #[error("orchestrator: {0}")]
+    Orchestrator(String),
 }
