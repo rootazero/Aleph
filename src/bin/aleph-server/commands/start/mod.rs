@@ -1025,6 +1025,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         .await
         {
             Ok(orch) => {
+                // Inject orchestrator into ExecutionEngine via the shared OnceLock.
+                if let Some(ref cell) = agent_result.orchestrator_cell {
+                    let _ = cell.set(orch.clone());
+                }
                 server.orchestrator = Some(orch);
                 if !args.daemon {
                     println!("Orchestrator: assembled (Phase 5)");
