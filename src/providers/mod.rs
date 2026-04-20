@@ -67,6 +67,7 @@ pub mod health;
 pub mod http_provider;
 pub mod llm_retry;
 pub mod message;
+pub mod model_behaviors;
 pub mod mock;
 pub mod model_discovery;
 pub mod oauth_refresh;
