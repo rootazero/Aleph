@@ -3,3 +3,4 @@ mod flow_registry;
 mod flow_spec_parse;
 mod loader;
 mod resolver;
+mod sandbox_factory;

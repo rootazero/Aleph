@@ -8,6 +8,7 @@ pub mod flow_spec;
 pub mod loader;
 pub mod presets;
 pub mod resolver;
+pub mod sandbox_factory;
 
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
@@ -16,6 +17,7 @@ pub use flow_spec::{
     SessionStrategy,
 };
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
+pub use sandbox_factory::{build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder};
 
 #[cfg(test)]
 mod tests;
