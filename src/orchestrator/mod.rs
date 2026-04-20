@@ -21,8 +21,8 @@ pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_run_tool::{FlowRunContext, FlowRunDescriptor, FlowRunInput, FlowRunTool};
 pub use flow_spec::{
-    AgentId, BrainRef, FlowId, FlowInput, FlowOverrides, FlowSpec, ProviderId, SandboxKind,
-    SessionStrategy,
+    AgentId, BrainRef, FlowHistoryTurn, FlowId, FlowInput, FlowOverrides, FlowSpec, ProviderId,
+    SandboxKind, SessionStrategy,
 };
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
 pub use sandbox_factory::{build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder};

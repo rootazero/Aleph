@@ -11,9 +11,31 @@ pub type ProviderId = String;
 
 /// Gateway-agnostic input envelope for a Flow dispatch.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum FlowInput {
+    /// Single user prompt. Seeded as one `UserMessage` session event.
     Prompt(String),
+    /// Pre-assembled user messages, seeded one event per entry.
     Messages(Vec<MessageContent>),
+    /// Multi-turn history plus a new user prompt. History turns are replayed
+    /// as the corresponding `UserMessage` / `AssistantMessage` events before
+    /// the prompt is emitted as a fresh `UserMessage`.
+    History {
+        turns: Vec<FlowHistoryTurn>,
+        prompt: String,
+    },
+    /// Multimodal user messages (one per entry). Each `MessageContent` can
+    /// carry `blocks` referencing images, files, or other non-text payloads;
+    /// the harness delegates interpretation to the LLM provider.
+    Multimodal(Vec<MessageContent>),
+}
+
+/// One role-tagged turn in a replayed history. Used only by
+/// [`FlowInput::History`] for seeding the session log.
+#[derive(Debug, Clone)]
+pub enum FlowHistoryTurn {
+    User(MessageContent),
+    Assistant(MessageContent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
