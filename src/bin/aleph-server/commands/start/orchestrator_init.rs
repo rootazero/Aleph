@@ -30,7 +30,7 @@ use alephcore::orchestrator::{
 pub(in crate::commands::start) async fn initialize_orchestrator(
     agent_registry: Arc<alephcore::agents::AgentRegistry>,
     session_service: Arc<dyn alephcore::session::service::SessionService>,
-    _tool_service: Arc<dyn alephcore::tools::service::ToolService>,
+    tool_service: Arc<dyn alephcore::tools::service::ToolService>,
     default_provider: Arc<dyn alephcore::providers::AiProvider>,
     sandbox: Arc<dyn alephcore::sandbox::Sandbox>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
@@ -65,7 +65,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
-        tool_service: _tool_service,
+        tool_service,
         default_provider,
         named_providers: HashMap::new(),
     });
