@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
-use crate::agent_loop::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
+use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::Sandbox;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
@@ -228,8 +228,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use crate::agent_loop::exec_approval::gate::ApprovalRequester;
-    use crate::agent_loop::exec_approval::types::ApprovalConfig;
+    use crate::sandbox::exec_approval::gate::ApprovalRequester;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::driver::OsSandboxProfile;
 

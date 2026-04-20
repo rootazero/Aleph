@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::agent_loop::exec_approval::gate::ApprovalOutcome;
+use crate::sandbox::exec_approval::gate::ApprovalOutcome;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
