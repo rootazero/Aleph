@@ -8,7 +8,9 @@ pub mod callback;
 pub mod context_budget;
 pub mod context_compactor;
 pub mod deps;
+pub mod stop_hooks;
 pub mod trait_def;
+pub mod verify_stop_hook;
 
 pub use agent::AgentHarness;
 pub use callback::{HarnessCallback, NoopHarnessCallback};
