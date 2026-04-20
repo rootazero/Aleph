@@ -82,66 +82,54 @@ Commit: `phase6b: relocate compaction into memory/ (task 2)`
 
 ---
 
-### Task 3: Relocate `agent_loop/context_budget/` → `harness/context_budget/` + wire into `HarnessDeps`
+### Task 3: Relocate `agent_loop/context_budget/` → `harness/context_budget/`
+
+**Note:** Scope narrowed from original plan — wiring into `HarnessDeps`
+and `AgentHarness` is now consolidated into **Task 10 / 11** alongside
+the other inherited 6a Task-6 helpers. Rationale: doing one HarnessDeps
+reconciliation after ALL relocations land is safer than churning the
+struct three times (once per wire). This keeps Tasks 3/4/5 mechanically
+symmetrical with Tasks 1/2/6/7/8/9 (pure strangler-fig moves).
 
 **Files:**
 - Create: `src/harness/context_budget/` (full subtree)
 - Modify: `src/agent_loop/context_budget/mod.rs` — re-export stub
 - Modify: `src/harness/mod.rs` — add `pub mod context_budget;`
-- Modify: `src/harness/deps.rs` — add `pub context_budget: Option<Arc<Mutex<ContextBudget>>>`
-- Modify: `src/harness/agent.rs` — invoke `budget.before_turn()` between iterations;
-  populate `FlowOutcome::hit_limit` when exceeded
-- Modify: `src/orchestrator/harness_bridge.rs` — pass field from HarnessDeps through
-- Modify: all existing HarnessDeps constructors in tests — default field to `None`
 
-- [ ] **Step 1: Relocate files per strangler-fig**
-- [ ] **Step 2: Add field to HarnessDeps (write failing test first that constructs it)**
-- [ ] **Step 3: Wire `before_turn()` invocation between iterations in `AgentHarness::run`**
-- [ ] **Step 4: Add test — over-budget run sets `FlowOutcome::hit_limit = true`**
-- [ ] **Step 5: `cargo test -p alephcore --lib`**
-- [ ] **Step 6: Commit**
+- [ ] **Steps 1–6 per strangler-fig discipline.**
 
-Commit: `phase6b: relocate context_budget to harness/ and wire (task 3)`
+Commit: `phase6b: relocate context_budget to harness/ (task 3)`
 
 ---
 
-### Task 4: Relocate `agent_loop/context_compactor.rs` → `harness/context_compactor.rs` + wire
+### Task 4: Relocate `agent_loop/context_compactor.rs` → `harness/context_compactor.rs`
+
+**Note:** Wiring deferred to Task 10/11 (same reasoning as Task 3).
 
 **Files:**
 - Create: `src/harness/context_compactor.rs`
 - Modify: `src/agent_loop/context_compactor.rs` — re-export stub
 - Modify: `src/harness/mod.rs` — add `pub mod context_compactor;`
-- Modify: `src/harness/deps.rs` — add `pub context_compactor: Option<Arc<ContextCompactor>>`
-- Modify: `src/harness/agent.rs` — invoke compactor when budget pressure crosses threshold
 
-- [ ] **Step 1: Relocate file per strangler-fig**
-- [ ] **Step 2: Add field to HarnessDeps**
-- [ ] **Step 3: Wire pressure-triggered compaction in `AgentHarness::run`**
-- [ ] **Step 4: Add test — synthetic pressure fires compactor (mock provider asserted)**
-- [ ] **Step 5: `cargo test -p alephcore --lib`**
-- [ ] **Step 6: Commit**
+- [ ] **Steps 1–6 per strangler-fig discipline.**
 
-Commit: `phase6b: relocate context_compactor to harness/ and wire (task 4)`
+Commit: `phase6b: relocate context_compactor to harness/ (task 4)`
 
 ---
 
-### Task 5: Relocate `agent_loop/{stop_hooks.rs, verify_stop_hook.rs}` → `harness/stop_hooks.rs` + wire
+### Task 5: Relocate `agent_loop/{stop_hooks.rs, verify_stop_hook.rs}` → `harness/`
+
+**Note:** Wiring deferred to Task 10/11 (same reasoning as Task 3).
 
 **Files:**
-- Create: `src/harness/stop_hooks.rs` (merging both sources or keeping siblings)
+- Create: `src/harness/stop_hooks.rs` + `src/harness/verify_stop_hook.rs`
+  (keep as siblings mirroring current layout)
 - Modify: old paths → re-export stubs
-- Modify: `src/harness/mod.rs` — `pub mod stop_hooks;`
-- Modify: `src/harness/deps.rs` — add `pub stop_hooks: Option<Arc<StopHooksExecutor>>`
-- Modify: `src/harness/agent.rs` — evaluate hooks before `TurnState::Done` early-exit
+- Modify: `src/harness/mod.rs` — `pub mod stop_hooks; pub mod verify_stop_hook;`
 
-- [ ] **Step 1: Relocate files per strangler-fig**
-- [ ] **Step 2: Add field to HarnessDeps**
-- [ ] **Step 3: Wire hook evaluation before early-exit in `AgentHarness::run`**
-- [ ] **Step 4: Add test — veto hook blocks stop, loop continues one more turn**
-- [ ] **Step 5: `cargo test -p alephcore --lib`**
-- [ ] **Step 6: Commit**
+- [ ] **Steps 1–6 per strangler-fig discipline.**
 
-Commit: `phase6b: relocate stop_hooks to harness/ and wire (task 5)`
+Commit: `phase6b: relocate stop_hooks to harness/ (task 5)`
 
 ---
 
@@ -201,30 +189,55 @@ Commit: `phase6b: relocate remaining harness helpers (task 9)`
 
 ---
 
-### Task 10: Audit 7 "other" `AgentLoop` builder behaviours (§6.1 table)
+### Task 10: Wire inherited 6a Task-6 triad + audit 7 other builder behaviours
 
-Each of the following must be resolved to **wire-in** or **documented drop**:
+This task does the consolidated HarnessDeps/AgentHarness wiring deferred
+from Tasks 3/4/5 AND from Phase 6a Task 6, plus the audit of the 7 other
+AgentLoop builder behaviours surfaced in cleanup-design §6.1.
+
+**Part A — Wire the Task-6 triad into `HarnessDeps` + `AgentHarness`:**
+
+- Add three optional fields to `HarnessDeps`:
+  - `pub stop_hooks: Option<Arc<StopHooksExecutor>>`
+  - `pub context_budget: Option<Arc<Mutex<ContextBudget>>>`
+  - `pub context_compactor: Option<Arc<ContextCompactor>>`
+- Update every `HarnessDeps { ... }` constructor site in tests +
+  production to default the new fields to `None`.
+- In `AgentHarness::run` / `run_turn`:
+  - Invoke `budget.before_turn()` between iterations; populate
+    `FlowOutcome::hit_limit` when exceeded.
+  - Invoke `compactor.compact()` when pressure crosses threshold.
+  - Evaluate stop hooks before `TurnState::Done` early-exit; a veto
+    forces `Continue`.
+- Add three targeted tests (over-budget → hit_limit; pressure → compact;
+  veto → continue one more turn).
+
+**Part B — Audit the 7 other builder behaviours:**
+
+Each must resolve to **wire-in** or **documented drop** in
+`docs/reference/PHASE_6B_BUILDER_AUDIT.md`:
 
 | Builder | Decision checklist |
 |---------|--------------------|
-| `with_chain` | Port chain_context onto harness path? Or document as gateway-only observability that FlowRequest routes via metadata? |
+| `with_chain` | Port chain_context onto harness path? Or gateway-only observability via FlowRequest metadata? |
 | `with_shared_snapshot` | Does `SessionService` already encompass snapshot semantics? Evaluate and document. |
-| `with_provider_name` | Already resolvable from `BrainRef::Strict.provider` — verify parity, document. |
+| `with_provider_name` | Resolvable from `BrainRef::Strict.provider` — verify parity. |
 | `with_platform_name` | Already threaded as `FlowRequest.channel` — verify parity. |
 | `with_session_id` | Already threaded as `FlowRequest.session_hint` — verify parity. |
 | `with_skill_prefetcher` | Add optional field to `HarnessDeps`; wire in orchestrator boot. |
 | `with_hook_executor` | User-config hook — decide harness-side vs gateway-side; document. |
 | `with_tool_refresh` | Extend `ToolService` trait with optional `refresh()` method; plumb. |
 
-- [ ] **Step 1:** Produce `docs/reference/PHASE_6B_BUILDER_AUDIT.md` documenting
-  each decision with code pointers.
-- [ ] **Step 2:** For each "wire-in" decision, add the HarnessDeps field + invocation
-  point with a targeted test.
-- [ ] **Step 3:** For each "document drop" decision, add a test asserting the
-  current behaviour is preserved through the gateway path regardless.
-- [ ] **Step 4:** Commit audit doc + wiring.
+- [ ] **Step 1:** Part A HarnessDeps fields + AgentHarness wiring + tests.
+- [ ] **Step 2:** Part B audit doc with each decision + code pointers.
+- [ ] **Step 3:** For each "wire-in" decision in Part B, add field +
+  invocation + test.
+- [ ] **Step 4:** For each "document drop" decision, add a test
+  asserting preserved behaviour through the gateway path.
+- [ ] **Step 5:** `cargo test -p alephcore --lib` green.
+- [ ] **Step 6:** Commit.
 
-Commit: `phase6b: audit and wire 7 remaining AgentLoop builder behaviours (task 10)`
+Commit: `phase6b: wire Task-6 triad + audit remaining AgentLoop builders (task 10)`
 
 ---
 
