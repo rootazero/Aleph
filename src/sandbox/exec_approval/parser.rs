@@ -55,7 +55,7 @@ pub fn parse_approval(text: &Option<String>) -> ApprovalDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::exec_approval::types::{ApprovalAction, BlockAction};
+    use crate::sandbox::exec_approval::types::{ApprovalAction, BlockAction};
 
     #[test]
     fn test_auto_execute_parsing() {

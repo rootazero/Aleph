@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 
-use crate::agent_loop::exec_approval::parser::parse_approval;
-use crate::agent_loop::exec_approval::types::{ApprovalAction, ApprovalConfig, ApprovalDecision};
+use crate::sandbox::exec_approval::parser::parse_approval;
+use crate::sandbox::exec_approval::types::{ApprovalAction, ApprovalConfig, ApprovalDecision};
 use crate::providers::adapter::ProviderResponse;
 
 #[async_trait]
@@ -104,7 +104,7 @@ impl ApprovalGate {
         matches!(
             decision.action,
             ApprovalAction::Block {
-                action: crate::agent_loop::exec_approval::types::BlockAction::Retry
+                action: crate::sandbox::exec_approval::types::BlockAction::Retry
             }
         ) && self.retry_count < 2
     }
@@ -129,7 +129,7 @@ pub fn check_always_confirm(tool_name: &str, always_confirm: &HashSet<String>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::exec_approval::types::BlockAction;
+    use crate::sandbox::exec_approval::types::BlockAction;
 
     fn make_response_with_approval(text: &str) -> ProviderResponse {
         ProviderResponse {

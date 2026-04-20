@@ -14,6 +14,7 @@ pub mod command;
 pub mod config;
 pub mod context;
 pub mod driver;
+pub mod exec_approval;
 pub mod factory;
 pub mod workspace;
 
