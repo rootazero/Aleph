@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::agent_loop::compaction::types::{
+use crate::memory::compaction::types::{
     CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
 };
 use crate::agent_loop::tool_result_store::extract_persisted_ref;

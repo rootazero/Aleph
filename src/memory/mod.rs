@@ -18,6 +18,7 @@ pub mod ai_retrieval;
 pub mod assembler;
 pub mod audit;
 pub mod cli;
+pub mod compaction;
 pub mod compression;
 pub mod content_scanner;
 pub mod context;
