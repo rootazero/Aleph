@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentRegistry;
 use crate::harness::agent::AgentHarness;
+use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
@@ -125,10 +126,10 @@ impl HarnessRunner for AgentHarnessRunner {
             llm,
         };
         let harness = AgentHarness::new(deps);
-        // PHASE 6a Task 2 replaces NoopHarnessCallback with a
-        // `BroadcastCallback` that fans `on_delta`/`on_tool_call` into
-        // `FlowStreamEvent`. Task 1 keeps the surface minimal and correct.
-        let mut cb = crate::harness::NoopHarnessCallback;
+        // Fans HarnessCallback events onto the FlowStreamEvent broadcast
+        // channel so downstream Gateway sinks see delta / tool_call cadence
+        // equivalent to the retiring AgentLoop StreamingSink.
+        let mut cb = BroadcastCallback::new(events.clone());
         harness
             .run(&session_id, &mut cb)
             .await
@@ -153,11 +154,47 @@ impl HarnessRunner for AgentHarnessRunner {
             }
         }
 
-        let _ = events.send(FlowStreamEvent::Complete);
+        // `BroadcastCallback::on_complete` already fired `Complete` from
+        // inside `Harness::run`; do not double-send here.
         Ok(FlowOutcome {
             final_text,
             iterations,
         })
+    }
+}
+
+/// Adapter that fans `HarnessCallback` lifecycle events onto the
+/// orchestrator's `FlowStreamEvent` broadcast channel.
+///
+/// * `on_delta(text)` → `FlowStreamEvent::Delta(text)`
+/// * `on_tool_call(name)` → `FlowStreamEvent::ToolCall { name }`
+/// * `on_complete()` → `FlowStreamEvent::Complete`
+///
+/// `broadcast::Sender::send` returns an error only when there are zero
+/// receivers; we deliberately ignore that since a dropped receiver must not
+/// abort the harness loop. The inner harness still produces session events
+/// as the canonical log.
+struct BroadcastCallback {
+    tx: broadcast::Sender<FlowStreamEvent>,
+}
+
+impl BroadcastCallback {
+    fn new(tx: broadcast::Sender<FlowStreamEvent>) -> Self {
+        Self { tx }
+    }
+}
+
+impl HarnessCallback for BroadcastCallback {
+    fn on_delta(&mut self, text: &str) {
+        let _ = self.tx.send(FlowStreamEvent::Delta(text.to_string()));
+    }
+    fn on_tool_call(&mut self, name: &str) {
+        let _ = self.tx.send(FlowStreamEvent::ToolCall {
+            name: name.to_string(),
+        });
+    }
+    fn on_complete(&mut self) {
+        let _ = self.tx.send(FlowStreamEvent::Complete);
     }
 }
 
@@ -179,5 +216,58 @@ fn pick_llm(
             .get(provider)
             .cloned()
             .ok_or_else(|| FlowError::ProviderUnavailable(provider.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broadcast_callback_fans_lifecycle_events() {
+        let (tx, mut rx) = broadcast::channel::<FlowStreamEvent>(16);
+        let mut cb = BroadcastCallback::new(tx);
+
+        cb.on_delta("hello ");
+        cb.on_delta("world");
+        cb.on_tool_call("read_file");
+        cb.on_complete();
+
+        let mut received = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            received.push(ev);
+        }
+
+        assert_eq!(received.len(), 4);
+        match &received[0] {
+            FlowStreamEvent::Delta(s) => assert_eq!(s, "hello "),
+            other => panic!("expected Delta(\"hello \"), got {other:?}"),
+        }
+        match &received[1] {
+            FlowStreamEvent::Delta(s) => assert_eq!(s, "world"),
+            other => panic!("expected Delta(\"world\"), got {other:?}"),
+        }
+        match &received[2] {
+            FlowStreamEvent::ToolCall { name } => assert_eq!(name, "read_file"),
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+        assert!(
+            matches!(received[3], FlowStreamEvent::Complete),
+            "expected Complete, got {:?}",
+            received[3]
+        );
+    }
+
+    #[test]
+    fn broadcast_callback_is_silent_when_no_receivers() {
+        // No active receiver — `send` returns Err(SendError) but
+        // BroadcastCallback swallows it so the harness loop is unaffected.
+        let (tx, _rx) = broadcast::channel::<FlowStreamEvent>(1);
+        drop(_rx);
+        let mut cb = BroadcastCallback::new(tx);
+        cb.on_delta("nobody is listening");
+        cb.on_tool_call("read_file");
+        cb.on_complete();
+        // No panic = pass.
     }
 }
