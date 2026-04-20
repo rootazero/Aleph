@@ -175,6 +175,10 @@ pub struct GatewayServer {
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
     pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
+    /// Phase 5 Orchestrator (flow composition). Populated at boot after
+    /// agent registry + session + tool + provider + sandbox are assembled.
+    /// Task 10 (Gateway run_agent_loop replacement) consumes this.
+    pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
 }
 
 impl GatewayServer {
@@ -214,6 +218,7 @@ impl GatewayServer {
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
+            orchestrator: None,
         }
     }
 
@@ -252,6 +257,7 @@ impl GatewayServer {
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
             embedding_provider: None,
+            orchestrator: None,
         }
     }
 

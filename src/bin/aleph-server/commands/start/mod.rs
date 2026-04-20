@@ -28,6 +28,9 @@ use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 mod builder;
 use builder::*;
 
+mod orchestrator_init;
+use orchestrator_init::initialize_orchestrator;
+
 // ── Subsystem initializer functions ──────────────────────────────────────────
 // Each function handles one cohesive initialization concern, extracted from
 // start_server() to keep the orchestrator function under 100 lines.
@@ -445,18 +448,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Phase 2 Task 10: assemble the ToolService decorator chain.
     //
-    // The chain is built once here and held as a local `_tool_service`. As
+    // The chain is built once here and held as a local `tool_service`. As
     // agent_loop migrates to `Arc<dyn ToolService>` dispatch (Task 11+), this
     // binding will be threaded into the downstream builders; today it is
     // enough to materialise the registry so MCP + Extension setters can wire
-    // into it. Any failure is warn-only — never aborts boot.
+    // into it, and the Phase 5 Orchestrator (`initialize_orchestrator` below)
+    // consumes it. Any failure is warn-only — never aborts boot.
     //
     // Phase 3 H3 fix: use `build_tool_service_with_handles` so we can attach
     // the Phase 3 `LayeredPermissionResolver` + `ApprovalGate`-as-Approver
     // onto the `PermissionLayer` below. Previously the layer had a default
     // `Allow` classifier attached and Ask-tier tools could not route through
     // a real approver.
-    let (_tool_service, tool_registry_phase2, tool_service_handles) = {
+    let (tool_service, tool_registry_phase2, tool_service_handles) = {
         let tool_cfg = loaded_app_config.tool_service.clone();
         // Use an empty AlephToolServer here: the aleph-server bin currently
         // builds its active tool catalogue via BuiltinToolRegistry inside
@@ -643,6 +647,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
     // disconnect hook captures session-end events (Task 8).
     // Only applicable for the SQLite backend; file backend skips this step.
+    //
+    // Phase 5 Task 9: hoist `session_service` out of the inner block so the
+    // Orchestrator (`initialize_orchestrator` below) can share the same
+    // `SessionService` used for dual-write. `None` on file-backend fallback.
+    let mut session_service_for_orchestrator: Option<
+        Arc<dyn alephcore::session::service::SessionService>,
+    > = None;
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         // Phase 1 Task 9: build a SessionService sharing the sessions DB
         // so every `SessionManager::add_message` mirrors into the new
@@ -659,6 +670,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             )
             .with_event_bus(event_bus.clone());
         if let Some(svc) = session_service {
+            session_service_for_orchestrator = Some(svc.clone());
             sm = sm.with_session_service(svc);
             if !args.daemon {
                 println!("  Session dual-write enabled (session_events log)");
@@ -993,6 +1005,47 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.openai_provider_configs = provider_configs;
     }
     server.embedding_provider = agent_result.embedder.clone();
+
+    // Phase 5 Task 9: assemble the Orchestrator once all five input services
+    // are available. Gated on `default_provider` + `session_service_for_orchestrator`
+    // because both are required by `AgentHarnessRunner`. Failure is warn-only —
+    // the rest of boot continues without flow composition, preserving Phase 4
+    // behaviour until Task 10 consumes `server.orchestrator`.
+    if let (Some(default_provider), Some(session_service)) = (
+        agent_result.default_provider.clone(),
+        session_service_for_orchestrator.clone(),
+    ) {
+        // The Orchestrator needs `alephcore::agents::AgentRegistry` (AgentDef
+        // catalogue), which is a different type from the
+        // `gateway::AgentRegistry` held in `agent_result`. We instantiate a
+        // fresh one from the same `builtin_agents()` catalogue used by
+        // `tools.effective`. PHASE-6: unify with per-session AgentRegistry.
+        let orchestrator_agent_registry =
+            Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+        match initialize_orchestrator(
+            orchestrator_agent_registry,
+            session_service,
+            tool_service.clone(),
+            default_provider,
+            sandbox.clone(),
+        )
+        .await
+        {
+            Ok(orch) => {
+                server.orchestrator = Some(orch);
+                if !args.daemon {
+                    println!("Orchestrator: assembled (Phase 5)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to assemble Orchestrator — flow composition disabled");
+            }
+        }
+    } else if !args.daemon {
+        tracing::info!(
+            "Orchestrator: skipped (no default provider or session service available)"
+        );
+    }
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
