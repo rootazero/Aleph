@@ -145,6 +145,7 @@ impl Drop for SessionLockGuard {
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
     async fn run(
         &self,

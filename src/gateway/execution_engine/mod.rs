@@ -10,15 +10,22 @@
 
 mod engine;
 pub(crate) mod event_drain;
+pub mod helpers;
 mod run_loop;
 mod simple;
 mod slash_command;
+mod tool_service_builder;
+mod trace_sink_adapter;
 
 #[cfg(test)]
 mod tests;
 
 pub use engine::ExecutionEngine;
 pub use simple::SimpleExecutionEngine;
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use tool_service_builder::build_request_tool_service;
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use trace_sink_adapter::GatewayTraceSink;
 
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
