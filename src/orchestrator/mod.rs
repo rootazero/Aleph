@@ -5,6 +5,7 @@
 pub mod dispatch;
 pub mod errors;
 pub mod flow_registry;
+pub mod flow_run_tool;
 pub mod flow_spec;
 pub mod harness_bridge;
 pub mod loader;
@@ -18,6 +19,7 @@ pub use dispatch::{
 pub use harness_bridge::AgentHarnessRunner;
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
+pub use flow_run_tool::{FlowRunContext, FlowRunDescriptor, FlowRunInput, FlowRunTool};
 pub use flow_spec::{
     AgentId, BrainRef, FlowId, FlowInput, FlowOverrides, FlowSpec, ProviderId, SandboxKind,
     SessionStrategy,
