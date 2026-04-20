@@ -9,6 +9,7 @@
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
 mod engine;
+pub(crate) mod event_drain;
 mod run_loop;
 mod simple;
 mod slash_command;
