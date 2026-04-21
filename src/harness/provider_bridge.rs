@@ -19,8 +19,13 @@ use crate::providers::message::{transform_messages, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
-use crate::agent_loop::LoopProvider;
 use crate::tools::runtime::ToolDefinition as LoopToolDefinition;
+
+// Canonical home for the `LoopProvider` trait — Phase 7 rewrites all
+// external references from `crate::agent_loop::LoopProvider` to this path.
+// The trait definition itself still lives in `agent_loop/loop_core.rs`
+// and is relocated here by T9 when `src/agent_loop/` is deleted.
+pub use crate::agent_loop::LoopProvider;
 
 /// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///

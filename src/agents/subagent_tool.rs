@@ -65,7 +65,7 @@ pub struct SubagentTool {
     provider: Arc<dyn AiProvider>,
     tool_registry_factory: ToolRegistryFactory,
     safety_guard_factory: SafetyGuardFactory,
-    chain: crate::agent_loop::chain_context::ChainContext,
+    chain: crate::harness::chain_context::ChainContext,
     agent_registry: Arc<AgentRegistry>,
     background_tracker: Arc<BackgroundAgentTracker>,
     /// Shared session actor threaded to child `AgentRuntime` instances.
@@ -98,7 +98,7 @@ impl SubagentTool {
         provider: Arc<dyn AiProvider>,
         tool_registry_factory: ToolRegistryFactory,
         safety_guard_factory: SafetyGuardFactory,
-        chain: crate::agent_loop::chain_context::ChainContext,
+        chain: crate::harness::chain_context::ChainContext,
         agent_registry: Arc<AgentRegistry>,
         background_tracker: Arc<BackgroundAgentTracker>,
         session: Arc<dyn SessionService>,
@@ -793,7 +793,7 @@ mod tests {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
         let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
         let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
-        let chain = crate::agent_loop::chain_context::ChainContext::new();
+        let chain = crate::harness::chain_context::ChainContext::new();
         SubagentTool::new(
             provider,
             factory,
@@ -999,7 +999,7 @@ mod tests {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
         let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
         let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
-        let chain = crate::agent_loop::chain_context::ChainContext::new();
+        let chain = crate::harness::chain_context::ChainContext::new();
         let tool = SubagentTool::new(
             provider,
             factory,

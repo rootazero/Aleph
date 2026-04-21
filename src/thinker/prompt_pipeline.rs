@@ -410,7 +410,7 @@ mod tests {
         ]);
 
         let config = PromptConfig::default();
-        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
+        let tools: Vec<crate::tools::info::ToolInfo> = vec![];
         let input = LayerInput::basic(&config, &tools);
         let result = pipeline.execute(AssemblyPath::Basic, &input);
 
@@ -431,7 +431,7 @@ mod tests {
         ]);
 
         let config = PromptConfig::default();
-        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
+        let tools: Vec<crate::tools::info::ToolInfo> = vec![];
         let input = LayerInput::basic(&config, &tools);
 
         let basic_result = pipeline.execute(AssemblyPath::Basic, &input);
@@ -445,7 +445,7 @@ mod tests {
     fn empty_pipeline_returns_empty_string() {
         let pipeline = PromptPipeline::new(vec![]);
         let config = PromptConfig::default();
-        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
+        let tools: Vec<crate::tools::info::ToolInfo> = vec![];
         let input = LayerInput::basic(&config, &tools);
 
         assert_eq!(pipeline.execute(AssemblyPath::Basic, &input), "");
@@ -480,7 +480,7 @@ mod tests {
             PromptPipeline::new(vec![stub("soul_only", 10, &[AssemblyPath::Soul], "SOUL")]);
 
         let config = PromptConfig::default();
-        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
+        let tools: Vec<crate::tools::info::ToolInfo> = vec![];
         let input = LayerInput::basic(&config, &tools);
 
         assert_eq!(pipeline.execute(AssemblyPath::Basic, &input), "");
