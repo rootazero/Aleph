@@ -110,7 +110,8 @@ pub type SharedSnapshot = crate::sync_primitives::Arc<
 // Public re-exports
 // ---------------------------------------------------------------------------
 
-pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
+pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider};
+pub use crate::agents::runtime::LoopRunResult;
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 
 // Trace types — previously re-exported from the stub; now forwarded directly.

@@ -291,20 +291,10 @@ impl Default for LoopConfig {
 // LoopRunResult
 // =============================================================================
 
-/// Result of a loop run.
-#[derive(Debug)]
-pub struct LoopRunResult {
-    pub final_text: Option<String>,
-    pub iterations: usize,
-    pub tool_calls_made: usize,
-    pub total_tokens: usize,
-    pub hit_limit: bool,
-    pub cancelled: bool,
-    /// Chain ID shared across all depths in a subagent call chain.
-    pub chain_id: String,
-    /// Nesting depth (0 = root agent).
-    pub depth: u32,
-}
+// LoopRunResult has moved to `crate::agents::runtime`. This re-export is a
+// transitional bridge; removed when `src/agent_loop/` is deleted in phase 7
+// task 9.
+pub use crate::agents::runtime::LoopRunResult;
 
 type SummaryHandle = JoinHandle<Option<String>>;
 type SkillPrefetchHandle = JoinHandle<Option<Vec<super::skill_prefetch::SkillInfo>>>;

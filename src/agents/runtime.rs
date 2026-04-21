@@ -10,7 +10,6 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::subagent_runner::{run_subagent, SubagentRunConfig};
-use crate::agent_loop::LoopRunResult;
 use crate::agents::AgentDef;
 use crate::harness::chain_context::ChainContext;
 use crate::providers::AiProvider;
@@ -18,6 +17,27 @@ use crate::session::ingress_safety::SafetyGuard;
 use crate::sync_primitives::Arc;
 use crate::thinker::prompt_builder::PromptSnapshot;
 use crate::tools::runtime::LoopToolRegistry;
+
+// =============================================================================
+// LoopRunResult
+// =============================================================================
+
+/// Outcome of a completed sub-agent run. Mirrors the legacy
+/// `agent_loop::loop_core::LoopRunResult` field-for-field so that
+/// `SubagentTool` and downstream consumers see zero behavior change.
+#[derive(Debug, Clone)]
+pub struct LoopRunResult {
+    pub final_text: Option<String>,
+    pub iterations: usize,
+    pub tool_calls_made: usize,
+    pub total_tokens: usize,
+    pub hit_limit: bool,
+    pub cancelled: bool,
+    /// Chain ID shared across all depths in a subagent call chain.
+    pub chain_id: String,
+    /// Nesting depth (0 = root agent).
+    pub depth: u32,
+}
 
 // =============================================================================
 // Type aliases
