@@ -17,7 +17,7 @@ use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
+use crate::gateway::media::{PendingMedia};
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -891,169 +891,6 @@ impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
     }
 }
 
-impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
-    for StreamCallback<E>
-{
-    fn on_trace(&mut self, event: &crate::agent_loop::LoopTraceEvent) {
-        self.shared.persist_trace(event);
-
-        let trace_event = StreamEvent::AgentTrace {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            event: event.clone(),
-        };
-        self.emit_async(trace_event);
-
-        match event {
-            crate::agent_loop::LoopTraceEvent::TextEmitted { stream, text, .. } => match stream {
-                crate::agent_loop::LoopTraceTextKind::Final => self.on_text(text),
-                crate::agent_loop::LoopTraceTextKind::Intermediate => {
-                    self.on_intermediate_text(text)
-                }
-            },
-            crate::agent_loop::LoopTraceEvent::ToolCallStarted { call, .. } => {
-                self.on_tool_call_start(call)
-            }
-            crate::agent_loop::LoopTraceEvent::ToolCallCompleted { call, result, .. } => {
-                self.on_tool_call_done(call, result)
-            }
-            crate::agent_loop::LoopTraceEvent::ToolSummary { summary, .. } => {
-                self.on_tool_summary(summary)
-            }
-            crate::agent_loop::LoopTraceEvent::TurnStarted { .. }
-            | crate::agent_loop::LoopTraceEvent::TurnStateEntered { .. }
-            | crate::agent_loop::LoopTraceEvent::TurnCompleted { .. }
-            | crate::agent_loop::LoopTraceEvent::SessionCompleted { .. } => {}
-        }
-    }
-
-    fn on_text(&mut self, text: &str) {
-        // If streaming is active and DeltaSink already delivered this text token-by-token,
-        // skip to avoid duplication. System-generated notices (truncation warning at
-        // loop_core.rs:495) were never sent through DeltaSink, so has_emitted_text
-        // will be false for them — they pass through normally.
-        if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
-            return;
-        }
-        let chunk_index = self.next_chunk_index();
-
-        let event = StreamEvent::ResponseChunk {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            delta: text.to_string(),
-            content: text.to_string(),
-            full_text: String::new(),
-            chunk_index,
-            is_final: false,
-            is_intermediate: false,
-        };
-        self.emit_async(event);
-    }
-
-    fn on_intermediate_text(&mut self, text: &str) {
-        // When streaming is active, DeltaSink already delivered the text tokens
-        // and its boundary marker triggers emitters (ReplyEmitter, GatewayEventEmitter)
-        // to flush their accumulated buffer as a standalone intermediate message.
-        // Skip here to avoid duplicate intermediate messages on channels.
-        if self.streaming_active {
-            return;
-        }
-        let chunk_index = self.next_chunk_index();
-
-        let event = StreamEvent::ResponseChunk {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            delta: text.to_string(),
-            content: text.to_string(),
-            full_text: String::new(),
-            chunk_index,
-            is_final: false,
-            is_intermediate: true,
-        };
-        self.emit_async(event);
-    }
-
-    fn on_tool_call_start(&mut self, event: &crate::agent_loop::ToolCallStartEvent) {
-        let stream_event = StreamEvent::ToolStart {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            tool_name: event.tool_name.clone(),
-            tool_id: event.tool_id.clone(),
-            params: event.input.clone(),
-        };
-        self.emit_async(stream_event);
-    }
-
-    fn on_tool_call_done(
-        &mut self,
-        event: &crate::agent_loop::ToolCallEndEvent,
-        result: &crate::agent_loop::ToolResult,
-    ) {
-        // Extract _media from raw Value before serialization
-        match result {
-            crate::agent_loop::ToolResult::Success { output }
-            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
-                if let Some(media_val) = output.get("_media") {
-                    if let Ok(items) = serde_json::from_value::<Vec<MediaItem>>(media_val.clone()) {
-                        tracing::info!(
-                            tool = %event.tool_name,
-                            count = items.len(),
-                            urls = ?items.iter().map(|i| &i.url).collect::<Vec<_>>(),
-                            "Extracted _media from tool output"
-                        );
-                        let mut pending =
-                            self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
-                        let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
-                        if remaining < items.len() {
-                            tracing::warn!(
-                                tool = %event.tool_name,
-                                total = items.len(),
-                                accepted = remaining,
-                                "Media items exceed per-run limit, dropping excess"
-                            );
-                        }
-                        pending.extend(items.into_iter().take(remaining));
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // === Existing code below ===
-        use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
-        let tool_result = match result {
-            crate::agent_loop::ToolResult::Success { output }
-            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
-                EmitterToolResult::success(output.to_string())
-            }
-            crate::agent_loop::ToolResult::Error { error, .. } => {
-                EmitterToolResult::error(error.clone())
-            }
-        };
-        let stream_event = StreamEvent::ToolEnd {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            tool_id: event.tool_id.clone(),
-            result: tool_result,
-            duration_ms: event.duration_ms,
-        };
-        self.emit_async(stream_event);
-    }
-
-    fn on_tool_summary(&mut self, summary: &str) {
-        let event = StreamEvent::ReasoningBlock {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            step_type: crate::gateway::event_emitter::ReasoningStepType::Observation,
-            label: "Tool Summary".to_string(),
-            content: summary.to_string(),
-            confidence: None,
-            is_final: false,
-        };
-        self.emit_async(event);
-    }
-}
-
 // ============================================================================
 // ExecutionAdapter trait implementation
 // ============================================================================
@@ -1121,7 +958,6 @@ pub(super) async fn write_conversation_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::LoopCallback;
     use crate::harness::trace::LoopTraceEvent;
     use crate::resilience::{AgentTask, RiskLevel};
 
@@ -1144,18 +980,11 @@ mod tests {
         let shared = Arc::new(StreamCallbackState::new(Some(Arc::new(
             TracePersistence::new(db.clone(), "run-1".to_string()),
         ))));
-        let emitter = Arc::new(crate::gateway::NoOpEventEmitter::new());
-        let mut callback = StreamCallback::new(
-            emitter,
-            "run-1".to_string(),
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            false,
-            Arc::new(AtomicBool::new(false)),
-            shared,
-        );
 
-        callback.on_trace(&LoopTraceEvent::TurnStarted { iteration: 1 });
-        callback.flush_trace_persistence().await;
+        // Test persistence directly via StreamCallbackState (post-flip: StreamCallback
+        // is dead code; the production path uses GatewayTraceSink/CallbackStateFlushHandle).
+        shared.persist_trace(&LoopTraceEvent::TurnStarted { iteration: 1 });
+        shared.flush_trace_persistence().await;
 
         let traces = db.get_traces_by_task("run-1").await.unwrap();
         assert_eq!(traces.len(), 1);

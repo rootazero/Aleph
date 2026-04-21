@@ -1,8 +1,12 @@
-//! AiProviderBridge — connects LoopProvider to existing AiProvider implementations.
+//! AiProviderBridge — connects existing AiProvider implementations to the harness.
 //!
-//! The bridge converts between the agent loop's local `ToolDefinition` (3 fields)
+//! The bridge converts between the harness's local `ToolDefinition` (3 fields)
 //! and the dispatcher's `ToolDefinition` (7 fields), and passes `UnifiedMessage`
 //! history through `transform_messages` before calling the provider.
+//!
+//! Note: `impl LoopProvider for AiProviderBridge` is retained until Phase 6c
+//! deletes `agent_loop/factory.rs` and `agent_loop/agent_runtime.rs` which still
+//! use `AiProviderBridge` as a `LoopProvider`.
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;

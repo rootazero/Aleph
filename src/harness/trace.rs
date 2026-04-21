@@ -25,7 +25,7 @@ pub enum LoopTraceEvent {
     ToolCallCompleted {
         iteration: usize,
         call: ToolCallEndEvent,
-        result: crate::agent_loop::ToolResult,
+        result: crate::tools::runtime::ToolResult,
     },
     /// Tool summary generated
     ToolSummary { iteration: usize, summary: String },
@@ -155,13 +155,13 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     duration_ms: call.duration_ms,
                 },
                 result: match result {
-                    crate::agent_loop::ToolResult::Success { output } => {
+                    crate::tools::runtime::ToolResult::Success { output } => {
                         aleph_protocol::AgentTraceToolResult::Success { output }
                     }
-                    crate::agent_loop::ToolResult::Error { error, retryable } => {
+                    crate::tools::runtime::ToolResult::Error { error, retryable } => {
                         aleph_protocol::AgentTraceToolResult::Error { error, retryable }
                     }
-                    crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
+                    crate::tools::runtime::ToolResult::SuccessAndStopLoop { output } => {
                         aleph_protocol::AgentTraceToolResult::SuccessAndStopLoop { output }
                     }
                 },
