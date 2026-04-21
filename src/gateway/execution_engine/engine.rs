@@ -61,7 +61,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) state_database: Option<Arc<StateDatabase>>,
     /// Teammate manager for named sub-agent team creation/registration.
     pub(super) teammate_manager:
-        Option<Arc<crate::agent_loop::subagent_teammates::TeammateManager>>,
+        Option<Arc<crate::agents::teammates::TeammateManager>>,
     /// Message router for sub-agent send_message actions.
     pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
     /// Inbox for sub-agent read_inbox actions.
@@ -193,7 +193,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// Set the teammate manager for named sub-agent team creation/registration.
     pub fn with_teammate_manager(
         mut self,
-        mgr: Arc<crate::agent_loop::subagent_teammates::TeammateManager>,
+        mgr: Arc<crate::agents::teammates::TeammateManager>,
     ) -> Self {
         self.teammate_manager = Some(mgr);
         self

@@ -34,7 +34,6 @@
 // Module Declarations
 // =============================================================================
 
-pub mod agent_loop;
 pub mod agents;
 pub mod approval;
 pub(crate) mod arena;

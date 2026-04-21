@@ -153,10 +153,10 @@ fn test_agent_trace_serialization() {
     let event = StreamEvent::agent_trace(
         "run-123",
         7,
-        crate::agent_loop::LoopTraceEvent::TurnCompleted {
+        crate::harness::trace::LoopTraceEvent::TurnCompleted {
             iteration: 2,
-            outcome: crate::agent_loop::LoopTraceTurnOutcome::Continue,
-            metrics: crate::agent_loop::LoopTraceTurnMetrics {
+            outcome: crate::harness::trace::LoopTraceTurnOutcome::Continue,
+            metrics: crate::harness::trace::LoopTraceTurnMetrics {
                 requested_tool_calls: 1,
                 executed_tool_calls: 1,
                 productive: true,

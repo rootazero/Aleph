@@ -148,6 +148,8 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     })
 }
 

@@ -212,6 +212,42 @@ impl crate::session::SessionDriver for AgentHarness {
 
 #[async_trait]
 impl Harness for AgentHarness {
+    /// Overrides the trait default to enforce `HarnessDeps.max_iterations`.
+    /// When the cap is reached, sets `hit_limit=true`, fires `on_complete`,
+    /// and returns `Ok(())` — the orchestrator bridge promotes `hit_limit`
+    /// into `FlowOutcome::hit_limit`. `None` falls through to the unbounded
+    /// default used by the Gateway path.
+    async fn run(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+        cancel: &CancellationToken,
+    ) -> Result<(), HarnessError> {
+        let cap = self.deps.max_iterations;
+        let mut iterations: usize = 0;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(HarnessError::Cancelled);
+            }
+            match self.run_turn(session_id, callback).await? {
+                TurnState::Continue => {
+                    iterations = iterations.saturating_add(1);
+                    if let Some(limit) = cap {
+                        if iterations >= limit {
+                            self.hit_limit.store(true, Ordering::SeqCst);
+                            callback.on_complete();
+                            return Ok(());
+                        }
+                    }
+                }
+                TurnState::Done => {
+                    callback.on_complete();
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     async fn run_turn(
         &self,
         session_id: &SessionId,
@@ -266,7 +302,10 @@ impl Harness for AgentHarness {
             return Ok(TurnState::Done);
         }
 
-        let payload = RequestPayload::new(&messages);
+        let payload = match self.deps.system_prompt.as_deref() {
+            Some(sp) => RequestPayload::new(&messages).with_system(Some(sp)),
+            None => RequestPayload::new(&messages),
+        };
 
         // 3. Call the LLM.
         let response = self.deps.llm.process(payload).await?;
@@ -522,4 +561,406 @@ fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
             _ => None,
         })
         .unwrap_or_else(uuid::Uuid::new_v4)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Inline tests for `AgentHarness` behaviours that assert on the exact
+    //! `RequestPayload` handed to the provider. The broader Think/Act/Driver
+    //! suites live in `harness::tests::{think,act,driver,task10_wiring}`.
+
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+
+    use crate::error::Result as AlephResult;
+    use crate::harness::callback::NoopHarnessCallback;
+    use crate::harness::deps::HarnessDeps;
+    use crate::harness::trait_def::Harness;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use crate::routing::session_key::SessionKey;
+    use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+
+    /// Provider that records the `system_prompt` it saw on each `process`
+    /// call, then returns a text-only response so the harness loop finishes
+    /// in one Think turn.
+    struct RecordingProvider {
+        captured: Arc<Mutex<Option<String>>>,
+    }
+
+    impl AiProvider for RecordingProvider {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let captured = self.captured.clone();
+            *captured.lock().unwrap() = payload.system_prompt.map(|s| s.to_string());
+            Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Tool service with no registered tools. The harness never dispatches
+    /// a tool in this test (the provider returns text-only) so `execute`
+    /// returning `NotFound` is safe — it is simply never called.
+    struct EmptyTools;
+
+    #[async_trait::async_trait]
+    impl crate::tools::service::ToolService for EmptyTools {
+        async fn execute(
+            &self,
+            name: &str,
+            _input: serde_json::Value,
+        ) -> Result<
+            crate::session::events::ToolOutput,
+            crate::tools::service::ToolError,
+        > {
+            Err(crate::tools::service::ToolError::NotFound {
+                name: name.to_string(),
+            })
+        }
+
+        async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+            Vec::new()
+        }
+
+        async fn describe(
+            &self,
+            _name: &str,
+        ) -> Option<crate::tools::service::ToolDefinition> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn system_prompt_flows_into_request_payload() {
+        let captured = Arc::new(Mutex::new(None));
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingProvider {
+            captured: captured.clone(),
+        });
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn crate::session::service::SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(EmptyTools);
+        // NoopSandbox never fires in this test — the provider returns
+        // text-only, so no tool call → no sandbox dispatch.
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
+            Arc::new(crate::sandbox::NoopSandbox);
+
+        let sid = SessionKey::ephemeral("test-syspr");
+        session.attach(sid.clone()).await.unwrap();
+        let turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::UserMessage,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::UserMessage {
+                    turn_id: turn,
+                    content: MessageContent {
+                        text: "hello".into(),
+                        blocks: vec![],
+                    },
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let deps = HarnessDeps {
+            session: session.clone(),
+            tools,
+            sandbox,
+            llm: provider,
+            stop_hooks: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: Some("ROLE: SPEC-BOT".into()),
+            max_iterations: None,
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        harness.run_turn(&sid, &mut cb).await.expect("run_turn");
+
+        let got = captured.lock().unwrap().clone();
+        assert_eq!(got.as_deref(), Some("ROLE: SPEC-BOT"));
+    }
+
+    /// Provider that always returns one tool_call, forcing `TurnState::Continue`
+    /// forever. Used to verify the `max_iterations` cap cuts the loop off.
+    struct LoopingProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AiProvider for LoopingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                        id: format!("call-{n}"),
+                        name: "noop".into(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    thinking: None,
+                    stop_reason: crate::providers::adapter::StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "looping"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Provider that returns a tool_call on calls 1..=tool_turns, then a final
+    /// text-only response (stop_reason = EndTurn) so the harness reaches
+    /// `TurnState::Done` naturally.
+    struct CountingProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        tool_turns: usize,
+    }
+
+    impl AiProvider for CountingProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let calls = self.calls.clone();
+            let tool_turns = self.tool_turns;
+            Box::pin(async move {
+                let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n < tool_turns {
+                    Ok(ProviderResponse {
+                        text: None,
+                        tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                            id: format!("call-{n}"),
+                            name: "noop".into(),
+                            arguments: serde_json::json!({}),
+                        }],
+                        thinking: None,
+                        stop_reason: crate::providers::adapter::StopReason::ToolUse,
+                        usage: None,
+                    })
+                } else {
+                    Ok(ProviderResponse::text_only("done".to_string()))
+                }
+            })
+        }
+
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Tool service whose `execute` always succeeds with an empty JSON payload.
+    /// The real tool name is irrelevant — the harness only needs `execute` to
+    /// return `Ok` so the tool_result is persisted and the next Think runs.
+    struct AlwaysOkTools;
+
+    #[async_trait::async_trait]
+    impl crate::tools::service::ToolService for AlwaysOkTools {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<
+            crate::session::events::ToolOutput,
+            crate::tools::service::ToolError,
+        > {
+            Ok(crate::session::events::ToolOutput {
+                value: serde_json::json!({}),
+                metadata: crate::session::events::ToolOutputMetadata::default(),
+            })
+        }
+
+        async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+            Vec::new()
+        }
+
+        async fn describe(
+            &self,
+            _name: &str,
+        ) -> Option<crate::tools::service::ToolDefinition> {
+            None
+        }
+    }
+
+    /// Build a freshly-attached session with a single TurnStarted + UserMessage
+    /// pair so `AgentHarness::run_turn` has work to do on the first call.
+    async fn fresh_session(
+        tag: &str,
+    ) -> (
+        Arc<dyn crate::session::service::SessionService>,
+        crate::session::service::SessionId,
+    ) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn crate::session::service::SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+
+        let sid = SessionKey::ephemeral(tag);
+        session.attach(sid.clone()).await.unwrap();
+        let turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::UserMessage,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::UserMessage {
+                    turn_id: turn,
+                    content: MessageContent {
+                        text: "go".into(),
+                        blocks: vec![],
+                    },
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        (session, sid)
+    }
+
+    #[tokio::test]
+    async fn max_iterations_stops_runaway_loop() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider: Arc<dyn AiProvider> = Arc::new(LoopingProvider {
+            calls: calls.clone(),
+        });
+
+        let (session, sid) = fresh_session("test-cap").await;
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
+            Arc::new(crate::sandbox::NoopSandbox);
+
+        let deps = HarnessDeps {
+            session,
+            tools,
+            sandbox,
+            llm: provider,
+            stop_hooks: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: None,
+            max_iterations: Some(3),
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Hard timeout: without the cap implemented, `run` would spin forever.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            harness.run(&sid, &mut cb, &cancel),
+        )
+        .await;
+
+        outcome
+            .expect("harness.run exceeded 2s timeout — max_iterations cap not enforced")
+            .expect("harness.run returned an error");
+
+        assert!(harness.hit_limit(), "expected hit_limit=true after cap");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "provider should be called exactly max_iterations (3) times",
+        );
+    }
+
+    #[tokio::test]
+    async fn max_iterations_none_keeps_unbounded() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider: Arc<dyn AiProvider> = Arc::new(CountingProvider {
+            calls: calls.clone(),
+            tool_turns: 4,
+        });
+
+        let (session, sid) = fresh_session("test-unbounded").await;
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
+            Arc::new(crate::sandbox::NoopSandbox);
+
+        let deps = HarnessDeps {
+            session,
+            tools,
+            sandbox,
+            llm: provider,
+            stop_hooks: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: None,
+            max_iterations: None,
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            harness.run(&sid, &mut cb, &cancel),
+        )
+        .await
+        .expect("harness.run exceeded 2s timeout")
+        .expect("harness.run returned an error");
+
+        assert!(!harness.hit_limit(), "hit_limit must be false for unbounded run");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            5,
+            "provider should run 4 tool turns + 1 final text turn = 5 calls",
+        );
+    }
 }

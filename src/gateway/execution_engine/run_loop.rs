@@ -95,7 +95,7 @@ impl<R: ToolRegistry + 'static> ExtensionToolRefreshSource<R> {
     }
 }
 
-impl<R: ToolRegistry + 'static> crate::agent_loop::ToolRefreshSource
+impl<R: ToolRegistry + 'static> crate::tools::refresh::ToolRefreshSource
     for ExtensionToolRefreshSource<R>
 {
     fn poll_changes(&self) -> bool {
@@ -113,8 +113,8 @@ impl<R: ToolRegistry + 'static> crate::agent_loop::ToolRefreshSource
         false
     }
 
-    fn fetch_tools(&self) -> Vec<Box<dyn crate::agent_loop::LoopTool>> {
-        crate::agent_loop::adapters::build_tool_adapters_from_tools(
+    fn fetch_tools(&self) -> Vec<Box<dyn crate::tools::runtime::LoopTool>> {
+        crate::harness::adapters::build_tool_adapters_from_tools(
             self.tool_registry.clone(),
             &self.merged_tools(),
             self.default_working_dir.clone(),
@@ -141,10 +141,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
-        use crate::harness::adapters::build_registry_from_tools;
         use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
-        use crate::config::types::policies::ToolSafetyPolicy;
-        use crate::session::ingress_safety::SafetyGuard;
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -240,36 +237,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .cloned(),
             );
         }
-
-        // Subagent tool factories (cloneable Arc closures)
-        let sub_allowed_tools: Vec<_> = allowed_tools
-            .iter()
-            .filter(|t| t.name != "subagent")
-            .cloned()
-            .collect();
-
-        let sub_tool_registry_ref = self.tool_registry.clone();
-        let sub_working_dir_ref = default_working_dir.clone();
-        let sub_tool_factory: crate::agents::runtime::ToolRegistryFactory = Arc::new({
-            let sub_tool_registry = sub_tool_registry_ref.clone();
-            let sub_allowed = sub_allowed_tools.clone();
-            let sub_dir = sub_working_dir_ref.clone();
-            move || {
-                build_registry_from_tools(sub_tool_registry.clone(), &sub_allowed, sub_dir.clone())
-            }
-        });
-
-        let sub_safety_factory: crate::agents::runtime::SafetyGuardFactory = Arc::new({
-            let global_perms = self.global_tool_permissions.clone();
-            let agent_perms_clone = agent.config().tool_permissions();
-            move || {
-                SafetyGuard::from_permissions(
-                    &global_perms,
-                    &agent_perms_clone,
-                    Some(ToolSafetyPolicy::default()),
-                )
-            }
-        });
 
         // Agent config values — `max_loops` / `agent_perms` moved into the
         // AgentHarnessRunner boot path (harness owns iteration cap +
@@ -448,11 +415,42 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             //    MCP refresh. `LoopToolRegistry` is built from the resolved
             //    `allowed_tools` so the view is identical to the retiring
             //    registry path.
-            let loop_registry = Arc::new(crate::agent_loop::adapters::build_registry_from_tools(
+            let loop_registry = Arc::new(crate::harness::adapters::build_registry_from_tools(
                 self.tool_registry.clone(),
                 &allowed_tools,
                 default_working_dir.clone(),
             ));
+
+            let allowed_names: std::collections::BTreeSet<String> = allowed_tools
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+
+            let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> =
+                extension_manager.as_ref().map(|ext_manager| {
+                    Arc::new(ExtensionToolRefreshSource::new(
+                        Arc::clone(ext_manager),
+                        self.tool_registry.clone(),
+                        agent.clone(),
+                        base_allowed_tools.clone(),
+                        default_working_dir.clone(),
+                    )) as Arc<dyn crate::tools::refresh::ToolRefreshSource>
+                });
+
+            // First build a "parent view" ToolService WITHOUT the subagent tool.
+            // This becomes the child subagents' parent_tools — `subagent_spawner`
+            // wraps it with `AllowlistToolService(child agent_def)` to produce
+            // the child harness's tool service. Omitting subagent_tool here
+            // avoids an Arc cycle (parent tool_service -> SubagentTool ->
+            // parent_tools -> ...) and prevents recursive subagent spawns
+            // without relying on the child's allowlist for that guarantee.
+            let parent_view_for_children: Arc<dyn crate::tools::service::ToolService> =
+                super::build_request_tool_service(
+                    loop_registry.clone(),
+                    allowed_names.clone(),
+                    None,
+                    tool_refresh.clone(),
+                );
 
             // SubagentTool is attached to the ScopedToolService (not registered
             // in LoopToolRegistry) so the service surfaces it via `list()`.
@@ -467,14 +465,43 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // The retiring path shared this between AgentLoop and SubagentTool;
                 // under the orchestrator flip only SubagentTool sees it since
                 // AgentHarness has its own tracing path via TraceSink.
-                let run_chain = crate::agent_loop::chain_context::ChainContext::new();
+                let run_chain = crate::harness::chain_context::ChainContext::new();
+
+                // Phase 7 Task 6 + follow-up: SubagentTool now owns the child
+                // harness deps (session / parent_tools / sandbox). Session is
+                // sourced from the orchestrator so child ephemeral sessions
+                // share the parent's SessionActor. parent_tools is the
+                // `parent_view_for_children` built above — `subagent_spawner`
+                // wraps it with `AllowlistToolService(child agent_def)` to
+                // produce the child harness's tool view. Sandbox defaults to
+                // `NoopSandbox` (child harness runs in-process and does not
+                // use the sandbox factory today).
+                let sub_session: Arc<dyn crate::session::service::SessionService> =
+                    match self.orchestrator.get() {
+                        Some(o) => o.session_service.clone(),
+                        None => {
+                            // Boot ordering fallback — surface via the same
+                            // error path the orchestrator dispatch uses below.
+                            error!(
+                                run_id = run_id,
+                                "Orchestrator not wired when constructing SubagentTool"
+                            );
+                            return Err(ExecutionError::Orchestrator(
+                                "orchestrator not yet initialised — boot ordering error".to_string(),
+                            ));
+                        }
+                    };
+                let sub_sandbox: Arc<dyn crate::sandbox::Sandbox> =
+                    Arc::new(crate::sandbox::NoopSandbox);
+
                 let mut t = SubagentTool::new(
                     sub_provider,
-                    sub_tool_factory.clone(),
-                    sub_safety_factory.clone(),
                     run_chain,
                     agent_registry,
                     background_tracker,
+                    sub_session,
+                    parent_view_for_children,
+                    sub_sandbox,
                 );
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
@@ -487,22 +514,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 Arc::new(t)
             };
-
-            let allowed_names: std::collections::BTreeSet<String> = allowed_tools
-                .iter()
-                .map(|t| t.name.clone())
-                .collect();
-
-            let tool_refresh: Option<Arc<dyn crate::agent_loop::ToolRefreshSource>> =
-                extension_manager.as_ref().map(|ext_manager| {
-                    Arc::new(ExtensionToolRefreshSource::new(
-                        Arc::clone(ext_manager),
-                        self.tool_registry.clone(),
-                        agent.clone(),
-                        base_allowed_tools.clone(),
-                        default_working_dir.clone(),
-                    )) as Arc<dyn crate::agent_loop::ToolRefreshSource>
-                });
 
             let tool_service = super::build_request_tool_service(
                 loop_registry,
@@ -755,7 +766,7 @@ impl TracePersistence {
         }
     }
 
-    fn record(&self, event: &crate::agent_loop::LoopTraceEvent) {
+    fn record(&self, event: &crate::harness::trace::LoopTraceEvent) {
         let step_index = self.next_step_index.fetch_add(1, Ordering::Relaxed);
         let db = self.db.clone();
         let task_id = self.task_id.clone();
@@ -821,7 +832,7 @@ impl StreamCallbackState {
         self.chunk_index.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn persist_trace(&self, event: &crate::agent_loop::LoopTraceEvent) {
+    fn persist_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
         if let Some(trace_persistence) = self.trace_persistence.as_ref() {
             trace_persistence.record(event);
         }

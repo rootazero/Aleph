@@ -92,7 +92,7 @@ pub trait EventEmitter: Send + Sync {
     }
 
     /// Emit a structured agent trace event
-    async fn emit_agent_trace(&self, run_id: &str, event: crate::agent_loop::LoopTraceEvent) {
+    async fn emit_agent_trace(&self, run_id: &str, event: crate::harness::trace::LoopTraceEvent) {
         let seq = self.next_seq();
         let _ = self
             .emit(StreamEvent::AgentTrace {

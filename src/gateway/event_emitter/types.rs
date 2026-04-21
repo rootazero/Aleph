@@ -94,7 +94,7 @@ pub enum StreamEvent {
     AgentTrace {
         run_id: String,
         seq: u64,
-        event: crate::agent_loop::LoopTraceEvent,
+        event: crate::harness::trace::LoopTraceEvent,
     },
 
     /// Response text chunk (streaming output)
@@ -276,7 +276,7 @@ impl StreamEvent {
     pub fn agent_trace(
         run_id: impl Into<String>,
         seq: u64,
-        event: crate::agent_loop::LoopTraceEvent,
+        event: crate::harness::trace::LoopTraceEvent,
     ) -> Self {
         Self::AgentTrace {
             run_id: run_id.into(),

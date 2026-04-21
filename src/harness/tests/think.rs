@@ -244,6 +244,8 @@ async fn think_with_no_tool_use_returns_done() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -288,6 +290,8 @@ async fn think_llm_error_maps_to_harness_llm() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -360,6 +364,8 @@ async fn callback_fires_on_delta_and_tool_call() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     };
     let harness = AgentHarness::new(deps);
     let mut cb = CapturingCallback::default();
@@ -414,6 +420,8 @@ async fn run_returns_cancelled_when_token_is_pre_cancelled() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -468,6 +476,8 @@ async fn think_tool_use_after_act_returns_continue() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
+        max_iterations: None,
     };
     let harness = AgentHarness::new(deps);
 

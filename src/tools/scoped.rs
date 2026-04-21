@@ -251,6 +251,39 @@ mod tests {
     // Stubs
     // -------------------------------------------------------------------------
 
+    /// Noop tool service stub used as `parent_tools` for SubagentTool in tests.
+    struct NoopParentTools;
+
+    #[async_trait::async_trait]
+    impl ToolService for NoopParentTools {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Err(ToolError::NotFound {
+                name: "test".into(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+            None
+        }
+    }
+
+    fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
+        use crate::session::in_process::InProcessActorSessionService;
+        use crate::session::store::{
+            migrate_add_session_events, SessionEventStore, SqliteEventStore,
+        };
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        Arc::new(InProcessActorSessionService::new(store))
+    }
+
     struct StubTool {
         tool_name: &'static str,
     }
@@ -341,12 +374,10 @@ mod tests {
     #[tokio::test]
     async fn list_includes_subagent_tool_when_set() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
-        use crate::session::ingress_safety::SafetyGuard;
         use std::future::Future;
         use std::pin::Pin;
 
@@ -360,13 +391,17 @@ mod tests {
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = ChainContext::new();
         let registry_arc = Arc::new(AgentRegistry::with_builtins());
         let tracker = Arc::new(BackgroundAgentTracker::new());
         let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-            provider, factory, safety, chain, registry_arc, tracker,
+            provider,
+            chain,
+            registry_arc,
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopParentTools),
+            Arc::new(crate::sandbox::NoopSandbox),
         ));
 
         let registry = make_registry(&["read_file"]);
@@ -399,12 +434,10 @@ mod tests {
     #[tokio::test]
     async fn execute_routes_to_subagent_tool_by_name() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
-        use crate::session::ingress_safety::SafetyGuard;
         use std::future::Future;
         use std::pin::Pin;
 
@@ -418,13 +451,17 @@ mod tests {
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = ChainContext::new();
         let registry_arc = Arc::new(AgentRegistry::with_builtins());
         let tracker = Arc::new(BackgroundAgentTracker::new());
         let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
-            provider, factory, safety, chain, registry_arc, tracker,
+            provider,
+            chain,
+            registry_arc,
+            tracker,
+            in_mem_session(),
+            Arc::new(NoopParentTools),
+            Arc::new(crate::sandbox::NoopSandbox),
         ));
 
         // Registry has NO "subagent" tool — proves routing goes to st, not inner

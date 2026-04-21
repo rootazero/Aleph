@@ -1,9 +1,10 @@
-//! SubagentTool — delegates tasks to a temporary AgentLoop.
+//! SubagentTool — delegates tasks to a temporary child harness.
 //!
 //! When the parent agent needs to run a complex sub-task autonomously,
-//! it calls the `subagent` tool. This creates a fresh `AgentLoop` with
-//! its own tool registry (minus the subagent tool itself to prevent
-//! infinite recursion) and runs the task to completion.
+//! it calls the `subagent` tool. `AgentRuntime::execute_via_harness` spawns a
+//! fresh `AgentHarness` (via `subagent_spawner`) with its parent tool service
+//! wrapped by `AllowlistToolService` (which excludes the `subagent` tool to
+//! prevent infinite recursion) and runs the task to completion.
 //!
 //! Supports agent role selection via `agent_type`, optional context
 //! injection via `context_summary`, and background execution via
@@ -16,16 +17,18 @@ use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::background_tracker::BackgroundAgentTracker;
-use crate::agent_loop::SharedSnapshot;
-use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, ToolRegistryFactory};
+use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
+use crate::sandbox::Sandbox;
+use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::MessageType;
 use crate::tools::runtime::{LoopTool, ToolResult};
+use crate::tools::service::ToolService;
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
@@ -61,11 +64,15 @@ struct RunArgs {
 /// A LoopTool that delegates tasks to a temporary AgentLoop.
 pub struct SubagentTool {
     provider: Arc<dyn AiProvider>,
-    tool_registry_factory: ToolRegistryFactory,
-    safety_guard_factory: SafetyGuardFactory,
-    chain: crate::agent_loop::chain_context::ChainContext,
+    chain: crate::harness::chain_context::ChainContext,
     agent_registry: Arc<AgentRegistry>,
     background_tracker: Arc<BackgroundAgentTracker>,
+    /// Shared session actor threaded to child `AgentRuntime` instances.
+    session: Arc<dyn SessionService>,
+    /// Parent tool service; the harness decorates it with an allowlist.
+    parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox passed to child harnesses.
+    sandbox: Arc<dyn Sandbox>,
     /// Optional teammate manager for auto team creation/registration.
     teammate_manager: Option<Arc<TeammateManager>>,
     /// Optional message router for send_message actions.
@@ -74,39 +81,37 @@ pub struct SubagentTool {
     inbox: Option<Arc<Inbox>>,
     /// Identifies the calling agent (default: "primary").
     parent_agent_id: String,
-    /// Shared prompt snapshot for fork path. Read-only from SubagentTool's perspective.
-    shared_snapshot: Option<SharedSnapshot>,
 }
 
 impl SubagentTool {
     /// Create a new SubagentTool.
     ///
     /// - `provider`: the AI provider for the sub-agent's LLM calls
-    /// - `tool_registry_factory`: builds a fresh tool registry (without "subagent")
-    /// - `safety_guard_factory`: builds a fresh SafetyGuard per invocation
     /// - `chain`: the parent's chain context for depth tracking
     /// - `agent_registry`: registry of available agent definitions
     /// - `background_tracker`: tracker for background sub-agent tasks
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
-        tool_registry_factory: ToolRegistryFactory,
-        safety_guard_factory: SafetyGuardFactory,
-        chain: crate::agent_loop::chain_context::ChainContext,
+        chain: crate::harness::chain_context::ChainContext,
         agent_registry: Arc<AgentRegistry>,
         background_tracker: Arc<BackgroundAgentTracker>,
+        session: Arc<dyn SessionService>,
+        parent_tools: Arc<dyn ToolService>,
+        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
-            tool_registry_factory,
-            safety_guard_factory,
             chain,
             agent_registry,
             background_tracker,
+            session,
+            parent_tools,
+            sandbox,
             teammate_manager: None,
             message_router: None,
             inbox: None,
             parent_agent_id: "primary".to_string(),
-            shared_snapshot: None,
         }
     }
 
@@ -132,30 +137,6 @@ impl SubagentTool {
     pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
         self.parent_agent_id = id.into();
         self
-    }
-
-    /// Set the shared prompt snapshot for the fork path.
-    pub fn with_shared_snapshot(mut self, snapshot: SharedSnapshot) -> Self {
-        self.shared_snapshot = Some(snapshot);
-        self
-    }
-
-    /// Check whether the fork path should be used for this invocation.
-    ///
-    /// Fork is eligible when the caller did not override agent_type, model,
-    /// or team_name AND a snapshot is available from the parent.
-    fn should_fork(&self, args: &RunArgs) -> bool {
-        args.agent_type.is_none()
-            && args.model.is_none()
-            && args.team_name.is_none()
-            && self.read_snapshot().is_some()
-    }
-
-    /// Read the current prompt snapshot from the shared lock, if available.
-    fn read_snapshot(&self) -> Option<crate::thinker::prompt_builder::PromptSnapshot> {
-        self.shared_snapshot
-            .as_ref()
-            .and_then(|s| s.read().unwrap_or_else(|e| e.into_inner()).clone())
     }
 }
 
@@ -619,42 +600,34 @@ impl LoopTool for SubagentTool {
                 args.task.clone(),
             );
 
-            // Compute fork decision and clone snapshot BEFORE moving into spawn
-            let should_fork_flag = self.should_fork(&args);
-            let prompt_snapshot_clone = if should_fork_flag {
-                self.read_snapshot()
-            } else {
-                None
-            };
-
             let provider = self.provider.clone();
-            let factory = self.tool_registry_factory.clone();
-            let safety_factory = self.safety_guard_factory.clone();
             let task = args.task.clone();
             let context_summary = args.context_summary;
             let model = args.model.clone();
             let timeout_secs = args.timeout_secs;
             let tracker = self.background_tracker.clone();
             let rid = request_id.clone();
+            let session = self.session.clone();
+            let parent_tools = self.parent_tools.clone();
+            let sandbox = self.sandbox.clone();
 
             tokio::spawn(async move {
-                let snapshot = if should_fork_flag {
-                    prompt_snapshot_clone
-                } else {
-                    None
-                };
-
                 let runtime_config = AgentRuntimeConfig {
                     agent_def,
                     task,
                     context_summary,
                     model,
                     timeout_secs,
-                    prompt_snapshot: snapshot,
                 };
 
-                let runtime =
-                    AgentRuntime::new(provider, factory, safety_factory, child_chain, cancel_token);
+                let runtime = AgentRuntime::new(
+                    provider,
+                    child_chain,
+                    cancel_token,
+                    session,
+                    parent_tools,
+                    sandbox,
+                );
 
                 let result = AssertUnwindSafe(runtime.run(runtime_config))
                     .catch_unwind()
@@ -677,27 +650,21 @@ impl LoopTool for SubagentTool {
             }
         } else {
             // Foreground execution
-            let snapshot = if self.should_fork(&args) {
-                self.read_snapshot()
-            } else {
-                None
-            };
-
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
                 task: args.task.clone(),
                 context_summary: args.context_summary,
                 model: args.model,
                 timeout_secs: args.timeout_secs,
-                prompt_snapshot: snapshot,
             };
 
             let runtime = AgentRuntime::new(
                 self.provider.clone(),
-                self.tool_registry_factory.clone(),
-                self.safety_guard_factory.clone(),
                 child_chain,
                 CancellationToken::new(),
+                self.session.clone(),
+                self.parent_tools.clone(),
+                self.sandbox.clone(),
             );
 
             match runtime.run(runtime_config).await {
@@ -740,11 +707,42 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use crate::tools::runtime::LoopToolRegistry;
     use crate::agents::AgentRegistry;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
-    use crate::session::ingress_safety::SafetyGuard;
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::tools::service::{ToolDefinition, ToolError, ToolService};
+
+    /// Noop tool service stub — never resolves any tool. Used by test helpers
+    /// that need a `parent_tools` dep but don't exercise tool execution.
+    struct NoopTestToolService;
+
+    #[async_trait::async_trait]
+    impl ToolService for NoopTestToolService {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<crate::session::events::ToolOutput, ToolError> {
+            Err(ToolError::NotFound {
+                name: "test".into(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+            None
+        }
+    }
+
+    fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        Arc::new(InProcessActorSessionService::new(store))
+    }
 
     /// Mock AI provider for unit tests.
     struct MockAiProvider;
@@ -778,16 +776,15 @@ mod tests {
 
     fn make_tool() -> SubagentTool {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
-        let chain = crate::agent_loop::chain_context::ChainContext::new();
+        let chain = crate::harness::chain_context::ChainContext::new();
         SubagentTool::new(
             provider,
-            factory,
-            safety_factory,
             chain,
             make_registry(),
             make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
         )
     }
 
@@ -981,16 +978,15 @@ mod tests {
         tracker.mark_completed("test-id", Ok("the result".to_string()));
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
-        let chain = crate::agent_loop::chain_context::ChainContext::new();
+        let chain = crate::harness::chain_context::ChainContext::new();
         let tool = SubagentTool::new(
             provider,
-            factory,
-            safety_factory,
             chain,
             make_registry(),
             tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
         );
 
         let result = tool.execute(json!({ "request_id": "test-id" })).await;

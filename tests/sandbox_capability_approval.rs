@@ -16,7 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use alephcore::agent_loop::exec_approval::{
+use alephcore::sandbox::exec_approval::{
     ApprovalConfig, ApprovalGate, ApprovalOutcome, ApprovalRequester,
 };
 use alephcore::routing::session_key::SessionKey;

@@ -55,7 +55,7 @@ pub enum GatewayEventFrame {
     AgentTrace {
         run_id: String,
         seq: u64,
-        event: crate::agent_loop::LoopTraceEvent,
+        event: crate::harness::trace::LoopTraceEvent,
     },
     ResponseChunk {
         run_id: String,

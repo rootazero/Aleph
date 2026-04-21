@@ -1325,7 +1325,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire team stores into ExecutionEngine for SubagentTool builder methods
         if let Some(ref ts) = team_store {
             engine = engine.with_teammate_manager(Arc::new(
-                alephcore::agent_loop::subagent_teammates::TeammateManager::new(ts.clone()),
+                alephcore::agents::teammates::TeammateManager::new(ts.clone()),
             ));
         }
         if let Some(ref mr) = message_router {

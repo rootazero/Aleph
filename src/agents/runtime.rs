@@ -1,42 +1,42 @@
 //! Sub-agent runtime — canonical home for `AgentRuntime` and the types it
 //! exposes to `SubagentTool` and callers.
 //!
-//! Relocated from `agent_loop/agent_runtime.rs` during Phase 6c deletion.
-//! `AgentLoop` itself (in `agent_loop/loop_core.rs`) is retained; this module
-//! wraps it with lifecycle tracing and transcript persistence.
+//! Wraps the Harness-based spawner with lifecycle tracing and transcript
+//! persistence.
 
 use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::subagent_runner::{run_subagent, SubagentRunConfig};
-use crate::agent_loop::LoopRunResult;
 use crate::agents::AgentDef;
 use crate::harness::chain_context::ChainContext;
 use crate::providers::AiProvider;
-use crate::session::ingress_safety::SafetyGuard;
+use crate::sandbox::Sandbox;
+use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
-use crate::thinker::prompt_builder::PromptSnapshot;
-use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::service::ToolService;
 
 // =============================================================================
-// Type aliases
+// LoopRunResult
 // =============================================================================
 
-/// Factory that builds a fresh LoopToolRegistry for the sub-agent.
+/// Outcome of a completed sub-agent run.
 ///
-/// The factory is responsible for providing the parent's tools minus
-/// the "subagent" tool itself (to prevent infinite recursion).
-pub type ToolRegistryFactory = Arc<dyn Fn() -> LoopToolRegistry + Send + Sync>;
-
-/// Factory that builds a SafetyGuard for the sub-agent.
-///
-/// SafetyGuard is not Clone, so we use a factory to produce a fresh instance
-/// each time a sub-agent is spawned.
-pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
-
-// SharedSnapshot is re-exported from crate::agent_loop (defined in agent_loop/mod.rs)
-// to avoid a circular dependency between this module and loop_core.
+/// Cancellation is surfaced as an `Err("sub-agent failed: …")` from
+/// `AgentRuntime::run`, not via a boolean on this struct — so there is no
+/// dedicated `cancelled` field.
+#[derive(Debug, Clone)]
+pub struct LoopRunResult {
+    pub final_text: Option<String>,
+    pub iterations: usize,
+    pub tool_calls_made: usize,
+    pub total_tokens: usize,
+    pub hit_limit: bool,
+    /// Chain ID shared across all depths in a subagent call chain.
+    pub chain_id: String,
+    /// Nesting depth (0 = root agent).
+    pub depth: u32,
+}
 
 // =============================================================================
 // AgentRuntimeConfig
@@ -54,8 +54,6 @@ pub struct AgentRuntimeConfig {
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
     pub timeout_secs: u64,
-    /// Optional prompt snapshot from the parent (used by fork path).
-    pub prompt_snapshot: Option<PromptSnapshot>,
 }
 
 // =============================================================================
@@ -101,27 +99,36 @@ pub struct SubagentTranscript {
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
 pub struct AgentRuntime {
     provider: Arc<dyn AiProvider>,
-    tool_registry_factory: ToolRegistryFactory,
-    safety_guard_factory: SafetyGuardFactory,
     child_chain: ChainContext,
     cancel_token: CancellationToken,
+    /// Shared session actor used by the Harness spawner for the child's
+    /// ephemeral session.
+    session: Arc<dyn SessionService>,
+    /// Parent tool service — decorated with `AllowlistToolService` inside
+    /// the spawner.
+    parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox instance passed to the child harness.
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl AgentRuntime {
     /// Create a new runtime with the shared infrastructure needed to spawn agents.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
-        tool_registry_factory: ToolRegistryFactory,
-        safety_guard_factory: SafetyGuardFactory,
         child_chain: ChainContext,
         cancel_token: CancellationToken,
+        session: Arc<dyn SessionService>,
+        parent_tools: Arc<dyn ToolService>,
+        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
-            tool_registry_factory,
-            safety_guard_factory,
             child_chain,
             cancel_token,
+            session,
+            parent_tools,
+            sandbox,
         }
     }
 
@@ -143,7 +150,7 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
-        let result = self.execute_fresh_path(&config).await;
+        let result = self.execute_via_harness(&config).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let key_findings = match &result {
@@ -201,26 +208,47 @@ impl AgentRuntime {
         result
     }
 
-    async fn execute_fresh_path(
+    async fn execute_via_harness(
         &self,
         config: &AgentRuntimeConfig,
     ) -> Result<LoopRunResult, String> {
-        let mut registry = (self.tool_registry_factory)();
-        registry.retain(|name| config.agent_def.is_tool_allowed(name));
-
-        run_subagent(SubagentRunConfig {
-            provider: &self.provider,
-            registry,
-            safety_guard: (self.safety_guard_factory)(),
+        use crate::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
+        // `self.child_chain` is the already-descended chain produced by the
+        // caller (SubagentTool::execute calls `self.chain.child()`). The
+        // spawner descends again via `base.chain.child()`, so synthesize the
+        // logical parent here to keep depth accounting equivalent to the
+        // retiring `run_subagent` path (which consumed the child_chain as-is).
+        //
+        // Invariant: `child_chain` came from `ChainContext::child()`, which
+        // returns `Some` only after incrementing depth by 1. depth == 0 here
+        // would indicate a caller constructed the runtime with an un-descended
+        // chain — the assert catches that in debug builds; release uses
+        // `saturating_sub` to avoid underflow.
+        debug_assert!(
+            self.child_chain.depth > 0,
+            "AgentRuntime received an un-descended ChainContext; callers must pass `parent_chain.child()`"
+        );
+        let parent_chain = ChainContext {
+            chain_id: self.child_chain.chain_id.clone(),
+            depth: self.child_chain.depth.saturating_sub(1),
+            max_depth: self.child_chain.max_depth,
+        };
+        let base = SpawnerBase {
+            session: self.session.clone(),
+            parent_tools: self.parent_tools.clone(),
+            sandbox: self.sandbox.clone(),
+            provider: self.provider.clone(),
+            chain: parent_chain,
+        };
+        let req = SpawnRequest {
             agent_def: &config.agent_def,
-            model: config.model.clone(),
             task: &config.task,
             context_summary: config.context_summary.as_deref(),
+            model: config.model.as_deref(),
             timeout_secs: config.timeout_secs,
-            child_chain: self.child_chain.clone(),
-            cancel_token: self.cancel_token.clone(),
-        })
-        .await
+            cancel: self.cancel_token.clone(),
+        };
+        spawn(&base, req).await
     }
 }
 
@@ -329,14 +357,12 @@ mod tests {
             context_summary: Some("Parent context".to_string()),
             model: Some("claude-sonnet".to_string()),
             timeout_secs: 60,
-            prompt_snapshot: None,
         };
 
         assert_eq!(config.task, "Do something");
         assert_eq!(config.timeout_secs, 60);
         assert!(config.context_summary.is_some());
         assert!(config.model.is_some());
-        assert!(config.prompt_snapshot.is_none());
     }
 
     #[test]

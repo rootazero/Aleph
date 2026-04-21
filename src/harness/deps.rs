@@ -48,4 +48,11 @@ pub struct HarnessDeps {
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,
+    /// System prompt injected into every RequestPayload. Subagent path builds
+    /// this via PromptBuilder at spawn time; Gateway passes None for now.
+    pub system_prompt: Option<String>,
+    /// Hard iteration cap. When set, AgentHarness::run forces TurnState::Done
+    /// after that many Continue turns and sets hit_limit=true. None → unbounded
+    /// (current Gateway default).
+    pub max_iterations: Option<usize>,
 }
