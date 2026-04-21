@@ -525,8 +525,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // rejected by policy rather than hanging. See Known Limitations in
     // CHANGELOG.
     let approval_gate = {
-        use alephcore::agent_loop::exec_approval::gate::ApprovalGate;
-        use alephcore::agent_loop::exec_approval::types::ApprovalConfig;
+        use alephcore::sandbox::exec_approval::gate::ApprovalGate;
+        use alephcore::sandbox::exec_approval::types::ApprovalConfig;
         Arc::new(ApprovalGate::new(ApprovalConfig::default(), None))
     };
     if !args.daemon {

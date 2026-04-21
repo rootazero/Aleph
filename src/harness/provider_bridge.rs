@@ -4,9 +4,7 @@
 //! and the dispatcher's `ToolDefinition` (7 fields), and passes `UnifiedMessage`
 //! history through `transform_messages` before calling the provider.
 //!
-//! Note: `impl LoopProvider for AiProviderBridge` is retained until Phase 6c
-//! deletes `agent_loop/factory.rs` and `agent_loop/agent_runtime.rs` which still
-//! use `AiProviderBridge` as a `LoopProvider`.
+//! This module is the canonical home for the `LoopProvider` trait (Phase 7 T9).
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -21,11 +19,25 @@ use crate::sync_primitives::Arc;
 
 use crate::tools::runtime::ToolDefinition as LoopToolDefinition;
 
-// Canonical home for the `LoopProvider` trait — Phase 7 rewrites all
-// external references from `crate::agent_loop::LoopProvider` to this path.
-// The trait definition itself still lives in `agent_loop/loop_core.rs`
-// and is relocated here by T9 when `src/agent_loop/` is deleted.
-pub use crate::agent_loop::LoopProvider;
+/// Abstraction over AI provider for testability.
+///
+/// Implementations translate `UnifiedMessage` history into provider-specific
+/// API calls and return a delta stream. Callers accumulate the stream via
+/// `DeltaCollector` to reconstruct a `ProviderResponse`.
+#[async_trait]
+pub trait LoopProvider: Send + Sync {
+    async fn stream(
+        &self,
+        messages: &[UnifiedMessage],
+        system_prompt: &str,
+        tools: &[LoopToolDefinition],
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>>;
+
+    /// Maximum output tokens this provider supports.
+    fn max_output_tokens(&self) -> u32 {
+        16_384
+    }
+}
 
 /// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///
