@@ -16,7 +16,7 @@ use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 use crate::agent_loop::LoopProvider;
-use crate::agent_loop::ToolDefinition as LoopToolDefinition;
+use crate::tools::runtime::ToolDefinition as LoopToolDefinition;
 
 /// Bridge from `LoopProvider` to any `Arc<dyn AiProvider>`.
 ///
