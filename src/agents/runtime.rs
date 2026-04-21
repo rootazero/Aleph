@@ -9,14 +9,16 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::subagent_runner::{run_subagent, SubagentRunConfig};
 use crate::agents::AgentDef;
 use crate::harness::chain_context::ChainContext;
 use crate::providers::AiProvider;
+use crate::sandbox::Sandbox;
 use crate::session::ingress_safety::SafetyGuard;
+use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::thinker::prompt_builder::PromptSnapshot;
 use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::service::ToolService;
 
 // =============================================================================
 // LoopRunResult
@@ -121,20 +123,36 @@ pub struct SubagentTranscript {
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
 pub struct AgentRuntime {
     provider: Arc<dyn AiProvider>,
+    /// Dead since T6 flipped to the Harness spawner; removed in T10.
+    #[allow(dead_code)]
     tool_registry_factory: ToolRegistryFactory,
+    /// Dead since T6 flipped to the Harness spawner; removed in T10.
+    #[allow(dead_code)]
     safety_guard_factory: SafetyGuardFactory,
     child_chain: ChainContext,
     cancel_token: CancellationToken,
+    /// Shared session actor used by the Harness spawner for the child's
+    /// ephemeral session.
+    session: Arc<dyn SessionService>,
+    /// Parent tool service — decorated with `AllowlistToolService` inside
+    /// the spawner.
+    parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox instance passed to the child harness.
+    sandbox: Arc<dyn Sandbox>,
 }
 
 impl AgentRuntime {
     /// Create a new runtime with the shared infrastructure needed to spawn agents.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
         tool_registry_factory: ToolRegistryFactory,
         safety_guard_factory: SafetyGuardFactory,
         child_chain: ChainContext,
         cancel_token: CancellationToken,
+        session: Arc<dyn SessionService>,
+        parent_tools: Arc<dyn ToolService>,
+        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
@@ -142,6 +160,9 @@ impl AgentRuntime {
             safety_guard_factory,
             child_chain,
             cancel_token,
+            session,
+            parent_tools,
+            sandbox,
         }
     }
 
@@ -163,7 +184,7 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
-        let result = self.execute_fresh_path(&config).await;
+        let result = self.execute_via_harness(&config).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let key_findings = match &result {
@@ -221,26 +242,37 @@ impl AgentRuntime {
         result
     }
 
-    async fn execute_fresh_path(
+    async fn execute_via_harness(
         &self,
         config: &AgentRuntimeConfig,
     ) -> Result<LoopRunResult, String> {
-        let mut registry = (self.tool_registry_factory)();
-        registry.retain(|name| config.agent_def.is_tool_allowed(name));
-
-        run_subagent(SubagentRunConfig {
-            provider: &self.provider,
-            registry,
-            safety_guard: (self.safety_guard_factory)(),
+        use crate::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
+        // `self.child_chain` is the already-descended chain produced by the
+        // caller (SubagentTool::execute calls `self.chain.child()`). The
+        // spawner descends again via `base.chain.child()`, so synthesize the
+        // logical parent here to keep depth accounting equivalent to the
+        // retiring `run_subagent` path (which consumed the child_chain as-is).
+        let parent_chain = ChainContext {
+            chain_id: self.child_chain.chain_id.clone(),
+            depth: self.child_chain.depth.saturating_sub(1),
+            max_depth: self.child_chain.max_depth,
+        };
+        let base = SpawnerBase {
+            session: self.session.clone(),
+            parent_tools: self.parent_tools.clone(),
+            sandbox: self.sandbox.clone(),
+            provider: self.provider.clone(),
+            chain: parent_chain,
+        };
+        let req = SpawnRequest {
             agent_def: &config.agent_def,
-            model: config.model.clone(),
             task: &config.task,
             context_summary: config.context_summary.as_deref(),
+            model: config.model.as_deref(),
             timeout_secs: config.timeout_secs,
-            child_chain: self.child_chain.clone(),
-            cancel_token: self.cancel_token.clone(),
-        })
-        .await
+            cancel: self.cancel_token.clone(),
+        };
+        spawn(&base, req).await
     }
 }
 

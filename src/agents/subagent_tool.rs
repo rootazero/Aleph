@@ -21,11 +21,14 @@ use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig, SafetyGuardFactor
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
+use crate::sandbox::Sandbox;
+use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::MessageType;
 use crate::tools::runtime::{LoopTool, ToolResult};
+use crate::tools::service::ToolService;
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
@@ -66,6 +69,12 @@ pub struct SubagentTool {
     chain: crate::agent_loop::chain_context::ChainContext,
     agent_registry: Arc<AgentRegistry>,
     background_tracker: Arc<BackgroundAgentTracker>,
+    /// Shared session actor threaded to child `AgentRuntime` instances.
+    session: Arc<dyn SessionService>,
+    /// Parent tool service; the harness decorates it with an allowlist.
+    parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox passed to child harnesses.
+    sandbox: Arc<dyn Sandbox>,
     /// Optional teammate manager for auto team creation/registration.
     teammate_manager: Option<Arc<TeammateManager>>,
     /// Optional message router for send_message actions.
@@ -87,6 +96,7 @@ impl SubagentTool {
     /// - `chain`: the parent's chain context for depth tracking
     /// - `agent_registry`: registry of available agent definitions
     /// - `background_tracker`: tracker for background sub-agent tasks
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
         tool_registry_factory: ToolRegistryFactory,
@@ -94,6 +104,9 @@ impl SubagentTool {
         chain: crate::agent_loop::chain_context::ChainContext,
         agent_registry: Arc<AgentRegistry>,
         background_tracker: Arc<BackgroundAgentTracker>,
+        session: Arc<dyn SessionService>,
+        parent_tools: Arc<dyn ToolService>,
+        sandbox: Arc<dyn Sandbox>,
     ) -> Self {
         Self {
             provider,
@@ -102,6 +115,9 @@ impl SubagentTool {
             chain,
             agent_registry,
             background_tracker,
+            session,
+            parent_tools,
+            sandbox,
             teammate_manager: None,
             message_router: None,
             inbox: None,
@@ -636,6 +652,9 @@ impl LoopTool for SubagentTool {
             let timeout_secs = args.timeout_secs;
             let tracker = self.background_tracker.clone();
             let rid = request_id.clone();
+            let session = self.session.clone();
+            let parent_tools = self.parent_tools.clone();
+            let sandbox = self.sandbox.clone();
 
             tokio::spawn(async move {
                 let snapshot = if should_fork_flag {
@@ -653,8 +672,16 @@ impl LoopTool for SubagentTool {
                     prompt_snapshot: snapshot,
                 };
 
-                let runtime =
-                    AgentRuntime::new(provider, factory, safety_factory, child_chain, cancel_token);
+                let runtime = AgentRuntime::new(
+                    provider,
+                    factory,
+                    safety_factory,
+                    child_chain,
+                    cancel_token,
+                    session,
+                    parent_tools,
+                    sandbox,
+                );
 
                 let result = AssertUnwindSafe(runtime.run(runtime_config))
                     .catch_unwind()
@@ -698,6 +725,9 @@ impl LoopTool for SubagentTool {
                 self.safety_guard_factory.clone(),
                 child_chain,
                 CancellationToken::new(),
+                self.session.clone(),
+                self.parent_tools.clone(),
+                self.sandbox.clone(),
             );
 
             match runtime.run(runtime_config).await {
@@ -745,6 +775,39 @@ mod tests {
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
     use crate::session::ingress_safety::SafetyGuard;
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+    use crate::tools::service::{ToolDefinition, ToolError, ToolService};
+
+    /// Noop tool service stub — never resolves any tool. Used by test helpers
+    /// that need a `parent_tools` dep but don't exercise tool execution.
+    struct NoopTestToolService;
+
+    #[async_trait::async_trait]
+    impl ToolService for NoopTestToolService {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<crate::session::events::ToolOutput, ToolError> {
+            Err(ToolError::NotFound {
+                name: "test".into(),
+            })
+        }
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![]
+        }
+        async fn describe(&self, _: &str) -> Option<ToolDefinition> {
+            None
+        }
+    }
+
+    fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        Arc::new(InProcessActorSessionService::new(store))
+    }
 
     /// Mock AI provider for unit tests.
     struct MockAiProvider;
@@ -788,6 +851,9 @@ mod tests {
             chain,
             make_registry(),
             make_tracker(),
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
         )
     }
 
@@ -991,6 +1057,9 @@ mod tests {
             chain,
             make_registry(),
             tracker,
+            in_mem_session(),
+            Arc::new(NoopTestToolService),
+            Arc::new(crate::sandbox::NoopSandbox),
         );
 
         let result = tool.execute(json!({ "request_id": "test-id" })).await;

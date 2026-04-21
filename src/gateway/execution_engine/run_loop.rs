@@ -30,6 +30,32 @@ use super::engine::ExecutionEngine;
 // `HarnessDeps.skill_prefetcher`, so this adapter has no call site in this
 // file. Retained via the noop cast below; Phase 6c removes outright.
 
+/// Placeholder `ToolService` handed to `SubagentTool` as its `parent_tools`
+/// dep. The subagent_spawner wraps this with `AllowlistToolService` inside
+/// `spawn`, but the child harness's real tool view is produced there — this
+/// placeholder is never consulted for production tool calls. It mirrors the
+/// noop stub used by the spawner's own unit tests.
+struct NoopSubagentParentTools;
+
+#[async_trait]
+impl crate::tools::service::ToolService for NoopSubagentParentTools {
+    async fn execute(
+        &self,
+        _name: &str,
+        _input: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        Err(crate::tools::service::ToolError::NotFound {
+            name: "subagent-parent-tools".into(),
+        })
+    }
+    async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+        vec![]
+    }
+    async fn describe(&self, _: &str) -> Option<crate::tools::service::ToolDefinition> {
+        None
+    }
+}
+
 fn plugin_tool_to_unified_tool(
     tool: crate::extension::ToolRegistration,
 ) -> crate::dispatcher::UnifiedTool {
@@ -468,6 +494,37 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // under the orchestrator flip only SubagentTool sees it since
                 // AgentHarness has its own tracing path via TraceSink.
                 let run_chain = crate::agent_loop::chain_context::ChainContext::new();
+
+                // Phase 7 Task 6: SubagentTool now owns the child harness deps
+                // (session / parent_tools / sandbox). Session is sourced from
+                // the orchestrator so child ephemeral sessions share the
+                // parent's SessionActor. parent_tools is a noop placeholder
+                // because the child's tool service is built fresh inside
+                // `subagent_spawner::spawn` (wrapping the parent's tool view
+                // with `AllowlistToolService`) — the field on `SubagentTool`
+                // is inert in the current flow. Sandbox defaults to
+                // `NoopSandbox` (child harness runs in-process and does not
+                // use the sandbox factory today).
+                let sub_session: Arc<dyn crate::session::service::SessionService> =
+                    match self.orchestrator.get() {
+                        Some(o) => o.session_service.clone(),
+                        None => {
+                            // Boot ordering fallback — surface via the same
+                            // error path the orchestrator dispatch uses below.
+                            error!(
+                                run_id = run_id,
+                                "Orchestrator not wired when constructing SubagentTool"
+                            );
+                            return Err(ExecutionError::Orchestrator(
+                                "orchestrator not yet initialised — boot ordering error".to_string(),
+                            ));
+                        }
+                    };
+                let sub_parent_tools: Arc<dyn crate::tools::service::ToolService> =
+                    Arc::new(NoopSubagentParentTools);
+                let sub_sandbox: Arc<dyn crate::sandbox::Sandbox> =
+                    Arc::new(crate::sandbox::NoopSandbox);
+
                 let mut t = SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
@@ -475,6 +532,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     run_chain,
                     agent_registry,
                     background_tracker,
+                    sub_session,
+                    sub_parent_tools,
+                    sub_sandbox,
                 );
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
