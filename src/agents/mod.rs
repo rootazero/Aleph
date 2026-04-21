@@ -22,6 +22,7 @@ mod types;
 pub mod allowlist_tool_service;
 pub mod background_tracker;
 pub mod runtime;
+pub mod subagent_spawner;
 pub mod subagent_tool;
 pub mod teammates;
 

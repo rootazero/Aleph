@@ -1,0 +1,740 @@
+//! Subagent spawner — Harness-based sub-agent execution.
+//!
+//! Replacement for the legacy `agent_loop::subagent_runner::run_subagent`.
+//! The spawner takes a `SpawnerBase` (shared session/tools/sandbox/provider)
+//! plus a `SpawnRequest` (agent_def, task, model, timeout, cancel), builds a
+//! child ephemeral `SessionKey`, assembles a `HarnessDeps` bundle with the
+//! agent's system prompt and max_iterations + a tool service wrapped in
+//! `AllowlistToolService`, seeds the task as a `UserMessage`, runs
+//! `AgentHarness::run` under `tokio::time::timeout` + `catch_unwind` for
+//! timeout + panic isolation, then walks the child session event log to
+//! synthesize a `LoopRunResult`.
+//!
+//! NOTE: This module is created in isolation during Phase 7 Task 5. Traffic
+//! hasn't been flipped yet — `AgentRuntime` still calls the legacy
+//! `run_subagent`. That swap happens in Task 6.
+
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use futures::FutureExt;
+use tokio_util::sync::CancellationToken;
+
+use crate::agents::allowlist_tool_service::AllowlistToolService;
+use crate::agents::runtime::LoopRunResult;
+use crate::agents::AgentDef;
+use crate::error::Result as AlephResult;
+use crate::harness::agent::AgentHarness;
+use crate::harness::callback::NoopHarnessCallback;
+use crate::harness::chain_context::ChainContext;
+use crate::harness::deps::HarnessDeps;
+use crate::harness::trait_def::Harness;
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::AiProvider;
+use crate::routing::session_key::SessionKey;
+use crate::sandbox::Sandbox;
+use crate::session::events::{
+    now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
+};
+use crate::session::service::{SessionId, SessionService};
+use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+use crate::tools::service::ToolService;
+
+/// Shared infrastructure shared by all sub-agent spawns in a given
+/// orchestration context (session actor, parent tool service, sandbox,
+/// provider, and the parent's chain context).
+#[derive(Clone)]
+pub struct SpawnerBase {
+    /// Shared session service (same actor as the parent).
+    pub session: Arc<dyn SessionService>,
+    /// The parent's tool service. The spawner decorates this with an
+    /// `AllowlistToolService` gated on `AgentDef.is_tool_allowed`.
+    pub parent_tools: Arc<dyn ToolService>,
+    /// Shared sandbox instance.
+    pub sandbox: Arc<dyn Sandbox>,
+    /// Provider used for LLM calls. The spawner wraps this with a
+    /// `ModelOverrideProvider` when `SpawnRequest.model` is set.
+    pub provider: Arc<dyn AiProvider>,
+    /// The parent's chain context. The spawner derives a child via
+    /// `ChainContext::child()`.
+    pub chain: ChainContext,
+}
+
+/// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
+pub struct SpawnRequest<'a> {
+    /// Agent definition (id, allowed_tools, max_iterations, model_hint, …).
+    pub agent_def: &'a AgentDef,
+    /// Task description — seeded as the child's first `UserMessage`.
+    pub task: &'a str,
+    /// Optional summary of the parent's context. When set, prefixed to the
+    /// task with a "## Context from parent agent" header (matches legacy
+    /// `run_subagent` behaviour).
+    pub context_summary: Option<&'a str>,
+    /// Explicit model override (highest priority). Falls back to
+    /// `agent_def.model_hint`, then to whatever the provider uses natively.
+    pub model: Option<&'a str>,
+    /// Hard wall-clock timeout for the entire run.
+    pub timeout_secs: u64,
+    /// Cancellation token observed between turns by the harness.
+    pub cancel: CancellationToken,
+}
+
+/// Build a child ephemeral session, run the harness, and synthesize the
+/// `LoopRunResult` by walking the child session event log.
+///
+/// Errors:
+///   * `"chain depth exceeded"` — the parent's `ChainContext::child()`
+///     returned `None` (hit the recursion cap).
+///   * `"Sub-agent timed out after Ns"` — the outer `tokio::time::timeout`
+///     elapsed before `AgentHarness::run` returned.
+///   * `"sub-agent panicked: …"` — the harness task panicked.
+///   * `"sub-agent failed: …"` — any other harness / session / tool error.
+pub async fn spawn(
+    base: &SpawnerBase,
+    req: SpawnRequest<'_>,
+) -> Result<LoopRunResult, String> {
+    // 1. Derive a child chain; fail early if the recursion cap is hit so
+    //    callers see the same "depth exceeded" signal the legacy path used.
+    let child_chain = base
+        .chain
+        .child()
+        .ok_or_else(|| "chain depth exceeded".to_string())?;
+
+    // 2. Unique ephemeral session key for this sub-agent.
+    let child_id = ephemeral_for(&req.agent_def.id);
+
+    // 3. Attach the child session and seed the initial Turn + UserMessage.
+    //    Any failure here surfaces immediately — the harness never runs.
+    base.session
+        .attach(child_id.clone())
+        .await
+        .map_err(|e| format!("sub-agent failed: attach session: {e}"))?;
+
+    let turn = uuid::Uuid::new_v4();
+    base.session
+        .emit_event(
+            &child_id,
+            SessionEvent::TurnStarted {
+                turn_id: turn,
+                trigger: TurnTrigger::SubagentRequest,
+                at: now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| format!("sub-agent failed: emit TurnStarted: {e}"))?;
+
+    let effective_task = match req.context_summary {
+        Some(summary) => format!(
+            "## Context from parent agent\n\n{}\n\n---\n\n{}",
+            summary, req.task
+        ),
+        None => req.task.to_string(),
+    };
+    base.session
+        .emit_event(
+            &child_id,
+            SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: effective_task,
+                    blocks: Vec::new(),
+                },
+                at: now_ms(),
+            },
+        )
+        .await
+        .map_err(|e| format!("sub-agent failed: emit UserMessage: {e}"))?;
+
+    // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
+    //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
+    //    tool schemas are delivered via native tool_use, not the prompt.
+    let system_prompt =
+        PromptBuilder::new(PromptConfig::default())
+            .with_agent(req.agent_def.clone())
+            .build_system_prompt(&[]);
+
+    // 5. Resolve the model override: explicit > model_hint > native.
+    let resolved_model: Option<String> = req
+        .model
+        .map(str::to_string)
+        .or_else(|| req.agent_def.model_hint.clone());
+    let llm: Arc<dyn AiProvider> = match resolved_model {
+        Some(m) => Arc::new(ModelOverrideProvider {
+            inner: base.provider.clone(),
+            model: m,
+        }),
+        None => base.provider.clone(),
+    };
+
+    // 6. Wrap the parent's tool service with the allowlist gate.
+    let agent_def_arc = Arc::new(req.agent_def.clone());
+    let scoped_tools: Arc<dyn ToolService> = Arc::new(AllowlistToolService::new(
+        base.parent_tools.clone(),
+        agent_def_arc.clone(),
+    ));
+
+    let max_iter = req.agent_def.max_iterations.map(|v| v as usize);
+
+    let deps = HarnessDeps {
+        session: base.session.clone(),
+        tools: scoped_tools,
+        sandbox: base.sandbox.clone(),
+        llm,
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
+        trace_sink: None,
+        system_prompt: Some(system_prompt),
+        max_iterations: max_iter,
+    };
+    let harness = AgentHarness::new(deps);
+
+    // 7. Run the harness with wall-clock timeout + panic isolation.
+    //    AssertUnwindSafe is used because the harness internals (provider
+    //    closures, channels) are not `UnwindSafe` but we intentionally
+    //    catch panics to synthesize a clean error rather than unwind
+    //    into the parent actor.
+    let timeout = std::time::Duration::from_secs(req.timeout_secs);
+    let cancel = req.cancel.clone();
+    let sid = child_id.clone();
+    let run_fut = async move {
+        let mut cb = NoopHarnessCallback;
+        harness.run(&sid, &mut cb, &cancel).await
+    };
+    let outcome = tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
+
+    let hit_limit = match outcome {
+        Err(_elapsed) => {
+            return Err(format!("Sub-agent timed out after {}s", req.timeout_secs));
+        }
+        Ok(Err(panic_payload)) => {
+            let msg = panic_message(&panic_payload);
+            return Err(format!("sub-agent panicked: {msg}"));
+        }
+        Ok(Ok(Err(e))) => {
+            return Err(format!("sub-agent failed: {e}"));
+        }
+        Ok(Ok(Ok(()))) => false,
+    };
+
+    // 8. `hit_limit` is stored on the harness only while it is still alive.
+    //    Since `harness` was consumed by the `async move` above, the
+    //    `max_iterations` cap signal is recovered from the event log by
+    //    detecting when the log's trailing record is `ToolResult` (no
+    //    final assistant text). The dedicated `max_iterations` test
+    //    below asserts this.
+    extract_run_result(
+        base.session.as_ref(),
+        &child_id,
+        &child_chain,
+        req.agent_def.max_iterations,
+        hit_limit,
+    )
+    .await
+}
+
+/// Walk the child session event log and synthesize a `LoopRunResult`.
+///
+/// `iterations` := count of `AssistantMessage` events.
+/// `tool_calls_made` := count of `ToolCallRequested` events.
+/// `final_text` := text of the last `AssistantMessage`, or `None`.
+/// `hit_limit` := `true` if the configured `max_iterations` equals the
+///                 assistant-message count (or passed in by the caller).
+/// `cancelled` := `false` (cancellation surfaces as an error earlier).
+async fn extract_run_result(
+    session: &dyn SessionService,
+    child_id: &SessionId,
+    chain: &ChainContext,
+    max_iterations: Option<u32>,
+    hit_limit_hint: bool,
+) -> Result<LoopRunResult, String> {
+    let events = session
+        .get_events(child_id, None, None)
+        .await
+        .map_err(|e| format!("sub-agent failed: read events: {e}"))?;
+
+    let mut iterations: usize = 0;
+    let mut tool_calls_made: usize = 0;
+    let mut final_text: Option<String> = None;
+    for rec in &events {
+        match &rec.event {
+            SessionEvent::AssistantMessage { content, .. } => {
+                iterations = iterations.saturating_add(1);
+                // Keep the most recent assistant text as the "final" answer.
+                if !content.text.is_empty() {
+                    final_text = Some(content.text.clone());
+                } else {
+                    // An assistant turn that was pure tool_use (no text)
+                    // doesn't overwrite an earlier textual answer — but
+                    // once we see a tool_use-only final turn, the loop
+                    // was cut off mid-think, so clear any earlier text.
+                    if is_last_assistant(&events, rec) {
+                        final_text = None;
+                    }
+                }
+            }
+            SessionEvent::ToolCallRequested { .. } => {
+                tool_calls_made = tool_calls_made.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    let hit_limit = hit_limit_hint
+        || match max_iterations {
+            Some(cap) => iterations >= cap as usize,
+            None => false,
+        };
+
+    Ok(LoopRunResult {
+        final_text,
+        iterations,
+        tool_calls_made,
+        total_tokens: 0,
+        hit_limit,
+        cancelled: false,
+        chain_id: chain.chain_id.clone(),
+        depth: chain.depth,
+    })
+}
+
+/// Generate a unique ephemeral SessionKey for this sub-agent spawn.
+fn ephemeral_for(agent_id: &str) -> SessionKey {
+    let nonce = uuid::Uuid::new_v4();
+    SessionKey::Ephemeral {
+        agent_id: agent_id.to_string(),
+        ephemeral_id: format!("sub-{nonce}"),
+    }
+}
+
+/// Whether `target` is the last `AssistantMessage` in `events` (by seq).
+fn is_last_assistant(events: &[SessionEventRecord], target: &SessionEventRecord) -> bool {
+    events
+        .iter()
+        .rev()
+        .find(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        .map(|r| r.seq == target.seq)
+        .unwrap_or(false)
+}
+
+/// Pull a human-readable message out of a panic payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "panic (non-string payload)".to_string()
+}
+
+/// Provider wrapper that stamps `RequestPayload.model` with a configured
+/// override before delegating to the inner provider. Used when the spawn
+/// request (or agent model_hint) supplies a per-spawn model.
+struct ModelOverrideProvider {
+    inner: Arc<dyn AiProvider>,
+    model: String,
+}
+
+impl AiProvider for ModelOverrideProvider {
+    fn process<'a>(
+        &'a self,
+        mut payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        payload.model = Some(self.model.clone());
+        self.inner.process(payload)
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn color(&self) -> &str {
+        self.inner.color()
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        self.inner.supports_native_tools()
+    }
+
+    fn supports_thinking(&self) -> bool {
+        self.inner.supports_thinking()
+    }
+
+    fn protocol(&self) -> &str {
+        self.inner.protocol()
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    use crate::agents::{AgentDef, AgentMode};
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason};
+    use crate::session::events::{ToolOutput, ToolOutputMetadata};
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{
+        migrate_add_session_events, SessionEventStore, SqliteEventStore,
+    };
+    use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
+    use serde_json::json;
+
+    // -- Providers --------------------------------------------------------
+
+    /// Returns scripted responses in sequence, panicking if called past the
+    /// script. Used to drive multi-turn behaviour deterministically.
+    struct ScriptedProvider {
+        responses: Mutex<Vec<ProviderResponse>>,
+        calls: AtomicUsize,
+    }
+
+    impl ScriptedProvider {
+        fn new(responses: Vec<ProviderResponse>) -> Arc<Self> {
+            Arc::new(Self {
+                responses: Mutex::new(responses),
+                calls: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl AiProvider for ScriptedProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut guard = self.responses.lock().unwrap();
+            let resp = if guard.is_empty() {
+                // Safety net — an exhausted script usually means the test
+                // forgot to stop the loop. Return a terminal text response.
+                ProviderResponse::text_only("(scripted provider exhausted)".to_string())
+            } else {
+                guard.remove(0)
+            };
+            Box::pin(async move { Ok(resp) })
+        }
+
+        fn name(&self) -> &str {
+            "scripted"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Always returns the same tool_call, forcing the harness to spin until
+    /// `max_iterations` cuts it off.
+    struct AlwaysToolCallProvider {
+        calls: AtomicUsize,
+    }
+
+    impl AiProvider for AlwaysToolCallProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: format!("call-{n}"),
+                        name: "noop".into(),
+                        arguments: json!({}),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "always-tool"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Sleeps for `delay` before returning a terminal text — drives the
+    /// timeout test.
+    struct SlowProvider {
+        delay: std::time::Duration,
+    }
+
+    impl AiProvider for SlowProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let delay = self.delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                Ok(ProviderResponse::text_only("eventually".to_string()))
+            })
+        }
+
+        fn name(&self) -> &str {
+            "slow"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Returns a tool_call targeting `tool_name`. Used by the allowlist
+    /// test — if the name isn't in the agent's allowlist, the
+    /// AllowlistToolService will short-circuit with PermissionDenied.
+    struct SingleCallProvider {
+        tool_name: String,
+        called: AtomicUsize,
+    }
+
+    impl AiProvider for SingleCallProvider {
+        fn process<'a>(
+            &'a self,
+            _payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let n = self.called.fetch_add(1, Ordering::SeqCst);
+            let tool_name = self.tool_name.clone();
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: format!("call-{n}"),
+                        name: tool_name,
+                        arguments: json!({}),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            })
+        }
+
+        fn name(&self) -> &str {
+            "single-call"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    // -- Tool services ----------------------------------------------------
+
+    /// Tool service whose `execute` always succeeds with an empty payload.
+    struct AlwaysOkTools;
+
+    #[async_trait::async_trait]
+    impl ToolService for AlwaysOkTools {
+        async fn execute(
+            &self,
+            _name: &str,
+            _input: serde_json::Value,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                value: json!({}),
+                metadata: ToolOutputMetadata::default(),
+            })
+        }
+
+        async fn list(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "noop".into(),
+                description: "fake noop".into(),
+                input_schema: json!({}),
+                source: ToolSource::Builtin,
+                metadata: Default::default(),
+            }]
+        }
+
+        async fn describe(&self, name: &str) -> Option<ToolDefinition> {
+            self.list().await.into_iter().find(|d| d.name == name)
+        }
+    }
+
+    // -- Fixtures ---------------------------------------------------------
+
+    fn make_base(provider: Arc<dyn AiProvider>) -> SpawnerBase {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+
+        SpawnerBase {
+            session,
+            parent_tools: Arc::new(AlwaysOkTools),
+            sandbox: Arc::new(crate::sandbox::NoopSandbox),
+            provider,
+            chain: ChainContext::new(),
+        }
+    }
+
+    fn agent_with_allowed(id: &str, tools: Vec<&str>) -> AgentDef {
+        AgentDef::new(id, AgentMode::SubAgent)
+            .with_allowed_tools(tools.into_iter().map(String::from).collect())
+    }
+
+    // -- Tests ------------------------------------------------------------
+
+    #[tokio::test]
+    async fn spawn_single_turn_returns_final_text() {
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "hi from child".to_string(),
+        )]);
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("echo", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "say hi",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("hi from child"));
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.tool_calls_made, 0);
+        assert_eq!(result.depth, 1); // child of root (depth=0) → depth=1
+        assert!(!result.hit_limit);
+        assert!(!result.cancelled);
+    }
+
+    #[tokio::test]
+    async fn spawn_multi_turn_counts_iterations_and_tool_calls() {
+        let provider = ScriptedProvider::new(vec![
+            // Turn 1: the agent calls a tool.
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call-1".into(),
+                    name: "noop".into(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: terminal text.
+            ProviderResponse::text_only("all done".to_string()),
+        ]);
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("worker", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "do two things",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("all done"));
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 1);
+        assert!(!result.hit_limit);
+    }
+
+    #[tokio::test]
+    async fn spawn_max_iter_sets_hit_limit() {
+        let provider: Arc<dyn AiProvider> = Arc::new(AlwaysToolCallProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let base = make_base(provider);
+
+        let agent = AgentDef::new("capped", AgentMode::SubAgent)
+            .with_allowed_tools(vec!["*".into()])
+            .with_max_iterations(3);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "loop forever",
+            context_summary: None,
+            model: None,
+            timeout_secs: 10,
+            cancel: CancellationToken::new(),
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert!(result.hit_limit, "expected hit_limit=true when cap fires");
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[tokio::test]
+    async fn spawn_timeout_returns_timed_out_error() {
+        let provider: Arc<dyn AiProvider> = Arc::new(SlowProvider {
+            delay: std::time::Duration::from_secs(3),
+        });
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("slow", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "take your time",
+            context_summary: None,
+            model: None,
+            timeout_secs: 1,
+            cancel: CancellationToken::new(),
+        };
+
+        let err = spawn(&base, req).await.expect_err("spawn should time out");
+        assert!(
+            err.contains("timed out"),
+            "expected timeout error, got: {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_tool_allowlist_enforced_via_harness() {
+        // Provider always calls `forbidden_tool`. The agent's allowlist
+        // only contains `noop`, so the allowlist decorator returns
+        // PermissionDenied. The harness surfaces that as an error.
+        let provider: Arc<dyn AiProvider> = Arc::new(SingleCallProvider {
+            tool_name: "forbidden_tool".into(),
+            called: AtomicUsize::new(0),
+        });
+        let base = make_base(provider);
+
+        let agent = agent_with_allowed("gated", vec!["noop"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "please don't call forbidden_tool",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+        };
+
+        let err = spawn(&base, req)
+            .await
+            .expect_err("allowlist should block forbidden_tool");
+        let lower = err.to_lowercase();
+        assert!(
+            lower.contains("sub-agent failed")
+                || lower.contains("permissiondenied")
+                || lower.contains("permission"),
+            "expected allowlist denial, got: {err}",
+        );
+    }
+}
