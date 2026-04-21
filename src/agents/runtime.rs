@@ -16,7 +16,6 @@ use crate::sandbox::Sandbox;
 use crate::session::ingress_safety::SafetyGuard;
 use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
-use crate::thinker::prompt_builder::PromptSnapshot;
 use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::service::ToolService;
 
@@ -57,9 +56,6 @@ pub type ToolRegistryFactory = Arc<dyn Fn() -> LoopToolRegistry + Send + Sync>;
 /// each time a sub-agent is spawned.
 pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
 
-// SharedSnapshot is re-exported from crate::agent_loop (defined in agent_loop/mod.rs)
-// to avoid a circular dependency between this module and loop_core.
-
 // =============================================================================
 // AgentRuntimeConfig
 // =============================================================================
@@ -76,8 +72,6 @@ pub struct AgentRuntimeConfig {
     pub model: Option<String>,
     /// Timeout in seconds for the entire run.
     pub timeout_secs: u64,
-    /// Optional prompt snapshot from the parent (used by fork path).
-    pub prompt_snapshot: Option<PromptSnapshot>,
 }
 
 // =============================================================================
@@ -381,14 +375,12 @@ mod tests {
             context_summary: Some("Parent context".to_string()),
             model: Some("claude-sonnet".to_string()),
             timeout_secs: 60,
-            prompt_snapshot: None,
         };
 
         assert_eq!(config.task, "Do something");
         assert_eq!(config.timeout_secs, 60);
         assert!(config.context_summary.is_some());
         assert!(config.model.is_some());
-        assert!(config.prompt_snapshot.is_none());
     }
 
     #[test]

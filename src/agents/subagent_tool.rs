@@ -16,7 +16,6 @@ use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::background_tracker::BackgroundAgentTracker;
-use crate::agent_loop::SharedSnapshot;
 use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, ToolRegistryFactory};
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentRegistry;
@@ -83,8 +82,6 @@ pub struct SubagentTool {
     inbox: Option<Arc<Inbox>>,
     /// Identifies the calling agent (default: "primary").
     parent_agent_id: String,
-    /// Shared prompt snapshot for fork path. Read-only from SubagentTool's perspective.
-    shared_snapshot: Option<SharedSnapshot>,
 }
 
 impl SubagentTool {
@@ -122,7 +119,6 @@ impl SubagentTool {
             message_router: None,
             inbox: None,
             parent_agent_id: "primary".to_string(),
-            shared_snapshot: None,
         }
     }
 
@@ -148,30 +144,6 @@ impl SubagentTool {
     pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
         self.parent_agent_id = id.into();
         self
-    }
-
-    /// Set the shared prompt snapshot for the fork path.
-    pub fn with_shared_snapshot(mut self, snapshot: SharedSnapshot) -> Self {
-        self.shared_snapshot = Some(snapshot);
-        self
-    }
-
-    /// Check whether the fork path should be used for this invocation.
-    ///
-    /// Fork is eligible when the caller did not override agent_type, model,
-    /// or team_name AND a snapshot is available from the parent.
-    fn should_fork(&self, args: &RunArgs) -> bool {
-        args.agent_type.is_none()
-            && args.model.is_none()
-            && args.team_name.is_none()
-            && self.read_snapshot().is_some()
-    }
-
-    /// Read the current prompt snapshot from the shared lock, if available.
-    fn read_snapshot(&self) -> Option<crate::thinker::prompt_builder::PromptSnapshot> {
-        self.shared_snapshot
-            .as_ref()
-            .and_then(|s| s.read().unwrap_or_else(|e| e.into_inner()).clone())
     }
 }
 
@@ -635,14 +607,6 @@ impl LoopTool for SubagentTool {
                 args.task.clone(),
             );
 
-            // Compute fork decision and clone snapshot BEFORE moving into spawn
-            let should_fork_flag = self.should_fork(&args);
-            let prompt_snapshot_clone = if should_fork_flag {
-                self.read_snapshot()
-            } else {
-                None
-            };
-
             let provider = self.provider.clone();
             let factory = self.tool_registry_factory.clone();
             let safety_factory = self.safety_guard_factory.clone();
@@ -657,19 +621,12 @@ impl LoopTool for SubagentTool {
             let sandbox = self.sandbox.clone();
 
             tokio::spawn(async move {
-                let snapshot = if should_fork_flag {
-                    prompt_snapshot_clone
-                } else {
-                    None
-                };
-
                 let runtime_config = AgentRuntimeConfig {
                     agent_def,
                     task,
                     context_summary,
                     model,
                     timeout_secs,
-                    prompt_snapshot: snapshot,
                 };
 
                 let runtime = AgentRuntime::new(
@@ -704,19 +661,12 @@ impl LoopTool for SubagentTool {
             }
         } else {
             // Foreground execution
-            let snapshot = if self.should_fork(&args) {
-                self.read_snapshot()
-            } else {
-                None
-            };
-
             let runtime_config = AgentRuntimeConfig {
                 agent_def,
                 task: args.task.clone(),
                 context_summary: args.context_summary,
                 model: args.model,
                 timeout_secs: args.timeout_secs,
-                prompt_snapshot: snapshot,
             };
 
             let runtime = AgentRuntime::new(
