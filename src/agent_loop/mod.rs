@@ -3,19 +3,13 @@
 //! The core think → act loop. LLM reasons, selects tools, executes them,
 //! and repeats until the task is complete.
 //!
-//! Phase 6c: stub re-export modules deleted; canonical paths used directly.
-//! `loop_core`, `agent_runtime`, `factory`, `truncation_recovery` are deleted
-//! in commit 2c. Until then, inline module aliases preserve `super::` imports
-//! inside those files.
+//! Phase 6c: `agent_runtime`, `factory`, `integration_probe` deleted.
+//! `loop_core` is retained as the canonical AgentLoop implementation used
+//! by `agents::runtime::AgentRuntime` for sub-agent execution.
 
-pub mod factory;
 mod loop_core;
-
-pub mod agent_runtime;
+pub mod subagent_runner;
 pub mod truncation_recovery;
-
-#[cfg(test)]
-mod integration_probe;
 
 // ---------------------------------------------------------------------------
 // Inline module aliases — keep `super::X` references inside loop_core.rs,
@@ -97,13 +91,26 @@ pub mod verify_stop_hook {
 }
 
 // ---------------------------------------------------------------------------
+// Shared types defined here (not in deleted agent_runtime.rs)
+// ---------------------------------------------------------------------------
+
+/// Shared snapshot of the parent's prompt state, used by the fork path.
+///
+/// Defined here (not in the deleted `agent_runtime` module) so that
+/// `loop_core` and `agents::runtime` can both reference it without a cycle:
+/// `loop_core` imports via `super::SharedSnapshot`, `agents::runtime` imports
+/// via `crate::agent_loop::SharedSnapshot`.
+pub type SharedSnapshot = crate::sync_primitives::Arc<
+    crate::sync_primitives::RwLock<
+        Option<crate::thinker::prompt_builder::PromptSnapshot>,
+    >,
+>;
+
+// ---------------------------------------------------------------------------
 // Public re-exports
 // ---------------------------------------------------------------------------
 
-pub use agent_runtime::{AgentRuntime, AgentRuntimeConfig, SharedSnapshot};
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
-#[cfg(test)]
-pub(crate) use loop_core::NoopCallback;
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 
 // Trace types — previously re-exported from the stub; now forwarded directly.

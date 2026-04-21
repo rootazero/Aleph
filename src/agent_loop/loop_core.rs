@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::agent_runtime::SharedSnapshot;
+use super::SharedSnapshot;
 use super::context_budget::diagnostics::ContextDiagnostics;
 use super::context_budget::pipeline::{
     CompactionPipeline, ImageStripper, ResultClearing, RoundDrop, ToolCompactStage,

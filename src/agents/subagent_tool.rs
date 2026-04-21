@@ -15,18 +15,17 @@ use serde_json::{json, Value};
 use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::agent_runtime::{
-    AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, SharedSnapshot, ToolRegistryFactory,
-};
 use crate::agents::background_tracker::BackgroundAgentTracker;
+use crate::agent_loop::SharedSnapshot;
+use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, ToolRegistryFactory};
 use crate::agents::teammates::TeammateManager;
-use crate::tools::runtime::{LoopTool, ToolResult};
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use crate::teams::messages::inbox::Inbox;
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::MessageType;
+use crate::tools::runtime::{LoopTool, ToolResult};
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]

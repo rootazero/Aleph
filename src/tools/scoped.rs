@@ -341,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn list_includes_subagent_tool_when_set() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agent_loop::agent_runtime::{SafetyGuardFactory, ToolRegistryFactory};
+        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;
@@ -399,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn execute_routes_to_subagent_tool_by_name() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agent_loop::agent_runtime::{SafetyGuardFactory, ToolRegistryFactory};
+        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;

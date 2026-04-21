@@ -1,29 +1,27 @@
-//! AgentRuntime — lifecycle layer between SubagentTool (dispatch) and AgentLoop (execution).
+//! Sub-agent runtime — canonical home for `AgentRuntime` and the types it
+//! exposes to `SubagentTool` and callers.
 //!
-//! Responsibilities:
-//! - Resolve model override chain (explicit > agent hint > default)
-//! - Build tool registry filtered by agent permissions
-//! - Construct PromptBuilder with agent definition
-//! - Execute AgentLoop with timeout and cancellation
-//! - Record structured transcript via tracing
+//! Relocated from `agent_loop/agent_runtime.rs` during Phase 6c deletion.
+//! `AgentLoop` itself (in `agent_loop/loop_core.rs`) is retained; this module
+//! wraps it with lifecycle tracing and transcript persistence.
 
 use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use super::chain_context::ChainContext;
-use super::loop_core::{AgentLoop, LoopConfig, LoopRunResult, NoopCallback};
-use super::provider_bridge::AiProviderBridge;
-use super::tool::LoopToolRegistry;
+use crate::agent_loop::subagent_runner::{run_subagent, SubagentRunConfig};
+use crate::agent_loop::LoopRunResult;
 use crate::agents::AgentDef;
+use crate::harness::chain_context::ChainContext;
 use crate::providers::AiProvider;
 use crate::session::ingress_safety::SafetyGuard;
-use crate::sync_primitives::{Arc, RwLock};
-use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig, PromptSnapshot};
+use crate::sync_primitives::Arc;
+use crate::thinker::prompt_builder::PromptSnapshot;
+use crate::tools::runtime::LoopToolRegistry;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Type aliases (migrated from subagent_runner.rs)
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// Type aliases
+// =============================================================================
 
 /// Factory that builds a fresh LoopToolRegistry for the sub-agent.
 ///
@@ -37,14 +35,14 @@ pub type ToolRegistryFactory = Arc<dyn Fn() -> LoopToolRegistry + Send + Sync>;
 /// each time a sub-agent is spawned.
 pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
 
-/// Shared snapshot of the parent's prompt state, used by the fork path (Task 7).
-pub type SharedSnapshot = Arc<RwLock<Option<PromptSnapshot>>>;
+// SharedSnapshot is re-exported from crate::agent_loop (defined in agent_loop/mod.rs)
+// to avoid a circular dependency between this module and loop_core.
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // AgentRuntimeConfig
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
-/// Configuration for launching a sub-agent via `AgentRuntime`.
+/// Configuration for launching a sub-agent.
 pub struct AgentRuntimeConfig {
     /// The agent definition describing role, tools, and limits.
     pub agent_def: AgentDef,
@@ -60,9 +58,9 @@ pub struct AgentRuntimeConfig {
     pub prompt_snapshot: Option<PromptSnapshot>,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SubagentTranscript / TranscriptOutcome
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
+// Transcript types
+// =============================================================================
 
 /// Outcome classification for a sub-agent execution.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -96,14 +94,11 @@ pub struct SubagentTranscript {
     pub key_findings: String,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // AgentRuntime
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
-///
-/// Replaces the free function `run_subagent()` from `subagent_runner.rs` with a
-/// struct-based API that adds structured tracing and transcript recording.
 pub struct AgentRuntime {
     provider: Arc<dyn AiProvider>,
     tool_registry_factory: ToolRegistryFactory,
@@ -131,10 +126,6 @@ impl AgentRuntime {
     }
 
     /// Execute a sub-agent to completion with lifecycle tracing.
-    ///
-    /// This is the fresh-path execution that builds everything from scratch
-    /// (model, registry, prompt builder, loop config) from the agent definition.
-    /// The fork path (reusing a parent snapshot) will be added in Task 7.
     pub async fn run(&self, config: AgentRuntimeConfig) -> Result<LoopRunResult, String> {
         let start = Instant::now();
         let agent_id = format!(
@@ -152,10 +143,8 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
-        // Phase 1: Resolve model, build registry, prompt builder, loop config
         let result = self.execute_fresh_path(&config).await;
 
-        // Phase 4: Record transcript
         let duration_ms = start.elapsed().as_millis() as u64;
         let key_findings = match &result {
             Ok(run_result) => run_result
@@ -207,92 +196,43 @@ impl AgentRuntime {
             "SubagentEnd: sub-agent completed"
         );
 
-        // Best-effort persistence
-        let session_id = &self.child_chain.chain_id;
-        persist_transcript(&transcript, session_id);
+        persist_transcript(&transcript, &self.child_chain.chain_id);
 
         result
     }
 
-    /// Fresh-path execution: build everything from the agent definition.
     async fn execute_fresh_path(
         &self,
         config: &AgentRuntimeConfig,
     ) -> Result<LoopRunResult, String> {
-        // Resolve model: explicit arg > agent_def.model_hint > default
-        let resolved_model = config
-            .model
-            .clone()
-            .or_else(|| config.agent_def.model_hint.clone());
-        let bridge = if let Some(m) = resolved_model {
-            AiProviderBridge::new(self.provider.clone()).with_model(m)
-        } else {
-            AiProviderBridge::new(self.provider.clone())
-        };
-
-        // Build tool registry, then filter to agent's allowed tools
         let mut registry = (self.tool_registry_factory)();
         registry.retain(|name| config.agent_def.is_tool_allowed(name));
 
-        // Build prompt builder for sub-agent via thinker pipeline
-        let prompt_builder =
-            PromptBuilder::new(PromptConfig::default()).with_agent(config.agent_def.clone());
-
-        // Build loop config from agent definition
-        let loop_config = LoopConfig {
-            max_iterations: config.agent_def.max_iterations.unwrap_or(25) as usize,
-            token_budget: config.agent_def.token_budget.unwrap_or(100_000) as usize,
-        };
-
-        // Create and run the agent loop
-        let mut agent_loop = AgentLoop::new(
-            bridge,
+        run_subagent(SubagentRunConfig {
+            provider: &self.provider,
             registry,
-            prompt_builder,
-            (self.safety_guard_factory)(),
-            loop_config,
-            self.cancel_token.clone(),
-        )
-        .with_chain(self.child_chain.clone());
-
-        // Prepend parent context to the task message if provided
-        let effective_task = match &config.context_summary {
-            Some(summary) => format!(
-                "## Context from parent agent\n\n{}\n\n---\n\n{}",
-                summary, config.task
-            ),
-            None => config.task.clone(),
-        };
-
-        let mut callback = NoopCallback;
-        let timeout_duration = std::time::Duration::from_secs(config.timeout_secs);
-        let run_result = tokio::time::timeout(
-            timeout_duration,
-            agent_loop.run(&effective_task, &mut callback),
-        )
-        .await;
-
-        match run_result {
-            Err(_elapsed) => Err(format!(
-                "Sub-agent timed out after {}s",
-                config.timeout_secs
-            )),
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(e)) => Err(format!("sub-agent failed: {}", e)),
-        }
+            safety_guard: (self.safety_guard_factory)(),
+            agent_def: &config.agent_def,
+            model: config.model.clone(),
+            task: &config.task,
+            context_summary: config.context_summary.as_deref(),
+            timeout_secs: config.timeout_secs,
+            child_chain: self.child_chain.clone(),
+            cancel_token: self.cancel_token.clone(),
+        })
+        .await
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 /// Truncate a string for log output, appending "..." if truncated.
-fn truncate_for_log(s: &str, max_len: usize) -> String {
+pub fn truncate_for_log(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        // Use char_indices for UTF-8 safety (P7 defensive design)
         match s.char_indices().nth(max_len) {
             Some((idx, _)) => format!("{}...", &s[..idx]),
             None => s.to_string(),
@@ -301,7 +241,7 @@ fn truncate_for_log(s: &str, max_len: usize) -> String {
 }
 
 /// Format a TranscriptOutcome for log output.
-fn format_outcome(outcome: &TranscriptOutcome) -> &str {
+pub fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     match outcome {
         TranscriptOutcome::Success => "success",
         TranscriptOutcome::Error(_) => "error",
@@ -312,11 +252,7 @@ fn format_outcome(outcome: &TranscriptOutcome) -> &str {
 /// Maximum transcript directories to retain per session.
 const MAX_TRANSCRIPT_DIRS: usize = 50;
 
-/// Clean up old transcript directories, retaining only the most recent
-/// [`MAX_TRANSCRIPT_DIRS`] session directories under the transcripts root.
 fn cleanup_old_transcripts(base_dir: &std::path::Path) {
-    // base_dir is ~/.aleph/data/transcripts/{session_id}/
-    // We clean at the parent level: ~/.aleph/data/transcripts/
     let parent = match base_dir.parent() {
         Some(p) => p,
         None => return,
@@ -346,13 +282,8 @@ fn cleanup_old_transcripts(base_dir: &std::path::Path) {
 }
 
 /// Persist a subagent transcript to disk for future retrieval.
-/// Writes to `~/.aleph/data/transcripts/{session_id}/{agent_id}.json`.
 /// Best-effort: errors are logged but not propagated.
-///
-/// Synchronous write is acceptable here — we're at loop exit after the
-/// subagent loop completes, no more LLM calls or tool execution pending.
-/// The write is < 1ms for a small JSON file.
-fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
+pub fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
     let base = match dirs::home_dir() {
         Some(h) => h.join(".aleph/data/transcripts").join(session_id),
         None => {
@@ -378,9 +309,9 @@ fn persist_transcript(transcript: &SubagentTranscript, session_id: &str) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 // Tests
-// ─────────────────────────────────────────────────────────────────────────────
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -443,8 +374,7 @@ mod tests {
 
     #[test]
     fn truncate_for_log_short_string() {
-        let s = "hello";
-        assert_eq!(truncate_for_log(s, 10), "hello");
+        assert_eq!(truncate_for_log("hello", 10), "hello");
     }
 
     #[test]
@@ -452,13 +382,11 @@ mod tests {
         let s = "a".repeat(200);
         let result = truncate_for_log(&s, 50);
         assert!(result.ends_with("..."));
-        // 50 chars + "..."
         assert_eq!(result.len(), 53);
     }
 
     #[test]
     fn truncate_for_log_unicode_safe() {
-        // Chinese characters are multi-byte; ensure no panic on boundary
         let s = "你好世界这是一个很长的字符串用于测试截断功能";
         let result = truncate_for_log(s, 5);
         assert!(result.ends_with("..."));
@@ -503,28 +431,5 @@ mod tests {
         assert!(json.contains("\"timeout\""));
         let deserialized: SubagentTranscript = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized.outcome, TranscriptOutcome::Error(ref e) if e == "timeout"));
-    }
-
-    #[test]
-    fn fork_path_uses_snapshot_prefix() {
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
-
-        let config = PromptConfig::default();
-        let builder = PromptBuilder::new(config);
-        let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
-        let snapshot = builder.capture_snapshot(&tools);
-
-        // Build a minimal sub-agent AgentDef for the fork path
-        let agent_def = AgentDef::new("fork-test-agent", crate::agents::AgentMode::SubAgent);
-
-        let forked = builder.build_from_snapshot(&snapshot, &agent_def, &tools);
-
-        // Fork result must start with the snapshot's stable prefix
-        assert!(
-            forked.starts_with(&snapshot.stable_prefix),
-            "forked prompt must start with the snapshot's stable prefix"
-        );
-        // Fork result should include content beyond just the prefix
-        assert!(forked.len() >= snapshot.stable_prefix.len());
     }
 }

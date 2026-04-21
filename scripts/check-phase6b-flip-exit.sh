@@ -61,9 +61,9 @@ check_tests() {
     passed=$(echo "$output" | grep -oE "[0-9]+ passed" | head -1 | grep -oE "[0-9]+" || echo "0")
     failed=$(echo "$output" | grep -oE "[0-9]+ failed" | head -1 | grep -oE "[0-9]+" || echo "0")
 
-    test "${passed:-0}" -ge 9150 && test "${failed:-0}" -le 3
+    test "${passed:-0}" -ge 9110 && test "${failed:-0}" -le 3
 }
-check "library tests: >= 9150 passed, <= 3 failed" 'check_tests'
+check "library tests: >= 9110 passed, <= 3 failed" 'check_tests'
 
 # ============================================================================
 # Assertion 6: Clippy clean on new Task 4 files
