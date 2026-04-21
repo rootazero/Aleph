@@ -167,10 +167,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
-        use crate::harness::adapters::build_registry_from_tools;
         use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
-        use crate::config::types::policies::ToolSafetyPolicy;
-        use crate::session::ingress_safety::SafetyGuard;
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -266,36 +263,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .cloned(),
             );
         }
-
-        // Subagent tool factories (cloneable Arc closures)
-        let sub_allowed_tools: Vec<_> = allowed_tools
-            .iter()
-            .filter(|t| t.name != "subagent")
-            .cloned()
-            .collect();
-
-        let sub_tool_registry_ref = self.tool_registry.clone();
-        let sub_working_dir_ref = default_working_dir.clone();
-        let sub_tool_factory: crate::agents::runtime::ToolRegistryFactory = Arc::new({
-            let sub_tool_registry = sub_tool_registry_ref.clone();
-            let sub_allowed = sub_allowed_tools.clone();
-            let sub_dir = sub_working_dir_ref.clone();
-            move || {
-                build_registry_from_tools(sub_tool_registry.clone(), &sub_allowed, sub_dir.clone())
-            }
-        });
-
-        let sub_safety_factory: crate::agents::runtime::SafetyGuardFactory = Arc::new({
-            let global_perms = self.global_tool_permissions.clone();
-            let agent_perms_clone = agent.config().tool_permissions();
-            move || {
-                SafetyGuard::from_permissions(
-                    &global_perms,
-                    &agent_perms_clone,
-                    Some(ToolSafetyPolicy::default()),
-                )
-            }
-        });
 
         // Agent config values — `max_loops` / `agent_perms` moved into the
         // AgentHarnessRunner boot path (harness owns iteration cap +
@@ -527,8 +494,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 let mut t = SubagentTool::new(
                     sub_provider,
-                    sub_tool_factory.clone(),
-                    sub_safety_factory.clone(),
                     run_chain,
                     agent_registry,
                     background_tracker,

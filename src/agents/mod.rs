@@ -43,8 +43,7 @@ pub mod swarm;
 
 pub use registry::{builtin_agents, AgentRegistry};
 pub use runtime::{
-    AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, SubagentTranscript,
-    ToolRegistryFactory, TranscriptOutcome,
+    AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome,
 };
 pub use types::{AgentDef, AgentMode, ContextMode};
 

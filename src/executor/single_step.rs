@@ -17,7 +17,7 @@
 //!
 //! ```ignore
 //! use alephcore::executor::SingleStepExecutor;
-//! use alephcore::agent_loop::{Action, ActionResult};
+//! use alephcore::executor::action_types::{Action, ActionResult};
 //!
 //! // Create executor
 //! let executor = SingleStepExecutor::new(tool_registry);

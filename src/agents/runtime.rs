@@ -1,9 +1,8 @@
 //! Sub-agent runtime — canonical home for `AgentRuntime` and the types it
 //! exposes to `SubagentTool` and callers.
 //!
-//! Relocated from `agent_loop/agent_runtime.rs` during Phase 6c deletion.
-//! `AgentLoop` itself (in `agent_loop/loop_core.rs`) is retained; this module
-//! wraps it with lifecycle tracing and transcript persistence.
+//! Wraps the Harness-based spawner with lifecycle tracing and transcript
+//! persistence.
 
 use std::time::Instant;
 
@@ -13,19 +12,17 @@ use crate::agents::AgentDef;
 use crate::harness::chain_context::ChainContext;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
-use crate::session::ingress_safety::SafetyGuard;
 use crate::session::service::SessionService;
 use crate::sync_primitives::Arc;
-use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::service::ToolService;
 
 // =============================================================================
 // LoopRunResult
 // =============================================================================
 
-/// Outcome of a completed sub-agent run. Mirrors the legacy
-/// `agent_loop::loop_core::LoopRunResult` field-for-field so that
-/// `SubagentTool` and downstream consumers see zero behavior change.
+/// Outcome of a completed sub-agent run. Mirrors the legacy pre-Harness
+/// `LoopRunResult` field-for-field so that `SubagentTool` and downstream
+/// consumers see zero behavior change.
 #[derive(Debug, Clone)]
 pub struct LoopRunResult {
     pub final_text: Option<String>,
@@ -39,22 +36,6 @@ pub struct LoopRunResult {
     /// Nesting depth (0 = root agent).
     pub depth: u32,
 }
-
-// =============================================================================
-// Type aliases
-// =============================================================================
-
-/// Factory that builds a fresh LoopToolRegistry for the sub-agent.
-///
-/// The factory is responsible for providing the parent's tools minus
-/// the "subagent" tool itself (to prevent infinite recursion).
-pub type ToolRegistryFactory = Arc<dyn Fn() -> LoopToolRegistry + Send + Sync>;
-
-/// Factory that builds a SafetyGuard for the sub-agent.
-///
-/// SafetyGuard is not Clone, so we use a factory to produce a fresh instance
-/// each time a sub-agent is spawned.
-pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
 
 // =============================================================================
 // AgentRuntimeConfig
@@ -117,12 +98,6 @@ pub struct SubagentTranscript {
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
 pub struct AgentRuntime {
     provider: Arc<dyn AiProvider>,
-    /// Dead since T6 flipped to the Harness spawner; removed in T10.
-    #[allow(dead_code)]
-    tool_registry_factory: ToolRegistryFactory,
-    /// Dead since T6 flipped to the Harness spawner; removed in T10.
-    #[allow(dead_code)]
-    safety_guard_factory: SafetyGuardFactory,
     child_chain: ChainContext,
     cancel_token: CancellationToken,
     /// Shared session actor used by the Harness spawner for the child's
@@ -140,8 +115,6 @@ impl AgentRuntime {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
-        tool_registry_factory: ToolRegistryFactory,
-        safety_guard_factory: SafetyGuardFactory,
         child_chain: ChainContext,
         cancel_token: CancellationToken,
         session: Arc<dyn SessionService>,
@@ -150,8 +123,6 @@ impl AgentRuntime {
     ) -> Self {
         Self {
             provider,
-            tool_registry_factory,
-            safety_guard_factory,
             child_chain,
             cancel_token,
             session,

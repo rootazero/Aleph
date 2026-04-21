@@ -1,6 +1,6 @@
 //! Subagent spawner — Harness-based sub-agent execution.
 //!
-//! Replacement for the legacy `agent_loop::subagent_runner::run_subagent`.
+//! Replacement for the legacy pre-Harness `run_subagent` entry point.
 //! The spawner takes a `SpawnerBase` (shared session/tools/sandbox/provider)
 //! plus a `SpawnRequest` (agent_def, task, model, timeout, cancel), builds a
 //! child ephemeral `SessionKey`, assembles a `HarnessDeps` bundle with the

@@ -301,7 +301,7 @@ impl PromptBuilder {
     /// Build system prompt for a sub-agent.
     ///
     /// Injects the agent's role header and protocol sections via `AgentRoleLayer`.
-    /// This replaces the old `agent_loop::PromptBuilder::for_agent()`.
+    /// This replaces the old `PromptBuilder::for_agent()` from the pre-Harness era.
     pub fn build_for_agent(
         &self,
         agent_def: &crate::agents::AgentDef,

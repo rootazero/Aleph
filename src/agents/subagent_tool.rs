@@ -1,9 +1,10 @@
-//! SubagentTool — delegates tasks to a temporary AgentLoop.
+//! SubagentTool — delegates tasks to a temporary child harness.
 //!
 //! When the parent agent needs to run a complex sub-task autonomously,
-//! it calls the `subagent` tool. This creates a fresh `AgentLoop` with
-//! its own tool registry (minus the subagent tool itself to prevent
-//! infinite recursion) and runs the task to completion.
+//! it calls the `subagent` tool. `AgentRuntime::execute_via_harness` spawns a
+//! fresh `AgentHarness` (via `subagent_spawner`) with its parent tool service
+//! wrapped by `AllowlistToolService` (which excludes the `subagent` tool to
+//! prevent infinite recursion) and runs the task to completion.
 //!
 //! Supports agent role selection via `agent_type`, optional context
 //! injection via `context_summary`, and background execution via
@@ -16,7 +17,7 @@ use std::panic::AssertUnwindSafe;
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::background_tracker::BackgroundAgentTracker;
-use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, ToolRegistryFactory};
+use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
 use crate::agents::teammates::TeammateManager;
 use crate::agents::AgentRegistry;
 use crate::providers::AiProvider;
@@ -63,8 +64,6 @@ struct RunArgs {
 /// A LoopTool that delegates tasks to a temporary AgentLoop.
 pub struct SubagentTool {
     provider: Arc<dyn AiProvider>,
-    tool_registry_factory: ToolRegistryFactory,
-    safety_guard_factory: SafetyGuardFactory,
     chain: crate::harness::chain_context::ChainContext,
     agent_registry: Arc<AgentRegistry>,
     background_tracker: Arc<BackgroundAgentTracker>,
@@ -88,16 +87,12 @@ impl SubagentTool {
     /// Create a new SubagentTool.
     ///
     /// - `provider`: the AI provider for the sub-agent's LLM calls
-    /// - `tool_registry_factory`: builds a fresh tool registry (without "subagent")
-    /// - `safety_guard_factory`: builds a fresh SafetyGuard per invocation
     /// - `chain`: the parent's chain context for depth tracking
     /// - `agent_registry`: registry of available agent definitions
     /// - `background_tracker`: tracker for background sub-agent tasks
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<dyn AiProvider>,
-        tool_registry_factory: ToolRegistryFactory,
-        safety_guard_factory: SafetyGuardFactory,
         chain: crate::harness::chain_context::ChainContext,
         agent_registry: Arc<AgentRegistry>,
         background_tracker: Arc<BackgroundAgentTracker>,
@@ -107,8 +102,6 @@ impl SubagentTool {
     ) -> Self {
         Self {
             provider,
-            tool_registry_factory,
-            safety_guard_factory,
             chain,
             agent_registry,
             background_tracker,
@@ -608,8 +601,6 @@ impl LoopTool for SubagentTool {
             );
 
             let provider = self.provider.clone();
-            let factory = self.tool_registry_factory.clone();
-            let safety_factory = self.safety_guard_factory.clone();
             let task = args.task.clone();
             let context_summary = args.context_summary;
             let model = args.model.clone();
@@ -631,8 +622,6 @@ impl LoopTool for SubagentTool {
 
                 let runtime = AgentRuntime::new(
                     provider,
-                    factory,
-                    safety_factory,
                     child_chain,
                     cancel_token,
                     session,
@@ -671,8 +660,6 @@ impl LoopTool for SubagentTool {
 
             let runtime = AgentRuntime::new(
                 self.provider.clone(),
-                self.tool_registry_factory.clone(),
-                self.safety_guard_factory.clone(),
                 child_chain,
                 CancellationToken::new(),
                 self.session.clone(),
@@ -720,11 +707,9 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use crate::tools::runtime::LoopToolRegistry;
     use crate::agents::AgentRegistry;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
     use crate::providers::AiProvider;
-    use crate::session::ingress_safety::SafetyGuard;
     use crate::session::in_process::InProcessActorSessionService;
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService};
@@ -791,13 +776,9 @@ mod tests {
 
     fn make_tool() -> SubagentTool {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = crate::harness::chain_context::ChainContext::new();
         SubagentTool::new(
             provider,
-            factory,
-            safety_factory,
             chain,
             make_registry(),
             make_tracker(),
@@ -997,13 +978,9 @@ mod tests {
         tracker.mark_completed("test-id", Ok("the result".to_string()));
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = crate::harness::chain_context::ChainContext::new();
         let tool = SubagentTool::new(
             provider,
-            factory,
-            safety_factory,
             chain,
             make_registry(),
             tracker,

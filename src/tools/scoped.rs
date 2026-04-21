@@ -374,12 +374,10 @@ mod tests {
     #[tokio::test]
     async fn list_includes_subagent_tool_when_set() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
-        use crate::session::ingress_safety::SafetyGuard;
         use std::future::Future;
         use std::pin::Pin;
 
@@ -393,15 +391,11 @@ mod tests {
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = ChainContext::new();
         let registry_arc = Arc::new(AgentRegistry::with_builtins());
         let tracker = Arc::new(BackgroundAgentTracker::new());
         let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
             provider,
-            factory,
-            safety,
             chain,
             registry_arc,
             tracker,
@@ -440,12 +434,10 @@ mod tests {
     #[tokio::test]
     async fn execute_routes_to_subagent_tool_by_name() {
         use crate::harness::chain_context::ChainContext;
-        use crate::agents::runtime::{SafetyGuardFactory, ToolRegistryFactory};
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
         use crate::providers::AiProvider;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
-        use crate::session::ingress_safety::SafetyGuard;
         use std::future::Future;
         use std::pin::Pin;
 
@@ -459,15 +451,11 @@ mod tests {
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
-        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         let chain = ChainContext::new();
         let registry_arc = Arc::new(AgentRegistry::with_builtins());
         let tracker = Arc::new(BackgroundAgentTracker::new());
         let st = Arc::new(crate::agents::subagent_tool::SubagentTool::new(
             provider,
-            factory,
-            safety,
             chain,
             registry_arc,
             tracker,
