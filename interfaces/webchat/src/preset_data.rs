@@ -72,6 +72,17 @@ pub const PRESETS: &[ProviderPreset] = &[
         auth_type: "api_key",
     },
     ProviderPreset {
+        name: "kimi-for-coding",
+        protocol: "anthropic",
+        model: "Kimi-K2.6",
+        base_url: "https://api.kimi.com/coding/v1",
+        description: "Kimi for Coding - Optimized for IDE and agent tool use",
+        api_key_placeholder: "sk-...",
+        icon_color: "#6366F1",
+        needs_api_key: true,
+        auth_type: "api_key",
+    },
+    ProviderPreset {
         name: "volcengine",
         protocol: "openai",
         model: "doubao-1.5-pro-256k",

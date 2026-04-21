@@ -269,6 +269,29 @@ impl AnthropicProtocol {
             ThinkLevel::XHigh => Some(50000),
         }
     }
+
+    // =============================================================================
+    // Kimi for Coding model optimizations
+    // =============================================================================
+
+    /// Detect if model is a Kimi for Coding model
+    fn is_kimi_model(model: &str) -> bool {
+        let m = model.to_lowercase();
+        m.contains("kimi-k2") || m.contains("kimi-k2.5") || m.contains("kimi-k2p5")
+    }
+
+    /// Get default temperature for Kimi models
+    fn kimi_default_temperature(model: &str) -> Option<f32> {
+        let m = model.to_lowercase();
+        if m.contains("k2.5") || m.contains("k2p5") || m.contains("k2-5") {
+            Some(1.0)
+        } else if m.contains("kimi-k2") {
+            Some(0.6)
+        } else {
+            None
+        }
+    }
+
 }
 
 #[async_trait]
@@ -290,18 +313,32 @@ impl ProtocolAdapter for AnthropicProtocol {
             .max_tokens
             .or(config.max_tokens)
             .unwrap_or(DEFAULT_MAX_TOKENS);
-        let temperature = payload.temperature.or(config.temperature);
+
+        // Apply Kimi-specific defaults if not explicitly set
+        let temperature = payload
+            .temperature
+            .or_else(|| Self::kimi_default_temperature(actual_model))
+            .or(config.temperature);
 
         // Build thinking config if enabled
-        let thinking = payload
-            .think_level
-            .as_ref()
-            .and_then(Self::map_think_level)
-            .map(|budget| ThinkingBlock {
+        // For Kimi models, enable thinking by default when no explicit think_level
+        let thinking = if Self::is_kimi_model(actual_model) && payload.think_level.is_none() {
+            Some(ThinkingBlock {
                 thinking_type: "enabled".to_string(),
-                budget_tokens: Some(budget),
+                budget_tokens: Some(16_000),
                 display: None,
-            });
+            })
+        } else {
+            payload
+                .think_level
+                .as_ref()
+                .and_then(Self::map_think_level)
+                .map(|budget| ThinkingBlock {
+                    thinking_type: "enabled".to_string(),
+                    budget_tokens: Some(budget),
+                    display: None,
+                })
+        };
 
         // Convert tool definitions to Anthropic format
         let tools = payload.tools.map(|tool_defs| {
