@@ -190,23 +190,28 @@ pub async fn spawn(
         system_prompt: Some(system_prompt),
         max_iterations: max_iter,
     };
-    let harness = AgentHarness::new(deps);
+    let harness = Arc::new(AgentHarness::new(deps));
 
     // 7. Run the harness with wall-clock timeout + panic isolation.
     //    AssertUnwindSafe is used because the harness internals (provider
     //    closures, channels) are not `UnwindSafe` but we intentionally
     //    catch panics to synthesize a clean error rather than unwind
     //    into the parent actor.
+    //
+    //    The harness is held via `Arc` so we retain a handle after the
+    //    async closure completes — this lets us query `hit_limit()`
+    //    directly instead of reconstructing it from the event log.
     let timeout = std::time::Duration::from_secs(req.timeout_secs);
     let cancel = req.cancel.clone();
     let sid = child_id.clone();
+    let harness_for_run = harness.clone();
     let run_fut = async move {
         let mut cb = NoopHarnessCallback;
-        harness.run(&sid, &mut cb, &cancel).await
+        harness_for_run.run(&sid, &mut cb, &cancel).await
     };
     let outcome = tokio::time::timeout(timeout, AssertUnwindSafe(run_fut).catch_unwind()).await;
 
-    let hit_limit = match outcome {
+    match outcome {
         Err(_elapsed) => {
             return Err(format!("Sub-agent timed out after {}s", req.timeout_secs));
         }
@@ -217,20 +222,19 @@ pub async fn spawn(
         Ok(Ok(Err(e))) => {
             return Err(format!("sub-agent failed: {e}"));
         }
-        Ok(Ok(Ok(()))) => false,
-    };
+        Ok(Ok(Ok(()))) => {}
+    }
 
-    // 8. `hit_limit` is stored on the harness only while it is still alive.
-    //    Since `harness` was consumed by the `async move` above, the
-    //    `max_iterations` cap signal is recovered from the event log by
-    //    detecting when the log's trailing record is `ToolResult` (no
-    //    final assistant text). The dedicated `max_iterations` test
-    //    below asserts this.
+    // 8. Query the harness directly for the `hit_limit` signal. The
+    //    previous implementation reconstructed this from the event log
+    //    because the harness had been moved into the async closure; with
+    //    `Arc<AgentHarness>` we just read the flag.
+    let hit_limit = harness.hit_limit();
+
     extract_run_result(
         base.session.as_ref(),
         &child_id,
         &child_chain,
-        req.agent_def.max_iterations,
         hit_limit,
     )
     .await
@@ -241,15 +245,13 @@ pub async fn spawn(
 /// `iterations` := count of `AssistantMessage` events.
 /// `tool_calls_made` := count of `ToolCallRequested` events.
 /// `final_text` := text of the last `AssistantMessage`, or `None`.
-/// `hit_limit` := `true` if the configured `max_iterations` equals the
-///                 assistant-message count (or passed in by the caller).
-/// `cancelled` := `false` (cancellation surfaces as an error earlier).
+/// `hit_limit` := passed in by the caller (sourced from
+///                 `AgentHarness::hit_limit()` after the run).
 async fn extract_run_result(
     session: &dyn SessionService,
     child_id: &SessionId,
     chain: &ChainContext,
-    max_iterations: Option<u32>,
-    hit_limit_hint: bool,
+    hit_limit: bool,
 ) -> Result<LoopRunResult, String> {
     let events = session
         .get_events(child_id, None, None)
@@ -266,14 +268,15 @@ async fn extract_run_result(
                 // Keep the most recent assistant text as the "final" answer.
                 if !content.text.is_empty() {
                     final_text = Some(content.text.clone());
-                } else {
-                    // An assistant turn that was pure tool_use (no text)
-                    // doesn't overwrite an earlier textual answer — but
-                    // once we see a tool_use-only final turn, the loop
-                    // was cut off mid-think, so clear any earlier text.
-                    if is_last_assistant(&events, rec) {
-                        final_text = None;
-                    }
+                } else if is_last_assistant(&events, rec) {
+                    // Edge case: the *last* AssistantMessage is pure tool_use
+                    // (no text). Clear any earlier textual answer so the
+                    // gateway's `hit_limit && final_text.is_empty()` check in
+                    // `helpers::gateway_response_from_outcome` surfaces
+                    // `ErrLoopExhausted` instead of echoing a stale earlier
+                    // message. The dedicated `final_text_cleared_when_…`
+                    // regression test below asserts this behavior.
+                    final_text = None;
                 }
             }
             SessionEvent::ToolCallRequested { .. } => {
@@ -283,19 +286,12 @@ async fn extract_run_result(
         }
     }
 
-    let hit_limit = hit_limit_hint
-        || match max_iterations {
-            Some(cap) => iterations >= cap as usize,
-            None => false,
-        };
-
     Ok(LoopRunResult {
         final_text,
         iterations,
         tool_calls_made,
         total_tokens: 0,
         hit_limit,
-        cancelled: false,
         chain_id: chain.chain_id.clone(),
         depth: chain.depth,
     })
@@ -617,7 +613,6 @@ mod tests {
         assert_eq!(result.tool_calls_made, 0);
         assert_eq!(result.depth, 1); // child of root (depth=0) → depth=1
         assert!(!result.hit_limit);
-        assert!(!result.cancelled);
     }
 
     #[tokio::test]
@@ -736,5 +731,107 @@ mod tests {
                 || lower.contains("permission"),
             "expected allowlist denial, got: {err}",
         );
+    }
+
+    // -- extract_run_result edge-case regression tests ------------------------
+
+    /// Seed a session with the given sequence of `AssistantMessage` text
+    /// variants (Some("…") = non-empty text turn, None = pure tool_use turn).
+    async fn seed_session_with_assistant_texts(
+        session: &Arc<dyn SessionService>,
+        child_id: &SessionId,
+        texts: &[Option<&str>],
+    ) {
+        session.attach(child_id.clone()).await.unwrap();
+        let turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                child_id,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        for text in texts {
+            session
+                .emit_event(
+                    child_id,
+                    SessionEvent::AssistantMessage {
+                        turn_id: turn,
+                        content: MessageContent {
+                            text: text.unwrap_or("").to_string(),
+                            blocks: Vec::new(),
+                        },
+                        at: now_ms(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    /// When the final AssistantMessage has empty text but earlier turns had
+    /// text, `final_text` must be cleared so the gateway surfaces
+    /// `ErrLoopExhausted` instead of echoing the stale earlier message.
+    #[tokio::test]
+    async fn final_text_cleared_when_last_assistant_is_empty() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("edge");
+
+        // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
+        seed_session_with_assistant_texts(
+            &session,
+            &child_id,
+            &[Some("thinking..."), None],
+        )
+        .await;
+
+        let chain = ChainContext::new();
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, true)
+            .await
+            .expect("extract ok");
+
+        assert_eq!(result.iterations, 2, "should count both assistant turns");
+        assert!(
+            result.final_text.is_none(),
+            "final_text must be None when the last assistant turn is empty (got {:?})",
+            result.final_text
+        );
+        assert!(result.hit_limit, "hit_limit must propagate from caller");
+    }
+
+    /// Control case: when the final AssistantMessage has non-empty text,
+    /// `final_text` is that text — confirming the clearing logic is guarded
+    /// on the last-assistant-empty condition.
+    #[tokio::test]
+    async fn final_text_kept_when_last_assistant_has_text() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+        let child_id = ephemeral_for("happy");
+
+        // Turn 1: pure tool_use (empty). Turn 2: terminal text.
+        seed_session_with_assistant_texts(
+            &session,
+            &child_id,
+            &[None, Some("final answer")],
+        )
+        .await;
+
+        let chain = ChainContext::new();
+        let result = extract_run_result(session.as_ref(), &child_id, &chain, false)
+            .await
+            .expect("extract ok");
+        assert_eq!(result.final_text.as_deref(), Some("final answer"));
+        assert!(!result.hit_limit);
     }
 }
