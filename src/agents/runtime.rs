@@ -20,9 +20,11 @@ use crate::tools::service::ToolService;
 // LoopRunResult
 // =============================================================================
 
-/// Outcome of a completed sub-agent run. Mirrors the legacy pre-Harness
-/// `LoopRunResult` field-for-field so that `SubagentTool` and downstream
-/// consumers see zero behavior change.
+/// Outcome of a completed sub-agent run.
+///
+/// Cancellation is surfaced as an `Err("sub-agent failed: …")` from
+/// `AgentRuntime::run`, not via a boolean on this struct — so there is no
+/// dedicated `cancelled` field.
 #[derive(Debug, Clone)]
 pub struct LoopRunResult {
     pub final_text: Option<String>,
@@ -30,7 +32,6 @@ pub struct LoopRunResult {
     pub tool_calls_made: usize,
     pub total_tokens: usize,
     pub hit_limit: bool,
-    pub cancelled: bool,
     /// Chain ID shared across all depths in a subagent call chain.
     pub chain_id: String,
     /// Nesting depth (0 = root agent).
@@ -217,6 +218,16 @@ impl AgentRuntime {
         // spawner descends again via `base.chain.child()`, so synthesize the
         // logical parent here to keep depth accounting equivalent to the
         // retiring `run_subagent` path (which consumed the child_chain as-is).
+        //
+        // Invariant: `child_chain` came from `ChainContext::child()`, which
+        // returns `Some` only after incrementing depth by 1. depth == 0 here
+        // would indicate a caller constructed the runtime with an un-descended
+        // chain — the assert catches that in debug builds; release uses
+        // `saturating_sub` to avoid underflow.
+        debug_assert!(
+            self.child_chain.depth > 0,
+            "AgentRuntime received an un-descended ChainContext; callers must pass `parent_chain.child()`"
+        );
         let parent_chain = ChainContext {
             chain_id: self.child_chain.chain_id.clone(),
             depth: self.child_chain.depth.saturating_sub(1),
