@@ -124,6 +124,7 @@ impl HarnessRunner for AgentHarnessRunner {
             context_compactor: self.context_compactor.clone(),
             skill_prefetcher: self.skill_prefetcher.clone(),
             trace_sink: trace_sink.clone(),
+            system_prompt: None,
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast

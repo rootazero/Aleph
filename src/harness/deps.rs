@@ -48,4 +48,7 @@ pub struct HarnessDeps {
     /// Gateway-side observability sink. `None` falls back to no-op tracing.
     /// Production path: Gateway wraps its persistence callback in `GatewayTraceSink`.
     pub trace_sink: Option<Arc<dyn TraceSink>>,
+    /// System prompt injected into every RequestPayload. Subagent path builds
+    /// this via PromptBuilder at spawn time; Gateway passes None for now.
+    pub system_prompt: Option<String>,
 }

@@ -260,6 +260,7 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -315,6 +316,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         context_compactor: Some(compactor.clone()),
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -384,6 +386,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         context_compactor: None,
         skill_prefetcher: None,
         trace_sink: None,
+        system_prompt: None,
     };
     let harness = AgentHarness::new(deps);
 

@@ -266,7 +266,10 @@ impl Harness for AgentHarness {
             return Ok(TurnState::Done);
         }
 
-        let payload = RequestPayload::new(&messages);
+        let payload = match self.deps.system_prompt.as_deref() {
+            Some(sp) => RequestPayload::new(&messages).with_system(Some(sp)),
+            None => RequestPayload::new(&messages),
+        };
 
         // 3. Call the LLM.
         let response = self.deps.llm.process(payload).await?;
@@ -522,4 +525,152 @@ fn current_turn_id(events: &[SessionEventRecord]) -> TurnId {
             _ => None,
         })
         .unwrap_or_else(uuid::Uuid::new_v4)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Inline tests for `AgentHarness` behaviours that assert on the exact
+    //! `RequestPayload` handed to the provider. The broader Think/Act/Driver
+    //! suites live in `harness::tests::{think,act,driver,task10_wiring}`.
+
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+
+    use crate::error::Result as AlephResult;
+    use crate::harness::callback::NoopHarnessCallback;
+    use crate::harness::deps::HarnessDeps;
+    use crate::harness::trait_def::Harness;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
+    use crate::routing::session_key::SessionKey;
+    use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
+    use crate::session::in_process::InProcessActorSessionService;
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+
+    /// Provider that records the `system_prompt` it saw on each `process`
+    /// call, then returns a text-only response so the harness loop finishes
+    /// in one Think turn.
+    struct RecordingProvider {
+        captured: Arc<Mutex<Option<String>>>,
+    }
+
+    impl AiProvider for RecordingProvider {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+            let captured = self.captured.clone();
+            *captured.lock().unwrap() = payload.system_prompt.map(|s| s.to_string());
+            Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    /// Tool service with no registered tools. The harness never dispatches
+    /// a tool in this test (the provider returns text-only) so `execute`
+    /// returning `NotFound` is safe — it is simply never called.
+    struct EmptyTools;
+
+    #[async_trait::async_trait]
+    impl crate::tools::service::ToolService for EmptyTools {
+        async fn execute(
+            &self,
+            name: &str,
+            _input: serde_json::Value,
+        ) -> Result<
+            crate::session::events::ToolOutput,
+            crate::tools::service::ToolError,
+        > {
+            Err(crate::tools::service::ToolError::NotFound {
+                name: name.to_string(),
+            })
+        }
+
+        async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+            Vec::new()
+        }
+
+        async fn describe(
+            &self,
+            _name: &str,
+        ) -> Option<crate::tools::service::ToolDefinition> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn system_prompt_flows_into_request_payload() {
+        let captured = Arc::new(Mutex::new(None));
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingProvider {
+            captured: captured.clone(),
+        });
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session: Arc<dyn crate::session::service::SessionService> =
+            Arc::new(InProcessActorSessionService::new(store));
+
+        let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(EmptyTools);
+        // NoopSandbox never fires in this test — the provider returns
+        // text-only, so no tool call → no sandbox dispatch.
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
+            Arc::new(crate::sandbox::NoopSandbox);
+
+        let sid = SessionKey::ephemeral("test-syspr");
+        session.attach(sid.clone()).await.unwrap();
+        let turn = uuid::Uuid::new_v4();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::TurnStarted {
+                    turn_id: turn,
+                    trigger: TurnTrigger::UserMessage,
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        session
+            .emit_event(
+                &sid,
+                SessionEvent::UserMessage {
+                    turn_id: turn,
+                    content: MessageContent {
+                        text: "hello".into(),
+                        blocks: vec![],
+                    },
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let deps = HarnessDeps {
+            session: session.clone(),
+            tools,
+            sandbox,
+            llm: provider,
+            stop_hooks: None,
+            context_budget: None,
+            context_compactor: None,
+            skill_prefetcher: None,
+            trace_sink: None,
+            system_prompt: Some("ROLE: SPEC-BOT".into()),
+        };
+        let harness = super::AgentHarness::new(deps);
+        let mut cb = NoopHarnessCallback;
+        harness.run_turn(&sid, &mut cb).await.expect("run_turn");
+
+        let got = captured.lock().unwrap().clone();
+        assert_eq!(got.as_deref(), Some("ROLE: SPEC-BOT"));
+    }
 }
