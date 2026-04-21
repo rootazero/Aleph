@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::agent_loop::exec_approval::gate::ApprovalGate;
+use crate::sandbox::exec_approval::gate::ApprovalGate;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::driver::OsSandboxDriverTrait;
@@ -59,7 +59,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::agent_loop::exec_approval::types::ApprovalConfig;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::driver::OsSandboxProfile;
 

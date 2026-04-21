@@ -24,6 +24,8 @@ async fn default_agent_roundtrip() {
             session_hint: Some("e2e-session-1".into()),
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         })
         .await
         .expect("dispatch");

@@ -19,6 +19,11 @@
 mod registry;
 mod types;
 
+pub mod background_tracker;
+pub mod runtime;
+pub mod subagent_tool;
+pub mod teammates;
+
 /// Thinking levels system for LLM reasoning depth control.
 pub mod thinking;
 
@@ -35,6 +40,12 @@ pub mod sub_agents;
 pub mod swarm;
 
 pub use registry::{builtin_agents, AgentRegistry};
+pub use runtime::{
+    AgentRuntime, AgentRuntimeConfig, SafetyGuardFactory, SubagentTranscript,
+    ToolRegistryFactory, TranscriptOutcome,
+};
+// SharedSnapshot is defined in agent_loop to avoid circular dependency
+pub use crate::agent_loop::SharedSnapshot;
 pub use types::{AgentDef, AgentMode, ContextMode};
 
 // Re-export rig module types for convenience

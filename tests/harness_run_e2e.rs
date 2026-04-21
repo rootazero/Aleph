@@ -15,8 +15,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
-use alephcore::harness::{AgentHarness, Harness, HarnessDeps};
+use alephcore::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback};
 use alephcore::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
 use alephcore::routing::session_key::SessionKey;
@@ -142,6 +143,11 @@ fn make_harness(session: Arc<dyn SessionService>) -> AgentHarness {
         tools: Arc::new(NoopTool),
         sandbox: Arc::new(InertSandbox),
         llm: Scripted::new(),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
+        trace_sink: None,
     })
 }
 
@@ -154,7 +160,7 @@ async fn harness_run_loops_until_done() {
     let sid: SessionId = SessionKey::ephemeral("e2e-1");
 
     harness
-        .run(&sid)
+        .run(&sid, &mut NoopHarnessCallback, &CancellationToken::new())
         .await
         .expect("harness.run should complete");
 
@@ -193,8 +199,15 @@ async fn multiple_sessions_do_not_cross_contaminate() {
     let harness_a = make_harness(session.clone());
     let harness_b = make_harness(session.clone());
 
-    harness_a.run(&sid_a).await.expect("run sid_a");
-    harness_b.run(&sid_b).await.expect("run sid_b");
+    let cancel = CancellationToken::new();
+    harness_a
+        .run(&sid_a, &mut NoopHarnessCallback, &cancel)
+        .await
+        .expect("run sid_a");
+    harness_b
+        .run(&sid_b, &mut NoopHarnessCallback, &cancel)
+        .await
+        .expect("run sid_b");
 
     let events_a = session
         .get_events(&sid_a, None, None)

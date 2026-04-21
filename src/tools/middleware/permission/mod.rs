@@ -17,7 +17,7 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::agent_loop::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
+use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::session::events::ToolOutput;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 

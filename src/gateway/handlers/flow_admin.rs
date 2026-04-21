@@ -143,6 +143,10 @@ mod tests {
                     crate::orchestrator::dispatch::FlowStreamEvent,
                 >,
                 _c: tokio_util::sync::CancellationToken,
+                _tool_service_override: Option<
+                    std::sync::Arc<dyn crate::tools::service::ToolService>,
+                >,
+                _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
             ) -> Result<
                 crate::orchestrator::dispatch::FlowOutcome,
                 crate::orchestrator::errors::FlowError,

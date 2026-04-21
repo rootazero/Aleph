@@ -66,6 +66,9 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
     /// Inbox for sub-agent read_inbox actions.
     pub(super) inbox: Option<Arc<crate::teams::messages::inbox::Inbox>>,
+    /// Orchestrator handle injected after boot assembly. Populated via
+    /// `with_orchestrator` once `initialize_orchestrator` completes.
+    pub(super) orchestrator: Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -97,7 +100,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             teammate_manager: None,
             message_router: None,
             inbox: None,
+            orchestrator: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Return the orchestrator OnceLock handle so boot code can inject the
+    /// `Arc<Orchestrator>` after `initialize_orchestrator` completes.
+    pub fn orchestrator_cell(
+        &self,
+    ) -> Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>> {
+        self.orchestrator.clone()
     }
 
     /// Set a task router for pre-classification of incoming requests.
@@ -944,9 +956,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// and (eventually) direct Gateway callers. Returns a minimal `FlowOutcome`.
     /// Full Gateway sink streaming is NOT yet wired — events are consumed but
     /// not re-emitted. This is Phase 5's "plumbing only" landing.
+    ///
+    /// The orchestrator is read from the engine's `orchestrator` field, which
+    /// is populated at boot by the `orchestrator_cell()` handle.
     pub async fn dispatch_via_orchestrator(
         &self,
-        orchestrator: Arc<crate::orchestrator::Orchestrator>,
         agent_id: String,
         input_text: String,
         session_key: String,
@@ -954,6 +968,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ) -> Result<crate::orchestrator::FlowOutcome, ExecutionError> {
         use crate::orchestrator::{FlowInput, FlowRequest, FlowStreamEvent};
         use tokio::sync::broadcast;
+
+        let orchestrator = self
+            .orchestrator
+            .get()
+            .ok_or_else(|| {
+                ExecutionError::Orchestrator(
+                    "orchestrator not yet initialised — boot ordering error".to_string(),
+                )
+            })?
+            .clone();
 
         let req = FlowRequest {
             flow_id: None,
@@ -963,6 +987,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             session_hint: Some(session_key),
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         };
 
         let handle = orchestrator
@@ -970,12 +996,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .await
             .map_err(|e| ExecutionError::Orchestrator(format!("dispatch: {e}")))?;
 
-        // Drain events; sink wiring is Phase 6. Complete event or channel close
-        // both terminate the drain.
+        // Drain events; sink wiring is Phase 6. Complete(outcome) event or
+        // channel close both terminate the drain.
         let mut events = handle.events;
         loop {
             match events.recv().await {
-                Ok(FlowStreamEvent::Complete) => break,
+                Ok(FlowStreamEvent::Complete(_outcome)) => break,
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(n)) => {

@@ -65,7 +65,7 @@ impl PromptLayer for ToolUsageGrammarLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::tool_info::{ToolInfo, ToolUsageHint};
+    use crate::tools::info::{ToolInfo, ToolUsageHint};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerInput;
 

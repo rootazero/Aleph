@@ -29,6 +29,8 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         _sandbox: Arc<dyn Sandbox>,
         events: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
         _cancel: CancellationToken,
+        _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
         self.invocations
             .lock()
@@ -37,7 +39,9 @@ impl crate::orchestrator::dispatch::HarnessRunner for MockHarness {
         let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Delta(
             "hi".into(),
         ));
-        let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete);
+        let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            self.outcome.clone(),
+        ));
         Ok(self.outcome.clone())
     }
 }
@@ -80,6 +84,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
         outcome: crate::orchestrator::dispatch::FlowOutcome {
             final_text: "ok".into(),
             iterations: 1,
+            ..Default::default()
         },
         invocations: invocations.clone(),
     });
@@ -109,6 +114,8 @@ async fn dispatch_happy_path_returns_handle_and_completes() {
             session_hint: None,
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         })
         .await
         .expect("dispatch ok");
@@ -133,6 +140,8 @@ async fn dispatch_unknown_flow_id_returns_error() {
             session_hint: None,
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         })
         .await
         .unwrap_err();
@@ -151,6 +160,8 @@ async fn dispatch_unknown_agent_returns_error() {
             session_hint: None,
             parent_session: None,
             depth: 0,
+            tool_service: None,
+            trace_sink: None,
         })
         .await
         .unwrap_err();
@@ -171,6 +182,8 @@ async fn dispatch_above_max_depth_returns_recursion_error() {
             session_hint: None,
             parent_session: None,
             depth: MAX_FLOW_DEPTH + 1,
+            tool_service: None,
+            trace_sink: None,
         })
         .await
         .unwrap_err();
@@ -210,11 +223,14 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
             _sb: Arc<dyn Sandbox>,
             _ev: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
             cancel: CancellationToken,
+            _tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+            _trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
         ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
             cancel.cancelled().await;
             Ok(crate::orchestrator::dispatch::FlowOutcome {
                 final_text: "cancelled".into(),
                 iterations: 0,
+                ..Default::default()
             })
         }
     }
@@ -236,6 +252,8 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         session_hint: Some("shared-session".into()),
         parent_session: None,
         depth: 0,
+        tool_service: None,
+        trace_sink: None,
     };
 
     let first = orch.dispatch(mk_req()).await.expect("first ok");
@@ -273,6 +291,7 @@ async fn dispatch_releases_session_lock_after_completion() {
         outcome: crate::orchestrator::dispatch::FlowOutcome {
             final_text: "ok".into(),
             iterations: 1,
+            ..Default::default()
         },
         invocations: invocations.clone(),
     });
@@ -294,6 +313,8 @@ async fn dispatch_releases_session_lock_after_completion() {
         session_hint: Some("reusable-session".into()),
         parent_session: None,
         depth: 0,
+        tool_service: None,
+        trace_sink: None,
     };
 
     // First dispatch — await completion.
@@ -310,4 +331,174 @@ async fn dispatch_releases_session_lock_after_completion() {
         2,
         "harness must have run twice — both dispatches completed"
     );
+}
+
+// ── Step 11: forwarding tests ────────────────────────────────────────────────
+
+/// Stub harness that records the `tool_service_override` and `trace_sink`
+/// passed into `run` so the test can assert they arrived correctly.
+struct CapturingHarness {
+    received_tool_service: Arc<Mutex<Option<bool>>>,
+    received_trace_sink: Arc<Mutex<Option<bool>>>,
+}
+
+#[async_trait]
+impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
+    async fn run(
+        &self,
+        _session_key: String,
+        _spec: Arc<FlowSpec>,
+        _input: FlowInput,
+        _sandbox: Arc<dyn Sandbox>,
+        events: broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
+        _cancel: CancellationToken,
+        tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+    ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
+        *self.received_tool_service.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(tool_service_override.is_some());
+        *self.received_trace_sink.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(trace_sink.is_some());
+        let outcome = crate::orchestrator::dispatch::FlowOutcome {
+            final_text: "captured".into(),
+            iterations: 1,
+            ..Default::default()
+        };
+        let _ = events.send(crate::orchestrator::dispatch::FlowStreamEvent::Complete(
+            outcome.clone(),
+        ));
+        Ok(outcome)
+    }
+}
+
+fn fixture_capturing_orchestrator() -> (
+    Orchestrator,
+    Arc<Mutex<Option<bool>>>,
+    Arc<Mutex<Option<bool>>>,
+) {
+    let mut spec_map = FlowSet::new();
+    let spec = FlowSpec {
+        id: "default-agent".into(),
+        description: "t".into(),
+        agent: "main".into(),
+        brain: BrainRef::Default,
+        sandbox_kind: SandboxKind::None,
+        session_strategy: SessionStrategy::Fresh,
+        overrides: FlowOverrides::default(),
+    };
+    spec_map.insert("default-agent".into(), Arc::new(spec));
+    let registry = Arc::new(FlowRegistry::new(spec_map));
+
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert("main".into(), "default-agent".into());
+
+    let session_service = fake_session_service();
+    let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
+        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
+    }));
+
+    let received_tool_service = Arc::new(Mutex::new(None::<bool>));
+    let received_trace_sink = Arc::new(Mutex::new(None::<bool>));
+
+    let harness = Arc::new(CapturingHarness {
+        received_tool_service: received_tool_service.clone(),
+        received_trace_sink: received_trace_sink.clone(),
+    });
+
+    (
+        Orchestrator::new(
+            registry,
+            Arc::new(RoutingOverrides::default()),
+            Arc::new(defaults),
+            session_service,
+            sandbox_factory,
+            harness,
+        ),
+        received_tool_service,
+        received_trace_sink,
+    )
+}
+
+/// Minimal ToolService stub for forwarding test — list/describe/execute all no-op.
+struct StubToolService;
+
+#[async_trait::async_trait]
+impl crate::tools::service::ToolService for StubToolService {
+    async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
+        Vec::new()
+    }
+    async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
+        None
+    }
+    async fn execute(
+        &self,
+        name: &str,
+        _args: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
+        Err(crate::tools::service::ToolError::NotFound {
+            name: name.to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn dispatch_forwards_tool_service_override() {
+    let (orch, received_tool_service, _received_trace_sink) = fixture_capturing_orchestrator();
+
+    let tool_service: std::sync::Arc<dyn crate::tools::service::ToolService> =
+        Arc::new(StubToolService);
+
+    let handle = orch
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "main".into(),
+            input: FlowInput::Prompt("test".into()),
+            channel: None,
+            session_hint: None,
+            parent_session: None,
+            depth: 0,
+            tool_service: Some(tool_service),
+            trace_sink: None,
+        })
+        .await
+        .expect("dispatch ok");
+
+    let _ = handle.completion.await.unwrap();
+
+    let got = received_tool_service
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .expect("harness must have been called");
+    assert!(got, "tool_service_override must arrive as Some(_)");
+}
+
+#[tokio::test]
+async fn dispatch_forwards_trace_sink() {
+    let (orch, _received_tool_service, received_trace_sink) = fixture_capturing_orchestrator();
+
+    let trace_sink: std::sync::Arc<dyn crate::harness::TraceSink> =
+        Arc::new(crate::harness::NoopTraceSink);
+
+    let handle = orch
+        .dispatch(FlowRequest {
+            flow_id: None,
+            agent_id: "main".into(),
+            input: FlowInput::Prompt("test".into()),
+            channel: None,
+            session_hint: None,
+            parent_session: None,
+            depth: 0,
+            tool_service: None,
+            trace_sink: Some(trace_sink),
+        })
+        .await
+        .expect("dispatch ok");
+
+    let _ = handle.completion.await.unwrap();
+
+    let got = received_trace_sink
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .expect("harness must have been called");
+    assert!(got, "trace_sink must arrive as Some(_)");
 }

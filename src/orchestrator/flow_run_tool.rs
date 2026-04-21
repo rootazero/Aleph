@@ -77,6 +77,8 @@ impl FlowRunTool {
             session_hint: None,
             parent_session: Some(ctx.parent_session_key),
             depth: ctx.current_depth.saturating_add(1),
+            tool_service: None,
+            trace_sink: None,
         };
         let handle = self.orchestrator.dispatch(req).await?;
         let outcome = handle

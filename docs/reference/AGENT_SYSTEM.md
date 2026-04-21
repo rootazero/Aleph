@@ -8,23 +8,49 @@
 
 The Agent System implements the **Think → Act** loop, the heart of Aleph's intelligence. The LLM handles all reasoning (intent, planning, tool selection) in a single inference call, keeping the system minimal.
 
+The runtime topology for Gateway chat is:
+
+```
+Gateway (chat ingress, protocol adapters)
+   │ FlowRequest { agent_id, input, tool_service, trace_sink, identity, ... }
+   ▼
+Orchestrator (resolves AgentDef + FlowSpec, builds HarnessDeps, dispatches)
+   │ HarnessRunner::run
+   ▼
+AgentHarness (Think → Act loop, stop-hooks, context budget, compaction)
+   │ uses
+   ├── SessionService  (append-only history)
+   ├── ToolService     (tool catalog + execution)
+   ├── Sandbox         (exec environment, capability ledger)
+   └── AiProvider      (LLM)
+   │
+   ▼
+FlowOutcome → Gateway renders response
+```
+
+> **Note**: SubagentTool (in-tool agent spawning) currently still routes through
+> the legacy `AgentLoop` path in `src/agent_loop/`. Migration to Harness is
+> planned as a follow-up phase.
+
+The inner loop inside `AgentHarness`:
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Agent Loop                                │
+│                        AgentHarness                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
 │   │ PREPARE  │ ──▶ │  THINK   │ ──▶ │ RESOLVE  │ ──▶ │   ACT    │
 │   │          │     │          │     │          │     │          │
-│   │• Budget │     │ • LLM    │     │• Parse   │     │• Execute │
-│   │• Context│     │ • Decide │     │• Decision│     │• Tools  │
-│   │• Preflight│   │ • Plan   │     │          │     │          │
+│   │• Budget  │     │ • LLM    │     │• Parse   │     │• Execute │
+│   │• Context │     │ • Decide │     │• Decision│     │• Tools   │
+│   │• Preflight│    │ • Plan   │     │          │     │          │
 │   └──────────┘     └──────────┘     └──────────┘     └──────────┘
 │                                                              │
 │                        ┌──────────┐                           │
-│                        │ FINALIZE│ ◀──────────────────────────┘
+│                        │ FINALIZE │ ◀──────────────────────────┘
 │                        │          │
-│                        │• Eval   │
+│                        │• Eval    │
 │                        │• Compress│
 │                        │• Decision│
 │                        └──────────┘
@@ -33,51 +59,58 @@ The Agent System implements the **Think → Act** loop, the heart of Aleph's int
 
 ---
 
-## Agent Loop
+## AgentHarness (Gateway chat path)
 
-**Location**: `src/agent_loop/`
+**Location**: `src/harness/`
+
+The `AgentHarness` is the runtime that drives the Think → Act loop for all
+Gateway chat requests. It is constructed by the `Orchestrator` and receives
+pre-resolved deps (`SessionService`, `ToolService`, `Sandbox`, `AiProvider`).
 
 ### Core Structure
 
 ```rust
-pub struct AgentLoop {
+pub struct AgentHarness {
     provider: Arc<dyn AiProvider>,           // LLM provider
-    registry: Arc<LoopToolRegistry>,         // Tool definitions
-    safety: Arc<SafetyGuard>,              // Permission guard
+    tool_service: Arc<dyn ToolService>,      // Tool catalog + execution
+    sandbox: Arc<dyn Sandbox>,              // Exec environment
+    session: Arc<dyn SessionService>,        // Append-only history
     stop_hook: Arc<StopHookHandler>,         // Stop hooks
-    compaction_pipeline: CompactionPipeline,  // Emergency compaction
+    compaction_pipeline: CompactionPipeline, // Emergency compaction
     preflight_pipeline: PreflightPipeline,  // Pre-flight context prep
-    config: LoopConfig,                      // Loop configuration
+    config: HarnessConfig,                   // Loop configuration
 }
 ```
 
 ### Key Components
 
-**Location**: `src/agent_loop/`
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `AgentHarness` | `src/harness/` | Think→Act loop controller |
+| `HarnessConfig` | `src/harness/` | Configuration options |
+| `TurnState` | `src/harness/` | State machine enum |
+| `ToolPipeline` | `src/harness/tool_pipeline.rs` | 7-stage tool execution pipeline |
+| `ToolOrchestrator` | `src/harness/tool_orchestrator.rs` | Tool batch orchestration |
+| `ToolExecutionContext` | `src/harness/tool_execution_context.rs` | Per-tool cancel/progress context |
+| `ContextBudget` | `src/harness/context_budget/` | Pressure sensing + directives |
+| `PreflightPipeline` | `src/harness/context_budget/preflight.rs` | Pre-flight async context prep |
+| `CompactionPipeline` | `src/harness/context_budget/pipeline.rs` | Emergency compaction stages |
+| `StreamingBridge` | `src/harness/streaming_bridge.rs` | Streaming + delta management |
+| `SafetyGuard` | `src/harness/safety.rs` | Permission enforcement |
+| `StopHookHandler` | `src/harness/stop_hooks.rs` | Stop hook execution |
+| `TruncationRecovery` | `src/agent_loop/truncation_recovery.rs` | MaxTokens escalation recovery |
+| `Orchestrator` | `src/orchestrator/` | AgentDef resolution + Harness construction |
+| `AgentRuntime` | `src/harness/agent_runtime.rs` | Runtime context + model resolution |
+| `ToolService` | `src/tool_service/` | Tool definitions registry + execution |
 
-| Component | File/Directory | Purpose |
-|-----------|----------------|---------|
-| `AgentLoop` | `loop_core.rs` | Main loop controller (4447 lines) |
-| `LoopConfig` | `loop_core.rs` | Configuration options |
-| `TurnState` | `loop_core.rs` | State machine enum |
-| `ToolPipeline` | `tool_pipeline.rs` | 7-stage tool execution pipeline |
-| `ToolOrchestrator` | `tool_orchestrator.rs` | Tool batch orchestration |
-| `ToolExecutionContext` | `tool_execution_context.rs` | Per-tool cancel/progress context |
-| `ContextBudget` | `context_budget/mod.rs` | Pressure sensing + directives |
-| `PreflightPipeline` | `context_budget/preflight.rs` | Pre-flight async context prep |
-| `CompactionPipeline` | `context_budget/pipeline.rs` | Emergency compaction stages |
-| `StreamingBridge` | `streaming_bridge.rs` | Streaming + delta management |
-| `SafetyGuard` | `safety.rs` | Permission enforcement |
-| `StopHookHandler` | `stop_hooks.rs` | Stop hook execution |
-| `TruncationRecovery` | `truncation_recovery.rs` | MaxTokens escalation recovery |
-| `LoopFactory` | `factory.rs` | Agent loop construction |
-| `AgentRuntime` | `agent_runtime.rs` | Runtime context + model resolution |
-| `ToolRegistry` | `tool.rs` | Tool definitions registry |
+> **Legacy path**: `src/agent_loop/loop_core.rs` + `src/agent_loop/subagent_runner.rs`
+> remain for SubagentTool's ephemeral agent spawning. They are not used by Gateway
+> chat. Migration to Harness is planned as a follow-up phase.
 
 ### State Machine
 
 ```
-TurnState enum (5 states):
+TurnState enum (5 states) — same in AgentHarness and legacy AgentLoop:
 
 ┌─────────┐
 │ PREPARE │
@@ -88,11 +121,11 @@ TurnState enum (5 states):
 │  THINK  │ ──▶ │ RESOLVE │ ──▶ │   ACT   │
 └─────────┘     └────┬────┘     └────┬────┘
                      │               │
-                     │ EndTurn      │ tools complete
-                     │ no_action    │
+                     │ EndTurn       │ tools complete
+                     │ no_action     │
                      ▼               ▼
                ┌─────────┐     ┌─────────┐
-               │FINALIZE│     │FINALIZE│
+               │FINALIZE │     │FINALIZE │
                └────┬────┘     └────┬────┘
                     │               │
                     ▼               ▼
@@ -639,21 +672,27 @@ impl LoopCallback for CliCallback {
 
 ## Sub-Agent Delegation
 
-**Location**: `src/agents/sub_agents/`
+**Location**: `src/agents/sub_agents/` (tool layer) + `src/agent_loop/subagent_runner.rs` (runtime)
 
-Main agent can spawn sub-agents for specialized tasks:
+The main agent can spawn sub-agents for specialized tasks via the `SubagentTool`.
+Sub-agent spawning currently still uses the legacy `AgentLoop` path
+(`src/agent_loop/loop_core.rs` + `subagent_runner.rs`). Migration of this path
+to `AgentHarness` is planned as a follow-up phase.
 
 ```
-Main Agent (claude-opus-4)
+Main Agent (claude-opus-4)  — runs via AgentHarness (Gateway chat)
     │
     ├─── Translator Sub-Agent (claude-haiku)
     │       Session: subagent:agent:main:translator
+    │       Runtime: legacy AgentLoop (SubagentTool path)
     │
     ├─── Code Reviewer Sub-Agent (claude-sonnet)
     │       Session: subagent:agent:main:code-reviewer
+    │       Runtime: legacy AgentLoop (SubagentTool path)
     │
     └─── Research Sub-Agent (gpt-4o)
             Session: subagent:agent:main:researcher
+            Runtime: legacy AgentLoop (SubagentTool path)
 ```
 
 ### Session Key Nesting

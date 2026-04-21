@@ -62,12 +62,21 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // PHASE-6: populate named providers from AuthProfileRegistry. Only
     // `BrainRef::Default` works correctly until then — `Strict` returns
     // `ProviderUnavailable`.
+    // PHASE-6b Task-10: the optional triad (stop_hooks / context_budget /
+    // context_compactor) + skill_prefetcher stay `None` until the user-facing
+    // config surface for them lands. The harness supports both None and
+    // Some(...) shapes so Phase 6d can inject real instances without touching
+    // this boot path again.
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
         tool_service,
         default_provider,
         named_providers: HashMap::new(),
+        stop_hooks: None,
+        context_budget: None,
+        context_compactor: None,
+        skill_prefetcher: None,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

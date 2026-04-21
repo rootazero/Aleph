@@ -32,19 +32,57 @@ impl std::fmt::Debug for FlowHandle {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum FlowStreamEvent {
+    /// Incremental assistant text (preserved from original).
     Delta(String),
-    ToolCall { name: String },
-    Complete,
+    /// Thinking/reasoning fragment. Fired when provider returns thinking content.
+    Reasoning(String),
+    /// Tool call started. `id` uniquely identifies this invocation for pairing
+    /// with `ToolCallDone` and `ToolSummary`.
+    ToolCallStart {
+        id: String,
+        name: String,
+        args: serde_json::Value,
+    },
+    /// Tool call completed. `result` and `error` are mutually exclusive.
+    ToolCallDone {
+        id: String,
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+    },
+    /// One-line summary of a tool call (async LLM-generated; silently skipped on failure).
+    ToolSummary { id: String, text: String },
+    /// Safety gate blocked the turn. `reason` is for i18n formatting.
+    SafetyBlock { reason: String },
+    /// Stop-hook blocked the turn; harness has forced another model turn.
+    StopHookBlock { reason: String },
+    /// Model fallback (primary provider unavailable, switched to backup).
+    ModelFallback { reason: String, fallback_model: String },
+    /// Terminal event — carries the complete `FlowOutcome`. Always last.
+    Complete(FlowOutcome),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FlowOutcome {
+    /// Final assistant-visible text for this flow run.
     pub final_text: String,
+    /// Number of assistant turns (AssistantMessage events) produced.
     pub iterations: u32,
+    /// Number of tool dispatches (ToolCallRequested events).
+    pub tool_calls_made: u32,
+    /// Sum of provider-reported token usage across the flow run.
+    /// Populated once the LLM layer surfaces usage through the session log;
+    /// today the field is present for Gateway parity with the retiring
+    /// `LoopRunResult` and reads as `0` until Phase 6a task 6 wires
+    /// `ContextBudget` observations into the report.
+    pub total_tokens: u32,
+    /// `true` if the run stopped because it hit an iteration or token cap.
+    /// Defaults to `false`; actual cap tracking lands in Phase 6a task 6.
+    pub hit_limit: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FlowRequest {
     pub flow_id: Option<FlowId>,
     pub agent_id: AgentId,
@@ -53,6 +91,30 @@ pub struct FlowRequest {
     pub session_hint: Option<String>,
     pub parent_session: Option<String>,
     pub depth: u8,
+    /// Per-request tool service override. `None` causes `AgentHarnessRunner`
+    /// to fall back to its default `tool_service`. Gateway production path
+    /// must supply `Some` to carry per-request dynamic tools.
+    /// Not included in `Debug` output because `Arc<dyn ToolService>` is not `Debug`.
+    pub tool_service: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+    /// Gateway-side observability sink. `None` is a no-op.
+    /// Not included in `Debug` output because `Arc<dyn TraceSink>` is not `Debug`.
+    pub trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
+}
+
+impl std::fmt::Debug for FlowRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowRequest")
+            .field("flow_id", &self.flow_id)
+            .field("agent_id", &self.agent_id)
+            .field("input", &self.input)
+            .field("channel", &self.channel)
+            .field("session_hint", &self.session_hint)
+            .field("parent_session", &self.parent_session)
+            .field("depth", &self.depth)
+            .field("tool_service", &self.tool_service.as_ref().map(|_| "<dyn ToolService>"))
+            .field("trace_sink", &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"))
+            .finish()
+    }
 }
 
 /// Orchestrator dependencies. Most are behind `Arc<dyn Trait>` so the struct
@@ -83,6 +145,7 @@ impl Drop for SessionLockGuard {
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::too_many_arguments)] // trait shape driven by Orchestrator::dispatch wiring (Task 2)
 pub trait HarnessRunner: Send + Sync {
     async fn run(
         &self,
@@ -92,6 +155,8 @@ pub trait HarnessRunner: Send + Sync {
         sandbox: Arc<dyn crate::sandbox::Sandbox>,
         events: broadcast::Sender<FlowStreamEvent>,
         cancel: CancellationToken,
+        tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
+        trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
     ) -> Result<FlowOutcome, FlowError>;
 }
 
@@ -173,6 +238,8 @@ impl Orchestrator {
         let session_key = session_res.session_key.clone();
         let active = self.active_sessions.clone();
         let session_for_release = session_res.session_key.clone();
+        let tool_service_override = req.tool_service.clone();
+        let trace_sink = req.trace_sink.clone();
 
         tokio::spawn(async move {
             let _lock = SessionLockGuard {
@@ -187,6 +254,8 @@ impl Orchestrator {
                     sandbox_clone,
                     event_tx,
                     cancel_clone,
+                    tool_service_override,
+                    trace_sink,
                 )
                 .await;
             let _ = done_tx.send(outcome);

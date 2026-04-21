@@ -21,10 +21,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::tool_execution_context::{CascadePolicy, ToolProgress};
-use crate::agent_loop::tool_orchestrator::ToolOutcome;
-use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
-use crate::agent_loop::LoopToolRegistry;
+use crate::harness::tool_execution_context::{CascadePolicy, ToolProgress};
+use crate::tools::orchestrator::ToolOutcome;
+use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
+use crate::tools::runtime::LoopToolRegistry;
 use crate::providers::delta::ProviderDelta;
 
 // =============================================================================
@@ -353,7 +353,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::{LoopTool, LoopToolRegistry, ToolResult};
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
     use crate::session::ingress_safety::SafetyGuard;

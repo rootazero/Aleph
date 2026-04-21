@@ -55,6 +55,15 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     #[allow(dead_code)]
     pub command_handler:
         Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
+    /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
+    /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
+    /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
+    /// engine's own field rather than an external argument.
+    pub orchestrator_cell: Option<
+        std::sync::Arc<
+            std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>,
+        >,
+    >,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -101,6 +110,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     > = None;
     let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
+    let mut orch_cell_out: Option<
+        std::sync::Arc<
+            std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>,
+        >,
+    > = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
@@ -1321,6 +1335,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_inbox(ib.clone());
         }
 
+        // Capture the OnceLock cell before wrapping engine in Arc so boot code
+        // can inject the orchestrator after initialize_orchestrator completes.
+        let orch_cell = engine.orchestrator_cell();
+        orch_cell_out = Some(orch_cell);
         let engine = Arc::new(engine);
 
         if !app_config.agents.list.is_empty() {
@@ -1882,5 +1900,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         team_store,
         coord_task_store: coord_store,
         command_handler: command_handler_out,
+        orchestrator_cell: orch_cell_out,
     }
 }

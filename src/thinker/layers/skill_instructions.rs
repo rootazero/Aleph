@@ -89,7 +89,7 @@ impl PromptLayer for SkillInstructionsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::ToolInfo;
+    use crate::tools::info::ToolInfo;
     use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
     use crate::thinker::prompt_builder::PromptConfig;
 

@@ -4,7 +4,7 @@
 //! system prompt into a stable prefix (cacheable) and a dynamic suffix
 //! that changes per request.
 
-use crate::agent_loop::ToolInfo;
+use crate::tools::info::ToolInfo;
 
 use super::{PromptBuilder, SystemPromptPart};
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput};

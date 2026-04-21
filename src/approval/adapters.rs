@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::agent_loop::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
 

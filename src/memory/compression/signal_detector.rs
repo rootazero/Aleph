@@ -317,7 +317,7 @@ impl Default for SignalDetector {
 // PostCompactCleanup impl
 // ---------------------------------------------------------------------------
 
-use crate::agent_loop::compaction::{CompactionResult, PostCompactCleanup};
+use crate::memory::compaction::{CompactionResult, PostCompactCleanup};
 
 impl PostCompactCleanup for SignalDetector {
     fn cleanup_order(&self) -> u32 {

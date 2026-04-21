@@ -6,7 +6,7 @@ use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
-use crate::agent_loop::ToolInfo;
+use crate::tools::info::ToolInfo;
 use crate::agents::AgentDef;
 use crate::dispatcher::tool_index::HydrationResult;
 

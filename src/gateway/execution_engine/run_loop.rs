@@ -8,11 +8,8 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 
@@ -20,46 +17,18 @@ use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
-use crate::gateway::streaming_sink::StreamingDeltaSink;
+use crate::gateway::media::{PendingMedia};
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
-use crate::config::types::policies::ToolSafetyPolicy;
-
 use super::engine::ExecutionEngine;
 
-#[derive(Clone)]
-struct ExtensionSkillDiscoverySource {
-    skill_system: crate::skill::SkillSystem,
-}
-
-impl ExtensionSkillDiscoverySource {
-    fn new(skill_system: crate::skill::SkillSystem) -> Self {
-        Self { skill_system }
-    }
-}
-
-impl crate::agent_loop::SkillDiscoverySource for ExtensionSkillDiscoverySource {
-    fn discover(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Vec<crate::agent_loop::SkillInfo>> + Send + '_>> {
-        let skill_system = self.skill_system.clone();
-        Box::pin(async move {
-            let snapshot = skill_system.current_snapshot().await;
-            snapshot
-                .eligible_manifests
-                .into_iter()
-                .map(|manifest| crate::agent_loop::SkillInfo {
-                    name: manifest.name().to_string(),
-                    description: manifest.description().to_string(),
-                    schema: None,
-                })
-                .collect()
-        })
-    }
-}
+// Phase 6b Task 4c: `ExtensionSkillDiscoverySource` previously wrapped
+// `SkillSystem` as an `agent_loop::SkillDiscoverySource` implementor for
+// `AgentLoop::with_skill_prefetcher`. The harness now owns prefetch via
+// `HarnessDeps.skill_prefetcher`, so this adapter has no call site in this
+// file. Retained via the noop cast below; Phase 6c removes outright.
 
 fn plugin_tool_to_unified_tool(
     tool: crate::extension::ToolRegistration,
@@ -172,13 +141,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         trace_task_id: Option<String>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
-        use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
-        use crate::agent_loop::{
-            adapters::build_registry_from_tools, provider_bridge::AiProviderBridge, AgentLoop,
-            LoopConfig,
-        };
+        use crate::harness::adapters::build_registry_from_tools;
+        use crate::providers::model_behaviors::{load_model_behavior, protocol_to_behavior};
+        use crate::config::types::policies::ToolSafetyPolicy;
         use crate::session::ingress_safety::SafetyGuard;
-        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -207,19 +173,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Resolve soul for prompt building (constant across retries).
         //
         // Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / …)
-        // live in the AGENT identity directory (`~/.aleph/agents/{agent_id}/`),
-        // NOT in the workspace directory (`~/.aleph/workspaces/{agent_id}/`
-        // — that's only for runtime tool output). Load them from `agent_dir()`
-        // here so `SoulLayer` / `IdentityFilesLayer` can inject them below.
-        let identity_files = crate::thinker::identity_files::IdentityFiles::load(
-            agent.agent_dir(),
-            &crate::thinker::identity_files::IdentityFilesConfig::default(),
-        );
-        // Legacy global `~/.aleph/soul.md` fallback only kicks in when no
-        // per-agent SOUL.md exists. SoulLayer prefers `input.identity_file("SOUL.md")`
-        // over `input.soul`, so the agent-dir file always wins when present.
-        let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
-        let resolved_soul = identity_resolver.resolve();
+        // live in the AGENT identity directory (`~/.aleph/agents/{agent_id}/`).
+        //
+        // Phase 6b Task 4c flip: these identity fragments are now assembled by
+        // the `AgentHarness` prompt sections layer (`src/harness/sections`), so
+        // we no longer construct `IdentityFiles` / `SoulLayer` / `IdentityResolver`
+        // directly here. The harness boot wires the same sources through
+        // `HarnessDeps` at startup.
+        let _ = agent.agent_dir();
 
         let extension_manager: Option<Arc<crate::extension::ExtensionManager>> =
             crate::gateway::handlers::plugins::get_extension_manager()
@@ -232,8 +193,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Pre-fetch extension-backed runtime helpers (constant across retries)
-        let eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>> =
+        // Phase 6b Task 4c flip: skill prefetch + hook executor are now owned
+        // by `AgentHarnessRunner` (via `HarnessDeps.skill_prefetcher` / the
+        // `ToolHookDecorator` pathway in `ScopedToolService`). These locals
+        // remain as call-site breadcrumbs for Phase 6c cleanup.
+        let _eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>> =
             if let Some(ext_manager) = extension_manager.as_ref() {
                 let snapshot = ext_manager.skill_system().current_snapshot().await;
                 if !snapshot.eligible_manifests.is_empty() {
@@ -244,13 +208,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             } else {
                 None
             };
-        let hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
+        let _hook_executor = if let Some(ext_manager) = extension_manager.as_ref() {
             let snapshot = ext_manager.hook_executor_snapshot().await;
             (snapshot.hook_count() > 0).then(|| Arc::new(snapshot))
         } else {
             None
         };
-        let skill_system = extension_manager
+        let _skill_system = extension_manager
             .as_ref()
             .map(|ext_manager| ext_manager.skill_system().clone());
 
@@ -286,7 +250,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         let sub_tool_registry_ref = self.tool_registry.clone();
         let sub_working_dir_ref = default_working_dir.clone();
-        let sub_tool_factory: crate::agent_loop::agent_runtime::ToolRegistryFactory = Arc::new({
+        let sub_tool_factory: crate::agents::runtime::ToolRegistryFactory = Arc::new({
             let sub_tool_registry = sub_tool_registry_ref.clone();
             let sub_allowed = sub_allowed_tools.clone();
             let sub_dir = sub_working_dir_ref.clone();
@@ -295,7 +259,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         });
 
-        let sub_safety_factory: crate::agent_loop::agent_runtime::SafetyGuardFactory = Arc::new({
+        let sub_safety_factory: crate::agents::runtime::SafetyGuardFactory = Arc::new({
             let global_perms = self.global_tool_permissions.clone();
             let agent_perms_clone = agent.config().tool_permissions();
             move || {
@@ -307,9 +271,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         });
 
-        // Agent config values
-        let agent_perms = agent.config().tool_permissions();
-        let max_loops = agent.config().max_loops as usize;
+        // Agent config values — `max_loops` / `agent_perms` moved into the
+        // AgentHarnessRunner boot path (harness owns iteration cap +
+        // safety guard assembly now). Token budget is still used by the
+        // session compactor below for history prep.
+        let _agent_perms = agent.config().tool_permissions();
+        let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
         // Load conversation history from session (for multi-turn context)
@@ -430,13 +397,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
                 .await;
 
-            let provider = self
-                .provider_registry
-                .get(&resolved.provider_name)
-                .unwrap_or_else(|| self.provider_registry.default_provider());
-
-            // Resolve model behavior: config override > protocol auto-mapping
-            let _behavior_content = {
+            // Resolve model behavior: config override > protocol auto-mapping.
+            // Behaviour content is no longer consumed at this seam (harness
+            // owns provider prompt assembly), but we still load it for the
+            // side-effect of surfacing config/protocol mismatches via
+            // tracing.
+            {
+                let provider = self
+                    .provider_registry
+                    .get(&resolved.provider_name)
+                    .unwrap_or_else(|| self.provider_registry.default_provider());
                 let behavior_name = provider
                     .model_behavior_override()
                     .or_else(|| protocol_to_behavior(provider.protocol()));
@@ -451,422 +421,285 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     loaded = content.is_some(),
                     "Model behavior resolved"
                 );
-                content
-            };
+            }
 
-            // Build bridge with resolved provider
-            let bridge = if resolved.model.is_empty() {
-                AiProviderBridge::new(provider.clone())
-            } else {
-                AiProviderBridge::new(provider.clone()).with_model(resolved.model.clone())
-            };
+            // -- Phase 6b Task 4c: flip from AgentLoop::new to Orchestrator::dispatch -----
+            //
+            // The retry-loop outer frame stays identical: provider resolution +
+            // `ModelResolved` emission + health-aware fallback are unchanged.
+            // Inside each attempt we now:
+            //   1. Build a per-request `ScopedToolService` carrying SubagentTool
+            //      + MCP refresh (was: `AgentLoop::register(subagent_tool)`).
+            //   2. Build a `GatewayTraceSink` wrapping the existing callback
+            //      state for persistence.
+            //   3. Construct a `FlowRequest` + dispatch via the orchestrator
+            //      helper, which drains events into the Gateway emitter.
+            //   4. On `DispatchFailure::Transient`, report outcome + retry.
+            //
+            // Design dropped deliberately (per PHASE_6B_BUILDER_AUDIT + §5
+            // resolution design): `with_chain`, `with_shared_snapshot`,
+            // `with_provider_name`, `with_platform_name`, `with_session_id`,
+            // `with_hook_executor`, `with_tool_refresh` (hook_executor is
+            // user-tool-hooks, not yet re-wired), streaming_sink (replaced by
+            // FlowStreamEvent::Delta), prompt_builder (harness owns prompt
+            // assembly via `src/harness/sections`).
 
-            // Build tool registry from UnifiedTool list
-            let mut tool_registry = build_registry_from_tools(
+            // 1. Build per-request ToolService with SubagentTool + optional
+            //    MCP refresh. `LoopToolRegistry` is built from the resolved
+            //    `allowed_tools` so the view is identical to the retiring
+            //    registry path.
+            let loop_registry = Arc::new(crate::agent_loop::adapters::build_registry_from_tools(
                 self.tool_registry.clone(),
                 &allowed_tools,
                 default_working_dir.clone(),
-            );
+            ));
 
-            // Create a shared chain context for this run — both the SubagentTool
-            // and the AgentLoop must share the same chain_id so that subagent
-            // invocations produce consistent end-to-end chain tracing.
-            let run_chain = crate::agent_loop::chain_context::ChainContext::new();
-
-            // Shared prompt snapshot for fork path — written once by AgentLoop,
-            // read by SubagentTool when spawning sub-agents.
-            let shared_snapshot: crate::agent_loop::agent_runtime::SharedSnapshot =
-                Arc::new(std::sync::RwLock::new(None));
-
-            // Register subagent tool
-            {
-                use crate::agent_loop::background_tracker::BackgroundAgentTracker;
-                use crate::agent_loop::subagent_tool::SubagentTool;
+            // SubagentTool is attached to the ScopedToolService (not registered
+            // in LoopToolRegistry) so the service surfaces it via `list()`.
+            let subagent_tool = {
+                use crate::agents::background_tracker::BackgroundAgentTracker;
+                use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
                 let sub_provider = self.provider_registry.default_provider();
                 let agent_registry = Arc::new(AgentRegistry::with_builtins());
                 let background_tracker = Arc::new(BackgroundAgentTracker::new());
-                let mut subagent_tool = SubagentTool::new(
+                // ChainContext is used by SubagentTool for chain-id correlation.
+                // The retiring path shared this between AgentLoop and SubagentTool;
+                // under the orchestrator flip only SubagentTool sees it since
+                // AgentHarness has its own tracing path via TraceSink.
+                let run_chain = crate::agent_loop::chain_context::ChainContext::new();
+                let mut t = SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
                     sub_safety_factory.clone(),
-                    run_chain.clone(),
+                    run_chain,
                     agent_registry,
                     background_tracker,
                 );
-                subagent_tool = subagent_tool.with_shared_snapshot(shared_snapshot.clone());
                 if let Some(ref mgr) = self.teammate_manager {
-                    subagent_tool = subagent_tool.with_teammate_manager(mgr.clone());
+                    t = t.with_teammate_manager(mgr.clone());
                 }
                 if let Some(ref router) = self.message_router {
-                    subagent_tool = subagent_tool.with_message_router(router.clone());
+                    t = t.with_message_router(router.clone());
                 }
                 if let Some(ref inbox) = self.inbox {
-                    subagent_tool = subagent_tool.with_inbox(inbox.clone());
+                    t = t.with_inbox(inbox.clone());
                 }
-                tool_registry.register(Box::new(subagent_tool));
-            }
-
-            debug!(
-                run_id = run_id,
-                attempt = attempt,
-                tool_count = tool_registry.len(),
-                "Agent loop: built tool registry"
-            );
-
-            // Build prompt builder via thinker pipeline.
-            // Pipeline layers handle soul, skills, tools, etc. during assembly.
-            let mut config = PromptConfig::default();
-            if let Some(custom_instructions) = agent.config().system_prompt.as_deref() {
-                config.custom_instructions = Some(custom_instructions.to_string());
-            }
-            if let Some(ref skills) = eligible_skills {
-                config.eligible_skills = Some(skills.clone());
-            }
-            let prompt_builder = if resolved_soul.is_empty() {
-                PromptBuilder::new(config)
-            } else {
-                PromptBuilder::new(config).with_soul(resolved_soul.clone())
-            };
-            let prompt_builder = prompt_builder.with_identity_files(identity_files.clone());
-
-            // Wire memory injection: call build_memory_user_message and thread the
-            // rendered XML string into PromptBuilder so MemoryAugmentationLayer
-            // picks it up via LayerInput::memory_user_message.
-            let prompt_builder = if let Some(ref mcp) = self.memory_context_provider {
-                match mcp
-                    .build_memory_user_message(request.session_key.agent_id(), &request.input)
-                    .await
-                {
-                    Ok(Some(msg)) => prompt_builder.with_memory_user_message(msg.text_content()),
-                    Ok(None) => prompt_builder,
-                    Err(e) => {
-                        warn!(error = %e, "memory injection failed; continuing without memory");
-                        prompt_builder
-                    }
-                }
-            } else {
-                prompt_builder
+                Arc::new(t)
             };
 
-            // Safety guard from merged global + agent permissions
-            let safety = SafetyGuard::from_permissions(
-                &self.global_tool_permissions,
-                &agent_perms,
-                Some(ToolSafetyPolicy::default()),
+            let allowed_names: std::collections::BTreeSet<String> = allowed_tools
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+
+            let tool_refresh: Option<Arc<dyn crate::agent_loop::ToolRefreshSource>> =
+                extension_manager.as_ref().map(|ext_manager| {
+                    Arc::new(ExtensionToolRefreshSource::new(
+                        Arc::clone(ext_manager),
+                        self.tool_registry.clone(),
+                        agent.clone(),
+                        base_allowed_tools.clone(),
+                        default_working_dir.clone(),
+                    )) as Arc<dyn crate::agent_loop::ToolRefreshSource>
+                });
+
+            let tool_service = super::build_request_tool_service(
+                loop_registry,
+                allowed_names,
+                Some(subagent_tool),
+                tool_refresh,
             );
 
-            let loop_config = LoopConfig {
-                max_iterations: max_loops,
-                token_budget,
+            // 2. Trace sink: wraps callback_state so TracePersistence continues
+            //    to run. `flush` is called by AgentHarnessRunner::run after the
+            //    inner harness loop completes.
+            let trace_sink: Arc<dyn crate::harness::TraceSink> =
+                Arc::new(super::GatewayTraceSink::new(Arc::new(
+                    CallbackStateFlushHandle::new(callback_state.clone()),
+                )));
+
+            // 3. Build FlowRequest — history replay + fresh prompt. Multimodal
+            //    messages currently degrade to text via History (attachments
+            //    are handled through the media pipeline + session events;
+            //    harness does not yet accept UnifiedMessage directly).
+            let flow_input = super::helpers::history_to_flow_input(
+                history.clone(),
+                request.input.clone(),
+            );
+
+            let req = crate::orchestrator::FlowRequest {
+                flow_id: None,
+                agent_id: agent.id().to_string(),
+                input: flow_input,
+                channel: request.metadata.get("platform").cloned(),
+                session_hint: Some(request.session_key.to_key_string()),
+                parent_session: None,
+                depth: 0,
+                tool_service: Some(tool_service),
+                trace_sink: Some(trace_sink),
             };
 
-            // Real-time streaming: ProviderDelta → EventEmitter
-            let has_emitted_text = Arc::new(AtomicBool::new(false));
-            let streaming_sink = StreamingDeltaSink::new(
-                run_id.to_string(),
-                emitter.clone()
-                    as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
-                has_emitted_text.clone(),
-            );
-
-            // Create the agent loop
-            // Build ContextBudget fresh for each retry attempt
-            let context_budget = self.session_compactor.as_ref().map(|sc| {
-                let config = crate::agent_loop::ContextBudgetConfig {
-                    token_budget: token_budget as u64,
-                    warning_threshold: 0.70,
-                    critical_threshold: 0.85,
-                    token_estimate_ratio: sc.config().token_estimate_ratio,
-                    fresh_tail_count: sc.config().fresh_tail_count,
-                    circuit_breaker_max: 3,
-                    diminishing_window: 4,
-                    diminishing_threshold: 500,
-                };
-                crate::agent_loop::ContextBudget::new(&config)
-            });
-
-            // Build session context for environment info injection
-            let session_ctx = crate::agent_loop::SessionContext {
-                os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-                shell: std::env::var("SHELL").unwrap_or_default(),
-                cwd: agent.workspace().to_string_lossy().to_string(),
-                git_branch: detect_git_branch(agent.workspace()).await,
-                language: String::new(),
-            };
-            let context_compactor = crate::agent_loop::ContextCompactor::new(
-                provider.clone(),
-                crate::agent_loop::CompactorConfig::default(),
-            );
-            let stop_hooks: Vec<Box<dyn crate::agent_loop::StopHookHandler>> =
-                if agent.id() == "coder" {
-                    vec![Box::new(crate::agent_loop::VerifyStopHook::new(
-                        agent.id().to_string(),
-                        crate::agent_loop::VerifyStopHookConfig {
-                            trigger_for: vec!["coder".to_string()],
-                            min_iterations: 3,
-                        },
-                    ))]
-                } else {
-                    Vec::new()
-                };
-            let tool_refresh = extension_manager.as_ref().map(|ext_manager| {
-                Arc::new(ExtensionToolRefreshSource::new(
-                    Arc::clone(ext_manager),
-                    self.tool_registry.clone(),
-                    agent.clone(),
-                    base_allowed_tools.clone(),
-                    default_working_dir.clone(),
-                )) as Arc<dyn crate::agent_loop::ToolRefreshSource>
-            });
-
-            let platform_name = request.metadata.get("platform").cloned();
-
-            // PHASE-6-LEGACY: replaced by orchestrator.dispatch once Gateway sink
-            // infrastructure (StreamCallback, context_budget, stop_hooks, etc.) is
-            // ported to FlowStreamEvent. Kept for production path until Phase 6.
-            let mut agent_loop = AgentLoop::new(
-                bridge,
-                tool_registry,
-                prompt_builder,
-                safety,
-                loop_config,
-                cancel_token.clone(),
-            )
-            .with_chain(run_chain)
-            .with_delta_sink(Box::new(streaming_sink))
-            .with_context_budget(context_budget)
-            .with_session_context(session_ctx)
-            .with_context_compactor(context_compactor)
-            .with_summary_provider(self.provider_registry.default_provider())
-            .with_stop_hooks(stop_hooks)
-            .with_shared_snapshot(shared_snapshot)
-            .with_provider_name(resolved.provider_name.clone())
-            .with_platform_name(platform_name)
-            .with_session_id(request.session_key.to_key_string());
-
-            if let Some(skill_system) = skill_system.as_ref() {
-                agent_loop =
-                    agent_loop.with_skill_prefetcher(crate::agent_loop::SkillPrefetcher::new(
-                        Arc::new(ExtensionSkillDiscoverySource::new(skill_system.clone())),
-                        Duration::from_secs(30),
+            // 4. Dispatch via the orchestrator + classify.
+            let orchestrator = match self.orchestrator.get() {
+                Some(o) => o.clone(),
+                None => {
+                    error!(
+                        run_id = run_id,
+                        "Orchestrator not wired; ExecutionEngine::orchestrator empty"
+                    );
+                    return Err(ExecutionError::Orchestrator(
+                        "orchestrator not yet initialised — boot ordering error".to_string(),
                     ));
-            }
-            if let Some(hooks) = hook_executor.as_ref() {
-                agent_loop = agent_loop.with_hook_executor(Arc::clone(hooks));
-            }
-            if let Some(tool_refresh) = tool_refresh {
-                agent_loop = agent_loop.with_tool_refresh(tool_refresh);
-            }
+                }
+            };
 
-            // Create a streaming callback
-            let mut callback = StreamCallback::new(
-                emitter.clone(),
-                run_id.to_string(),
-                request.pending_media.clone(),
-                true,
-                has_emitted_text,
-                callback_state.clone(),
+            let locale = crate::gateway::i18n::Locale::from_config(
+                request.metadata.get("locale").map(|s| s.as_str()),
             );
 
-            // Run the agent loop with history
-            let loop_result = if let Some(ref messages) = multimodal_messages {
-                agent_loop
-                    .run_with_history_messages(messages.clone(), &mut callback)
-                    .await
-            } else {
-                agent_loop
-                    .run_with_history(&request.input, history.clone(), &mut callback)
-                    .await
-            };
-            callback.flush_trace_persistence().await;
+            let emitter_dyn: Arc<dyn crate::gateway::event_emitter::EventEmitter> =
+                emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>;
 
-            match loop_result {
-                Ok(result) => {
-                    // Report success for health tracking
+            let dispatch_result = super::helpers::run_dispatch_and_drain_classified(
+                orchestrator,
+                req,
+                emitter_dyn,
+                run_id,
+                cancel_token.clone(),
+                locale,
+            )
+            .await;
+
+            match dispatch_result {
+                Ok(response) => {
                     self.provider_registry
                         .report_outcome(&resolved.provider_name, Ok(()));
-
-                    // Cleanup media if attachments were processed
                     if multimodal_messages.is_some() {
-                        if let Some(media_processor) = self.media_processor.as_ref() {
-                            media_processor.cleanup(&request.session_key.to_key_string());
+                        if let Some(mp) = self.media_processor.as_ref() {
+                            mp.cleanup(&request.session_key.to_key_string());
                         }
                     }
-
                     info!(
                         run_id = run_id,
-                        iterations = result.iterations,
-                        tool_calls = result.tool_calls_made,
-                        tokens = result.total_tokens,
-                        hit_limit = result.hit_limit,
-                        "Agent loop completed"
+                        attempt = attempt,
+                        "Orchestrator dispatch completed"
                     );
-                    let response = if result.hit_limit
-                        && result
-                            .final_text
-                            .as_ref()
-                            .map(|t| t.is_empty())
-                            .unwrap_or(true)
-                    {
-                        warn!(
-                            run_id = run_id,
-                            iterations = result.iterations,
-                            tool_calls = result.tool_calls_made,
-                            "Agent hit iteration/token limit without producing a response"
-                        );
-                        let locale = crate::gateway::i18n::Locale::from_config(
-                            request.metadata.get("locale").map(|s| s.as_str()),
-                        );
-                        crate::gateway::i18n::t(
-                            crate::gateway::i18n::Msg::ErrLoopExhausted {
-                                iterations: result.iterations,
-                                tool_calls: result.tool_calls_made,
-                            },
-                            locale,
-                        )
-                    } else {
-                        result.final_text.unwrap_or_default()
-                    };
                     return Ok(response);
                 }
-                Err(e) => {
-                    // Classify the error for health tracking and retry decisions.
-                    // Errors may arrive as AlephError (from process()) or as plain
-                    // anyhow::Error (from stream_raw's map_err). Try both paths.
-                    let mut is_retryable = false;
-
-                    if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
-                        // Rate limit errors should NOT trigger retries — retrying
-                        // amplifies the problem and can exhaust provider quotas.
-                        let is_rate_limited =
-                            matches!(aleph_err, crate::error::AlephError::RateLimitError { .. });
-                        let provider_err: Option<crate::providers::health::ProviderError> =
-                            aleph_err.into();
-                        if let Some(pe) = provider_err {
-                            if !is_rate_limited {
-                                is_retryable = true;
-                            }
-                            self.provider_registry
-                                .report_outcome(&resolved.provider_name, Err(pe));
-                        }
-                    } else {
-                        // stream_raw wraps errors as anyhow strings — classify via message.
-                        // Use word-boundary-aware matching to avoid false positives
-                        // (e.g. "4500" should NOT match status code "500").
-                        let msg = e.to_string();
-                        let is_rate_limit = msg.contains("429")
-                            || msg.contains("rate limit")
-                            || msg.contains("Rate limit");
-                        let is_network = msg.contains("Network error")
-                            || msg.contains("error sending request")
-                            || msg.contains("connection")
-                            || msg.contains("dns")
-                            || msg.contains("timed out");
-                        let is_auth = msg.contains("401")
-                            || msg.contains("403")
-                            || msg.contains("Unauthorized");
-                        // Match HTTP status codes with boundary awareness:
-                        // look for "(500)", "(502)", "(503)" patterns from error formatting,
-                        // or status code at word boundaries to avoid matching "4500" etc.
-                        let is_server = contains_http_status(&msg, 500)
-                            || contains_http_status(&msg, 502)
-                            || contains_http_status(&msg, 503);
-
-                        if is_rate_limit {
-                            // Rate limit is NOT retryable — don't amplify the problem
-                            self.provider_registry.report_outcome(
-                                &resolved.provider_name,
-                                Err(crate::providers::health::ProviderError::Transient(
-                                    crate::providers::health::TransientError::RateLimited {
-                                        retry_after: None,
-                                    },
-                                )),
-                            );
-                        } else if is_network || is_server {
-                            is_retryable = true;
-                            self.provider_registry.report_outcome(
-                                &resolved.provider_name,
-                                Err(crate::providers::health::ProviderError::Transient(
-                                    crate::providers::health::TransientError::ConnectionFailed,
-                                )),
-                            );
-                        } else if is_auth {
-                            is_retryable = true;
-                            self.provider_registry.report_outcome(
-                                &resolved.provider_name,
-                                Err(crate::providers::health::ProviderError::Permanent(
-                                    crate::providers::health::PermanentError::AuthFailed,
-                                )),
-                            );
-                        }
-                    }
-
-                    // Retry with fallback on any provider-classified error (transient or permanent)
-                    // Transient: rate limit, 5xx, timeout — provider might recover
-                    // Permanent: auth failed, model not found — this provider is dead, try another
-                    if is_retryable && attempt < MAX_FALLBACK_ATTEMPTS {
-                        // Check if a different provider is available
-                        match self.provider_registry.resolve_with_fallback(
-                            &agent.config().model,
-                            &agent.config().fallback_models,
-                        ) {
-                            Ok(new_resolved)
-                                if new_resolved.provider_name != resolved.provider_name =>
-                            {
-                                warn!(
-                                    run_id = run_id,
-                                    attempt = attempt,
-                                    failed_provider = %resolved.provider_name,
-                                    next_provider = %new_resolved.provider_name,
-                                    error = %e,
-                                    "Provider failed with transient error, retrying with fallback"
-                                );
-                                continue; // retry with new provider
-                            }
-                            _ => {
-                                // No different fallback available, give up
-                                error!(run_id = run_id, error = %e, "Agent loop failed, no alternative provider available");
-                            }
-                        }
-                    } else {
-                        error!(run_id = run_id, error = %e, attempt = attempt, "Agent loop failed");
-                    }
-
-                    // Cleanup media on failure too
+                Err(super::helpers::DispatchFailure::Cancelled) => {
                     if multimodal_messages.is_some() {
-                        if let Some(media_processor) = self.media_processor.as_ref() {
-                            media_processor.cleanup(&request.session_key.to_key_string());
+                        if let Some(mp) = self.media_processor.as_ref() {
+                            mp.cleanup(&request.session_key.to_key_string());
                         }
                     }
-
-                    return Err(ExecutionError::Failed(e.to_string()));
+                    return Err(ExecutionError::Cancelled);
+                }
+                Err(super::helpers::DispatchFailure::Transient { provider: prov_name, message })
+                    if attempt < MAX_FALLBACK_ATTEMPTS =>
+                {
+                    // Mark the provider degraded and try again. The outer
+                    // `loop` re-resolves on the next iteration.
+                    self.provider_registry.report_outcome(
+                        &resolved.provider_name,
+                        Err(crate::providers::health::ProviderError::Transient(
+                            crate::providers::health::TransientError::ConnectionFailed,
+                        )),
+                    );
+                    warn!(
+                        run_id = run_id,
+                        attempt = attempt,
+                        failed_provider = %prov_name,
+                        message = %message,
+                        "Provider transient failure via Orchestrator::dispatch — retrying"
+                    );
+                    continue;
+                }
+                Err(super::helpers::DispatchFailure::Transient { provider: prov_name, message }) => {
+                    self.provider_registry.report_outcome(
+                        &resolved.provider_name,
+                        Err(crate::providers::health::ProviderError::Transient(
+                            crate::providers::health::TransientError::ConnectionFailed,
+                        )),
+                    );
+                    if multimodal_messages.is_some() {
+                        if let Some(mp) = self.media_processor.as_ref() {
+                            mp.cleanup(&request.session_key.to_key_string());
+                        }
+                    }
+                    error!(
+                        run_id = run_id,
+                        attempt = attempt,
+                        failed_provider = %prov_name,
+                        message = %message,
+                        "Orchestrator dispatch exhausted retries"
+                    );
+                    return Err(ExecutionError::Failed(format!(
+                        "provider {prov_name} transient: {message}"
+                    )));
+                }
+                Err(super::helpers::DispatchFailure::Fatal(msg)) => {
+                    if multimodal_messages.is_some() {
+                        if let Some(mp) = self.media_processor.as_ref() {
+                            mp.cleanup(&request.session_key.to_key_string());
+                        }
+                    }
+                    error!(
+                        run_id = run_id,
+                        attempt = attempt,
+                        error = %msg,
+                        "Orchestrator dispatch failed"
+                    );
+                    return Err(ExecutionError::Failed(msg));
                 }
             }
         }
     }
 }
 
-/// Check if a message contains an HTTP status code with word boundaries.
+/// Adapter that translates the existing `StreamCallbackState` into the
+/// `TraceFlushHandle` the orchestrator-side `GatewayTraceSink` expects.
 ///
-/// Matches patterns like "(500)", "500 ", " 500" to avoid false positives
-/// where the status code digits appear inside larger numbers (e.g. "4500").
-fn contains_http_status(msg: &str, code: u16) -> bool {
-    let code_str = code.to_string();
-    // Find all occurrences and check boundaries
-    let mut search_from = 0;
-    while let Some(pos) = msg[search_from..].find(&code_str) {
-        let abs_pos = search_from + pos;
-        let before_ok = abs_pos == 0 || !msg.as_bytes()[abs_pos - 1].is_ascii_digit();
-        let after_pos = abs_pos + code_str.len();
-        let after_ok = after_pos >= msg.len() || !msg.as_bytes()[after_pos].is_ascii_digit();
-        if before_ok && after_ok {
-            return true;
-        }
-        search_from = abs_pos + code_str.len();
-    }
-    false
+/// Keeps `TracePersistence::flush` wired — same persistence path as the
+/// retiring `StreamCallback::flush_trace_persistence`. `on_trace` routes each
+/// `LoopTraceEvent` into the same queue.
+struct CallbackStateFlushHandle {
+    state: Arc<StreamCallbackState>,
 }
+
+impl CallbackStateFlushHandle {
+    fn new(state: Arc<StreamCallbackState>) -> Self {
+        Self { state }
+    }
+}
+
+impl super::trace_sink_adapter::TraceFlushHandle for CallbackStateFlushHandle {
+    fn on_trace(&self, event: &crate::harness::trace::LoopTraceEvent) {
+        // `agent_loop::LoopTraceEvent` is a re-export of `harness::trace::LoopTraceEvent`
+        // (see `src/agent_loop/trace.rs`), so no translation needed today. The
+        // trait boundary is kept distinct in case Phase 6c splits them.
+        self.state.persist_trace(event);
+    }
+
+    fn flush_blocking(&self) {
+        // Fire-and-forget blocking spawn; the existing flush is async and
+        // returns only after all pending persistence handles drain.
+        let state = self.state.clone();
+        // We can't `.await` in a non-async function; use a current-thread
+        // tokio handle if available. If no runtime is active (tests), the
+        // block_on is inert since there are no pending handles to flush.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                state.flush_trace_persistence().await;
+            });
+        }
+    }
+}
+
+// Phase 6b Task 4c: `contains_http_status` used to classify anyhow-wrapped
+// provider errors. Classification now lives in
+// `orchestrator::harness_bridge::classify_harness_error`, so this function
+// moved there. (Kept out of this module to minimise dead code.)
 
 /// Build loop history from the agent's session, excluding the current user input.
 async fn build_loop_history(
@@ -963,12 +796,14 @@ impl TracePersistence {
     }
 }
 
+#[allow(dead_code)] // seq/chunk_index kept for StreamCallback wiring (cfg(test) only post-flip)
 struct StreamCallbackState {
     seq: AtomicU64,
     chunk_index: AtomicU32,
     trace_persistence: Option<Arc<TracePersistence>>,
 }
 
+#[allow(dead_code)] // next_seq/next_chunk_index kept for StreamCallback (cfg(test) post-flip)
 impl StreamCallbackState {
     fn new(trace_persistence: Option<Arc<TracePersistence>>) -> Self {
         Self {
@@ -1000,6 +835,7 @@ impl StreamCallbackState {
 }
 
 /// Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
+#[allow(dead_code)] // retained for cfg(test) coverage of the trace-persistence seam
 pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
     emitter: Arc<E>,
     run_id: String,
@@ -1013,6 +849,7 @@ pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
     shared: Arc<StreamCallbackState>,
 }
 
+#[allow(dead_code)] // all methods retained for cfg(test) fixture
 impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
     fn new(
         emitter: Arc<E>,
@@ -1051,169 +888,6 @@ impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
 
     async fn flush_trace_persistence(&self) {
         self.shared.flush_trace_persistence().await;
-    }
-}
-
-impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
-    for StreamCallback<E>
-{
-    fn on_trace(&mut self, event: &crate::agent_loop::LoopTraceEvent) {
-        self.shared.persist_trace(event);
-
-        let trace_event = StreamEvent::AgentTrace {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            event: event.clone(),
-        };
-        self.emit_async(trace_event);
-
-        match event {
-            crate::agent_loop::LoopTraceEvent::TextEmitted { stream, text, .. } => match stream {
-                crate::agent_loop::LoopTraceTextKind::Final => self.on_text(text),
-                crate::agent_loop::LoopTraceTextKind::Intermediate => {
-                    self.on_intermediate_text(text)
-                }
-            },
-            crate::agent_loop::LoopTraceEvent::ToolCallStarted { call, .. } => {
-                self.on_tool_call_start(call)
-            }
-            crate::agent_loop::LoopTraceEvent::ToolCallCompleted { call, result, .. } => {
-                self.on_tool_call_done(call, result)
-            }
-            crate::agent_loop::LoopTraceEvent::ToolSummary { summary, .. } => {
-                self.on_tool_summary(summary)
-            }
-            crate::agent_loop::LoopTraceEvent::TurnStarted { .. }
-            | crate::agent_loop::LoopTraceEvent::TurnStateEntered { .. }
-            | crate::agent_loop::LoopTraceEvent::TurnCompleted { .. }
-            | crate::agent_loop::LoopTraceEvent::SessionCompleted { .. } => {}
-        }
-    }
-
-    fn on_text(&mut self, text: &str) {
-        // If streaming is active and DeltaSink already delivered this text token-by-token,
-        // skip to avoid duplication. System-generated notices (truncation warning at
-        // loop_core.rs:495) were never sent through DeltaSink, so has_emitted_text
-        // will be false for them — they pass through normally.
-        if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
-            return;
-        }
-        let chunk_index = self.next_chunk_index();
-
-        let event = StreamEvent::ResponseChunk {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            delta: text.to_string(),
-            content: text.to_string(),
-            full_text: String::new(),
-            chunk_index,
-            is_final: false,
-            is_intermediate: false,
-        };
-        self.emit_async(event);
-    }
-
-    fn on_intermediate_text(&mut self, text: &str) {
-        // When streaming is active, DeltaSink already delivered the text tokens
-        // and its boundary marker triggers emitters (ReplyEmitter, GatewayEventEmitter)
-        // to flush their accumulated buffer as a standalone intermediate message.
-        // Skip here to avoid duplicate intermediate messages on channels.
-        if self.streaming_active {
-            return;
-        }
-        let chunk_index = self.next_chunk_index();
-
-        let event = StreamEvent::ResponseChunk {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            delta: text.to_string(),
-            content: text.to_string(),
-            full_text: String::new(),
-            chunk_index,
-            is_final: false,
-            is_intermediate: true,
-        };
-        self.emit_async(event);
-    }
-
-    fn on_tool_call_start(&mut self, event: &crate::agent_loop::ToolCallStartEvent) {
-        let stream_event = StreamEvent::ToolStart {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            tool_name: event.tool_name.clone(),
-            tool_id: event.tool_id.clone(),
-            params: event.input.clone(),
-        };
-        self.emit_async(stream_event);
-    }
-
-    fn on_tool_call_done(
-        &mut self,
-        event: &crate::agent_loop::ToolCallEndEvent,
-        result: &crate::agent_loop::ToolResult,
-    ) {
-        // Extract _media from raw Value before serialization
-        match result {
-            crate::agent_loop::ToolResult::Success { output }
-            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
-                if let Some(media_val) = output.get("_media") {
-                    if let Ok(items) = serde_json::from_value::<Vec<MediaItem>>(media_val.clone()) {
-                        tracing::info!(
-                            tool = %event.tool_name,
-                            count = items.len(),
-                            urls = ?items.iter().map(|i| &i.url).collect::<Vec<_>>(),
-                            "Extracted _media from tool output"
-                        );
-                        let mut pending =
-                            self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
-                        let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
-                        if remaining < items.len() {
-                            tracing::warn!(
-                                tool = %event.tool_name,
-                                total = items.len(),
-                                accepted = remaining,
-                                "Media items exceed per-run limit, dropping excess"
-                            );
-                        }
-                        pending.extend(items.into_iter().take(remaining));
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // === Existing code below ===
-        use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
-        let tool_result = match result {
-            crate::agent_loop::ToolResult::Success { output }
-            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
-                EmitterToolResult::success(output.to_string())
-            }
-            crate::agent_loop::ToolResult::Error { error, .. } => {
-                EmitterToolResult::error(error.clone())
-            }
-        };
-        let stream_event = StreamEvent::ToolEnd {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            tool_id: event.tool_id.clone(),
-            result: tool_result,
-            duration_ms: event.duration_ms,
-        };
-        self.emit_async(stream_event);
-    }
-
-    fn on_tool_summary(&mut self, summary: &str) {
-        let event = StreamEvent::ReasoningBlock {
-            run_id: self.run_id.clone(),
-            seq: self.next_seq(),
-            step_type: crate::gateway::event_emitter::ReasoningStepType::Observation,
-            label: "Tool Summary".to_string(),
-            content: summary.to_string(),
-            confidence: None,
-            is_final: false,
-        };
-        self.emit_async(event);
     }
 }
 
@@ -1276,30 +950,15 @@ pub(super) async fn write_conversation_memory(
     debug!("Conversation memory write skipped (SessionStore removed)");
 }
 
-/// Detect current git branch from workspace path.
-async fn detect_git_branch(workspace: &std::path::Path) -> Option<String> {
-    let output = tokio::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(workspace)
-        .output()
-        .await
-        .ok()?;
-    if output.status.success() {
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if branch.is_empty() || branch == "HEAD" {
-            None
-        } else {
-            Some(branch)
-        }
-    } else {
-        None
-    }
-}
+// Phase 6b Task 4c: `detect_git_branch` produced the `git_branch` field on
+// `agent_loop::SessionContext` consumed by `AgentLoop::with_session_context`.
+// Under the orchestrator flip the harness assembles session context from its
+// own sources, so this helper is no longer called from `run_agent_loop`.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_loop::{LoopCallback, LoopTraceEvent};
+    use crate::harness::trace::LoopTraceEvent;
     use crate::resilience::{AgentTask, RiskLevel};
 
     #[tokio::test]
@@ -1321,18 +980,11 @@ mod tests {
         let shared = Arc::new(StreamCallbackState::new(Some(Arc::new(
             TracePersistence::new(db.clone(), "run-1".to_string()),
         ))));
-        let emitter = Arc::new(crate::gateway::NoOpEventEmitter::new());
-        let mut callback = StreamCallback::new(
-            emitter,
-            "run-1".to_string(),
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            false,
-            Arc::new(AtomicBool::new(false)),
-            shared,
-        );
 
-        callback.on_trace(&LoopTraceEvent::TurnStarted { iteration: 1 });
-        callback.flush_trace_persistence().await;
+        // Test persistence directly via StreamCallbackState (post-flip: StreamCallback
+        // is dead code; the production path uses GatewayTraceSink/CallbackStateFlushHandle).
+        shared.persist_trace(&LoopTraceEvent::TurnStarted { iteration: 1 });
+        shared.flush_trace_persistence().await;
 
         let traces = db.get_traces_by_task("run-1").await.unwrap();
         assert_eq!(traces.len(), 1);

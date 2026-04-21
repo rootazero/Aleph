@@ -39,18 +39,23 @@
                                     │
 ┌───────────────────────────────────┴─────────────────────────────────────────┐
 │                              AGENT LAYER                                     │
-│                      (Observe-Think-Act-Feedback Loop)                      │
+│                    (Orchestrator → Harness → Think → Act)                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         Agent Loop                                   │   │
+│  │                        Orchestrator                                  │   │
+│  │  Resolves AgentDef + FlowSpec, builds HarnessDeps, dispatches       │   │
+│  └───────────────────────────────┬──────────────────────────────────────┘   │
+│                                  │ HarnessRunner::run                       │
+│  ┌───────────────────────────────▼──────────────────────────────────────┐   │
+│  │                         AgentHarness                                 │   │
 │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐   │   │
-│  │  │ Observe │→ │  Think  │→ │   Act   │→ │Feedback │→ │ Compress│   │   │
-│  │  │ (Input) │  │(Thinker)│  │(Execute)│  │ (Eval)  │  │ (Memory)│   │   │
+│  │  │ Context │→ │  Think  │→ │   Act   │→ │Stop-Hook│→ │ Compact │   │   │
+│  │  │ (Budget)│  │(Thinker)│  │ (Tools) │  │  Check  │  │ (Budget)│   │   │
 │  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                      │
-│  │  Dispatcher  │  │    Guards    │  │   Overflow   │                      │
-│  │ (Orchestrate)│  │  (Safety)    │  │  Detector    │                      │
+│  │  ToolService │  │    Guards    │  │   Overflow   │                      │
+│  │  (Tool Exec) │  │  (Safety)    │  │  Detector    │                      │
 │  └──────────────┘  └──────────────┘  └──────────────┘                      │
 └───────────────────────────────────┬─────────────────────────────────────────┘
                                     │
@@ -87,28 +92,28 @@
 
 ```
                     ┌─────────────┐
-                    │   gateway   │ ← Entry point (feature-gated)
+                    │   gateway   │ ← Entry point (chat ingress, protocol adapters)
                     └──────┬──────┘
-                           │
+                           │ FlowRequest
           ┌────────────────┼────────────────┐
           │                │                │
           ▼                ▼                ▼
     ┌───────────┐    ┌───────────┐    ┌───────────┐
-    │interfaces │    │  routing  │    │ handlers  │
+    │interfaces │    │  routing  │    │orchestrator│
     └───────────┘    └───────────┘    └─────┬─────┘
-                                            │
+                                            │ HarnessRunner::run
                            ┌────────────────┼────────────────┐
                            │                │                │
                            ▼                ▼                ▼
                      ┌───────────┐    ┌───────────┐    ┌───────────┐
-                     │agent_loop │    │  memory   │    │   exec    │
+                     │  harness  │    │  memory   │    │   exec    │
                      └─────┬─────┘    └───────────┘    └───────────┘
                            │
           ┌────────────────┼────────────────┐
           │                │                │
           ▼                ▼                ▼
     ┌───────────┐    ┌───────────┐    ┌───────────┐
-    │  thinker  │    │ dispatcher│    │  executor │
+    │  thinker  │    │tool_service│   │  executor │
     └─────┬─────┘    └───────────┘    └─────┬─────┘
           │                                  │
           ▼                                  ▼
@@ -140,30 +145,32 @@ Client Request (JSON-RPC)
 │   • Parse JSON-RPC message                          │
 │   • Route to appropriate handler                    │
 │   • Authentication check (if enabled)              │
+│   • Construct FlowRequest { agent_id, input, ... }  │
 └─────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│ Handler: agent.run                                  │
-│   • Resolve session key                             │
-│   • Load session history                            │
-│   • Create AgentLoop instance                       │
+│ Orchestrator                                        │
+│   • Resolve AgentDef + FlowSpec                     │
+│   • Build HarnessDeps (SessionService, ToolService, │
+│     Sandbox, AiProvider)                            │
+│   • Dispatch to HarnessRunner::run                  │
 └─────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│ AgentLoop: Observe-Think-Act-Feedback               │
-│   1. Observe: Build context from history + input    │
+│ AgentHarness: Think → Act loop                      │
+│   1. Context: Apply budget, preflight prep          │
 │   2. Think: Call Thinker (LLM) for decision         │
-│   3. Act: Execute tools via Executor                │
-│   4. Feedback: Evaluate result, update state        │
-│   5. Compress: If overflow, compact history         │
+│   3. Act: Execute tools via ToolService             │
+│   4. Stop-hook: Evaluate completion / guards        │
+│   5. Compact: If overflow, compact history          │
 └─────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────┐
-│ Response (Streaming)                                │
-│   • Stream events via EventBus                      │
+│ FlowOutcome → Gateway renders response              │
+│   • Stream events via TraceSink / EventBus          │
 │   • Final response as JSON-RPC result               │
 └─────────────────────────────────────────────────────┘
 ```
@@ -218,7 +225,9 @@ pattern.
 | Module | Path | Purpose |
 |--------|------|---------|
 | **gateway** | `src/gateway/` | WebSocket server, JSON-RPC routing, interfaces |
-| **agent_loop** | `src/agent_loop/` | Observe-Think-Act-Feedback cycle |
+| **orchestrator** | `src/orchestrator/` | Resolve FlowSpec, build HarnessDeps, dispatch |
+| **harness** | `src/harness/` | Think→Act loop, stop-hooks, context budget, compaction |
+| **agent_loop** | `src/agent_loop/` | Legacy loop (SubagentTool path; migration planned) |
 | **thinker** | `src/thinker/` | LLM interaction, prompt building, streaming |
 | **dispatcher** | `src/dispatcher/` | Task orchestration, tool filtering |
 | **executor** | `src/executor/` | Tool execution engine |
@@ -242,15 +251,14 @@ pattern.
 ### Session Service
 
 Agent execution's authoritative session state lives in
-[`SessionService`](./SESSION_SERVICE.md) (`src/session/`). The Phase 1
-implementation `InProcessActorSessionService` spawns one tokio task per
-session and persists each event synchronously to the `session_events`
-table. Gateway `session.*` RPC methods continue to use the legacy
-`SessionManager`; every `SessionManager` append is mirrored into
-`SessionService` via a dual-write shim (`src/session/shim.rs`) until
-Phase 6 migrates Gateway RPC directly. `agent_loop` is already
-decoupled from `SessionManager` and will adopt `SessionService` in
-Phase 4.
+[`SessionService`](./SESSION_SERVICE.md) (`src/session/`). The
+`InProcessActorSessionService` spawns one tokio task per session and
+persists each event synchronously to the `session_events` table.
+`AgentHarness` reads and writes history exclusively through
+`SessionService`. Gateway `session.*` RPC methods continue to use the
+legacy `SessionManager`; every `SessionManager` append is mirrored into
+`SessionService` via a dual-write shim (`src/session/shim.rs`) until a
+future phase migrates Gateway RPC directly.
 
 ---
 
@@ -262,16 +270,16 @@ Aleph employs several key design patterns to ensure code quality, type safety, a
 
 Groups related function parameters into dedicated structs, reducing parameter count and improving API ergonomics.
 
-**Example: `RunContext`**
+**Example: `HarnessDeps` / `FlowRequest`**
 ```rust
-// Before: 7 parameters
+// Before: 7 parameters passed directly
 agent_loop.run(request, context, tools, identity, callback, abort_signal, initial_history).await
 
-// After: 2 parameters + Context
-let run_context = RunContext::new(request, context, tools, identity)
-    .with_abort_signal(abort_rx)
-    .with_initial_history(history);
-agent_loop.run(run_context, callback).await
+// After: structured deps + FlowRequest
+let deps = HarnessDeps { session, tool_service, sandbox, provider, trace_sink };
+let flow = FlowRequest::new(agent_id, input, identity)
+    .with_abort_signal(abort_rx);
+HarnessRunner::run(flow, deps).await
 ```
 
 **Benefits:**
@@ -499,16 +507,16 @@ IdentityContext is an immutable identity snapshot that flows through the entire 
 │  └──────────────────────────────────────────────────────────┘  │
 │                           │                                      │
 │                           ▼                                      │
-│  3. Agent Loop Execution                                         │
+│  3. Harness Execution                                            │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  AgentLoop::run(                                          │  │
-│  │      request,                                             │  │
-│  │      context,                                             │  │
-│  │      tools,                                               │  │
-│  │      identity,  // ← IdentityContext passed here         │  │
-│  │      callback,                                            │  │
-│  │      abort_signal,                                        │  │
-│  │      initial_history                                      │  │
+│  │  HarnessRunner::run(                                      │  │
+│  │      FlowRequest {                                        │  │
+│  │          agent_id,                                        │  │
+│  │          input,                                           │  │
+│  │          identity,  // ← IdentityContext passed here     │  │
+│  │          abort_signal,                                    │  │
+│  │      },                                                   │  │
+│  │      HarnessDeps { session, tool_service, sandbox, ... } │  │
 │  │  )                                                        │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                           │                                      │
@@ -640,8 +648,8 @@ let result2 = executor.execute(&action2, &identity).await;
 | **PolicyEngine** | `src/gateway/security/policy_engine.rs` | Stateless permission checker |
 | **InvitationManager** | `src/gateway/security/invitation_manager.rs` | Guest invitation lifecycle |
 | **SessionManager** | `src/gateway/session_manager.rs` | Identity construction |
-| **ExecutionEngine** | `src/gateway/execution_engine.rs` | Identity injection |
-| **AgentLoop** | `src/agent_loop/agent_loop.rs` | Identity propagation |
+| **Orchestrator** | `src/orchestrator/` | Identity injection into FlowRequest |
+| **AgentHarness** | `src/harness/` | Identity propagation through Think→Act loop |
 | **Executor** | `src/executor/` | Permission enforcement |
 
 ### Security Properties

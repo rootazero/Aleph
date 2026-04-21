@@ -10,7 +10,7 @@ mod sections;
 #[cfg(test)]
 mod tests;
 
-use crate::agent_loop::ToolInfo;
+use crate::tools::info::ToolInfo;
 use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
 
