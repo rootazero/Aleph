@@ -7,11 +7,10 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 use super::agent_instance::AgentRegistry;
 use super::channel_registry::ChannelRegistry;
@@ -103,7 +102,7 @@ impl SessionScheduler {
     pub async fn enqueue(&self, enriched: EnrichedMessage) {
         let session_key_str = enriched.merged.primary_context.session_key.to_key_string();
 
-        let mut queues = self.queues.lock().await;
+        let mut queues = self.queues.lock().unwrap();
         let queue = queues
             .entry(session_key_str.clone())
             .or_insert_with(SessionQueue::new);
@@ -141,7 +140,7 @@ impl SessionScheduler {
 
         // Set active run id
         {
-            let mut queues = self.queues.lock().await;
+            let mut queues = self.queues.lock().unwrap();
             let queue = queues
                 .entry(session_key_str.to_string())
                 .or_insert_with(SessionQueue::new);
@@ -154,7 +153,7 @@ impl SessionScheduler {
             None => {
                 error!(agent_id = %agent_id, "Agent not found — dropping message");
                 // Clear active run
-                let mut queues = self.queues.lock().await;
+                let mut queues = self.queues.lock().unwrap();
                 if let Some(queue) = queues.get_mut(session_key_str) {
                     queue.active_run_id = None;
                 }
@@ -189,7 +188,7 @@ impl SessionScheduler {
             }
         }
         let pending_media: crate::gateway::media::PendingMedia =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            Arc::new(Mutex::new(Vec::new()));
         let reply_emitter: Arc<dyn EventEmitter + Send + Sync> =
             Arc::new(ReplyEmitter::with_config(
                 self.channel_registry.clone(),
@@ -261,9 +260,9 @@ pub struct QueueDepthFuture<'a> {
 }
 
 impl<'a> QueueDepthFuture<'a> {
-    /// Await the queue depth.
-    pub async fn get(self) -> usize {
-        let queues = self.queues.lock().await;
+    /// Get the queue depth.
+    pub fn get(self) -> usize {
+        let queues = self.queues.lock().unwrap();
         queues
             .get(&self.session_key)
             .map(|q| q.pending.len())
@@ -291,7 +290,7 @@ impl SchedulerEventListener {
     /// the next one if available.
     async fn on_run_finished(&self) {
         let next_task = {
-            let mut queues = self.queues.lock().await;
+            let mut queues = self.queues.lock().unwrap();
             if let Some(queue) = queues.get_mut(&self.session_key) {
                 queue.active_run_id = None;
 
@@ -381,7 +380,7 @@ async fn execute_next(
 
     // Set active run id
     {
-        let mut qs = queues.lock().await;
+        let mut qs = queues.lock().unwrap();
         let queue = qs
             .entry(session_key_str.to_string())
             .or_insert_with(SessionQueue::new);
@@ -393,7 +392,7 @@ async fn execute_next(
         Some(a) => a,
         None => {
             error!(agent_id = %agent_id, "Agent not found — dropping queued message");
-            let mut qs = queues.lock().await;
+            let mut qs = queues.lock().unwrap();
             if let Some(queue) = qs.get_mut(session_key_str) {
                 queue.active_run_id = None;
             }
@@ -427,7 +426,7 @@ async fn execute_next(
         }
     }
     let pending_media: crate::gateway::media::PendingMedia =
-        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        Arc::new(Mutex::new(Vec::new()));
     let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
         channel_registry.clone(),
         enriched.merged.primary_context.reply_route.clone(),
@@ -537,7 +536,7 @@ mod tests {
         );
 
         // Nonexistent session should return 0
-        let depth = scheduler.queue_depth("nonexistent").get().await;
+        let depth = scheduler.queue_depth("nonexistent").get();
         assert_eq!(depth, 0);
     }
 }

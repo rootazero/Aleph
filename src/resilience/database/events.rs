@@ -10,7 +10,11 @@ use crate::sync_primitives::{AtomicBool, Ordering as AtomicOrdering};
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
-static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
+static FIRST_EVENT_LOGGED: std::sync::OnceLock<AtomicBool> = std::sync::OnceLock::new();
+
+fn first_event_logged() -> &'static AtomicBool {
+    FIRST_EVENT_LOGGED.get_or_init(|| AtomicBool::new(false))
+}
 
 /// Construct AgentEvent from a rusqlite row.
 /// Expected column order: id, task_id, seq, event_type, payload_json, is_structural, timestamp
@@ -50,7 +54,7 @@ impl StateDatabase {
         )
         .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
 
-        if !FIRST_EVENT_LOGGED.swap(true, AtomicOrdering::Relaxed) {
+        if !first_event_logged().swap(true, AtomicOrdering::Relaxed) {
             tracing::info!(
                 subsystem = "resilience",
                 event = "first_event_recorded",

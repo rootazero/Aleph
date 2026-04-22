@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::Mutex;
 use async_trait::async_trait;
 use regex::Regex;
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -499,6 +499,8 @@ pub struct ReplyEmitter {
 
     seq_counter: AtomicU64,
     has_sent: AtomicBool,
+    /// Guard against duplicate RunComplete events (orchestrator drain + engine.rs both emit).
+    run_complete_handled: AtomicBool,
     run_id: String,
 
     /// Cancellation token to stop the persistent typing indicator task
@@ -556,6 +558,7 @@ impl ReplyEmitter {
             buffer: Mutex::new(String::new()),
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
+            run_complete_handled: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,
@@ -594,6 +597,7 @@ impl ReplyEmitter {
             buffer: Mutex::new(String::new()),
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
+            run_complete_handled: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
             generation_registry: None,
@@ -1412,6 +1416,12 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
+                // Guard against duplicate RunComplete (orchestrator drain + engine.rs both emit).
+                if self.run_complete_handled.swap(true, Ordering::SeqCst) {
+                    tracing::debug!(run_id = %self.run_id, "Ignoring duplicate RunComplete");
+                    return Ok(());
+                }
+
                 // Stop the persistent typing indicator
                 self.typing_cancel.cancel();
 
@@ -1670,6 +1680,7 @@ impl EventEmitter for ReplyEmitter {
 mod tests {
     use super::*;
     use crate::gateway::channel::{ChannelId, ConversationId};
+    use crate::sync_primitives::Mutex;
 
     #[test]
     fn test_config_defaults() {
@@ -1699,7 +1710,7 @@ mod tests {
             registry,
             route.clone(),
             "run-123".to_string(),
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.run_id(), "run-123");
@@ -1727,7 +1738,7 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -1743,7 +1754,7 @@ mod tests {
             registry,
             route,
             "run-789".to_string(),
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.next_seq(), 0);
@@ -1760,7 +1771,7 @@ mod tests {
             registry,
             route,
             "run-test".to_string(),
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         emitter.buffer.lock().await.push_str("Hello ");

@@ -98,7 +98,9 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::gateway::execution_engine::RunState;
+    use crate::gateway::media::PendingMedia;
     use crate::gateway::router::SessionKey;
+    use crate::sync_primitives::Mutex;
 
     /// Mock execution adapter for testing
     struct MockExecutionAdapter {
@@ -188,7 +190,7 @@ mod tests {
             timeout_secs: None,
             metadata: HashMap::new(),
             attachments: Vec::new(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: PendingMedia::default(),
         };
 
         let result = adapter.execute(request, agent, emitter).await;

@@ -25,7 +25,7 @@ pub(crate) use loom::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 #[cfg(feature = "loom")]
-pub(crate) use loom::sync::{Mutex, RwLock};
+pub(crate) use loom::sync::{Mutex, MutexGuard, RwLock};
 
 #[cfg(not(feature = "loom"))]
 #[allow(unused_imports)] // AtomicUsize used by test code only
@@ -33,4 +33,4 @@ pub(crate) use std::sync::atomic::{
     AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 #[cfg(not(feature = "loom"))]
-pub(crate) use std::sync::{Mutex, RwLock};
+pub(crate) use std::sync::{Mutex, MutexGuard, RwLock};
