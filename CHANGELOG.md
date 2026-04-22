@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.23]
+
+### Fixed
+- **Loom concurrency tests:** Fixed compilation errors when running with `--features loom`. Resolved `MutexGuard` export, static initialization issues, and type mismatches between `std::sync` and `loom::sync` primitives.
+
 ## [2026.04.22]
 
 ### Added
