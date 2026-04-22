@@ -109,9 +109,14 @@ just test-all                          # All tests (core + desktop + proptest)
 |------|-------------|
 | **R1** | Core never calls platform APIs (AppKit, Vision, CoreGraphics). Core defines trait contracts; platform impl via IPC |
 | **R2** | Complex business UI in Leptos/WASM only. Native shells = window container + animations |
+| **R3** | Core minimalism — no heavy deps for non-core features; implement as Skill/MCP |
 | **R4** | Interface layers (App/Bot/CLI) are pure I/O — no business logic |
+| **R5** | Menu bar first, window on demand — lightweight entry + expand when needed |
+| **R6** | AI comes to you — minimize context switching; Halo, notifications, inline |
+| **R7** | One core, many shells — Rust Core is the only brain |
 | **R8** | LLM handles intent/routing. Regex only for machine formats (JSON, URLs) |
 | **R9** | All configurability exposed as tools — natural language drives everything |
+| **R10** | Intelligence lives in the prompt — zero middleware tax |
 
 ---
 
@@ -152,4 +157,22 @@ Multiple processes → HMAC failure → **vault data loss**.
 
 ---
 
-*Last updated: 2026-04-04*
+## Workspace Members
+
+```
+desktop/shared       # DesktopCapability trait + IPC
+desktop/macos        # macOS native implementation
+desktop/linux        # Linux native implementation
+desktop/windows      # Windows native implementation
+shared/logging       # Logging infrastructure
+shared/protocol      # Shared protocol types
+shared/ui_logic      # Shared UI logic
+shared/client        # Shared client utilities
+interfaces/cli       # CLI client
+interfaces/tui       # TUI client
+interfaces/webchat   # Web chat interface
+```
+
+---
+
+*Last updated: 2026-04-22*

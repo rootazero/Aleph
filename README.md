@@ -8,27 +8,50 @@
 
 [中文文档](README_CN.md)
 
-## A Note from the Author
-
-This is a personal hobby project. I'm not a professional programmer — just someone who got fascinated by the possibilities of AI and started building. I've been learning AI-assisted coding along the way, and Aleph is the result of that journey. The project draws heavy inspiration from [OpenClaw](https://github.com/AIChatClaw/OpenClaw) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
-
-I'm sharing it in the spirit of open source, in case it's useful or interesting to others. Contributions, feedback, and ideas are always welcome.
-
-![Aleph Panel Dashboard](docs/images/panel-dashboard-1.png)
-![Aleph Panel Chat](docs/images/panel-dashboard-2.png)
-![Aleph Panel Settings](docs/images/panel-dashboard-3.png)
-
 ## What is Aleph?
 
 Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on your own devices, connecting through a unified Gateway to 15+ messaging channels (Telegram, Discord, Slack, WhatsApp, IRC, Matrix, Signal, and more). The Rust core drives an agent loop with multi-provider LLM support, 30+ built-in tools, hybrid memory search, and a plugin system — accessible through native apps, CLI, a web panel, and social bots simultaneously.
 
-## Architecture
+## Key Highlights
+
+### Cognitive Memory Architecture
+
+Aleph's memory system goes beyond simple RAG:
+
+- **Note Layer** — Markdown-based memory with Obsidian-compatible `[[wikilink]]` syntax, forming a traversable knowledge graph
+- **Hybrid Retrieval** — Vector ANN (sqlite-vec) + full-text search (FTS5) + wikilink graph traversal for multi-hop reasoning
+- **Self-Learning** — Automatic skill generation from notes; the system observes patterns in your notes and suggests or auto-generates skills
+- **Dream Daemon** — Background compaction and synthesis of memories into higher-level abstractions
+
+### Decoupled Agent Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Orchestrator│────▶│   Harness   │────▶│   Thinker   │
+│             │     │  (Think→Act)│     │  (LLM Call) │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    ┌──────────┐    ┌──────────┐    ┌──────────┐
+    │  Session │    │  Tools   │    │ Sandbox  │
+    │ (History)│    │(Execution│    │(Isolation│
+    └──────────┘    └──────────┘    └──────────┘
+```
+
+- **Orchestrator** — Resolves AgentDef + FlowSpec, assembles Harness deps, dispatches execution
+- **Harness** — Think→Act loop with stop-hooks, context budget, and emergency compaction
+- **Sandbox** — Per-session workspace with capability ledger and OS-native isolation (`OsSandboxDriver`)
+- **Session Service** — Append-only event log with in-process actor for authoritative state
+- **Tool Service** — Unified façade over built-in tools, MCP servers, and extensions with layered middleware (audit → permission → context rules → timeout)
+
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        INTERFACE LAYER (I/O)                        │
 │  macOS Native | Tauri | CLI | Panel (WASM) | Telegram |           │  │
-│  Discord | Slack | WhatsApp | IRC | Matrix | Signal | Nostr | ...  │
+│  Discord | Slack | WhatsApp | IRC | Matrix | Signal | ...          │
 ├─────────────────────────────┬───────────────────────────────────────┤
 │                       GATEWAY LAYER                                 │
 │  Router | Session Manager | Event Bus | Channel Registry | Reload  │
@@ -37,10 +60,10 @@ Aleph is a self-hosted personal AI assistant built in Rust. It runs entirely on 
 │  Agent Loop | Thinker | Dispatcher | Task Planner | Compressor     │
 ├─────────────────────────────┼───────────────────────────────────────┤
 │                      EXECUTION LAYER                                │
-│  Providers | Executor | Tool Server | MCP | Extensions | Exec      │
+│  Providers | Engine | Tool Server | MCP | Extensions | Exec        │
 ├─────────────────────────────┼───────────────────────────────────────┤
 │                       STORAGE LAYER                                 │
-│  Memory (LanceDB) | State (SQLite) | Config (~/.aleph/)            │
+│  Memory (SQLite+vec0) | State (SQLite) | Config (~/.aleph/)        │
 └─────────────────────────────┴───────────────────────────────────────┘
 ```
 
@@ -50,12 +73,13 @@ See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the ful
 
 ### Core
 
-- Multi-provider LLM support (Claude, GPT-4, Gemini, DeepSeek, Ollama, Moonshot)
+- Multi-provider LLM support (Claude, GPT-4, Gemini, DeepSeek, Ollama, Moonshot, Kimi)
 - 15+ messaging channel interfaces via unified Gateway
 - 30+ built-in tools with JSON Schema auto-generation
-- Memory system with hybrid search (vector ANN + full-text via LanceDB)
+- **Cognitive Memory** — Note layer with wikilink knowledge graph, hybrid retrieval (vector + FTS + graph), and background dream daemon
+- **Self-Learning** — Automatic skill generation from note patterns
 - MCP protocol support for external tool integration
-- Think → Act agent loop with LLM-native tool orchestration
+- **Decoupled Agent Loop** — Orchestrator + Harness + Sandbox + Session + Tool Service architecture
 - Desktop Bridge for native OS control (OCR, screenshots, input automation)
 
 ### Developer Experience
@@ -149,33 +173,78 @@ Aleph/
 │   ├── gateway/                 # WebSocket control plane
 │   │   ├── handlers/            # 58+ RPC method handlers
 │   │   ├── interfaces/          # 15+ channel interfaces
-│   │   └── security/            # Auth, pairing, device management
-│   ├── agent_loop/              # Observe-Think-Act-Feedback loop
+│   │   ├── security/            # Auth, pairing, device management
+│   │   └── ...                  # Router, session, events, voice, webhooks
+│   ├── orchestrator/            # AgentDef resolution + Harness dispatch
+│   ├── harness/                 # Think→Act loop, stop-hooks, context budget
 │   ├── thinker/                 # LLM interaction layer
 │   ├── dispatcher/              # Task orchestration (DAG scheduling)
-│   ├── executor/                # Tool execution engine
+│   ├── engine/                  # Tool execution engine
 │   ├── builtin_tools/           # 30+ built-in tools
-│   ├── memory/                  # LanceDB storage (vectors + FTS)
+│   ├── memory/                  # SQLite+sqlite-vec storage (vectors + FTS)
 │   ├── resilience/              # State management (SQLite)
 │   ├── extension/               # WASM + Node.js plugin system
 │   ├── providers/               # AI provider integrations
 │   ├── domain/                  # DDD domain model
 │   ├── mcp/                     # MCP protocol client
-│   └── exec/                    # Shell execution + security
-├── crates/
-│   ├── desktop/                 # DesktopCapability native impl
-│   └── logging/                 # Logging infrastructure
+│   ├── sandbox/                 # Sandbox trait + WorkspaceSandbox
+│   ├── exec/                    # Shell execution + security
+│   ├── agents/                  # Agent runtime, subagent spawning
+│   ├── a2a/                     # A2A protocol adapter
+│   ├── acp/                     # ACP protocol
+│   ├── approval/                # Approval system
+│   ├── arena/                   # Arena functionality
+│   ├── browser/                 # Browser automation
+│   ├── capability/              # Capability system
+│   ├── clawhub/                 # ClawHub integration
+│   ├── components/              # Shared components
+│   ├── compressor/              # Context compression
+│   ├── core/                    # Core types and primitives
+│   ├── daemon/                  # Background daemon
+│   ├── discovery/               # Service discovery
+│   ├── event/                   # Event system
+│   ├── generation/              # Media generation
+│   ├── group_chat/              # Group chat management
+│   ├── intent/                  # Intent recognition
+│   ├── logging/                 # Logging infrastructure
+│   ├── markdown/                # Markdown processing
+│   ├── media/                   # Media processing
+│   ├── metrics/                 # Metrics collection
+│   ├── permission/              # Permission system
+│   ├── pii/                     # PII detection/handling
+│   ├── prompt/                  # Prompt management
+│   ├── routing/                 # Session key resolution
+│   ├── runtimes/                # Capability ledger
+│   ├── scheduler/               # Job scheduling
+│   ├── search/                  # Search providers
+│   ├── secrets/                 # Secret management
+│   ├── security/                # Security utilities
+│   ├── session/                 # Session service
+│   ├── skill/                   # Skill system
+│   ├── supervisor/              # Execution supervision
+│   ├── tasks/                   # Task management
+│   ├── teams/                   # Team coordination
+│   ├── tool_output/             # Tool output handling
+│   ├── utils/                   # Utilities
+│   ├── vision/                  # Vision processing
+│   └── wizard/                  # Wizard flows
+├── desktop/
+│   ├── shared/                  # DesktopCapability trait + IPC
+│   ├── macos/                   # macOS native implementation
+│   ├── linux/                   # Linux native implementation
+│   └── windows/                 # Windows native implementation
 ├── shared/
 │   ├── protocol/                # Shared protocol types
+│   ├── logging/                 # Logging infrastructure
+│   ├── client/                  # Shared client utilities
 │   └── ui_logic/                # Shared UI logic
-├── apps/
+├── interfaces/
 │   ├── cli/                     # CLI client
-│   ├── panel/                   # Leptos/WASM Panel UI
-│   ├── desktop/                 # Tauri cross-platform app
-│   └── macos-native/            # Native macOS app (Swift/Xcode)
+│   ├── tui/                     # TUI client
+│   └── webchat/                 # Web chat interface
 ├── docs/
 │   ├── reference/               # Architecture & system docs
-│   └── plans/                   # Design documents
+│   └── superpowers/             # Design specs & run reports
 ├── justfile                     # Build pipeline
 └── Cargo.toml                   # Workspace root
 ```
@@ -206,4 +275,6 @@ Example: `gateway: add WebSocket server foundation`
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
 

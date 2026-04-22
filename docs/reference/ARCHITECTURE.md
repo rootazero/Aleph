@@ -76,7 +76,7 @@
 │                            STORAGE LAYER                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────────────────┐  ┌────────────────┐  ┌─────────────────┐          │
-│  │  Memory (LanceDB)    │  │ Resilience     │  │  Config Store   │          │
+│  │  Memory (SQLite+vec0)│  │ Resilience     │  │  Config Store   │          │
 │  │  ┌──────┐ ┌───────┐  │  │   (SQLite)     │  │  ┌─────┐┌────┐ │          │
 │  │  │Facts │ │ Graph │  │  │  ┌──────────┐  │  │  │TOML ││Keys│ │          │
 │  │  │+Vec  │ │ Nodes │  │  │  │  State   │  │  │  │File ││    │ │          │
@@ -104,30 +104,30 @@
                                             │ HarnessRunner::run
                            ┌────────────────┼────────────────┐
                            │                │                │
-                           ▼                ▼                ▼
-                     ┌───────────┐    ┌───────────┐    ┌───────────┐
-                     │  harness  │    │  memory   │    │   exec    │
-                     └─────┬─────┘    └───────────┘    └───────────┘
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-          ▼                ▼                ▼
-    ┌───────────┐    ┌───────────┐    ┌───────────┐
-    │  thinker  │    │tool_service│   │  executor │
-    └─────┬─────┘    └───────────┘    └─────┬─────┘
-          │                                  │
-          ▼                                  ▼
-    ┌───────────┐                      ┌───────────┐
-    │ providers │                      │   tools   │
-    └───────────┘                      └─────┬─────┘
-                                             │
-                           ┌─────────────────┼─────────────────┐
-                           │                 │                 │
-                           ▼                 ▼                 ▼
-                     ┌───────────┐     ┌───────────┐     ┌───────────┐
-                     │  builtin  │     │    mcp    │     │ extension │
-                     │   tools   │     │  client   │     │ (plugins) │
-                     └───────────┘     └───────────┘     └───────────┘
+                            ▼                ▼                ▼
+                      ┌───────────┐    ┌───────────┐    ┌───────────┐
+                      │  harness  │    │  memory   │    │   exec    │
+                      └─────┬─────┘    └───────────┘    └───────────┘
+                            │
+           ┌────────────────┼────────────────┐
+           │                │                │
+           ▼                ▼                ▼
+     ┌───────────┐    ┌───────────┐    ┌───────────┐
+     │  thinker  │    │tool_service│   │  engine   │
+     └─────┬─────┘    └───────────┘    └─────┬─────┘
+           │                                  │
+           ▼                                  ▼
+     ┌───────────┐                      ┌───────────┐
+     │ providers │                      │   tools   │
+     └───────────┘                      └─────┬─────┘
+                                              │
+                            ┌─────────────────┼─────────────────┐
+                            │                 │                 │
+                            ▼                 ▼                 ▼
+                      ┌───────────┐     ┌───────────┐     ┌───────────┐
+                      │  builtin  │     │    mcp    │     │ extension │
+                      │   tools   │     │  client   │     │ (plugins) │
+                      └───────────┘     └───────────┘     └───────────┘
 ```
 
 ---
@@ -227,14 +227,14 @@ pattern.
 | **gateway** | `src/gateway/` | WebSocket server, JSON-RPC routing, interfaces |
 | **orchestrator** | `src/orchestrator/` | Resolve FlowSpec, build HarnessDeps, dispatch |
 | **harness** | `src/harness/` | Think→Act loop, stop-hooks, context budget, compaction |
-| **agent_loop** | `src/agent_loop/` | Legacy loop (SubagentTool path; migration planned) |
+| **agents** | `src/agents/` | Agent runtime, subagent spawning, team coordination |
 | **thinker** | `src/thinker/` | LLM interaction, prompt building, streaming |
 | **dispatcher** | `src/dispatcher/` | Task orchestration, tool filtering |
-| **executor** | `src/executor/` | Tool execution engine |
+| **engine** | `src/engine/` | Tool execution engine |
 | **providers** | `src/providers/` | AI provider implementations |
 | **tools** | `src/tools/` | AlephTool trait, tool server |
 | **builtin_tools** | `src/builtin_tools/` | Built-in tool implementations |
-| **memory** | `src/memory/` | Facts DB, hybrid retrieval |
+| **memory** | `src/memory/` | Facts DB, hybrid retrieval (SQLite + sqlite-vec + markdown notes + wikilink graph) |
 | **extension** | `src/extension/` | Plugin system (WASM, Node.js) |
 | **exec** | `src/exec/` | Shell execution, approval system, OS-native sandboxing (`OsSandboxDriver`) |
 | **sandbox** | `src/sandbox/` | `Sandbox` trait + `WorkspaceSandbox` — per-session workspace, capability ledger, `ApprovalGate`-backed escalation ([SANDBOX.md](./SANDBOX.md)) |
@@ -243,6 +243,43 @@ pattern.
 | **config** | `src/config/` | Configuration management |
 | **runtimes** | `src/runtimes/` | Capability ledger — probe, bootstrap, persist external tool status |
 | **session** | `src/session/` | Append-only session event log + in-process actor (see below) |
+| **a2a** | `src/a2a/` | A2A protocol adapter |
+| **acp** | `src/acp/` | ACP protocol implementation |
+| **approval** | `src/approval/` | Approval system |
+| **arena** | `src/arena/` | Arena functionality |
+| **browser** | `src/browser/` | Browser automation |
+| **capability** | `src/capability/` | Capability system |
+| **clawhub** | `src/clawhub/` | ClawHub integration |
+| **components** | `src/components/` | Shared components |
+| **compressor** | `src/compressor/` | Context compression |
+| **core** | `src/core/` | Core types and primitives |
+| **daemon** | `src/daemon/` | Background daemon |
+| **discovery** | `src/discovery/` | Service discovery |
+| **event** | `src/event/` | Event system |
+| **generation** | `src/generation/` | Media generation |
+| **group_chat** | `src/group_chat/` | Group chat management |
+| **intent** | `src/intent/` | Intent recognition |
+| **logging** | `src/logging/` | Logging infrastructure |
+| **markdown** | `src/markdown/` | Markdown processing |
+| **media** | `src/media/` | Media processing |
+| **metrics** | `src/metrics/` | Metrics collection |
+| **permission** | `src/permission/` | Permission system |
+| **pii** | `src/pii/` | PII detection and handling |
+| **prompt** | `src/prompt/` | Prompt management |
+| **resilience** | `src/resilience/` | State management (SQLite) |
+| **resilient** | `src/resilient/` | Resilience utilities |
+| **scheduler** | `src/scheduler/` | Job scheduling |
+| **search** | `src/search/` | Search providers |
+| **secrets** | `src/secrets/` | Secret management |
+| **security** | `src/security/` | Security utilities |
+| **skill** | `src/skill/` | Skill system |
+| **supervisor** | `src/supervisor/` | Execution supervision |
+| **tasks** | `src/tasks/` | Task management |
+| **teams** | `src/teams/` | Team coordination |
+| **tool_output** | `src/tool_output/` | Tool output handling |
+| **utils** | `src/utils/` | Utilities |
+| **vision** | `src/vision/` | Vision processing |
+| **wizard** | `src/wizard/` | Wizard flows |
 
 ---
 
@@ -273,7 +310,7 @@ Groups related function parameters into dedicated structs, reducing parameter co
 **Example: `HarnessDeps` / `FlowRequest`**
 ```rust
 // Before: 7 parameters passed directly
-agent_loop.run(request, context, tools, identity, callback, abort_signal, initial_history).await
+legacy_agent_loop.run(request, context, tools, identity, callback, abort_signal, initial_history).await
 
 // After: structured deps + FlowRequest
 let deps = HarnessDeps { session, tool_service, sandbox, provider, trace_sink };
@@ -415,36 +452,22 @@ test-helpers = []          # 集成测试工具
 
 ## Platform Architecture
 
-### macOS App
+### Desktop Bridge
+
+The desktop bridge provides native OS capabilities to the core through IPC:
 
 ```
-apps/macos/
-├── Aleph/
-│   ├── Sources/
-│   │   ├── App/              # App lifecycle
-│   │   ├── Gateway/          # WebSocket interface
-│   │   ├── Store/            # SwiftUI state
-│   │   ├── Services/         # Core services
-│   │   ├── Components/       # UI components
-│   │   ├── Settings/         # Settings views
-│   │   └── MultiTurn/        # Conversation UI
-│   └── Resources/
-└── project.yml               # XcodeGen config
+desktop/
+├── shared/                   # DesktopCapability trait + IPC protocol
+├── macos/                    # macOS native implementation (AppKit, Vision)
+├── linux/                    # Linux native implementation
+└── windows/                  # Windows native implementation
 ```
 
-### Tauri App
+### Web Chat Interface
 
 ```
-apps/desktop/
-├── src/                      # React frontend
-│   ├── components/
-│   └── App.tsx
-├── src-tauri/
-│   └── src/
-│       ├── commands/         # IPC commands
-│       ├── core/             # Core logic
-│       └── main.rs
-└── package.json
+apps/webchat/                # Web-based chat interface
 ```
 
 ---
@@ -650,7 +673,7 @@ let result2 = executor.execute(&action2, &identity).await;
 | **SessionManager** | `src/gateway/session_manager.rs` | Identity construction |
 | **Orchestrator** | `src/orchestrator/` | Identity injection into FlowRequest |
 | **AgentHarness** | `src/harness/` | Identity propagation through Think→Act loop |
-| **Executor** | `src/executor/` | Permission enforcement |
+| **Engine** | `src/engine/` | Permission enforcement |
 
 ### Security Properties
 
@@ -664,7 +687,7 @@ let result2 = executor.execute(&action2, &identity).await;
 
 ## Prompt System
 
-The prompt system lives entirely in `src/thinker/`. The sole public entry point is `thinker::PromptBuilder`, which wraps a `PromptPipeline`. The old `agent_loop::PromptBuilder` has been removed.
+The prompt system lives entirely in `src/thinker/`. The sole public entry point is `thinker::PromptBuilder`, which wraps a `PromptPipeline`. The old `agent_loop::PromptBuilder` was removed during the Harness migration (Phase 6/7).
 
 ### PromptBuilder
 
@@ -768,8 +791,9 @@ Reads `ToolInfo.usage_hint` fields (`prefer_for`, `prefer_over`) and generates d
 
 Supports dual-path memory injection:
 1. **Structured index** — reads `.aleph/MEMORY.md`, truncated to 200 lines
-2. **Vector retrieval** — top-K semantic search results from LanceDB
-3. Includes memory taxonomy guidelines for how to interpret and use memories
+2. **Vector retrieval** — top-K semantic search results from sqlite-vec (ANN index)
+3. **Wikilink graph** — Obsidian-compatible `[[note]]` links form a traversable knowledge graph; `memory_explore` performs multi-hop Ripple traversal
+4. Includes memory taxonomy guidelines for how to interpret and use memories
 
 ### TokenBudget
 

@@ -194,7 +194,7 @@ impl ExtensionManager {
 
 ### Anti-Pattern 2: The Flat Script
 
-**File**: `bin/aleph_server/commands/start.rs` (1664 lines)
+**File**: `src/bin/aleph-server/commands/start/mod.rs`
 
 ```rust
 // ❌ One function doing 700 lines of initialization
@@ -213,7 +213,7 @@ pub async fn start_server(args: StartArgs) -> Result<()> {
 
 **Problem**: Impossible to test subsystems in isolation. A change to tool registration risks breaking signal handling.
 
-**Fix**: Apply Pattern D — `ServerBuilder` where each subsystem has its own `initialize_*` method.
+**Fix**: Apply Pattern D — `ServerBuilder` in `src/bin/aleph-server/commands/start/builder/` where each subsystem has its own initialization method.
 
 ---
 
@@ -242,24 +242,22 @@ pub struct FactStats { ... }      // statistics
 
 ## 6. Reference Examples
 
-### Good: `memory/store/lance/facts.rs` (1042 lines)
+### Good: `memory/store/sqlite/mod.rs`
 
-Despite the line count, this file has **one job**: implement `MemoryStore` and `AuditStore` for `LanceMemoryBackend`.
+Despite the line count, this file has **one job**: implement `MemoryStore` for SQLite backend.
 
 ```
-Private utility functions (L31–L124)
-  └── lance_err, collect_batches, scan_facts, add_batch, read_*
+Schema management (table creation, migrations)
+  └── init_schema, migrate_v1_to_v2, ...
 
-impl MemoryStore for LanceMemoryBackend (L125–L550)
-  └── 26 trait methods
+impl MemoryStore for SqliteMemoryBackend
+  └── store, retrieve, search, delete trait methods
 
-impl LanceMemoryBackend (L551–L603)
-  └── manual_hybrid_search (private extension)
-
-impl AuditStore for LanceMemoryBackend (L604–L635)
+Private helpers
+  └── query builders, batch operations, connection pooling
 ```
 
-**Why it works**: Every line of code serves the same two trait implementations. The private functions are helpers for those implementations, not unrelated utilities. A new developer reading this file has one question to answer: *"how does LanceDB store memories?"*
+**Why it works**: Every line of code serves the same trait implementation. The private functions are helpers for those implementations, not unrelated utilities. A new developer reading this file has one question to answer: *"how does SQLite store memories?"*
 
 **When high line count is acceptable**: When a file implements a well-defined interface (a trait or protocol) and the complexity comes from the depth of that implementation, not from breadth of concerns.
 
@@ -273,32 +271,32 @@ Files identified for refactoring, ordered by priority. Each item links to the pa
 
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
-| `bin/aleph_server/commands/start.rs` | 1664 | Single 710-line function, no structure | Pattern D |
-| `extension/mod.rs` | 1159 | God Object, 46 public methods | Pattern C |
+| `src/bin/aleph-server/commands/start/mod.rs` | ~800 | Single large function, no structure | Pattern D (refactored to `builder/`) |
+| `src/extension/mod.rs` | 1159 | God Object, 46 public methods | Pattern C |
 
 ### P1 — High (明显可拆分)
 
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
-| `memory/context.rs` | 1302 | 14 types, 31 impl blocks, type dumping ground | Pattern B |
-| `browser/mod.rs` | 1459 | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` |
-| `gateway/execution_engine.rs` | 1088 | Two engine implementations, state models mixed in | Pattern A + `types.rs` |
+| `src/memory/context/mod.rs` | ~600 | Types now split across `context/` submodules | Pattern B (completed) |
+| `src/browser/mod.rs` | 1459 | Two unrelated classes: `BrowserService` + `BrowserPool` | Pattern A + `pool.rs` |
+| `src/gateway/execution_engine.rs` | 1088 | Two engine implementations, state models mixed in | Pattern A + `types.rs` |
 
 ### P2 — Medium (可优化)
 
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
-| `tools/server.rs` | 1034 | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation |
-| `extension/hooks/mod.rs` | 993 | Similar to `extension/mod.rs` | Pattern C |
-| `dispatcher/model_router/health/status.rs` | 997 | Health status logic mixed with model routing | Pattern A |
+| `src/tools/server.rs` | 1034 | `AlephToolServer` and `AlephToolServerHandle` mirror each other | Use `Deref` or macro delegation |
+| `src/extension/hooks/mod.rs` | 993 | Similar to `extension/mod.rs` | Pattern C |
+| `src/dispatcher/model_router/health/status.rs` | 997 | Health status logic mixed with model routing | Pattern A |
 
 ### P3 — Low (轻度优化)
 
 | File | Lines | Problem | Pattern |
 |------|-------|---------|---------|
-| `thinker/prompt_builder.rs` | 1243 | `Message`/`MessageRole` belong in `types.rs` | Extract `types.rs` |
-| `dispatcher/types/unified.rs` | 1003 | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` |
-| `providers/profile_manager.rs` | 1024 | Review for separation of auth vs. profile concerns | TBD after review |
+| `src/thinker/prompt_builder/` | ~1200 | `Message`/`MessageRole` belong in `types.rs` | Extract `types.rs` |
+| `src/dispatcher/types/unified.rs` | 1003 | 28 `with_*` builder methods bloating `impl UnifiedTool` | Extract `UnifiedToolBuilder` |
+| `src/providers/profile_manager.rs` | 1024 | Review for separation of auth vs. profile concerns | TBD after review |
 
 ---
 
