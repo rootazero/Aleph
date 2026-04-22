@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.22]
+
 ### Added
-- **`SessionDriver` trait + `AgentHarness` implementation (Phase 4b.5):**
+- **Config migration for vector_db:** Auto-migrates `vector_db = "lancedb"` to `vector_db = "sqlite-vec"` on server boot. Migration is logged and persisted back to `config.toml`.
+- **Phase 7 — SubagentTool → Harness migration:** Complete migration of subagent execution from legacy `AgentLoop` to `Harness`-based spawner. Includes `AllowlistToolService` decorator, `HarnessDeps` injection, and deletion of `src/agent_loop/` directory.
+- **Phase 6 — Gateway Orchestrator flip + cleanup:** Routed Gateway chat through `Orchestrator::dispatch`, deleted `factory.rs` and `integration_probe.rs`, relocated `AgentRuntime` to `agents/runtime.rs`, rewrote architecture docs for Orchestrator-driven teams.
+- **Phase 5 — Orchestrator & Flow Composition:** Full Orchestrator implementation with FlowSpec TOML parsing, FlowRegistry with ArcSwap hot-reload, 7-step dispatch pipeline, HarnessRunner bridge, and cross-module e2e tests.
+- **Phase 4b — Harness Think→Act loop:** Implemented `Harness` trait with Think phase (tool planning), Act phase (tool execution + turn reconstruction), and `SessionDriver` trait for session runtime integration.
+- **Kimi for Coding preset:** Added preset configuration with model optimizations for Kimi provider.
+
+### Changed
+- **Config loading:** Pre-process TOML migrations (`migrate_mcp_builtin_in_toml`, `migrate_vector_db_in_toml`) now run before parsing and save migrated config back to disk.
+- **Architecture docs:** Rewrote `AGENT_SYSTEM.md`, `MULTI_AGENT_SYSTEM.md`, and `ARCHITECTURE.md` to reflect Orchestrator+Harness runtime topology.
+- **ACP naming:** Renamed `AcpHarness` family to `AcpAdapter` to free "Harness" for managed-agents meaning.
+
+### Fixed
+- **Config persistence:** Migrated values are now written back to `config.toml` instead of only existing in memory.
+
+## [2026.04.18]
+
+This release lands a 10-day stretch of foundational refactors: the memory layer is rebuilt around an 8-spec architecture (notes-as-source-of-truth, L0 raw memory, compound LLM ingestion, strategy-driven Dream Daemon), seven new chat channels ship (WeChat, QQ, Discord, Matrix, Signal, LINE, WhatsApp) plus a structured Telegram v2, the runtime security orchestrator goes live, browser automation migrates from MCP to Playwright CLI, the agent loop adopts Claude Code-style preflight + recovery cascades, and the provider/vault path is hardened end-to-end. 566 commits since v2026.04.08.
+
+### Memory Layer — 8-Spec Evolution
   `src/session/driver.rs` introduces the `SessionDriver` trait as the
   seam between session runtime and whatever drives its turns. `AgentHarness`
   (Phase 4b) implements it via blanket delegation to `Harness::run`.
