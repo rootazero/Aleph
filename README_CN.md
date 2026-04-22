@@ -91,10 +91,6 @@ Aleph 的记忆系统超越了简单的 RAG：
 - 通过 schemars 自动生成 JSON Schema
 - proptest 和 loom 并发测试套件
 
-## 与 OpenClaw 的关系
-
-Aleph 是受 [OpenClaw](https://github.com/AIChatClaw/OpenClaw) 启发的 Rust 重新实现。相比原始 TypeScript 实现的关键优势包括：编译性能（~100ms 启动，~20MB 内存）、编译时安全保证（无 null/undefined，基于所有权）、多线程异步并发（tokio）、纵深防御分层安全、认知记忆架构（分层存储和后台综合），以及一等 MCP 协议支持。
-
 ## 安装
 
 ### macOS / Linux

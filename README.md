@@ -91,10 +91,6 @@ See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the ful
 - JSON Schema auto-generation via schemars
 - Proptest and Loom concurrency test suites
 
-## Relationship to OpenClaw
-
-Aleph is a Rust reimplementation inspired by [OpenClaw](https://github.com/AIChatClaw/OpenClaw). Key advantages over the original TypeScript implementation include: compiled performance (~100ms startup, ~20MB memory), compile-time safety guarantees (no null/undefined, ownership-based memory management), multi-threaded async concurrency (tokio), layered security with defense-in-depth, cognitive memory architecture with tiered storage and background consolidation, and first-class MCP protocol support.
-
 ## Installation
 
 ### macOS / Linux
