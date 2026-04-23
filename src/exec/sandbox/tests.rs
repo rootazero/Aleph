@@ -12,6 +12,7 @@ mod integration_tests {
         ProcessCapability,
     };
     use crate::exec::sandbox::executor::{FallbackPolicy, OsSandboxDriver};
+    #[cfg(target_os = "macos")]
     use crate::exec::sandbox::platforms::macos::MacOSSandbox;
     use crate::sync_primitives::Arc;
 

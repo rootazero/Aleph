@@ -354,6 +354,7 @@ fn truncate_utf8(s: String, max_bytes: usize) -> (Vec<u8>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
     use crate::exec::sandbox::platforms::macos::MacOSSandbox;
 
     #[test]
