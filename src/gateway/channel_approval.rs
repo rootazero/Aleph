@@ -213,7 +213,7 @@ mod tests {
     use super::*;
     use crate::exec::approval::types::{CapabilityApprovalRequest, TrustStage};
     use crate::sandbox::capabilities::SandboxCapabilities;
-    use crate::exec::sandbox::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
+    use crate::exec::approval::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
 
     fn make_test_request() -> ApprovalRequest {
         let required = RequiredCapabilities {

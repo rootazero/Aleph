@@ -1,4 +1,4 @@
-use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
+use crate::exec::approval::parameter_binding::RequiredCapabilities;
 use crate::sandbox::capabilities::SandboxCapabilities;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_capability_approval_request_creation() {
-        use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
+        use crate::exec::approval::parameter_binding::CapabilityOverrides;
 
         let required = RequiredCapabilities {
             base_preset: "file_processor".to_string(),

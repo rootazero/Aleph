@@ -252,19 +252,15 @@ mod tests {
 
     #[test]
     fn test_risk_score_network_domains() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::AllowDomains(vec!["example.com".to_string()]),
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
+        let caps = SandboxCapabilities {
+            network: NetworkPolicy::AllowHosts {
+                hosts: vec!["example.com".to_string()],
             },
-            environment: EnvironmentCapability::Restricted,
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
-        assert_eq!(score, 25, "AllowDomains network adds 15 points");
+        assert_eq!(score, 25, "AllowHosts network adds 15 points");
     }
 
     #[test]
