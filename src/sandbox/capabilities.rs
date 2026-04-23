@@ -1,4 +1,21 @@
 //! SandboxCapabilities — what a command is allowed to do inside the sandbox.
+//!
+//! # Platform-specific network restrictions
+//!
+//! **macOS**: `AllowHosts` is enforced via seatbelt profiles (sandbox-exec).
+//!
+//! **Linux**: `AllowHosts` is enforced via bubblewrap network namespaces
+//! combined with seccomp or iptables rules.
+//!
+//! **Windows**: `AllowHosts` is **not enforceable at the OS level** using
+//! standard Windows APIs. Windows sandboxing uses restricted tokens and job
+//! objects, which do not provide per-host network filtering. To restrict
+//! network access on Windows, use Windows Firewall with Advanced Security
+//! (WFAS) or a third-party firewall solution.
+//!
+//! When `AllowHosts` is used on Windows, a warning is logged and the policy
+//! falls back to `AllowAll` (if any network access is granted) or `None`
+//! (if no network access is requested).
 
 use std::path::PathBuf;
 
