@@ -118,6 +118,8 @@ mod tests {
             enabled: false,
             default_timeout_seconds: 60,
             max_output_bytes: 1024,
+            linux: Default::default(),
+            windows: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
         let sandbox = build_sandbox(&cfg, driver, make_gate());
@@ -159,6 +161,8 @@ mod tests {
             enabled: true,
             default_timeout_seconds: 60,
             max_output_bytes: 1024,
+            linux: Default::default(),
+            windows: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
         let sandbox = build_sandbox(&cfg, driver, make_gate());

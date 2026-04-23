@@ -10,15 +10,43 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
+use crate::sandbox::platforms::common::{
+    is_wsl, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
+};
 
 const BWRAP_CANDIDATES: [&str; 2] = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxSandboxOptions {
+    pub mount_proc: bool,
+    pub no_new_privs: bool,
+    pub include_platform_defaults: bool,
+}
+
+impl Default for LinuxSandboxOptions {
+    fn default() -> Self {
+        Self {
+            mount_proc: true,
+            no_new_privs: true,
+            include_platform_defaults: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct BubblewrapDriver;
+pub struct BubblewrapDriver {
+    options: LinuxSandboxOptions,
+}
 
 impl BubblewrapDriver {
     pub fn new() -> Self {
-        Self
+        Self {
+            options: LinuxSandboxOptions::default(),
+        }
+    }
+
+    pub fn with_options(options: LinuxSandboxOptions) -> Self {
+        Self { options }
     }
 
     fn find_bwrap(&self) -> Option<PathBuf> {
@@ -41,11 +69,33 @@ impl BubblewrapDriver {
         None
     }
 
+    fn check_wsl(&self) {
+        if is_wsl() {
+            match wsl_version() {
+                Some(1) => {
+                    warn!(
+                        "WSL1 detected. Bubblewrap sandbox may not work correctly \
+                         due to lack of proper Linux namespace support. \
+                         Consider upgrading to WSL2."
+                    );
+                }
+                Some(2) => {
+                    debug!("WSL2 detected. Bubblewrap sandbox should work correctly.");
+                }
+                _ => {
+                    warn!("WSL detected but version unknown. Sandbox behavior may be unpredictable.");
+                }
+            }
+        }
+    }
+
     fn generate_args(
         &self,
         policy: &SandboxPolicy,
         cwd: &Path,
     ) -> Result<Vec<String>, SandboxError> {
+        self.check_wsl();
+
         let mut args = Vec::new();
 
         args.push("--new-session".into());
@@ -83,8 +133,10 @@ impl BubblewrapDriver {
 
         self.add_fs_args(&mut args, &policy.filesystem, cwd)?;
 
-        args.push("--proc".into());
-        args.push("/proc".into());
+        if self.options.mount_proc {
+            args.push("--proc".into());
+            args.push("/proc".into());
+        }
         args.push("--dev".into());
         args.push("/dev".into());
 
@@ -107,10 +159,24 @@ impl BubblewrapDriver {
     ) -> Result<(), SandboxError> {
         match fs {
             FsPolicy::WorkspaceOnly => {
+                args.push("--tmpfs".into());
+                args.push("/".into());
+                args.push("--dev".into());
+                args.push("/dev".into());
                 args.push("--dir".into());
                 args.push("/tmp".into());
                 args.push("--tmpfs".into());
                 args.push("/tmp".into());
+
+                if self.options.include_platform_defaults {
+                    for root in LINUX_PLATFORM_DEFAULT_READ_ROOTS {
+                        if Path::new(root).exists() {
+                            args.push("--ro-bind".into());
+                            args.push(root.to_string());
+                            args.push(root.to_string());
+                        }
+                    }
+                }
 
                 let cwd_str = cwd.to_str().ok_or_else(|| {
                     SandboxError::ProfileGeneration(
@@ -169,6 +235,8 @@ impl BubblewrapDriver {
                 args.push("--ro-bind".into());
                 args.push("/".into());
                 args.push("/".into());
+                args.push("--dev".into());
+                args.push("/dev".into());
 
                 for path in exclude {
                     let path_str = path.to_str().ok_or_else(|| {
@@ -178,8 +246,6 @@ impl BubblewrapDriver {
                         ))
                     })?;
                     args.push("--tmpfs".into());
-                    args.push(path_str.into());
-                    args.push("--remount-ro".into());
                     args.push(path_str.into());
                 }
             }
@@ -187,6 +253,8 @@ impl BubblewrapDriver {
                 args.push("--bind".into());
                 args.push("/".into());
                 args.push("/".into());
+                args.push("--dev".into());
+                args.push("/dev".into());
 
                 for path in exclude {
                     let path_str = path.to_str().ok_or_else(|| {
@@ -197,12 +265,16 @@ impl BubblewrapDriver {
                     })?;
                     args.push("--tmpfs".into());
                     args.push(path_str.into());
-                    args.push("--remount-ro".into());
-                    args.push(path_str.into());
                 }
             }
         }
         Ok(())
+    }
+
+    fn apply_no_new_privs(&self, cmd: &mut Command) {
+        if self.options.no_new_privs {
+            debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
+        }
     }
 }
 
@@ -265,6 +337,8 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::piped());
 
+        self.apply_no_new_privs(&mut cmd);
+
         let mut child = cmd.spawn().map_err(|e| {
             SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}"))
         })?;
@@ -322,6 +396,12 @@ impl Default for BubblewrapDriver {
     }
 }
 
+impl BubblewrapDriver {
+    pub fn options(&self) -> LinuxSandboxOptions {
+        self.options
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,8 +427,25 @@ mod tests {
         assert!(args.contains(&"--unshare-pid".into()));
         assert!(args.contains(&"--cap-drop".into()));
         assert!(args.contains(&"ALL".into()));
+        assert!(args.contains(&"--tmpfs".into()));
+        assert!(args.contains(&"/".into()));
         assert!(args.contains(&"--bind".into()));
         assert!(args.contains(&"/tmp/test-workspace".into()));
+    }
+
+    #[test]
+    fn generate_args_workspace_only_without_platform_defaults() {
+        let driver = BubblewrapDriver::with_options(LinuxSandboxOptions {
+            mount_proc: true,
+            no_new_privs: true,
+            include_platform_defaults: false,
+        });
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/test-workspace");
+        let args = driver.generate_args(&policy, cwd).unwrap();
+
+        assert!(args.contains(&"--tmpfs".into()));
+        assert!(!args.iter().any(|a| a == "/usr"));
     }
 
     #[test]

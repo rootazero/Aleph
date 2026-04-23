@@ -539,9 +539,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
-        use alephcore::sandbox::{build_sandbox, create_platform_driver};
+        use alephcore::sandbox::{build_sandbox, create_platform_driver_from_config};
 
-        let os_driver = create_platform_driver();
+        let os_driver = create_platform_driver_from_config(&loaded_app_config.sandbox);
         build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone())
     };
     if !args.daemon {

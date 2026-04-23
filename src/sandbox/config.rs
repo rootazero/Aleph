@@ -11,6 +11,74 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WindowsSandboxConfig {
+    #[serde(default = "default_windows_use_restricted_token")]
+    pub use_restricted_token: bool,
+
+    #[serde(default = "default_windows_use_job_object")]
+    pub use_job_object: bool,
+
+    #[serde(default = "default_windows_max_active_processes")]
+    pub max_active_processes: u32,
+}
+
+fn default_windows_use_restricted_token() -> bool {
+    true
+}
+
+fn default_windows_use_job_object() -> bool {
+    true
+}
+
+fn default_windows_max_active_processes() -> u32 {
+    8
+}
+
+impl Default for WindowsSandboxConfig {
+    fn default() -> Self {
+        Self {
+            use_restricted_token: default_windows_use_restricted_token(),
+            use_job_object: default_windows_use_job_object(),
+            max_active_processes: default_windows_max_active_processes(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LinuxSandboxConfig {
+    #[serde(default = "default_linux_mount_proc")]
+    pub mount_proc: bool,
+
+    #[serde(default = "default_linux_no_new_privs")]
+    pub no_new_privs: bool,
+
+    #[serde(default = "default_linux_include_platform_defaults")]
+    pub include_platform_defaults: bool,
+}
+
+fn default_linux_mount_proc() -> bool {
+    true
+}
+
+fn default_linux_no_new_privs() -> bool {
+    true
+}
+
+fn default_linux_include_platform_defaults() -> bool {
+    true
+}
+
+impl Default for LinuxSandboxConfig {
+    fn default() -> Self {
+        Self {
+            mount_proc: default_linux_mount_proc(),
+            no_new_privs: default_linux_no_new_privs(),
+            include_platform_defaults: default_linux_include_platform_defaults(),
+        }
+    }
+}
+
 /// Runtime configuration for the sandbox subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SandboxConfig {
@@ -29,6 +97,12 @@ pub struct SandboxConfig {
     /// Maximum combined stdout + stderr bytes retained per command.
     #[serde(default = "default_max_output_bytes")]
     pub max_output_bytes: usize,
+
+    #[serde(default)]
+    pub linux: LinuxSandboxConfig,
+
+    #[serde(default)]
+    pub windows: WindowsSandboxConfig,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -58,6 +132,8 @@ impl Default for SandboxConfig {
             enabled: default_enabled(),
             default_timeout_seconds: default_timeout_seconds(),
             max_output_bytes: default_max_output_bytes(),
+            linux: LinuxSandboxConfig::default(),
+            windows: WindowsSandboxConfig::default(),
         }
     }
 }

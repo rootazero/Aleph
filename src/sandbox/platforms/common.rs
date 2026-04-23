@@ -1,5 +1,32 @@
 use std::path::{Path, PathBuf};
 
+pub const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/lib",
+    "/lib64",
+    "/nix/store",
+    "/run/current-system/sw",
+];
+
+pub fn is_wsl() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .map(|content| content.to_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+}
+
+pub fn wsl_version() -> Option<u32> {
+    if !is_wsl() {
+        return None;
+    }
+
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|content| if content.contains("WSL2") { 2 } else { 1 })
+}
+
 pub fn normalize_path_for_sandbox(path: &Path, cwd: &Path) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;
@@ -168,5 +195,12 @@ mod tests {
     fn glob_mixed_pattern() {
         let regex = glob_to_regex("src/**/test_*.rs").unwrap();
         assert_eq!(regex, "^src/.*/test_[^/]*\\.rs$");
+    }
+
+    #[test]
+    fn linux_platform_defaults_not_empty() {
+        assert!(!LINUX_PLATFORM_DEFAULT_READ_ROOTS.is_empty());
+        assert!(LINUX_PLATFORM_DEFAULT_READ_ROOTS.contains(&"/usr"));
+        assert!(LINUX_PLATFORM_DEFAULT_READ_ROOTS.contains(&"/bin"));
     }
 }

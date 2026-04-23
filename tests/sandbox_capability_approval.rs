@@ -45,6 +45,14 @@ impl RecordingDriver {
 
 #[async_trait]
 impl OsSandboxDriverTrait for RecordingDriver {
+    fn platform(&self) -> &'static str {
+        "test/recording"
+    }
+
+    fn is_supported(&self) -> bool {
+        true
+    }
+
     fn profile_for(
         &self,
         _capabilities: &SandboxCapabilities,
@@ -123,6 +131,8 @@ fn build_test_sandbox(
         enabled: true,
         default_timeout_seconds: 30,
         max_output_bytes: 4096,
+        linux: Default::default(),
+        windows: Default::default(),
     };
     let (driver, run_count) = RecordingDriver::new();
     let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver;

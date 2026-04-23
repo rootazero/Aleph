@@ -102,25 +102,30 @@ impl SessionScheduler {
     pub async fn enqueue(&self, enriched: EnrichedMessage) {
         let session_key_str = enriched.merged.primary_context.session_key.to_key_string();
 
-        let mut queues = self.queues.lock().unwrap();
-        let queue = queues
-            .entry(session_key_str.clone())
-            .or_insert_with(SessionQueue::new);
+        let should_execute = {
+            let mut queues = self.queues.lock().unwrap();
+            let queue = queues
+                .entry(session_key_str.clone())
+                .or_insert_with(SessionQueue::new);
 
-        if queue.is_idle() {
-            // Execute immediately — drop the lock first.
-            drop(queues);
+            if queue.is_idle() {
+                true
+            } else {
+                debug!(
+                    session = %session_key_str,
+                    depth = queue.pending.len() + 1,
+                    "Session busy — queuing message"
+                );
+                queue.pending.push_back(QueuedTask {
+                    enriched: enriched.clone(),
+                    enqueued_at: Instant::now(),
+                });
+                false
+            }
+        };
+
+        if should_execute {
             self.execute_enriched(enriched, &session_key_str).await;
-        } else {
-            debug!(
-                session = %session_key_str,
-                depth = queue.pending.len() + 1,
-                "Session busy — queuing message"
-            );
-            queue.pending.push_back(QueuedTask {
-                enriched,
-                enqueued_at: Instant::now(),
-            });
         }
     }
 

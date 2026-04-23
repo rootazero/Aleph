@@ -133,67 +133,95 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         timeout: Duration,
         max_output_bytes: usize,
     ) -> Result<SandboxOutput, SandboxError> {
-        let _policy = parse_profile(&profile.contents)?;
+        let parsed = parse_profile(&profile.contents)?;
 
         debug!("running Windows sandbox for program: {}", program);
 
-        warn!("Windows sandbox is not yet fully implemented; running without full isolation");
+        #[cfg(target_os = "windows")]
+        {
+            use super::job::SandboxJob;
+            use super::token::create_restricted_token;
+            use std::os::windows::process::CommandExt;
+            use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args)
-            .current_dir(cwd)
-            .env_clear()
-            .envs(env)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::piped());
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args)
+                .current_dir(cwd)
+                .env_clear()
+                .envs(env)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::piped())
+                .creation_flags(CREATE_NEW_PROCESS_GROUP as u32);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
-        })?;
+            let job = unsafe {
+                SandboxJob::new(if parsed.allow_fork { 32 } else { 1 })
+                    .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?
+            };
 
-        if let Some(stdin_data) = stdin {
-            if let Some(mut child_stdin) = child.stdin.take() {
-                use tokio::io::AsyncWriteExt;
-                child_stdin
-                    .write_all(stdin_data)
-                    .await
-                    .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
+            let child = cmd.spawn().map_err(|e| {
+                SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
+            })?;
+
+            let pid = child.id().unwrap_or(0);
+            if pid != 0 {
+                let handle = child.raw_handle().unwrap_or(0);
+                if handle != 0 {
+                    let _ = unsafe { job.assign_process(handle as _) };
+                }
+            }
+
+            if let Some(stdin_data) = stdin {
+                if let Some(mut child_stdin) = child.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    child_stdin
+                        .write_all(stdin_data)
+                        .await
+                        .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
+                }
+            }
+
+            let start = std::time::Instant::now();
+            let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+
+            match result {
+                Ok(Ok(output)) => {
+                    let stdout_truncated = output.stdout.len() > max_output_bytes;
+                    let stderr_truncated = output.stderr.len() > max_output_bytes;
+                    let stdout = if stdout_truncated {
+                        output.stdout[..max_output_bytes].to_vec()
+                    } else {
+                        output.stdout
+                    };
+                    let stderr = if stderr_truncated {
+                        output.stderr[..max_output_bytes].to_vec()
+                    } else {
+                        output.stderr
+                    };
+
+                    Ok(SandboxOutput {
+                        stdout,
+                        stderr,
+                        exit_code: output.status.code(),
+                        signal: None,
+                        truncated: stdout_truncated || stderr_truncated,
+                        duration_ms: elapsed_ms,
+                    })
+                }
+                Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
+                    "process execution error: {e}"
+                ))),
+                Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
             }
         }
 
-        let start = std::time::Instant::now();
-        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        match result {
-            Ok(Ok(output)) => {
-                let stdout_truncated = output.stdout.len() > max_output_bytes;
-                let stderr_truncated = output.stderr.len() > max_output_bytes;
-                let stdout = if stdout_truncated {
-                    output.stdout[..max_output_bytes].to_vec()
-                } else {
-                    output.stdout
-                };
-                let stderr = if stderr_truncated {
-                    output.stderr[..max_output_bytes].to_vec()
-                } else {
-                    output.stderr
-                };
-
-                Ok(SandboxOutput {
-                    stdout,
-                    stderr,
-                    exit_code: output.status.code(),
-                    signal: None,
-                    truncated: stdout_truncated || stderr_truncated,
-                    duration_ms: elapsed_ms,
-                })
-            }
-            Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
-                "process execution error: {e}"
-            ))),
-            Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (program, args, env, stdin, cwd, timeout, max_output_bytes, parsed);
+            Err(SandboxError::Other(
+                "Windows sandbox driver requires Windows platform".into(),
+            ))
         }
     }
 }

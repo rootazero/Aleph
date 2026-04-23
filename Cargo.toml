@@ -288,6 +288,10 @@ harness = false
 name = "approval_performance"
 harness = false
 
+[[bench]]
+name = "sandbox_performance"
+harness = false
+
 [[test]]
 name = "cron_probe"
 required-features = ["test-helpers"]

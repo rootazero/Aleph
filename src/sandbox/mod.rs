@@ -20,16 +20,13 @@ pub mod platforms;
 pub mod policy;
 pub mod workspace;
 
-#[cfg(target_os = "windows")]
-pub mod platforms;
-
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
 pub use command::{SandboxCommand, SandboxError, SandboxOutput};
 pub use config::SandboxConfig;
 pub use context::current_session;
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
-pub use platforms::create_platform_driver;
+pub use platforms::{create_platform_driver, create_platform_driver_from_config};
 pub use policy::{EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 #[async_trait]

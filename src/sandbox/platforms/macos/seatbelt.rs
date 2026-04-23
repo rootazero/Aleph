@@ -146,14 +146,12 @@ impl SeatbeltDriver {
         fs: &FsPolicy,
         cwd: &Path,
     ) -> Result<(), SandboxError> {
+        let cwd_str = cwd.to_str().ok_or_else(|| {
+            SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
+        })?;
+
         match fs {
             FsPolicy::WorkspaceOnly => {
-                // Allow read/write within workspace only
-                let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
-                })?;
                 profile.push_str(&format!(
                     "; workspace-only filesystem access\n\
                      (allow file-read* (subpath \"{}\"))\n\
@@ -162,11 +160,6 @@ impl SeatbeltDriver {
                 ));
             }
             FsPolicy::ReadPaths(paths) => {
-                let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
-                })?;
                 profile.push_str(&format!(
                     "; workspace read/write\n\
                      (allow file-read* (subpath \"{}\"))\n\
@@ -187,11 +180,6 @@ impl SeatbeltDriver {
                 }
             }
             FsPolicy::WritePaths(paths) => {
-                let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
-                })?;
                 profile.push_str(&format!(
                     "; workspace read/write\n\
                      (allow file-read* (subpath \"{}\"))\n\
