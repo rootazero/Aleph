@@ -1,5 +1,5 @@
-use crate::exec::sandbox::capabilities::Capabilities;
 use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
+use crate::sandbox::capabilities::SandboxCapabilities;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -43,7 +43,7 @@ pub struct CapabilityApprovalRequest {
     pub tool_name: String,
     pub tool_description: String,
     pub required_capabilities: RequiredCapabilities,
-    pub resolved_capabilities: Capabilities,
+    pub resolved_capabilities: SandboxCapabilities,
     pub trust_stage: TrustStage,
 }
 
@@ -100,7 +100,7 @@ mod tests {
             parameter_bindings: Default::default(),
         };
 
-        let resolved = Capabilities::default();
+        let resolved = SandboxCapabilities::default();
 
         let request = CapabilityApprovalRequest {
             tool_name: "test_tool".to_string(),

@@ -212,7 +212,7 @@ pub trait ChannelApprovalExt {
 mod tests {
     use super::*;
     use crate::exec::approval::types::{CapabilityApprovalRequest, TrustStage};
-    use crate::exec::sandbox::capabilities::Capabilities;
+    use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::exec::sandbox::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
 
     fn make_test_request() -> ApprovalRequest {
@@ -227,7 +227,7 @@ mod tests {
             tool_name: "test_tool".to_string(),
             tool_description: "A test tool".to_string(),
             required_capabilities: required,
-            resolved_capabilities: Capabilities::default(),
+            resolved_capabilities: SandboxCapabilities::default(),
             trust_stage: TrustStage::Draft,
         }))
     }
