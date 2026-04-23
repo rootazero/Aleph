@@ -11,8 +11,11 @@ use tokio::time::timeout;
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
+use crate::sandbox::platforms::windows::appcontainer::{AppContainer, AppContainerCapability};
+use crate::sandbox::platforms::windows::filter::FilterSet;
 use crate::sandbox::platforms::windows::job::SandboxJob;
 use crate::sandbox::platforms::windows::token::create_restricted_token;
+use crate::sandbox::platforms::windows::wfp::{is_admin, is_wfp_available};
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -31,17 +34,31 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
-/// Windows sandbox driver using restricted tokens and job objects.
+/// Windows sandbox driver with multi-level isolation support.
 ///
-/// This driver implements sandboxing for Windows using:
-/// - Restricted tokens (CreateRestrictedToken API)
-/// - Job objects for resource limits
-/// - ACL-based filesystem restrictions (future enhancement)
+/// This driver implements sandboxing for Windows using multiple isolation levels:
+/// - **AppContainer** (Win10+): Strongest isolation, namespace-based filesystem
+/// - **Restricted Token**: Fallback for older Windows versions
+/// - **WFP Filtering**: Network-level AllowHosts enforcement (requires admin)
+/// - **Job Objects**: Resource limits (process count, UI restrictions)
 ///
-/// Windows sandboxing has inherent limitations compared to macOS/Linux:
-/// - Network restrictions require Windows Firewall (not implemented)
-/// - Filesystem sandboxing is ACL-based, not namespace-based
-/// - AllowHosts policy is not enforceable at OS level
+/// Isolation level is selected automatically based on:
+/// - Windows version (AppContainer requires Win10+)
+/// - Admin privileges (WFP requires admin)
+/// - Available APIs
+///
+/// # Architecture
+///
+/// ```text
+/// WindowsSandboxDriver
+///     ├── Detect isolation level
+///     │       ├── AppContainer + WFP (best)
+///     │       ├── AppContainer only
+///     │       └── Restricted Token (fallback)
+///     ├── Create isolation context
+///     ├── Spawn process
+///     └── Apply resource limits (Job Object)
+/// ```
 #[derive(Debug, Default)]
 pub struct WindowsSandboxDriver;
 
