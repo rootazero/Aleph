@@ -305,7 +305,8 @@ impl CompositeCapabilityExecutor {
     /// The enriched payload with all capability contexts added
     pub async fn execute_all(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Get requested capabilities sorted by priority
-        let requested = Capability::sort_by_priority(payload.config.capabilities.clone());
+        let mut requested = payload.config.capabilities.clone();
+        Capability::sort_by_priority(&mut requested);
 
         tracing::info!(
             capabilities = ?requested,

@@ -53,29 +53,11 @@ pub enum SsrfError {
     FetchFailed(String),
 }
 
-/// Validates a URL synchronously (no DNS resolution).
-///
-/// Checks:
-/// 1. URL is parseable with http/https scheme.
-/// 2. URL has a host.
-/// 3. No legacy IP literal encodings (hex, octal, decimal, short-form).
-/// 4. No embedded credentials in URL.
-/// 5. Host is not on the hostname blocklist (unless allowlisted).
-/// 6. Host is not on the user-configured blocklist.
-/// 7. If the host is a literal IP, it is not in a blocked range.
-///
-/// This is the backward-compatible entry point used by existing callers.
-pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
-    // When SSRF protection is disabled, only parse the URL
-    if !policy.enabled {
-        return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
-    }
-
+fn validate_url_common(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
     let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
 
-    // Legacy IP literal detection
     if is_legacy_ip_literal(host) {
         return Err(SsrfError::BlockedAddress(format!(
             "legacy IP literal: {}",
@@ -83,24 +65,20 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
         )));
     }
 
-    // URL credentials detection
     if has_url_credentials(url_str) {
         return Err(SsrfError::InvalidUrl(
             "URL contains embedded credentials".to_string(),
         ));
     }
 
-    // Allowlist check — allowlisted hosts bypass all further validation
     if is_allowlisted(host, &policy.allowed_hosts) {
         return Ok(url);
     }
 
-    // Hostname blocklist (hardcoded names like "localhost", cloud metadata)
     if is_blocked_hostname(host) {
         return Err(SsrfError::BlockedAddress(host.to_string()));
     }
 
-    // User-configured blocklist
     if is_blocklisted(host, &policy.blocked_hosts) {
         return Err(SsrfError::BlockedAddress(format!(
             "host in blocklist: {}",
@@ -108,14 +86,11 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
         )));
     }
 
-    // If the host is a literal IP address, validate it immediately
-    let ip_from_url = match url.host() {
+    if let Some(ip) = match url.host() {
         Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
         Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
         _ => None,
-    };
-
-    if let Some(ip) = ip_from_url {
+    } {
         if is_ip_blocked_by_policy(ip, policy) {
             return Err(SsrfError::BlockedAddress(ip.to_string()));
         }
@@ -124,64 +99,23 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
     Ok(url)
 }
 
-/// Validates a URL asynchronously, including DNS rebinding defense.
-///
-/// Performs all sync checks from `validate_url`, then resolves the hostname
-/// via DNS and validates every returned IP address against the blocklist.
+/// Validates a URL synchronously (no DNS resolution).
+pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
+    if !policy.enabled {
+        return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
+    }
+    validate_url_common(url_str, policy)
+}
+
 pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
-    // When SSRF protection is disabled, only parse the URL
     if !policy.enabled {
         return Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()));
     }
 
-    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
-
+    let url = validate_url_common(url_str, policy)?;
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
 
-    // Legacy IP literal detection
-    if is_legacy_ip_literal(host) {
-        return Err(SsrfError::BlockedAddress(format!(
-            "legacy IP literal: {}",
-            host
-        )));
-    }
-
-    // URL credentials detection
-    if has_url_credentials(url_str) {
-        return Err(SsrfError::InvalidUrl(
-            "URL contains embedded credentials".to_string(),
-        ));
-    }
-
-    // Allowlist check — skip DNS validation for explicitly allowed hosts
-    if is_allowlisted(host, &policy.allowed_hosts) {
-        return Ok(url);
-    }
-
-    // Hostname blocklist
-    if is_blocked_hostname(host) {
-        return Err(SsrfError::BlockedAddress(host.to_string()));
-    }
-
-    // User-configured blocklist
-    if is_blocklisted(host, &policy.blocked_hosts) {
-        return Err(SsrfError::BlockedAddress(format!(
-            "host in blocklist: {}",
-            host
-        )));
-    }
-
-    // If the host is a literal IP, validate it immediately (no DNS needed)
-    let ip_from_url = match url.host() {
-        Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
-        Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
-        _ => None,
-    };
-
-    if let Some(ip) = ip_from_url {
-        if is_ip_blocked_by_policy(ip, policy) {
-            return Err(SsrfError::BlockedAddress(ip.to_string()));
-        }
+    if matches!(url.host(), Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_))) {
         return Ok(url);
     }
 

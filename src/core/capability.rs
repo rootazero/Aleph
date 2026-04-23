@@ -41,11 +41,8 @@ impl Capability {
         }
     }
 
-    /// Sort capabilities by priority
-    pub fn sort_by_priority(caps: Vec<Capability>) -> Vec<Capability> {
-        let mut sorted = caps;
-        sorted.sort(); // Uses PartialOrd (0 < 1 < 2)
-        sorted
+    pub fn sort_by_priority(caps: &mut [Capability]) {
+        caps.sort();
     }
 }
 
@@ -83,10 +80,10 @@ mod tests {
 
     #[test]
     fn test_capability_sort() {
-        let caps = vec![Capability::Skills, Capability::Memory, Capability::Mcp];
-        let sorted = Capability::sort_by_priority(caps);
+        let mut caps = vec![Capability::Skills, Capability::Memory, Capability::Mcp];
+        Capability::sort_by_priority(&mut caps);
         assert_eq!(
-            sorted,
+            caps,
             vec![Capability::Memory, Capability::Mcp, Capability::Skills]
         );
     }

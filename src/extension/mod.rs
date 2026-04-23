@@ -266,16 +266,7 @@ impl ExtensionManager {
             .unwrap_or_else(|e| e.into_inner()) = Some(registry);
     }
 
-    /// Snapshot of the injected `ToolRegistry`, if any (Task 4).
-    #[allow(dead_code)] // Consumed from Task 10 when lifecycle wiring lands.
-    pub(crate) fn tool_registry(
-        &self,
-    ) -> Option<crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>> {
-        self.tool_registry
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
+
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 

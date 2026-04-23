@@ -26,12 +26,7 @@ use tracing::{debug, warn};
 // Aleph tool names now use underscores (e.g. "cron_manage"), but this
 // sanitizer is kept as a safety net for any external/plugin tool names.
 
-use super::openai_common::tools::sanitize_tool_name as sanitize_tool_name_pub;
-
-/// Replace characters not in `[a-zA-Z0-9_-]` with underscores (internal alias).
-fn sanitize_tool_name(name: &str) -> String {
-    sanitize_tool_name_pub(name)
-}
+use super::openai_common::tools::sanitize_tool_name;
 
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {

@@ -2,32 +2,15 @@
 //!
 //! Common functions used by prompt assemblers across the codebase.
 
-/// Format a Unix timestamp as a human-readable UTC string
-///
-/// # Arguments
-/// * `timestamp` - Unix timestamp in seconds
-///
-/// # Returns
-/// Formatted string like "2024-01-15 10:30:00 UTC" or "Unknown" if invalid
-pub fn format_timestamp(timestamp: i64) -> String {
-    use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc};
 
+/// Format a Unix timestamp as a human-readable UTC string
+pub fn format_timestamp(timestamp: i64) -> String {
     DateTime::<Utc>::from_timestamp(timestamp, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Truncate text to a maximum number of characters
-///
-/// If the text exceeds the limit, it will be truncated and "..." appended.
-/// Handles Unicode characters correctly.
-///
-/// # Arguments
-/// * `text` - The text to truncate
-/// * `max_chars` - Maximum number of characters to keep
-///
-/// # Returns
-/// Original text if under limit, or truncated text with "..."
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
     // Single-pass: find the byte offset of the (max_chars)th character
     match text.char_indices().nth(max_chars) {
@@ -36,9 +19,6 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
-/// Escape special Markdown characters
-///
-/// Escapes characters that have special meaning in Markdown: [ ] ( ) * _ `
 pub fn escape_markdown(text: &str) -> String {
     text.replace('[', "\\[")
         .replace(']', "\\]")

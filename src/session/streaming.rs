@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::tool_execution_context::{CascadePolicy, ToolProgress};
+use crate::harness::tool_execution_context::CascadePolicy;
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
 use crate::tools::runtime::LoopToolRegistry;
@@ -159,29 +159,7 @@ pub struct StreamingToolExecutor {
 
 impl StreamingToolExecutor {
     /// Consume all ready tool calls and return results sorted by original order.
-    pub async fn run(self) -> Vec<PipelineOutcome> {
-        self.run_internal(None).await
-    }
-
-    /// Run with a progress channel.
-    ///
-    /// NOTE: Progress sending is not yet wired into tool execution.
-    /// The receiver will be immediately closed. This API is scaffolding
-    /// for future progress streaming support.
-    #[allow(dead_code)]
-    pub(crate) async fn run_with_progress(
-        self,
-    ) -> (Vec<PipelineOutcome>, mpsc::Receiver<ToolProgress>) {
-        let (progress_tx, progress_rx) = mpsc::channel::<ToolProgress>(64);
-        let results = self.run_internal(Some(progress_tx)).await;
-        (results, progress_rx)
-    }
-
-    /// Internal implementation shared by `run()` and `run_with_progress()`.
-    async fn run_internal(
-        mut self,
-        _progress_tx: Option<mpsc::Sender<ToolProgress>>,
-    ) -> Vec<PipelineOutcome> {
+    pub async fn run(mut self) -> Vec<PipelineOutcome> {
         let batch_cancel = self.cancel.child_token();
         let mut results: Vec<(usize, PipelineOutcome)> = Vec::new();
         let mut in_flight: Vec<(usize, JoinHandle<PipelineOutcome>)> = Vec::new();
@@ -701,7 +679,7 @@ mod tests {
         feed_tool_call(&mut bridge, "t1", "echo", r#"{"msg":"hello"}"#);
         bridge.finish();
 
-        let (results, _progress_rx) = executor.run_with_progress().await;
+        let results = executor.run().await;
         assert_eq!(results.len(), 1);
         assert!(!results[0].outcome.is_error);
         assert!(results[0].outcome.output_text.contains("hello"));

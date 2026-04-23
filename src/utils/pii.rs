@@ -96,50 +96,16 @@ fn get_patterns() -> &'static PiiPatterns {
 pub fn scrub_pii(text: &str) -> String {
     let patterns = get_patterns();
 
-    let mut scrubbed = text.to_string();
+    let result = patterns.api_key.replace_all(text, "[REDACTED]");
+    let result = patterns.china_id.replace_all(&result, "[ID_CARD]");
+    let result = patterns.email.replace_all(&result, "[EMAIL]");
+    let result = patterns.china_mobile.replace_all(&result, "[PHONE]");
+    let result = patterns.phone.replace_all(&result, "[PHONE]");
+    let result = patterns.ssn.replace_all(&result, "[SSN]");
+    let result = patterns.credit_card.replace_all(&result, "[CREDIT_CARD]");
+    let result = patterns.bank_card.replace_all(&result, "[BANK_CARD]");
 
-    // Apply scrubbing in order (more specific patterns first to avoid partial matches)
-    // 1. API keys first (most specific, longest patterns)
-    scrubbed = patterns
-        .api_key
-        .replace_all(&scrubbed, "[REDACTED]")
-        .to_string();
-
-    // 2. Chinese ID cards (18 digits, more specific than bank cards)
-    scrubbed = patterns
-        .china_id
-        .replace_all(&scrubbed, "[ID_CARD]")
-        .to_string();
-
-    // 3. Email addresses
-    scrubbed = patterns.email.replace_all(&scrubbed, "[EMAIL]").to_string();
-
-    // 4. Chinese mobile numbers (11 digits starting with 1[3-9])
-    scrubbed = patterns
-        .china_mobile
-        .replace_all(&scrubbed, "[PHONE]")
-        .to_string();
-
-    // 5. US/International phone numbers
-    scrubbed = patterns.phone.replace_all(&scrubbed, "[PHONE]").to_string();
-
-    // 6. SSN (Social Security Number)
-    scrubbed = patterns.ssn.replace_all(&scrubbed, "[SSN]").to_string();
-
-    // 7. Credit card numbers (16 digits with optional separators)
-    scrubbed = patterns
-        .credit_card
-        .replace_all(&scrubbed, "[CREDIT_CARD]")
-        .to_string();
-
-    // 8. Bank card numbers (16-19 consecutive digits, applied last)
-    // Note: This may catch some false positives, but privacy > accuracy
-    scrubbed = patterns
-        .bank_card
-        .replace_all(&scrubbed, "[BANK_CARD]")
-        .to_string();
-
-    scrubbed
+    result.into_owned()
 }
 
 #[cfg(test)]

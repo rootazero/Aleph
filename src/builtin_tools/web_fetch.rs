@@ -125,12 +125,7 @@ impl WebFetchTool {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
-        let url_display = if args.url.chars().count() > 50 {
-            let truncated: String = args.url.chars().take(50).collect();
-            format!("{}...", truncated)
-        } else {
-            args.url.clone()
-        };
+        let url_display = crate::utils::text_format::truncate_text(&args.url, 50);
         notify_tool_start(Self::NAME, &format!("获取网页: {}", url_display));
 
         info!("Fetching URL: {}", args.url);

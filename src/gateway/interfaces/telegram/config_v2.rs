@@ -133,6 +133,7 @@ pub struct TelegramAccountConfig {
     pub allowed_groups: Option<Vec<i64>>,
     pub streaming: Option<StreamingOptions>,
     pub error_policy: Option<ErrorPolicy>,
+    #[serde(default)]
     pub groups: Vec<TelegramGroupConfig>,
 }
 

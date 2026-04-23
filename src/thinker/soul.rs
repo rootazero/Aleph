@@ -26,6 +26,30 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+trait NonEmptyOr<T> {
+    fn non_empty_or(self, fallback: T) -> T;
+}
+
+impl NonEmptyOr<String> for String {
+    fn non_empty_or(self, fallback: String) -> String {
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
+    }
+}
+
+impl<T> NonEmptyOr<Vec<T>> for Vec<T> {
+    fn non_empty_or(self, fallback: Vec<T>) -> Vec<T> {
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
+    }
+}
+
 /// Response verbosity preference
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -413,17 +437,13 @@ impl SoulManifest {
     /// - Otherwise, fall back to base's value
     pub fn merge_with(&self, base: &SoulManifest) -> SoulManifest {
         SoulManifest {
-            identity: if self.identity.is_empty() {
-                base.identity.clone()
-            } else {
-                self.identity.clone()
-            },
+            identity: self.identity.clone().non_empty_or(base.identity.clone()),
             voice: SoulVoice {
-                tone: if self.voice.tone.is_empty() {
-                    base.voice.tone.clone()
-                } else {
-                    self.voice.tone.clone()
-                },
+                tone: self
+                    .voice
+                    .tone
+                    .clone()
+                    .non_empty_or(base.voice.tone.clone()),
                 verbosity: self.voice.verbosity,
                 formatting_style: self.voice.formatting_style,
                 language_notes: self
@@ -432,26 +452,18 @@ impl SoulManifest {
                     .clone()
                     .or_else(|| base.voice.language_notes.clone()),
             },
-            directives: if self.directives.is_empty() {
-                base.directives.clone()
-            } else {
-                self.directives.clone()
-            },
-            anti_patterns: if self.anti_patterns.is_empty() {
-                base.anti_patterns.clone()
-            } else {
-                self.anti_patterns.clone()
-            },
-            relationship: if self.relationship == RelationshipMode::default() {
-                base.relationship.clone()
-            } else {
-                self.relationship.clone()
-            },
-            expertise: if self.expertise.is_empty() {
-                base.expertise.clone()
-            } else {
-                self.expertise.clone()
-            },
+            directives: self
+                .directives
+                .clone()
+                .non_empty_or(base.directives.clone()),
+            anti_patterns: self
+                .anti_patterns
+                .clone()
+                .non_empty_or(base.anti_patterns.clone()),
+            relationship: (self.relationship != RelationshipMode::default())
+                .then(|| self.relationship.clone())
+                .unwrap_or_else(|| base.relationship.clone()),
+            expertise: self.expertise.clone().non_empty_or(base.expertise.clone()),
             addendum: self.addendum.clone().or_else(|| base.addendum.clone()),
         }
     }

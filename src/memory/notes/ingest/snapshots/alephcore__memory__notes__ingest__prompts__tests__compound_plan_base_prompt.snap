@@ -50,9 +50,24 @@ Valid JSON only. No prose, no markdown fences. Shape:
 
 {
   "reasoning": "2-3 sentence explanation of what you did and why",
-  "ops": [ /* PageOp objects */ ],
+  "ops": [ /* PageOp objects, EACH MUST CARRY A "kind" FIELD */ ],
   "schema_proposals": [ /* optional new_tag / new_rule / domain_update */ ]
 }
+
+Every entry inside `ops` MUST start with the discriminator field
+`"kind"` whose value is exactly one of:
+`"create"`, `"append"`, `"update"`, `"contradict"`, `"link"`, `"supersede"`.
+Operations missing `kind` are silently discarded — do not omit it.
+Concrete shapes:
+
+```json
+{"kind": "create", "note_path": "personal/li-wei.md", "title": "Li Wei", "summary": "User's partner of six years", "facts": ["Li Wei works in tech."], "links": ["personal/zou-guojun.md"], "tags": ["personal"]}
+{"kind": "append", "note_path": "preferences/coding-style.md", "new_facts": ["Comments must be in English."], "new_links": []}
+{"kind": "update", "note_path": "projects/aleph.md", "expected_content_hash": "<copy hash from input>", "new_facts": ["Current focus is the memory subsystem."], "reason": "User clarified the focus area."}
+{"kind": "link", "from": "personal/zou-guojun.md", "to": "projects/aleph.md"}
+{"kind": "supersede", "old_path": "projects/old-aleph.md", "new_path": "projects/aleph.md"}
+{"kind": "contradict", "note_path": "preferences/coding-style.md", "new_claim": "User now prefers Python.", "evidence_source_ids": ["raw-123"]}
+```
 
 If nothing is worth ingesting, emit:
 {"reasoning": "no durable knowledge", "ops": [], "schema_proposals": []}

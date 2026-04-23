@@ -138,7 +138,8 @@ impl CapabilityExecutor {
     /// The enriched payload with context data added
     pub async fn execute_all(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Sort capabilities by priority (Memory=0, Search=1, MCP=2)
-        let capabilities = Capability::sort_by_priority(payload.config.capabilities.clone());
+        let mut capabilities = payload.config.capabilities.clone();
+        Capability::sort_by_priority(&mut capabilities);
 
         info!(
             capabilities = ?capabilities,
