@@ -9,8 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2026.04.23]
 
+### Changed
+- **Idiomatic Rust refactoring:** Systematic cleanup across core modules to eliminate technical debt and improve code purity.
+  - `core/capability`: `sort_by_priority` now accepts `&mut [Capability]` to avoid unnecessary ownership transfer.
+  - `utils/pii`: Chain regex replacements via `Cow<str>` without 7 intermediate `String` allocations.
+  - `security/ssrf`: Extract `validate_url_common` to eliminate ~60 lines of duplicated validation logic between sync and async URL validators.
+  - `session/streaming`: Remove dead `run_with_progress` code and unused `ToolProgress` import.
+  - `providers/openai_chat`: Drop redundant `sanitize_tool_name` wrapper.
+  - `thinker/soul`: Introduce `NonEmptyOr` trait to collapse repetitive `if-is-empty` branches in `merge_with`.
+  - `builtin_tools/web_fetch`: Reuse `utils::text_format::truncate_text` instead of inline char-count truncation.
+  - `extension/mod`: Remove unused `tool_registry()` getter.
+
 ### Fixed
 - **Loom concurrency tests:** Fixed compilation errors when running with `--features loom`. Resolved `MutexGuard` export, static initialization issues, and type mismatches between `std::sync` and `loom::sync` primitives.
+- **Telegram config parsing:** Add `#[serde(default)]` to `groups` field in `TelegramAccountConfig`, fixing V2 config parsing when groups are omitted.
+- **Memory ingest snapshot:** Update snapshot to match updated prompt text.
 
 ## [2026.04.22]
 
