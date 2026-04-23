@@ -18,19 +18,15 @@
 
 // Arc is always std::sync::Arc — loom::sync::Arc is incompatible with
 // external crate APIs that expect std::sync::Arc (e.g. tokio::sync).
-pub(crate) use std::sync::Arc;
+pub use std::sync::Arc;
 
 #[cfg(feature = "loom")]
-pub(crate) use loom::sync::atomic::{
-    AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+pub use loom::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "loom")]
-pub(crate) use loom::sync::{Mutex, MutexGuard, RwLock};
+pub use loom::sync::{Mutex, MutexGuard, RwLock};
 
 #[cfg(not(feature = "loom"))]
 #[allow(unused_imports)] // AtomicUsize used by test code only
-pub(crate) use std::sync::atomic::{
-    AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+pub use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(not(feature = "loom"))]
-pub(crate) use std::sync::{Mutex, MutexGuard, RwLock};
+pub use std::sync::{Mutex, MutexGuard, RwLock};

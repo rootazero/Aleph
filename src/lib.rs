@@ -96,7 +96,7 @@ pub mod resilient;
 pub mod scheduler;
 pub mod secrets;
 pub mod security;
-pub(crate) mod sync_primitives;
+pub mod sync_primitives;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {
