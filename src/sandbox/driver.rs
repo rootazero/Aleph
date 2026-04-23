@@ -10,7 +10,6 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 
 /// OS-specific seatbelt / sandbox-exec profile bytes or handle.
-/// Opaque to WorkspaceSandbox.
 #[derive(Debug, Clone)]
 pub struct OsSandboxProfile {
     /// macOS: sandbox-exec SBPL profile text.
@@ -19,6 +18,10 @@ pub struct OsSandboxProfile {
 
 #[async_trait]
 pub trait OsSandboxDriverTrait: Send + Sync + 'static {
+    fn platform(&self) -> &'static str;
+
+    fn is_supported(&self) -> bool;
+
     fn profile_for(
         &self,
         capabilities: &SandboxCapabilities,

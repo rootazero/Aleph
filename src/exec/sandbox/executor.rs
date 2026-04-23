@@ -208,6 +208,14 @@ fn map_exec_error(err: AlephError) -> SandboxError {
 
 #[async_trait]
 impl OsSandboxDriverTrait for OsSandboxDriver {
+    fn platform(&self) -> &'static str {
+        "macos/seatbelt"
+    }
+
+    fn is_supported(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     fn profile_for(
         &self,
         capabilities: &NewSandboxCapabilities,
