@@ -25,7 +25,7 @@ pub fn create_platform_driver() -> Arc<dyn OsSandboxDriverTrait> {
     }
     #[cfg(target_os = "linux")]
     {
-        Arc::new(UnsupportedDriver)
+        Arc::new(linux::bwrap::BubblewrapDriver::new())
     }
     #[cfg(target_os = "windows")]
     {
