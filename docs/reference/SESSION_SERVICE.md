@@ -54,19 +54,20 @@ A Harness that crashed mid-turn will surface as a `TurnStarted` with no matching
 
 ## Gateway RPC relationship
 
-Phase 1 does **not** migrate Gateway `session.*` RPC methods. `SessionManager` (`src/gateway/session_manager/`) remains the public face for those methods. A dual-write shim (`src/session/shim.rs`) mirrors each `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. Phase 6 removes the shim and points Gateway RPC at `SessionService` directly.
+Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). A dual-write shim (`src/session/shim.rs`) mirrors each `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. A future phase will migrate Gateway RPC directly and remove the shim.
 
 ## Consumer migration status
 
 | Consumer | Status |
 |----------|--------|
-| `agent_loop` | No direct use of `SessionManager` *or* `SessionService` yet. Phase 1 verified `agent_loop/**` was already decoupled from `SessionManager` — no imports, no calls. Phase 4 rewrites the loop on top of `SessionService`. |
-| Gateway `session.*` RPC | On `SessionManager`; every append dual-writes into `SessionService` via `src/session/shim.rs`. Phase 6 migrates Gateway RPC directly and removes the shim. |
+| `AgentHarness` | Reads and writes history exclusively through `SessionService` (Phase 6 completed). |
+| `agents::runtime` (SubagentTool) | Harness-based subagent spawning uses `SessionService` for ephemeral child sessions (Phase 7 completed). |
+| Gateway `session.*` RPC | On `SessionManager`; every append dual-writes into `SessionService` via `src/session/shim.rs`. Future phase will migrate Gateway RPC directly and remove the shim. |
 | Memory / Dream / other | Read-only `SessionService::get_events` available; adoption on a case-by-case basis. |
 
-## Non-goals (Phase 1)
+## Non-goals
 
-- Migrating Gateway `session.*` RPC methods (Phase 6).
+- Migrating Gateway `session.*` RPC methods (future phase).
 - Cross-process Session daemon.
 - Deleting the legacy `messages` column (it remains the Gateway-read materialized view).
 - Snapshot-based `wake()` optimization — full replay is adequate in v1.

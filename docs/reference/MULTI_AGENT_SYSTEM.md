@@ -4,8 +4,9 @@ Aleph provides three user-triggerable collaboration modes plus a shared sensing 
 
 **Runtime topology**: Named agents (Delegate, Team) dispatch through the
 Orchestrator → AgentHarness pipeline introduced in Phase 5/6. The Spawn mode
-(SubagentTool) currently still uses the legacy `AgentLoop` path; migration to
-AgentHarness is planned as a follow-up phase.
+(SubagentTool) was migrated to Harness in Phase 7 (2026-04-21). The legacy
+`src/agent_loop/` directory has been deleted. All agent execution now routes
+through Orchestrator → AgentHarness.
 
 ## Architecture Overview
 
@@ -44,10 +45,8 @@ The main agent spawns an ephemeral sub-agent to handle a focused sub-task. The
 sub-agent has its own tool registry (excluding subagent tools to prevent
 recursion), token budget, and timeout. It returns a result and is destroyed.
 
-**Runtime**: Sub-agent spawning currently uses the legacy `AgentLoop` path
-(`src/agent_loop/loop_core.rs` + `subagent_runner.rs`). The Gateway chat path
-routes through Orchestrator → AgentHarness; migration of SubagentTool to the
-same Harness path is planned as a follow-up phase.
+**Runtime**: Sub-agent spawning routes through Orchestrator → AgentHarness
+(Phase 7, 2026-04-21). The legacy `src/agent_loop/` directory has been deleted.
 
 **When LLM uses it**: Tasks benefiting from isolated context — parallel searches, code analysis, format conversion, translation.
 

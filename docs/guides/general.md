@@ -24,7 +24,7 @@ collect_window_ms = 3000       # Batch window for collect mode
 enabled = true
 max_context_items = 10         # Past interactions to retrieve
 retention_days = 0             # 0 = never delete
-vector_db = "lancedb"          # "lancedb" | "sqlite-vec"
+vector_db = "sqlite-vec"       # "sqlite-vec"
 similarity_threshold = 0.5     # 0.0-1.0
 compression_enabled = true
 compression_turn_threshold = 20

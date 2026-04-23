@@ -28,9 +28,9 @@ AgentHarness (Think → Act loop, stop-hooks, context budget, compaction)
 FlowOutcome → Gateway renders response
 ```
 
-> **Note**: SubagentTool (in-tool agent spawning) currently still routes through
-> the legacy `AgentLoop` path in `src/agent_loop/`. Migration to Harness is
-> planned as a follow-up phase.
+> **Note**: SubagentTool (in-tool agent spawning) was migrated to Harness in
+> Phase 7 (2026-04-21). The legacy `AgentLoop` path in `src/agent_loop/` has
+> been deleted. All agent execution now routes through Orchestrator → Harness.
 
 The inner loop inside `AgentHarness`:
 
@@ -98,19 +98,19 @@ pub struct AgentHarness {
 | `StreamingBridge` | `src/harness/streaming_bridge.rs` | Streaming + delta management |
 | `SafetyGuard` | `src/harness/safety.rs` | Permission enforcement |
 | `StopHookHandler` | `src/harness/stop_hooks.rs` | Stop hook execution |
-| `TruncationRecovery` | `src/agent_loop/truncation_recovery.rs` | MaxTokens escalation recovery |
+| `TruncationRecovery` | `src/harness/truncation_recovery.rs` | MaxTokens escalation recovery |
 | `Orchestrator` | `src/orchestrator/` | AgentDef resolution + Harness construction |
-| `AgentRuntime` | `src/harness/agent_runtime.rs` | Runtime context + model resolution |
-| `ToolService` | `src/tool_service/` | Tool definitions registry + execution |
+| `AgentRuntime` | `src/agents/runtime.rs` | Runtime context + model resolution |
+| `ToolService` | `src/tools/service.rs` | Tool definitions registry + execution |
 
-> **Legacy path**: `src/agent_loop/loop_core.rs` + `src/agent_loop/subagent_runner.rs`
-> remain for SubagentTool's ephemeral agent spawning. They are not used by Gateway
-> chat. Migration to Harness is planned as a follow-up phase.
+> **Migration complete**: The legacy `src/agent_loop/` directory was deleted in
+> Phase 7 (2026-04-21). All agent execution — including SubagentTool — now routes
+> through Orchestrator → Harness.
 
 ### State Machine
 
 ```
-TurnState enum (5 states) — same in AgentHarness and legacy AgentLoop:
+TurnState enum (5 states):
 
 ┌─────────┐
 │ PREPARE │
@@ -449,7 +449,7 @@ I am Aleph, your AI programming partner.
 
 ## Chain-of-Thought Transparency
 
-**Location**: `src/agent_loop/thinking.rs`
+**Location**: `src/thinker/thinking.rs`
 
 CoT Transparency parses LLM reasoning into structured, understandable steps.
 
@@ -606,7 +606,7 @@ pub struct SmartFilter {
 
 ## Guards
 
-**Location**: `src/agent_loop/guards.rs`
+**Location**: `src/harness/guards.rs`
 
 Safety checks before each loop iteration.
 
@@ -635,7 +635,7 @@ pub enum GuardResult {
 
 ## Callback System
 
-**Location**: `src/agent_loop/callback.rs`
+**Location**: `src/harness/callback.rs`
 
 ```rust
 #[async_trait]
@@ -672,27 +672,27 @@ impl LoopCallback for CliCallback {
 
 ## Sub-Agent Delegation
 
-**Location**: `src/agents/sub_agents/` (tool layer) + `src/agent_loop/subagent_runner.rs` (runtime)
+**Location**: `src/agents/sub_agents/` (tool layer) + `src/agents/runtime.rs` (runtime)
 
 The main agent can spawn sub-agents for specialized tasks via the `SubagentTool`.
-Sub-agent spawning currently still uses the legacy `AgentLoop` path
-(`src/agent_loop/loop_core.rs` + `subagent_runner.rs`). Migration of this path
-to `AgentHarness` is planned as a follow-up phase.
+Sub-agent spawning was migrated to Harness in Phase 7 (2026-04-21). The legacy
+`src/agent_loop/` directory has been deleted. All agent execution now routes
+through Orchestrator → AgentHarness.
 
 ```
 Main Agent (claude-opus-4)  — runs via AgentHarness (Gateway chat)
     │
     ├─── Translator Sub-Agent (claude-haiku)
     │       Session: subagent:agent:main:translator
-    │       Runtime: legacy AgentLoop (SubagentTool path)
+    │       Runtime: AgentHarness (via Orchestrator dispatch)
     │
     ├─── Code Reviewer Sub-Agent (claude-sonnet)
     │       Session: subagent:agent:main:code-reviewer
-    │       Runtime: legacy AgentLoop (SubagentTool path)
+    │       Runtime: AgentHarness (via Orchestrator dispatch)
     │
     └─── Research Sub-Agent (gpt-4o)
             Session: subagent:agent:main:researcher
-            Runtime: legacy AgentLoop (SubagentTool path)
+            Runtime: AgentHarness (via Orchestrator dispatch)
 ```
 
 ### Session Key Nesting

@@ -146,7 +146,7 @@ See: [docs/superpowers/specs/2026-04-13-memory-evolution-spec1-capture-hooks-des
 
 ### 7.3 session_summary_source
 
-`src/agent_loop/compaction/session_summary_source.rs` implements zero-cost context compaction. When the agent loop needs to shrink its window, `SessionSummarySource::try_reuse` scans `aleph://session/{session_id}/` (any depth), sorts highest-depth-first (`d2` > `d1` > `d0`, then newest within a depth), and assembles summaries into a single synthetic `[Context Summary (from session memory)]` user message within a token budget of `tokens_before / 2`. No LLM call is required — the d-summaries produced by `SessionCompactor` are reused in place.
+`src/memory/session_compactor/session_summary_source.rs` implements zero-cost context compaction. When the agent harness needs to shrink its window, `SessionSummarySource::try_reuse` scans `aleph://session/{session_id}/` (any depth), sorts highest-depth-first (`d2` > `d1` > `d0`, then newest within a depth), and assembles summaries into a single synthetic `[Context Summary (from session memory)]` user message within a token budget of `tokens_before / 2`. No LLM call is required — the d-summaries produced by `SessionCompactor` are reused in place.
 
 ## 8. Lifecycle
 

@@ -4,7 +4,7 @@
 
 ## 1. Purpose
 
-Aleph's memory system gives the LLM durable knowledge across sessions. Conversations and attachments land in an ephemeral raw-memory buffer (L0); a realtime compressor distills them into human-readable markdown notes (L1). An offline daemon periodically consolidates, synthesizes, and prunes those notes so retrieval stays sharp as the corpus grows.
+Aleph's memory system gives the LLM durable knowledge across sessions. Conversations and attachments land in an ephemeral raw-memory buffer (L0); a realtime compressor distills them into human-readable markdown notes (L1). Notes are linked via Obsidian-compatible `[[wikilinks]]` forming a traversable knowledge graph. An offline daemon periodically consolidates, synthesizes, and prunes those notes so retrieval stays sharp as the corpus grows.
 
 ## 2. Design Principles
 
@@ -140,14 +140,26 @@ cooldown_minutes = 30
 
 Embedding provider, rerank, scoring pipeline, and noise filter live in dedicated subtables — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
-## 8. Subdocument Navigation
+## 8. Knowledge Graph (Wikilinks)
 
-- [Notes (L1)](memory/NOTES.md) — markdown-first persistent knowledge, indexing, `note_manage` tool.
+Notes form an Obsidian-compatible knowledge graph through `[[wikilink]]` syntax:
+
+- **Extraction**: `extract_wikilinks()` parses `[[note-name]]` from markdown bodies
+- **Resolution**: `resolve_wikilink()` follows Obsidian rules — exact path match if `/` present, global filename search otherwise
+- **Bidirectional linking**: `note_manage` tool supports `link` operations that create reciprocal connections
+- **Graph traversal**: `memory_explore` performs multi-hop Ripple exploration across the wikilink graph
+- **Maintenance**: Dream Daemon's `note_lint` stage repairs broken wikilinks and rewrites renamed targets
+
+The `notes_links` SQLite table stores outgoing links per note, enabling fast graph traversal without re-parsing markdown.
+
+## 9. Subdocument Navigation
+
+- [Notes (L1)](memory/NOTES.md) — markdown-first persistent knowledge, indexing, `note_manage` tool, wikilink graph.
 - [Raw Memory (L0)](memory/RAW_MEMORY.md) — ephemeral session data, compression input.
 - [Dream Daemon](memory/DREAM_DAEMON.md) — 6-stage offline notes consolidation.
 - [Retrieval](memory/RETRIEVAL.md) — hybrid search, scoring, tools, audit.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### High memory / disk usage
 
@@ -179,7 +191,7 @@ Symptom: a note you know exists does not surface in search results.
 4. Increase BM25 weight when the target note is a good lexical match: `memory.bm25_bonus_weight = 0.3`.
 5. Use `memory_explore` for multi-hop traversal when single-shot retrieval keeps missing the wikilink neighborhood — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
-## Orientation layer (Spec 5, shipped 2026-04-14)
+## 12. Orientation layer (Spec 5, shipped 2026-04-14)
 
 Aleph maintains three LLM-readable markdown files per agent —
 `SCHEMA.md`, `index.md`, `log.md` — and a `NoteOrientation` trait that
@@ -192,7 +204,7 @@ content hashes. See
 for the design; the four new markdown files now live alongside the
 existing per-category note directories.
 
-## User profile (Spec 7, shipped 2026-04-17)
+## 12. User profile (Spec 7, shipped 2026-04-17)
 
 `USER.md` is a dialectic, session-end-synthesised user model with six
 fixed sections (Identity, Communication Style, Motivations, Current
@@ -204,7 +216,7 @@ N turns thereafter (configurable). The `user_profile` tool exposes
 read access in Tools/Hybrid mode. See
 [docs/superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md §4](../superpowers/specs/2026-04-14-memory-llm-wiki-evolution-design.md).
 
-## Query filed-back (Spec 8, shipped 2026-04-17)
+## 13. Query filed-back (Spec 8, shipped 2026-04-17)
 
 High-value `memory_reflect` answers are automatically archived as
 `query/` category notes. A two-tier gate (cheap: ≥3 sources + ≥200 chars;

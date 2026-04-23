@@ -7,7 +7,7 @@ Terminology in Aleph is aligned with Anthropic's managed-agents paradigm ([blog]
 ### Harness
 **Anthropic meaning:** The loop that calls the LLM and routes tool calls to relevant infrastructure. Stateless; recoverable via `wake(session_id)` after crashes.
 
-**Aleph today:** The Think→Act loop lives in `src/agent_loop/loop_core.rs` (pre-refactor) or `src/harness/` (post-Phase-4). No external-CLI meaning.
+**Aleph today:** The Think→Act loop lives in `src/harness/` (post-Phase-7). The legacy `src/agent_loop/` directory was deleted in 2026-04-21. No external-CLI meaning.
 
 ### Sandbox
 **Anthropic meaning:** Execution environment where the agent runs code and edits files. Provisioned on-demand via `execute(name, input) → string`.

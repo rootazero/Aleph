@@ -116,7 +116,7 @@ let run_context = run_context
     .with_initial_history(history);
 
 // Call with clean API
-let result = agent_loop.run(run_context, callback).await;
+let result = HarnessRunner::run(flow, deps).await;
 ```
 
 ### Benefits
@@ -138,7 +138,7 @@ Apply the Context Pattern when:
 
 ### Locations in Codebase
 
-- `agent_loop::RunContext` - Agent loop execution parameters
+- `HarnessDeps` / `FlowRequest` - Agent harness execution parameters (replaces legacy `agent_loop::RunContext`)
 - Future candidates: Tool execution contexts, configuration contexts
 
 ---
