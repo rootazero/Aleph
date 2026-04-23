@@ -306,7 +306,7 @@ mod tests {
     /// Spy tool that captures the SESSION_ID task-local visible during
     /// `execute` via `sandbox::context::current_session()`.
     struct SessionSpy {
-        seen: std::sync::Arc<std::sync::Mutex<Option<SessionId>>>,
+        seen: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Option<SessionId>>>,
     }
 
     #[async_trait]
@@ -329,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn session_id_task_local_is_visible_inside_invoke() {
         let session_svc = fresh_session_svc().await;
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(None));
         let tool_svc: Arc<dyn ToolService> = Arc::new(SessionSpy { seen: seen.clone() });
         let id = sample_id("trace-taskloc");
         session_svc.attach(id.clone()).await.unwrap();

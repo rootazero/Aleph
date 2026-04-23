@@ -30,7 +30,7 @@ pub struct EvolutionAutoLoader {
     tool_server: Arc<AlephToolServer>,
 
     /// Track generated skill paths for later management
-    generated_skills: std::sync::RwLock<Vec<PathBuf>>,
+    generated_skills: crate::sync_primitives::RwLock<Vec<PathBuf>>,
 }
 
 impl EvolutionAutoLoader {
@@ -39,7 +39,7 @@ impl EvolutionAutoLoader {
         Self {
             generator: MarkdownSkillGenerator::new(),
             tool_server,
-            generated_skills: std::sync::RwLock::new(Vec::new()),
+            generated_skills: crate::sync_primitives::RwLock::new(Vec::new()),
         }
     }
 
@@ -51,7 +51,7 @@ impl EvolutionAutoLoader {
         Self {
             generator: MarkdownSkillGenerator::with_config(config),
             tool_server,
-            generated_skills: std::sync::RwLock::new(Vec::new()),
+            generated_skills: crate::sync_primitives::RwLock::new(Vec::new()),
         }
     }
 

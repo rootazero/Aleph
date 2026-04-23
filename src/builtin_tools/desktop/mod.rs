@@ -10,9 +10,7 @@ mod tests;
 
 pub use types::{DesktopArgs, DesktopOutput};
 
-use std::sync::Mutex;
-
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 use async_trait::async_trait;
 

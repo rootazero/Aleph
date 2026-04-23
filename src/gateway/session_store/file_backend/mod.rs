@@ -33,7 +33,7 @@ impl Default for FileSessionStoreConfig {
 
 pub struct FileSessionStore {
     config: FileSessionStoreConfig,
-    event_bus: std::sync::RwLock<Option<Arc<GatewayEventBus>>>,
+    event_bus: crate::sync_primitives::RwLock<Option<Arc<GatewayEventBus>>>,
 }
 
 impl FileSessionStore {
@@ -50,7 +50,7 @@ impl FileSessionStore {
         info!("FileSessionStore initialized: {:?}", config.base_dir);
         Ok(Self {
             config,
-            event_bus: std::sync::RwLock::new(None),
+            event_bus: crate::sync_primitives::RwLock::new(None),
         })
     }
 

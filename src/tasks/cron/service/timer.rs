@@ -130,7 +130,7 @@ pub async fn run_worker_pool(
     }
 
     let worker_count = max_workers.min(jobs.len()).max(1);
-    let queue = Arc::new(std::sync::Mutex::new(VecDeque::from(jobs)));
+    let queue = Arc::new(crate::sync_primitives::Mutex::new(VecDeque::from(jobs)));
     let results = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     let mut handles = Vec::new();

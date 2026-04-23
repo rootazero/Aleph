@@ -5,8 +5,9 @@ use crate::gateway::channel::{ChannelConfig, ChannelFactory, ChannelResult};
 
 type ChannelFactoryFn = fn(ChannelConfig) -> ChannelResult<Arc<dyn ChannelFactory>>;
 
-static PLUGINS: std::sync::LazyLock<std::sync::RwLock<HashMap<&'static str, ChannelFactoryFn>>> =
-    std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+static PLUGINS: std::sync::LazyLock<
+    crate::sync_primitives::RwLock<HashMap<&'static str, ChannelFactoryFn>>,
+> = std::sync::LazyLock::new(|| crate::sync_primitives::RwLock::new(HashMap::new()));
 
 pub fn register(channel_type: &'static str, create: ChannelFactoryFn) {
     let mut guard = PLUGINS.write().unwrap();

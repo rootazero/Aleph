@@ -15,6 +15,12 @@ pub struct MessageDedup {
     ttl: Duration,
 }
 
+impl Default for MessageDedup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MessageDedup {
     pub fn new() -> Self {
         Self {

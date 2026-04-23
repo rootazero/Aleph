@@ -18,8 +18,8 @@ use crate::error::{AlephError, Result};
 use crate::gateway::context::GatewayContext;
 use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_engine::RunRequest;
+use crate::sync_primitives::{Arc, Mutex};
 use crate::gateway::router::SessionKey;
-use crate::sync_primitives::Arc;
 use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
@@ -261,7 +261,7 @@ impl AlephTool for TeamDelegateTool {
                 m
             },
             attachments: Vec::new(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: Arc::new(Mutex::new(Vec::new())),
         };
 
         let execution_adapter = Arc::clone(context.execution_adapter());

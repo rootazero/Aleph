@@ -64,6 +64,9 @@ pub struct ResolvedAgent {
     /// Parsed SOUL.md manifest (if present in workspace)
     pub soul: Option<SoulManifest>,
 
+    /// Raw SOUL.md content (if present in workspace)
+    pub soul_md: Option<String>,
+
     /// Raw AGENTS.md content (if present in workspace)
     pub agents_md: Option<String>,
 
@@ -296,6 +299,7 @@ impl AgentDefinitionResolver {
 
         // 6. Load SOUL.md, AGENTS.md, MEMORY.md from agent identity directory
         let soul = self.identity_loader.load_soul(&agent_dir);
+        let soul_md = self.identity_loader.load(&agent_dir, "SOUL.md");
         let agents_md = self.identity_loader.load_agents_md(&agent_dir);
         let max_chars = defaults
             .bootstrap_max_chars
@@ -317,6 +321,7 @@ impl AgentDefinitionResolver {
             agent_dir,
             profile,
             soul,
+            soul_md,
             agents_md,
             memory_md,
             model,

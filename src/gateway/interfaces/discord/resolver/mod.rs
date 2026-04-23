@@ -10,7 +10,7 @@ pub use error::{Candidate, ChannelResolutionError};
 pub use input::ParsedInput;
 
 use super::api::{list_channels, list_guilds, ChannelSummary, GuildSummary};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use serenity::http::Http;
 use strategy::search_in_guilds;
 
@@ -24,7 +24,7 @@ pub struct ResolvedChannel {
 #[derive(Clone)]
 pub struct DiscordResolver {
     http: Arc<Http>,
-    cache: Arc<std::sync::Mutex<Option<Cache>>>,
+    cache: Arc<Mutex<Option<Cache>>>,
 }
 
 struct Cache {
@@ -37,7 +37,7 @@ impl DiscordResolver {
     pub fn new(http: Arc<Http>) -> Self {
         Self {
             http,
-            cache: Arc::new(std::sync::Mutex::new(None)),
+            cache: Arc::new(Mutex::new(None)),
         }
     }
 

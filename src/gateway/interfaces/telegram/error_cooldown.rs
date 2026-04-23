@@ -9,8 +9,8 @@
 //! to allow a probe request.
 
 use super::config_v2::ErrorPolicy;
+use crate::sync_primitives::Mutex;
 use dashmap::DashMap;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Duration after which a tripped typing circuit breaker enters half-open

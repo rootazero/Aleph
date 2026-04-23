@@ -91,7 +91,7 @@ pub struct MsTeamsConfig {
     /// Azure Bot App ID
     pub app_id: String,
     /// Azure Bot App Password (client secret) - deprecated, use federated_identity instead
-    #[deprecated(since = "2026.06.01", note = "use federated_identity instead")]
+    #[deprecated(since = "0.3.0", note = "use federated_identity instead")]
     pub app_password: String,
     /// Federated identity configuration (recommended alternative to app_password)
     #[serde(skip_serializing_if = "Option::is_none")]

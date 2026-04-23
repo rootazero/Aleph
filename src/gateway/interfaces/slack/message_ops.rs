@@ -816,6 +816,7 @@ impl SlackMessageOps {
     /// - Processing events in a loop with `tokio::select!`
     /// - ACK-ing `events_api` envelopes
     /// - Reconnecting with exponential backoff on disconnect
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_socket_mode_loop(
         client: reqwest::Client,
         app_token: String,

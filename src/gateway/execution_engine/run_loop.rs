@@ -8,10 +8,9 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Mutex;
-
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{
+    Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering,
+};
 
 use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};

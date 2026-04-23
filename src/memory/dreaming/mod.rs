@@ -336,9 +336,9 @@ pub struct DreamDaemon {
     /// Optional wiki orientation — forwarded into DreamContext for IndexRefresherStage.
     orientation: Option<Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
     /// Strategy selector with personality adaptation.
-    selector: std::sync::Mutex<StrategySelector>,
+    selector: crate::sync_primitives::Mutex<StrategySelector>,
     /// Mutation gate tracking evolution pathologies.
-    mutation_gate: std::sync::Mutex<MutationGate>,
+    mutation_gate: crate::sync_primitives::Mutex<MutationGate>,
 }
 
 impl DreamDaemon {
@@ -354,8 +354,8 @@ impl DreamDaemon {
             command_handler: None,
             provider: None,
             orientation: None,
-            selector: std::sync::Mutex::new(StrategySelector::new()),
-            mutation_gate: std::sync::Mutex::new(MutationGate::new()),
+            selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
+            mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
         })
     }
 

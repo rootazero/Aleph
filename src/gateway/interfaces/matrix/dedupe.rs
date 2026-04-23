@@ -1,7 +1,7 @@
 use crate::gateway::channel::ChannelError;
+use crate::sync_primitives::Mutex;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 /// Inbound event deduplicator backed by SQLite with an in-memory LRU cache.
 pub struct EventDeduper {

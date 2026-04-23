@@ -66,7 +66,7 @@ impl PairingManager {
     pub fn new(graph_client: Arc<GraphClient>) -> Self {
         Self {
             graph_client,
-            state: Arc::new(RwLock::new(PairingState::Unpaired)).into(),
+            state: Arc::new(RwLock::new(PairingState::Unpaired)),
         }
     }
 

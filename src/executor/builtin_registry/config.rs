@@ -1,8 +1,6 @@
 //! Configuration types for the builtin tool registry
 
-use crate::sync_primitives::Arc;
-
-use tokio::sync::RwLock;
+use crate::sync_primitives::{Arc, RwLock};
 
 use crate::acp::manager::AcpAdapterManager;
 use crate::config::{Config, ConfigPatcher};
@@ -20,11 +18,11 @@ pub struct BuiltinToolConfig {
     /// Search registry for multi-provider search (SearXNG, Tavily, Brave, etc.)
     pub search_registry: Option<Arc<crate::search::SearchRegistry>>,
     /// Generation provider registry for image/video/audio generation
-    pub generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
+    pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
-    pub dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
+    pub dispatcher_registry: Option<Arc<tokio::sync::RwLock<DispatcherToolRegistry>>>,
     /// Shared config handle for ConfigReadTool
-    pub config: Option<Arc<RwLock<Config>>>,
+    pub config: Option<Arc<tokio::sync::RwLock<Config>>>,
     /// ConfigPatcher for ConfigUpdateTool
     pub config_patcher: Option<Arc<ConfigPatcher>>,
     /// Memory backend for memory_search and memory_browse tools

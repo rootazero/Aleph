@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use std::sync::Arc;
+use alephcore::sync_primitives::{Arc, Mutex};
 
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
@@ -183,7 +183,7 @@ where
         timeout_secs: None,
         metadata,
         attachments: Vec::new(),
-        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_media: Arc::new(Mutex::new(Vec::new())),
     };
 
     // Spawn execution task
@@ -394,7 +394,7 @@ where
         timeout_secs: None,
         metadata,
         attachments: Vec::new(),
-        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_media: Arc::new(Mutex::new(Vec::new())),
     };
 
     // Spawn execution task

@@ -1,4 +1,4 @@
-use std::sync::Mutex as StdMutex;
+use crate::sync_primitives::Mutex as StdMutex;
 
 use crate::gateway::interfaces::feishu::api::FeishuApi;
 use crate::gateway::interfaces::feishu::types::TypingState;

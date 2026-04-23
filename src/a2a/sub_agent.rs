@@ -553,7 +553,7 @@ mod spec1_tests {
     use std::sync::Arc;
 
     #[derive(Default)]
-    struct FakeWriter(std::sync::Mutex<Vec<RawMemory>>);
+    struct FakeWriter(crate::sync_primitives::Mutex<Vec<RawMemory>>);
 
     #[async_trait::async_trait]
     impl RawMemoryStore for FakeWriter {

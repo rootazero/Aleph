@@ -487,7 +487,7 @@
       "basic_settings": "基础设置",
       "enable_memory": "启用记忆模块",
       "vector_db": "向量数据库",
-      "vector_db_hint": "LanceDB 是唯一支持的向量数据库后端",
+      "vector_db_hint": "sqlite-vec 是当前使用的向量数据库后端",
       "max_context_items": "最大上下文条目数",
       "retention_days": "保留天数",
       "similarity_threshold": "相似度阈值（0.0-1.0）",

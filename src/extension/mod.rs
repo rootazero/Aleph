@@ -86,8 +86,8 @@ use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use crate::sync_primitives::RwLock as StdRwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock as StdRwLock;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 
@@ -170,8 +170,8 @@ pub struct ExtensionManager {
     /// section are auto-registered as `McpMemoryExtension` entries.
     /// Wrapped in RwLock so it can be injected after construction (the manager
     /// is typically behind an Arc by the time Task 11 calls `set_memory_registry`).
-    memory_registry: std::sync::RwLock<
-        Option<std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    memory_registry: crate::sync_primitives::RwLock<
+        Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
 
     /// Phase 2 Tool Service shared registry (Task 4).
@@ -181,7 +181,7 @@ pub struct ExtensionManager {
     /// lifecycle wiring is deferred to Task 10 (AppContext wiring) per the
     /// Phase 2 plan — this field + setter ship now so the registration helper
     /// has a stable injection point.
-    tool_registry: std::sync::RwLock<Option<std::sync::Arc<crate::tools::registry::ToolRegistry>>>,
+    tool_registry: crate::sync_primitives::RwLock<Option<crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>>>
 }
 
 impl ExtensionManager {
@@ -211,8 +211,8 @@ impl ExtensionManager {
             active_plugin_tools: Arc::new(StdRwLock::new(HashMap::new())),
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
-            memory_registry: std::sync::RwLock::new(None),
-            tool_registry: std::sync::RwLock::new(None),
+            memory_registry: crate::sync_primitives::RwLock::new(None),
+            tool_registry: crate::sync_primitives::RwLock::new(None),
         })
     }
 
@@ -227,7 +227,7 @@ impl ExtensionManager {
     /// `Arc<ExtensionManager>`, use `set_memory_registry` instead.
     pub fn with_memory_registry(
         self,
-        registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+        registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) -> Self {
         *self
             .memory_registry
@@ -243,7 +243,7 @@ impl ExtensionManager {
     /// section are auto-registered as `McpMemoryExtension` entries.
     pub fn set_memory_registry(
         &self,
-        registry: std::sync::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+        registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
     ) {
         *self
             .memory_registry
@@ -258,7 +258,7 @@ impl ExtensionManager {
     /// `tools::handlers::registration`.
     pub fn set_tool_registry(
         &self,
-        registry: std::sync::Arc<crate::tools::registry::ToolRegistry>,
+        registry: crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>,
     ) {
         *self
             .tool_registry
@@ -270,7 +270,7 @@ impl ExtensionManager {
     #[allow(dead_code)] // Consumed from Task 10 when lifecycle wiring lands.
     pub(crate) fn tool_registry(
         &self,
-    ) -> Option<std::sync::Arc<crate::tools::registry::ToolRegistry>> {
+    ) -> Option<crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>> {
         self.tool_registry
             .read()
             .unwrap_or_else(|e| e.into_inner())

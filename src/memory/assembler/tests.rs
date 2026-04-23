@@ -18,7 +18,7 @@ use crate::memory::SqliteMemoryBackend;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex as StdMutex;
+use crate::sync_primitives::Mutex as StdMutex;
 use std::time::Duration;
 
 // ---- Stubs ----

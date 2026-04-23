@@ -39,6 +39,7 @@ fn map_session_metadata(row: &rusqlite::Row) -> Result<SessionMetadata, rusqlite
         model_provider: row.get(14)?,
         parent_session_key: row.get(15)?,
         compaction_count: row.get(16)?,
+        derived_title: row.get(17).ok(),
         ..Default::default()
     })
 }
@@ -65,7 +66,7 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count
+                        parent_session_key, compaction_count, derived_title
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -201,6 +202,27 @@ impl SessionManager {
             let model_owned = model.map(|s| s.to_string());
             let provider_owned = model_provider.map(|s| s.to_string());
 
+            let derived_title: Option<String> = if role == "user" {
+                conn.query_row(
+                    "SELECT derived_title FROM sessions WHERE key = ?",
+                    params![&key_str],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    let title = content.trim();
+                    let title = if title.chars().count() > 60 {
+                        title.chars().take(60).collect::<String>() + "..."
+                    } else {
+                        title.to_string()
+                    };
+                    if title.is_empty() { None } else { Some(title) }
+                })
+            } else {
+                None
+            };
+
             let mut session_update_sql = String::from(
                 "UPDATE sessions SET last_active_at = ?, message_count = message_count + 1, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, total_tokens = total_tokens + ?"
             );
@@ -213,6 +235,9 @@ impl SessionManager {
             if provider_owned.is_some() {
                 session_update_sql.push_str(", model_provider = ?");
             }
+            if derived_title.is_some() {
+                session_update_sql.push_str(", derived_title = ?");
+            }
             session_update_sql.push_str(" WHERE key = ?");
 
             let mut params: Vec<&dyn rusqlite::ToSql> =
@@ -222,6 +247,9 @@ impl SessionManager {
             }
             if let Some(ref mp) = provider_owned {
                 params.push(mp);
+            }
+            if let Some(ref dt) = derived_title {
+                params.push(dt);
             }
             params.push(&key_str);
             conn.execute(&session_update_sql, params.as_slice()).ok();
@@ -386,7 +414,7 @@ impl SessionManager {
         let sql = "SELECT key, agent_id, session_type, created_at, last_active_at,
                           message_count, total_tokens, auto_reset_at, state, metadata,
                           label, input_tokens, output_tokens, model, model_provider,
-                          parent_session_key, compaction_count
+                          parent_session_key, compaction_count, derived_title
                    FROM sessions";
 
         let sessions = if let Some(id) = agent_id {
@@ -1027,7 +1055,7 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count
+                        parent_session_key, compaction_count, derived_title
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,
@@ -1192,7 +1220,7 @@ impl SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count
+                        parent_session_key, compaction_count, derived_title
                  FROM sessions WHERE state = ? ORDER BY last_active_at DESC",
             )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
@@ -1268,10 +1296,10 @@ mod spec1_tests {
     use crate::memory::store::raw_memory::{
         RawMemory, RawMemorySource, RawMemoryStore, SessionEndReason,
     };
-    use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{Arc, Mutex};
 
     #[derive(Default)]
-    struct FakeWriter(std::sync::Mutex<Vec<RawMemory>>);
+    struct FakeWriter(Mutex<Vec<RawMemory>>);
 
     #[async_trait::async_trait]
     impl RawMemoryStore for FakeWriter {

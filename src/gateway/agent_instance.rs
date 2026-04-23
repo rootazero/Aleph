@@ -84,10 +84,12 @@ impl AgentInstanceConfig {
     /// Create from a resolved agent definition.
     ///
     /// Maps ResolvedAgent fields to AgentInstanceConfig:
-    /// - system_prompt <- agents_md (workspace AGENTS.md content)
+    /// - system_prompt <- soul_md (workspace SOUL.md content), falls back to agents_md
     /// - tool_whitelist <- skills
     /// - workspace <- workspace_path
     pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
+        // Prioritize SOUL.md over AGENTS.md for system prompt
+        let system_prompt = agent.soul_md.clone().or_else(|| agent.agents_md.clone());
         Self {
             agent_id: agent.id.clone(),
             display_name: Some(agent.name.clone()),
@@ -96,7 +98,7 @@ impl AgentInstanceConfig {
             fallback_models: vec![],
             max_loops: 100,
             max_tokens: None,
-            system_prompt: agent.agents_md.clone(),
+            system_prompt,
             tool_whitelist: agent.skills.clone(),
             tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
@@ -936,6 +938,7 @@ mod tests {
             agent_dir: PathBuf::from("/tmp/test-agents/coding"),
             profile: ProfileConfig::default(),
             soul: None,
+            soul_md: Some("You are a coding expert.".to_string()),
             agents_md: Some("Be a great coder.".to_string()),
             memory_md: None,
             model: "claude-opus-4-6".to_string(),
@@ -950,7 +953,8 @@ mod tests {
         assert_eq!(config.agent_id, "coding");
         assert_eq!(config.workspace, PathBuf::from("/tmp/test-workspace"));
         assert_eq!(config.model, "claude-opus-4-6");
-        assert_eq!(config.system_prompt.as_deref(), Some("Be a great coder."));
+        // soul_md takes priority over agents_md
+        assert_eq!(config.system_prompt.as_deref(), Some("You are a coding expert."));
         assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
         assert!(config.tool_blacklist.is_empty());
         assert_eq!(config.max_loops, 100);
@@ -969,6 +973,7 @@ mod tests {
             agent_dir: PathBuf::from("/tmp/test-agents/restricted"),
             profile: ProfileConfig::default(),
             soul: None,
+            soul_md: None,
             agents_md: None,
             memory_md: None,
             model: "claude-sonnet-4-5".to_string(),

@@ -11,8 +11,7 @@ use super::store::SecurityStore;
 use crate::secrets::crypto::SecretsCrypto;
 use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
 use crate::secrets::vault::SecretVault;
-use crate::sync_primitives::{Arc, Mutex};
-use std::sync::RwLock;
+use crate::sync_primitives::{Arc, Mutex, RwLock};
 use uuid::Uuid;
 
 /// Manages a single shared token for UI/API authentication.

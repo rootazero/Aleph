@@ -196,8 +196,8 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::RwLock;
     use std::collections::HashMap;
-    use std::sync::RwLock;
 
     // Hardhat default account #0
     const TEST_PRIVATE_KEY: &str =

@@ -54,7 +54,7 @@ mod tests {
 
     #[tokio::test]
     async fn records_one_row_per_note() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::new()));
         let cap_ref = captured.clone();
         let record = move |row: SignalRow| {
             let cap_ref = cap_ref.clone();
@@ -92,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_lookup_writes_no_rows() {
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::new()));
         let cap_ref = captured.clone();
         let record = move |row: SignalRow| {
             let cap_ref = cap_ref.clone();
@@ -113,7 +113,7 @@ mod tests {
         // Sanity: Owner scope should produce "owner" — matches the sqlite
         // schema's default namespace column value.
         let opts = ReflectOpts::for_agent("x");
-        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::new()));
         let cap_ref = captured.clone();
         let record = move |row: SignalRow| {
             let cap_ref = cap_ref.clone();

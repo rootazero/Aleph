@@ -412,7 +412,7 @@ mod tests {
     async fn test_global_bus_maintains_sequence_ordering() {
         let global_bus = Box::leak(Box::new(GlobalBus::new()));
 
-        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sequences = Arc::new(crate::sync_primitives::Mutex::new(Vec::new()));
         let seq_clone = sequences.clone();
 
         let _sub = global_bus

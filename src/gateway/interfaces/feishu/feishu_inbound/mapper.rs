@@ -47,7 +47,7 @@ pub fn map_event_to_inbound(
                 text,
                 attachments: vec![],
                 timestamp: Utc::now(),
-                reply_to: parent_id.as_ref().map(|id| MessageId::new(id)),
+                reply_to: parent_id.as_ref().map(MessageId::new),
                 is_group,
                 raw: Some(serde_json::json!(event)),
                 metadata,

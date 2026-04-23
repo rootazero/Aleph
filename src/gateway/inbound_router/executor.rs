@@ -4,7 +4,7 @@
 //! (execute_for_context / execute_for_context_with_metadata)
 //! into a single parameterized implementation.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -110,7 +110,7 @@ impl InboundMessageRouter {
         }
 
         let pending_media: crate::gateway::media::PendingMedia =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            Arc::new(Mutex::new(Vec::new()));
 
         // Detect feishu/telegram channels and optionally construct custom emitters
         let (is_feishu, is_telegram) = {

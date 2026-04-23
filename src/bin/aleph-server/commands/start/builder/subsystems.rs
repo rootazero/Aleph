@@ -8,7 +8,8 @@
 //! - Inbound message routing
 
 use std::path::PathBuf;
-use std::sync::Arc;
+
+use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
@@ -362,7 +363,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     session_store: Option<Arc<dyn alephcore::gateway::session_store::SessionStore>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     generation_registry: Option<
-        Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>,
+        Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>,
     >,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
     daemon: bool,

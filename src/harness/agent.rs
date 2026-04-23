@@ -30,6 +30,7 @@ use crate::providers::adapter::{NativeToolCall, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
+use crate::tools::service::ToolError;
 
 pub struct AgentHarness {
     deps: HarnessDeps,
@@ -76,6 +77,8 @@ impl AgentHarness {
         tool_calls: Vec<NativeToolCall>,
         callback: &mut dyn HarnessCallback,
     ) -> Result<(), HarnessError> {
+        let mut first_error: Option<ToolError> = None;
+
         for call in tool_calls {
             callback.on_tool_call(&call.name);
             let requested = SessionEvent::ToolCallRequested {
@@ -86,6 +89,26 @@ impl AgentHarness {
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
+
+            if let Some(ref prior_err) = first_error {
+                let skip_event = SessionEvent::ToolError {
+                    turn_id,
+                    call_id: call.id.clone(),
+                    error: format!("Skipped: {}", prior_err),
+                    at: now_ms(),
+                };
+                if let Err(emit_err) =
+                    self.deps.session.emit_event(session_id, skip_event).await
+                {
+                    tracing::warn!(
+                        ?session_id,
+                        call_id = %call.id,
+                        ?emit_err,
+                        "failed to persist skipped-tool ToolError event",
+                    );
+                }
+                continue;
+            }
 
             match self.deps.tools.execute(&call.name, call.arguments).await {
                 Ok(output) => {
@@ -122,9 +145,13 @@ impl AgentHarness {
                             "failed to persist ToolError event",
                         );
                     }
-                    return Err(HarnessError::Tool(e));
+                    first_error = Some(e);
                 }
             }
+        }
+
+        if let Some(e) = first_error {
+            return Err(HarnessError::Tool(e));
         }
         Ok(())
     }
@@ -302,9 +329,33 @@ impl Harness for AgentHarness {
             return Ok(TurnState::Done);
         }
 
+        // 2d. Fetch tool definitions from the tool service and convert to
+        // dispatcher format so the LLM sees available tools.
+        let tool_defs = self.deps.tools.list().await;
+        let dispatcher_tools: Vec<crate::dispatcher::ToolDefinition> = tool_defs
+            .into_iter()
+            .map(|def| crate::dispatcher::ToolDefinition {
+                name: def.name,
+                description: def.description,
+                parameters: def.input_schema,
+                requires_confirmation: false,
+                category: crate::dispatcher::ToolCategory::Builtin,
+                llm_context: None,
+                strict: false,
+            })
+            .collect();
+        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> =
+            if dispatcher_tools.is_empty() {
+                None
+            } else {
+                Some(&dispatcher_tools)
+            };
+
         let payload = match self.deps.system_prompt.as_deref() {
-            Some(sp) => RequestPayload::new(&messages).with_system(Some(sp)),
-            None => RequestPayload::new(&messages),
+            Some(sp) => RequestPayload::new(&messages)
+                .with_system(Some(sp))
+                .with_tools(tools_ref),
+            None => RequestPayload::new(&messages).with_tools(tools_ref),
         };
 
         // 3. Call the LLM.
@@ -520,6 +571,22 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
                         cache_control: None,
                     }],
                     is_error: false,
+                });
+            }
+            SessionEvent::ToolError {
+                call_id, error, ..
+            } => {
+                let tool_result_idx = tail_start + offset;
+                let tool_name =
+                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
+                messages.push(UnifiedMessage::ToolResult {
+                    tool_call_id: call_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    content: vec![ContentBlock::Text {
+                        text: error.clone(),
+                        cache_control: None,
+                    }],
+                    is_error: true,
                 });
             }
             _ => {}

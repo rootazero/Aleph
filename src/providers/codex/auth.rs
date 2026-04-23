@@ -185,7 +185,7 @@ impl CodexAuth {
 
         // Channel to send the authorization code from the callback handler
         let (tx, rx) = oneshot::channel::<std::result::Result<String, String>>();
-        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
+        let tx = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Some(tx)));
 
         let expected_state = state.clone();
 

@@ -542,7 +542,7 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
 #[cfg(test)]
 pub struct MockToolRegistry {
     tools: std::collections::HashMap<String, UnifiedTool>,
-    results: std::sync::Mutex<std::collections::HashMap<String, Value>>,
+    results: crate::sync_primitives::Mutex<std::collections::HashMap<String, Value>>,
 }
 
 #[cfg(test)]
@@ -550,7 +550,7 @@ impl MockToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: std::collections::HashMap::new(),
-            results: std::sync::Mutex::new(std::collections::HashMap::new()),
+            results: crate::sync_primitives::Mutex::new(std::collections::HashMap::new()),
         }
     }
 

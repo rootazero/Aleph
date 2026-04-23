@@ -234,7 +234,7 @@ impl AcpSession {
         if let Some(cb) = on_chunk {
             // Streaming path: forward chunks in real-time via callback
             let cb = cb.clone();
-            let accumulated = std::sync::Mutex::new(String::new());
+            let accumulated = crate::sync_primitives::Mutex::new(String::new());
 
             let result = self
                 .transport

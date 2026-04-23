@@ -11,6 +11,6 @@ impl MediaHelper {
     ) -> ChannelResult<String> {
         api.upload_image(data, filename)
             .await
-            .map_err(|e| crate::gateway::channel::ChannelError::SendFailed(e))
+            .map_err(crate::gateway::channel::ChannelError::SendFailed)
     }
 }

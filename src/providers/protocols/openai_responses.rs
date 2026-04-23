@@ -335,7 +335,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                     let line = line.trim_end();
 
-                    if let Some(data) = line.strip_prefix("data: ") {
+                    if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
                         parse_sse_event_multi(data, &mut state.item_to_call, &mut state.pending);
                     }
                     // Loop to drain more lines or pop from pending
@@ -350,7 +350,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                         let remaining = remaining.trim();
                         if !remaining.is_empty() {
-                            if let Some(data) = remaining.strip_prefix("data: ") {
+                            if let Some(data) = remaining.strip_prefix("data: ").or_else(|| remaining.strip_prefix("data:")) {
                                 parse_sse_event_multi(
                                     data,
                                     &mut state.item_to_call,

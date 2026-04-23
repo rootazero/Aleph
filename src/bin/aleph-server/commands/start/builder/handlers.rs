@@ -774,6 +774,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
 
 // ─── init_compression_service ────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) fn init_compression_service(
     memory_db: &MemoryBackend,
     provider: std::sync::Arc<dyn alephcore::providers::AiProvider>,

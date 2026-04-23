@@ -157,10 +157,9 @@ mod tests {
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::raw_memory::RawMemorySource;
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
     struct CannedCaller {
-        canned: Mutex<HashMap<String, Value>>,
+        canned: crate::sync_primitives::Mutex<HashMap<String, Value>>,
     }
 
     impl CannedCaller {
@@ -170,7 +169,7 @@ mod tests {
                 m.insert(k.to_string(), v);
             }
             Self {
-                canned: Mutex::new(m),
+                canned: crate::sync_primitives::Mutex::new(m),
             }
         }
     }

@@ -64,6 +64,7 @@ fn map_session_metadata(
         model_provider: row.get(14)?,
         parent_session_key: row.get(15)?,
         compaction_count: row.get(16)?,
+        derived_title: row.get(17).ok(),
         ..Default::default()
     })
 }
@@ -89,7 +90,7 @@ impl SessionStore for SessionManager {
                 "SELECT key, agent_id, session_type, created_at, last_active_at,
                         message_count, total_tokens, auto_reset_at, state, metadata,
                         label, input_tokens, output_tokens, model, model_provider,
-                        parent_session_key, compaction_count
+                        parent_session_key, compaction_count, derived_title
                  FROM sessions WHERE key = ?",
                 params![&key_str],
                 map_session_metadata,

@@ -135,7 +135,7 @@ fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                 <div>
                     <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.vector_db)}</label>
                     <div class="w-full px-3 py-2 border border-border rounded bg-surface-sunken text-text-secondary">
-                        "LanceDB"
+                        {move || config.get().map(|c| c.vector_db.clone()).unwrap_or_else(|| "sqlite-vec".to_string())}
                     </div>
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.vector_db_hint)}</p>
                 </div>

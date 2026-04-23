@@ -298,35 +298,52 @@ pub trait InternalEventHandler: Send + Sync {
 #[cfg(test)]
 #[allow(clippy::type_complexity)]
 pub struct MockEventHandler {
-    pub state_changes: std::sync::Arc<std::sync::Mutex<Vec<ProcessingState>>>,
-    pub errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    pub response_chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    pub typed_errors: std::sync::Arc<std::sync::Mutex<Vec<(ErrorType, String)>>>,
-    pub progress_updates: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
-    pub ai_processing_started: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    pub ai_responses: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    pub provider_fallbacks: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    pub config_changes: std::sync::Arc<std::sync::Mutex<u32>>, // Count of config change events
-    pub typewriter_progress: std::sync::Arc<std::sync::Mutex<Vec<f32>>>, // Typewriter progress updates
-    pub typewriter_cancelled: std::sync::Arc<std::sync::Mutex<u32>>,     // Count of cancellations
-    pub clarification_requests: std::sync::Arc<std::sync::Mutex<Vec<ClarificationRequest>>>, // Phantom Flow requests
-    pub clarification_response: std::sync::Arc<std::sync::Mutex<Option<ClarificationResult>>>, // Mock response to return
+    pub state_changes:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<ProcessingState>>>,
+    pub errors: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<String>>>,
+    pub response_chunks: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<String>>>,
+    pub typed_errors:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<(ErrorType, String)>>>,
+    pub progress_updates: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<f32>>>,
+    pub ai_processing_started:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<(String, String)>>>,
+    pub ai_responses: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<String>>>,
+    pub provider_fallbacks:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<(String, String)>>>,
+    pub config_changes: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<u32>>, // Count of config change events
+    pub typewriter_progress: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<f32>>>, // Typewriter progress updates
+    pub typewriter_cancelled: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<u32>>, // Count of cancellations
+    pub clarification_requests:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<ClarificationRequest>>>, // Phantom Flow requests
+    pub clarification_response:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Option<ClarificationResult>>>, // Mock response to return
     // Multi-turn conversation tracking
-    pub conversation_started: std::sync::Arc<std::sync::Mutex<Vec<String>>>, // Session IDs
-    pub conversation_turns: std::sync::Arc<std::sync::Mutex<Vec<ConversationTurn>>>,
-    pub conversation_continuation_ready_count: std::sync::Arc<std::sync::Mutex<u32>>,
-    pub conversation_ended: std::sync::Arc<std::sync::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
+    pub conversation_started:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<String>>>, // Session IDs
+    pub conversation_turns:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<ConversationTurn>>>,
+    pub conversation_continuation_ready_count:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<u32>>,
+    pub conversation_ended:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
     // Tool registry tracking
-    pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
-    pub tools_refresh_needed_count: std::sync::Arc<std::sync::Mutex<u32>>,
+    pub tools_changed: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<u32>>>,
+    pub tools_refresh_needed_count: crate::sync_primitives::Arc<crate::sync_primitives::Mutex<u32>>,
     // MCP startup tracking
-    pub mcp_startup_reports: std::sync::Arc<std::sync::Mutex<Vec<McpStartupReport>>>,
+    pub mcp_startup_reports:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<McpStartupReport>>>,
     // Agent loop tracking
-    pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
-    pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
-    pub agent_tool_completed:
-        std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, bool, String)>>>, // (plan_id, step_index, tool_name, success, result_preview)
-    pub agent_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, bool, u64, String)>>>, // (plan_id, success, duration_ms, response)
+    pub agent_started:
+        crate::sync_primitives::Arc<crate::sync_primitives::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
+    pub agent_tool_started: crate::sync_primitives::Arc<
+        crate::sync_primitives::Mutex<Vec<(String, u32, String, String)>>,
+    >, // (plan_id, step_index, tool_name, description)
+    pub agent_tool_completed: crate::sync_primitives::Arc<
+        crate::sync_primitives::Mutex<Vec<(String, u32, String, bool, String)>>,
+    >, // (plan_id, step_index, tool_name, success, result_preview)
+    pub agent_completed: crate::sync_primitives::Arc<
+        crate::sync_primitives::Mutex<Vec<(String, bool, u64, String)>>,
+    >, // (plan_id, success, duration_ms, response)
 }
 
 #[cfg(test)]
@@ -339,31 +356,32 @@ impl Default for MockEventHandler {
 #[cfg(test)]
 impl MockEventHandler {
     pub fn new() -> Self {
+        use crate::sync_primitives::{Arc, Mutex};
         Self {
-            state_changes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            response_chunks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            typed_errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            progress_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            ai_processing_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            ai_responses: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            provider_fallbacks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            config_changes: std::sync::Arc::new(std::sync::Mutex::new(0)),
-            typewriter_progress: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            typewriter_cancelled: std::sync::Arc::new(std::sync::Mutex::new(0)),
-            clarification_requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            clarification_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            conversation_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            conversation_turns: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            conversation_continuation_ready_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
-            conversation_ended: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            tools_changed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            tools_refresh_needed_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
-            mcp_startup_reports: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            agent_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            agent_tool_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            agent_tool_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            agent_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            state_changes: Arc::new(Mutex::new(Vec::new())),
+            errors: Arc::new(Mutex::new(Vec::new())),
+            response_chunks: Arc::new(Mutex::new(Vec::new())),
+            typed_errors: Arc::new(Mutex::new(Vec::new())),
+            progress_updates: Arc::new(Mutex::new(Vec::new())),
+            ai_processing_started: Arc::new(Mutex::new(Vec::new())),
+            ai_responses: Arc::new(Mutex::new(Vec::new())),
+            provider_fallbacks: Arc::new(Mutex::new(Vec::new())),
+            config_changes: Arc::new(Mutex::new(0)),
+            typewriter_progress: Arc::new(Mutex::new(Vec::new())),
+            typewriter_cancelled: Arc::new(Mutex::new(0)),
+            clarification_requests: Arc::new(Mutex::new(Vec::new())),
+            clarification_response: Arc::new(Mutex::new(None)),
+            conversation_started: Arc::new(Mutex::new(Vec::new())),
+            conversation_turns: Arc::new(Mutex::new(Vec::new())),
+            conversation_continuation_ready_count: Arc::new(Mutex::new(0)),
+            conversation_ended: Arc::new(Mutex::new(Vec::new())),
+            tools_changed: Arc::new(Mutex::new(Vec::new())),
+            tools_refresh_needed_count: Arc::new(Mutex::new(0)),
+            mcp_startup_reports: Arc::new(Mutex::new(Vec::new())),
+            agent_started: Arc::new(Mutex::new(Vec::new())),
+            agent_tool_started: Arc::new(Mutex::new(Vec::new())),
+            agent_tool_completed: Arc::new(Mutex::new(Vec::new())),
+            agent_completed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 

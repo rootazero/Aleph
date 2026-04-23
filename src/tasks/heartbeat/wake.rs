@@ -6,7 +6,7 @@
 //! preserving the most urgent intent.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 
 use tokio::sync::Notify;
 

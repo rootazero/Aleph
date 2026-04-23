@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::sync_primitives::{Arc, Mutex};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{header, HeaderMap};
@@ -26,7 +27,7 @@ use crate::gateway::openai_api::types::{
     Delta, DeltaFunction, DeltaToolCall, StreamChoice, Usage,
 };
 use crate::gateway::router::SessionKey;
-use crate::sync_primitives::Arc;
+
 
 // =============================================================================
 // SseEventEmitter — translates StreamEvent → OpenAI SSE frames
@@ -39,8 +40,8 @@ struct SseEventEmitter {
     completion_id: String,
     model: String,
     created: u64,
-    seq: std::sync::atomic::AtomicU64,
-    tool_tracker: std::sync::Mutex<stream::ToolCallTracker>,
+    seq: crate::sync_primitives::AtomicU64,
+    tool_tracker: Mutex<stream::ToolCallTracker>,
 }
 
 impl SseEventEmitter {
@@ -50,8 +51,8 @@ impl SseEventEmitter {
             completion_id,
             model,
             created,
-            seq: std::sync::atomic::AtomicU64::new(0),
-            tool_tracker: std::sync::Mutex::new(stream::ToolCallTracker::default()),
+            seq: crate::sync_primitives::AtomicU64::new(0),
+            tool_tracker: Mutex::new(stream::ToolCallTracker::default()),
         }
     }
 
@@ -313,7 +314,7 @@ pub async fn handle(
     }
 
     let run_id = uuid::Uuid::new_v4().to_string();
-    let pending_media: PendingMedia = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pending_media: PendingMedia = Arc::new(Mutex::new(Vec::new()));
 
     let run_request = RunRequest {
         run_id: run_id.clone(),

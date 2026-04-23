@@ -89,10 +89,8 @@ impl StreamOrchestrator {
                                 tracing::warn!("Failed to write answer chunk: {}", e);
                             }
                         }
-                    } else {
-                        if let Err(e) = answer_lane.write_chunk(delta).await {
-                            tracing::warn!("Failed to write answer chunk: {}", e);
-                        }
+                    } else if let Err(e) = answer_lane.write_chunk(delta).await {
+                        tracing::warn!("Failed to write answer chunk: {}", e);
                     }
                 }
                 StreamEvent::ReasoningBlock { content, .. } => {

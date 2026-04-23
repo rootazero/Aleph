@@ -373,8 +373,8 @@ impl AiProvider for ModelOverrideProvider {
 mod tests {
     use super::*;
 
+    use crate::sync_primitives::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
 
     use crate::agents::{AgentDef, AgentMode};
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason};

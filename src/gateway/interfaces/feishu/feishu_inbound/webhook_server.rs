@@ -1,5 +1,4 @@
-use crate::sync_primitives::Arc;
-use std::sync::Mutex as StdMutex;
+use crate::sync_primitives::{Arc, Mutex as StdMutex};
 
 use axum::{body::Bytes, extract::State, http::StatusCode, response::Json, routing::post, Router};
 use hmac::{Hmac, Mac};

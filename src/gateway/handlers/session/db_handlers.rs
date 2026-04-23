@@ -26,7 +26,6 @@ pub struct SessionInfo {
     pub created_at: String,
     /// Last activity timestamp (ISO 8601)
     pub last_active_at: String,
-    /// Session topic (extracted from metadata JSON)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     /// Session status (e.g. "closed")
@@ -92,12 +91,14 @@ pub async fn handle_list_db(
                 // that should not appear in user-facing session lists
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
-                    let topic = m.topic.clone().or_else(|| {
-                        m.identity_meta.as_ref().and_then(|im| {
-                            im.custom
-                                .get("topic")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
+                    let topic = m.derived_title.clone().or_else(|| {
+                        m.topic.clone().or_else(|| {
+                            m.identity_meta.as_ref().and_then(|im| {
+                                im.custom
+                                    .get("topic")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                            })
                         })
                     });
                     let status = m.status.clone().or_else(|| {

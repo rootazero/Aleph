@@ -8,7 +8,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::router::SessionKey;
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
@@ -80,7 +80,7 @@ async fn test_simple_execution_engine_basic() {
         timeout_secs: None,
         metadata: HashMap::new(),
         attachments: Vec::new(),
-        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_media: Arc::new(Mutex::new(Vec::new())),
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -126,7 +126,7 @@ async fn test_simple_execution_engine_run() {
         timeout_secs: Some(5),
         metadata: HashMap::new(),
         attachments: Vec::new(),
-        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_media: Arc::new(Mutex::new(Vec::new())),
     };
 
     // This should succeed and complete quickly

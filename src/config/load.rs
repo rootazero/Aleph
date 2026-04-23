@@ -74,8 +74,10 @@ impl Config {
             crate::config::defaults_override::init_defaults_override(defaults);
         }
 
-        // Pre-process TOML: Migrate [mcp.builtin] to [tools] if needed
         let contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
+        let migrated_contents = Self::migrate_vector_db_in_toml(&contents)?;
+        let migrated = migrated_contents != contents;
+        let contents = migrated_contents;
 
         // Parse TOML
         let mut config: Config = toml::from_str(&contents).map_err(|e| {
@@ -123,8 +125,15 @@ impl Config {
             "Builtin rules merged, checking for migrations"
         );
 
-        // Validate config
         config.validate()?;
+
+        if migrated {
+            if let Err(e) = config.save_to_file(path) {
+                warn!(path = %path.display(), error = %e, "Failed to save migrated config");
+            } else {
+                info!(path = %path.display(), "Saved migrated config to file");
+            }
+        }
 
         info!(
             path = %path.display(),

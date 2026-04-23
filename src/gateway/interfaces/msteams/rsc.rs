@@ -80,7 +80,7 @@ impl RscPermissionManager {
         });
 
         let url = format!("/teams/{}/appPermissions", team_id);
-        let _resp = self.graph_client.post(&url, payload).await?;
+        self.graph_client.post(&url, payload).await?;
 
         Ok(())
     }

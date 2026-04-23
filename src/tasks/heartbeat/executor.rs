@@ -4,7 +4,8 @@
 //! `HeartbeatExecutionAdapter` trait for actual agent execution.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::sync_primitives::{Arc, Mutex};
 
 use async_trait::async_trait;
 use tracing::{error, info, warn};
@@ -139,7 +140,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             timeout_secs: Some(timeout_secs),
             metadata,
             attachments: Vec::new(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: Arc::new(Mutex::new(Vec::new())),
         };
 
         // Silent execution — no user-facing events

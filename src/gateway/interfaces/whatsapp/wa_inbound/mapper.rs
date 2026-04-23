@@ -23,10 +23,10 @@ pub fn map_event_to_inbound(
                 .as_ref()
                 .and_then(|ext| ext.context_info.as_ref())
                 .and_then(|ctx| ctx.stanza_id.as_ref())
-                .map(|id| MessageId::new(id));
+                .map(MessageId::new);
 
             Some(InboundMessage {
-                id: MessageId::new(&info.id.to_string()),
+                id: MessageId::new(info.id.to_string()),
                 channel_id: channel_id.clone(),
                 conversation_id: ConversationId::new(&conversation_id),
                 sender_id: UserId::new(&sender_id),

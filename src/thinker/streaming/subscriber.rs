@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let text_received = Arc::new(std::sync::Mutex::new(false));
+        let text_received = Arc::new(crate::sync_primitives::Mutex::new(false));
         let text_clone = text_received.clone();
 
         let subscriber = StreamSubscriberBuilder::new()

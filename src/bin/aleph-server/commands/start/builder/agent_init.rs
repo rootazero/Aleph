@@ -4,7 +4,7 @@
 //! Contains the complex agent engine setup: provider registry creation,
 //! tool registry, task routing, and handler wiring.
 
-use std::sync::Arc;
+use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::gateway::handlers::agent::{
@@ -44,7 +44,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     >,
     /// Generation provider registry for TTS voice output
     pub generation_registry:
-        Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
+        Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     /// Builtin tool registry (for heartbeat probe executor)
     pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
     /// Team store for panel RPC handlers
@@ -468,7 +468,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         if !registry.is_empty() && !daemon {
             println!("  Generation providers: {} registered", registry.len());
         }
-        Arc::new(std::sync::RwLock::new(registry))
+        Arc::new(RwLock::new(registry))
     };
 
     // Hot-reload: rebuild generation registry when Panel updates providers

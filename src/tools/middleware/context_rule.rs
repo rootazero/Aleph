@@ -106,7 +106,7 @@ impl ToolService for ContextRuleLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     use crate::session::events::{ToolOutput, ToolOutputMetadata};
 

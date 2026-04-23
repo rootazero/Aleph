@@ -241,9 +241,8 @@ async fn initialize_session_store(
 /// sessions DB, runs the `session_events` migration, and returns an
 /// `InProcessActorSessionService` around a `SqliteEventStore`. Uses a
 /// separate connection (not the one owned by `SessionManager`) because
-/// `SessionManager` uses `std::sync::Mutex<Connection>` while
-/// `SqliteEventStore` uses `tokio::sync::Mutex<Connection>` — reconciling
-/// them is out of scope for Task 9 and will be revisited in Phase 6.
+/// `SessionManager` and `SqliteEventStore` use different `Mutex` types.
+/// Reconciling them is out of scope for Task 9 and will be revisited in Phase 6.
 ///
 /// Returns `None` on any failure (non-fatal — dual-write simply stays
 /// off for this run; the legacy `messages` table remains authoritative).
@@ -540,13 +539,53 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
-        use alephcore::exec::sandbox::platforms::MacOSSandbox;
         use alephcore::exec::sandbox::OsSandboxDriver;
         use alephcore::sandbox::{build_sandbox, OsSandboxDriverTrait};
 
         // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
-        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> =
-            Arc::new(MacOSSandbox::new());
+        #[cfg(target_os = "macos")]
+        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> = {
+            use alephcore::exec::sandbox::platforms::MacOSSandbox;
+            Arc::new(MacOSSandbox::new())
+        };
+        #[cfg(not(target_os = "macos"))]
+        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> = {
+            use alephcore::exec::sandbox::adapter::SandboxAdapter;
+
+            struct NoopAdapter;
+
+            #[async_trait::async_trait]
+            impl SandboxAdapter for NoopAdapter {
+                fn is_supported(&self) -> bool {
+                    false
+                }
+                fn platform_name(&self) -> &str {
+                    "noop"
+                }
+                fn generate_profile(
+                    &self,
+                    _caps: &alephcore::exec::sandbox::capabilities::Capabilities,
+                ) -> alephcore::error::Result<alephcore::exec::sandbox::adapter::SandboxProfile> {
+                    unreachable!("noop adapter")
+                }
+                async fn execute_sandboxed(
+                    &self,
+                    _command: &alephcore::exec::sandbox::adapter::SandboxCommand,
+                    _profile: &alephcore::exec::sandbox::adapter::SandboxProfile,
+                ) -> alephcore::error::Result<alephcore::exec::sandbox::adapter::ExecutionResult> {
+                    unreachable!("noop adapter")
+                }
+                fn cleanup(
+                    &self,
+                    _profile: &alephcore::exec::sandbox::adapter::SandboxProfile,
+                ) -> alephcore::error::Result<()> {
+                    Ok(())
+                }
+            }
+
+            Arc::new(NoopAdapter)
+        };
+
         let os_driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(OsSandboxDriver::new(os_adapter));
 
         build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone())

@@ -171,8 +171,8 @@ impl ToolService for PermissionLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
 
     use crate::session::events::{ToolOutput, ToolOutputMetadata};
 

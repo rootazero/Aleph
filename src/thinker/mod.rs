@@ -113,13 +113,13 @@ impl ProviderRegistry for SingleProviderRegistry {
 /// When the user switches the default provider via the Panel,
 /// the new provider is atomically swapped in without restarting the server.
 pub struct SwappableProviderRegistry {
-    provider: std::sync::RwLock<Arc<dyn AiProvider>>,
+    provider: crate::sync_primitives::RwLock<Arc<dyn AiProvider>>,
 }
 
 impl SwappableProviderRegistry {
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
         Self {
-            provider: std::sync::RwLock::new(provider),
+            provider: crate::sync_primitives::RwLock::new(provider),
         }
     }
 
@@ -222,7 +222,7 @@ struct RegistryState {
 
 /// Multi-provider registry: routes by provider name, supports runtime mutation and fallback.
 pub struct MultiProviderRegistry {
-    state: std::sync::RwLock<RegistryState>,
+    state: crate::sync_primitives::RwLock<RegistryState>,
 }
 
 impl MultiProviderRegistry {
@@ -232,7 +232,7 @@ impl MultiProviderRegistry {
         let mut health = HashMap::new();
         health.insert(name.clone(), ProviderHealth::default());
         Self {
-            state: std::sync::RwLock::new(RegistryState {
+            state: crate::sync_primitives::RwLock::new(RegistryState {
                 providers,
                 default_name: name,
                 fallbacks: vec![],

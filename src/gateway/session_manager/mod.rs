@@ -225,9 +225,6 @@ impl Default for SessionManagerConfig {
 
 /// Session manager with SQLite persistence
 ///
-/// Uses `std::sync::Mutex` for the connection because `rusqlite::Connection`
-/// is not `Sync` (it uses `RefCell` internally). This is safe for async use
-/// as long as we don't hold the lock across await points.
 #[derive(Clone)]
 pub struct SessionManager {
     pub(super) config: SessionManagerConfig,
@@ -394,6 +391,7 @@ impl SessionManager {
             ("sessions", "model_provider", "TEXT"),
             ("sessions", "parent_session_key", "TEXT"),
             ("sessions", "compaction_count", "INTEGER DEFAULT 0"),
+            ("sessions", "derived_title", "TEXT"),
             ("messages", "input_tokens", "INTEGER DEFAULT 0"),
             ("messages", "output_tokens", "INTEGER DEFAULT 0"),
         ];

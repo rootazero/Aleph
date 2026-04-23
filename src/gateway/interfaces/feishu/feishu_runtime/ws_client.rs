@@ -1,5 +1,4 @@
-use crate::sync_primitives::Arc;
-use std::sync::Mutex as StdMutex;
+use crate::sync_primitives::{Arc, Mutex as StdMutex};
 
 use futures_util::StreamExt;
 use tokio::sync::watch;

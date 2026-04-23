@@ -64,4 +64,47 @@ impl Config {
             AlephError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
         })
     }
+
+    pub(crate) fn migrate_vector_db_in_toml(contents: &str) -> Result<String> {
+        // Parse as raw TOML value
+        let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
+            AlephError::invalid_config(format!(
+                "Failed to parse TOML for vector_db migration: {}",
+                e
+            ))
+        })?;
+
+        // Check if migration is needed
+        let needs_migration =
+            if let Some(toml::Value::Table(ref mut memory)) = value.get_mut("memory") {
+                if let Some(toml::Value::String(vector_db)) = memory.get("vector_db") {
+                    if vector_db == "lancedb" {
+                        memory.insert(
+                            "vector_db".to_string(),
+                            toml::Value::String("sqlite-vec".to_string()),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+        if !needs_migration {
+            return Ok(contents.to_string());
+        }
+
+        // Perform migration
+        warn!("Migrating deprecated vector_db value 'lancedb' to 'sqlite-vec'");
+        info!("Successfully migrated vector_db from 'lancedb' to 'sqlite-vec'");
+
+        // Serialize back to TOML
+        toml::to_string_pretty(&value).map_err(|e| {
+            AlephError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
+        })
+    }
 }

@@ -104,7 +104,7 @@ mod tests {
     use crate::memory::extensions::types::CaptureDecision;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     struct FakeStore(Mutex<Vec<RawMemory>>);
     #[async_trait]

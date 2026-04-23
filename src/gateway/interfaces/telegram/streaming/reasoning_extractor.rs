@@ -14,6 +14,12 @@ enum ExtractorState {
 const MAX_TAG_LEN: usize = 20;
 const THINK_TAGS: [&str; 4] = ["think", "thinking", "thought", "antthinking"];
 
+impl Default for ReasoningExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReasoningExtractor {
     pub fn new() -> Self {
         Self {
@@ -78,12 +84,10 @@ impl ReasoningExtractor {
             } else {
                 (None, Some(answer.to_string()), false)
             }
+        } else if input.is_empty() {
+            (None, None, false)
         } else {
-            if input.is_empty() {
-                (None, None, false)
-            } else {
-                (None, Some(input.to_string()), false)
-            }
+            (None, Some(input.to_string()), false)
         }
     }
 
@@ -112,12 +116,10 @@ impl ReasoningExtractor {
             } else {
                 (Some(reasoning.to_string()), None, false)
             }
+        } else if input.is_empty() {
+            (None, None, false)
         } else {
-            if input.is_empty() {
-                (None, None, false)
-            } else {
-                (Some(input.to_string()), None, false)
-            }
+            (Some(input.to_string()), None, false)
         }
     }
 

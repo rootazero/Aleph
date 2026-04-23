@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use futures::future::join_all;
-use tokio::sync::RwLock;
 
 use crate::error::{AlephError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
@@ -76,9 +75,9 @@ enum ToolLocation {
 /// only manages external MCP server connections.
 pub struct McpClient {
     /// Tool name to location mapping (RwLock for thread-safe updates)
-    tool_location_map: RwLock<HashMap<String, ToolLocation>>,
+    tool_location_map: tokio::sync::RwLock<HashMap<String, ToolLocation>>,
     /// External server connections
-    external_servers: RwLock<HashMap<String, Arc<McpServerConnection>>>,
+    external_servers: tokio::sync::RwLock<HashMap<String, Arc<McpServerConnection>>>,
     /// Handler for sampling requests from servers
     sampling_handler: Arc<SamplingHandler>,
     /// Optional shared `ToolRegistry` for the Phase 2 Tool Service façade.
@@ -94,8 +93,8 @@ impl McpClient {
     /// Create a new empty MCP client
     pub fn new() -> Self {
         Self {
-            tool_location_map: RwLock::new(HashMap::new()),
-            external_servers: RwLock::new(HashMap::new()),
+            tool_location_map: tokio::sync::RwLock::new(HashMap::new()),
+            external_servers: tokio::sync::RwLock::new(HashMap::new()),
             sampling_handler: Arc::new(SamplingHandler::new()),
             tool_registry: std::sync::RwLock::new(None),
         }
