@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
-use crate::exec::sandbox::OsSandboxDriver;
+use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::exec::{
@@ -36,7 +36,7 @@ pub enum PreExecDecision {
 pub struct ExecSecurityGate {
     security_kernel: SecurityKernel,
     approval_manager: Arc<ExecApprovalManager>,
-    sandbox_manager: Option<Arc<OsSandboxDriver>>,
+    sandbox_manager: Option<Arc<dyn OsSandboxDriverTrait>>,
     masker: SecretMasker,
     audit_log: Option<crate::security::audit::SecurityAuditLog>,
     #[allow(dead_code)]
@@ -48,7 +48,7 @@ impl ExecSecurityGate {
     /// Create a new gate with required approval manager and optional sandbox
     pub fn new(
         approval_manager: Arc<ExecApprovalManager>,
-        sandbox_manager: Option<Arc<OsSandboxDriver>>,
+        sandbox_manager: Option<Arc<dyn OsSandboxDriverTrait>>,
     ) -> Self {
         Self {
             security_kernel: SecurityKernel::default(),
@@ -64,7 +64,7 @@ impl ExecSecurityGate {
     /// Create a new gate with approval manager, sandbox, and channel registry for native delivery.
     pub fn with_channel_registry(
         approval_manager: Arc<ExecApprovalManager>,
-        sandbox_manager: Option<Arc<OsSandboxDriver>>,
+        sandbox_manager: Option<Arc<dyn OsSandboxDriverTrait>>,
         channel_registry: Arc<ChannelRegistry>,
     ) -> Self {
         let channel_bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
@@ -182,7 +182,7 @@ impl ExecSecurityGate {
                 let use_sandbox = self
                     .sandbox_manager
                     .as_ref()
-                    .map(|s| s.is_available())
+                    .map(|s| s.is_supported())
                     .unwrap_or(false);
                 info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
                 // Note: use_sandbox is passed to the caller but actual sandbox routing

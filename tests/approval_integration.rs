@@ -8,27 +8,19 @@ use alephcore::exec::approval::binding::check_binding_compliance;
 use alephcore::exec::approval::escalation::check_path_escalation;
 use alephcore::exec::approval::storage::ApprovalAuditStorage;
 use alephcore::exec::approval::types::{CapabilityApprovalRequest, EscalationReason, TrustStage};
-use alephcore::exec::sandbox::capabilities::{
-    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
-};
-use alephcore::exec::sandbox::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
+use alephcore::sandbox::capabilities::{SandboxCapabilities, NetworkPolicy};
+use alephcore::exec::approval::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Helper: Create test capabilities with filesystem access
-fn create_test_capabilities(path: &str) -> Capabilities {
-    Capabilities {
-        filesystem: vec![FileSystemCapability::ReadWrite {
-            path: PathBuf::from(path),
-        }],
-        network: NetworkCapability::Deny,
-        process: ProcessCapability {
-            no_fork: true,
-            max_execution_time: 300,
-            max_memory_mb: Some(512),
-        },
-        environment: EnvironmentCapability::Restricted,
+fn create_test_capabilities(path: &str) -> SandboxCapabilities {
+    SandboxCapabilities {
+        fs_read: vec![PathBuf::from(path)],
+        fs_write: vec![PathBuf::from(path)],
+        network: NetworkPolicy::None,
+        spawn_subprocess: false,
     }
 }
 
@@ -45,7 +37,7 @@ fn create_required_capabilities(preset: &str, description: &str) -> RequiredCapa
 /// Helper: Create approval request
 fn create_approval_request(
     tool_name: &str,
-    capabilities: Capabilities,
+    capabilities: SandboxCapabilities,
     stage: TrustStage,
 ) -> CapabilityApprovalRequest {
     CapabilityApprovalRequest {

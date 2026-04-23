@@ -14,9 +14,7 @@ use std::path::PathBuf;
 use alephcore::exec::approval::audit::AuditQuery;
 use alephcore::exec::approval::binding::check_binding_compliance;
 use alephcore::exec::approval::escalation::{check_path_escalation, is_sensitive_directory};
-use alephcore::exec::sandbox::capabilities::{
-    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
-};
+use alephcore::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 
 /// Benchmark path escalation check (target: < 10ms)
 fn benchmark_path_escalation(c: &mut Criterion) {
@@ -67,57 +65,35 @@ fn benchmark_path_escalation(c: &mut Criterion) {
 /// Benchmark risk score calculation (target: < 1ms)
 fn benchmark_risk_score(c: &mut Criterion) {
     c.bench_function("risk_score_minimal", |bencher| {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::Deny,
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            fs_read: vec![PathBuf::from("/tmp")],
+            fs_write: vec![],
+            network: NetworkPolicy::None,
+            spawn_subprocess: false,
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(0)));
     });
 
     c.bench_function("risk_score_moderate", |bencher| {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::ReadWrite {
-                path: PathBuf::from("/tmp"),
-            }],
-            network: NetworkCapability::AllowDomains(vec![
-                "api.example.com".to_string(),
-                "cdn.example.com".to_string(),
-            ]),
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
+        let caps = SandboxCapabilities {
+            fs_read: vec![PathBuf::from("/tmp")],
+            fs_write: vec![PathBuf::from("/tmp")],
+            network: NetworkPolicy::AllowHosts {
+                hosts: vec!["api.example.com".to_string(), "cdn.example.com".to_string()],
             },
-            environment: EnvironmentCapability::Restricted,
+            spawn_subprocess: false,
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(2)));
     });
 
     c.bench_function("risk_score_high", |bencher| {
-        let caps = Capabilities {
-            filesystem: vec![
-                FileSystemCapability::ReadWrite {
-                    path: PathBuf::from("/tmp"),
-                },
-                FileSystemCapability::ReadWrite {
-                    path: PathBuf::from("/home/user"),
-                },
-            ],
-            network: NetworkCapability::AllowAll,
-            process: ProcessCapability {
-                no_fork: false, // Allow exec
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            fs_read: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user")],
+            fs_write: vec![PathBuf::from("/tmp"), PathBuf::from("/home/user")],
+            network: NetworkPolicy::AllowAll,
+            spawn_subprocess: true,
         };
 
         bencher.iter(|| AuditQuery::calculate_risk_score(black_box(&caps), black_box(5)));

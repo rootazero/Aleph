@@ -539,55 +539,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
-        use alephcore::exec::sandbox::OsSandboxDriver;
-        use alephcore::sandbox::{build_sandbox, OsSandboxDriverTrait};
+        use alephcore::sandbox::{build_sandbox, create_platform_driver};
 
-        // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
-        #[cfg(target_os = "macos")]
-        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> = {
-            use alephcore::exec::sandbox::platforms::MacOSSandbox;
-            Arc::new(MacOSSandbox::new())
-        };
-        #[cfg(not(target_os = "macos"))]
-        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> = {
-            use alephcore::exec::sandbox::adapter::SandboxAdapter;
-
-            struct NoopAdapter;
-
-            #[async_trait::async_trait]
-            impl SandboxAdapter for NoopAdapter {
-                fn is_supported(&self) -> bool {
-                    false
-                }
-                fn platform_name(&self) -> &str {
-                    "noop"
-                }
-                fn generate_profile(
-                    &self,
-                    _caps: &alephcore::exec::sandbox::capabilities::Capabilities,
-                ) -> alephcore::error::Result<alephcore::exec::sandbox::adapter::SandboxProfile> {
-                    unreachable!("noop adapter")
-                }
-                async fn execute_sandboxed(
-                    &self,
-                    _command: &alephcore::exec::sandbox::adapter::SandboxCommand,
-                    _profile: &alephcore::exec::sandbox::adapter::SandboxProfile,
-                ) -> alephcore::error::Result<alephcore::exec::sandbox::adapter::ExecutionResult> {
-                    unreachable!("noop adapter")
-                }
-                fn cleanup(
-                    &self,
-                    _profile: &alephcore::exec::sandbox::adapter::SandboxProfile,
-                ) -> alephcore::error::Result<()> {
-                    Ok(())
-                }
-            }
-
-            Arc::new(NoopAdapter)
-        };
-
-        let os_driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(OsSandboxDriver::new(os_adapter));
-
+        let os_driver = create_platform_driver();
         build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone())
     };
     if !args.daemon {

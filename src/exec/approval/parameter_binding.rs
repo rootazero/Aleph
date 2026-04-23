@@ -50,11 +50,11 @@ pub struct CapabilityOverrides {
     #[serde(default)]
     pub filesystem: Vec<FileSystemOverride>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub network: Option<super::capabilities::NetworkCapability>,
+    pub network: Option<crate::sandbox::capabilities::NetworkPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessOverride>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub environment: Option<super::capabilities::EnvironmentCapability>,
+    pub environment: Option<EnvironmentOverride>,
 }
 
 /// Filesystem override specification
@@ -73,6 +73,13 @@ pub struct ProcessOverride {
     pub max_execution_time: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_memory_mb: Option<u64>,
+}
+
+/// Environment override specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_vars: Option<Vec<String>>,
 }
 
 #[cfg(test)]

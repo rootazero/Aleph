@@ -1,6 +1,6 @@
 use crate::exec::approval::storage::ApprovalAuditStorage;
 use crate::exec::approval::types::EscalationReason;
-use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability, NetworkCapability};
+use crate::sandbox::capabilities::{SandboxCapabilities, NetworkPolicy};
 use rusqlite::Result as SqliteResult;
 use std::collections::HashMap;
 use tracing::warn;
@@ -39,25 +39,23 @@ impl AuditQuery {
     }
 
     /// Calculate risk score based on capabilities
-    pub fn calculate_risk_score(capabilities: &Capabilities, escalation_count: u32) -> u32 {
+    pub fn calculate_risk_score(capabilities: &SandboxCapabilities, escalation_count: u32) -> u32 {
         let mut score: u32 = 10; // Base score
 
         // Check filesystem capabilities
-        for fs_cap in &capabilities.filesystem {
-            if let FileSystemCapability::ReadWrite { .. } = fs_cap {
-                score = score.saturating_add(20);
-            }
+        if !capabilities.fs_write.is_empty() {
+            score = score.saturating_add(20);
         }
 
         // Check network capability
         match &capabilities.network {
-            NetworkCapability::AllowAll => score = score.saturating_add(30),
-            NetworkCapability::AllowDomains(_) => score = score.saturating_add(15),
-            NetworkCapability::Deny => {}
+            NetworkPolicy::AllowAll => score = score.saturating_add(30),
+            NetworkPolicy::AllowHosts { .. } => score = score.saturating_add(15),
+            NetworkPolicy::None => {}
         }
 
         // Check process capability (exec)
-        if !capabilities.process.no_fork {
+        if capabilities.spawn_subprocess {
             score = score.saturating_add(40);
         }
 
@@ -179,47 +177,37 @@ fn parse_escalation_reason(reason: &str) -> EscalationReason {
 }
 
 /// Parse capabilities from string representations
-fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilities {
+fn parse_capabilities_from_strings(capability_strings: &[String]) -> SandboxCapabilities {
     use std::path::PathBuf;
 
-    let mut capabilities = Capabilities::default();
+    let mut capabilities = SandboxCapabilities::default();
 
     for cap_str in capability_strings {
         if let Some(fs_type) = cap_str.strip_prefix("filesystem.") {
-            // Skip "filesystem."
             match fs_type {
                 "read_write" => {
-                    capabilities
-                        .filesystem
-                        .push(FileSystemCapability::ReadWrite {
-                            path: PathBuf::from("/tmp"), // Placeholder path
-                        });
+                    capabilities.fs_write.push(PathBuf::from("/tmp"));
                 }
                 "read_only" => {
-                    capabilities
-                        .filesystem
-                        .push(FileSystemCapability::ReadOnly {
-                            path: PathBuf::from("/tmp"), // Placeholder path
-                        });
+                    capabilities.fs_read.push(PathBuf::from("/tmp"));
                 }
                 _ => {}
             }
         } else if let Some(net_type) = cap_str.strip_prefix("network.") {
-            // Skip "network."
             match net_type {
                 "allow_all" => {
-                    capabilities.network = NetworkCapability::AllowAll;
+                    capabilities.network = NetworkPolicy::AllowAll;
                 }
                 "allow_domains" => {
-                    capabilities.network = NetworkCapability::AllowDomains(vec![]);
+                    capabilities.network = NetworkPolicy::AllowHosts { hosts: vec![] };
                 }
                 "deny" => {
-                    capabilities.network = NetworkCapability::Deny;
+                    capabilities.network = NetworkPolicy::None;
                 }
                 _ => {}
             }
         } else if cap_str == "process.exec" {
-            capabilities.process.no_fork = false;
+            capabilities.spawn_subprocess = true;
         }
     }
 
@@ -229,21 +217,12 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilitie
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::sandbox::capabilities::{EnvironmentCapability, ProcessCapability};
+    use crate::sandbox::capabilities::NetworkPolicy;
     use std::path::PathBuf;
 
     #[test]
     fn test_risk_score_base() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::Deny,
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
-        };
+        let caps = SandboxCapabilities::default();
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
         assert_eq!(score, 10, "Base score should be 10");
@@ -251,17 +230,9 @@ mod tests {
 
     #[test]
     fn test_risk_score_filesystem() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::ReadWrite {
-                path: PathBuf::from("/tmp"),
-            }],
-            network: NetworkCapability::Deny,
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            fs_write: vec![PathBuf::from("/tmp")],
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
@@ -270,15 +241,9 @@ mod tests {
 
     #[test]
     fn test_risk_score_network_all() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::AllowAll,
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
@@ -287,32 +252,22 @@ mod tests {
 
     #[test]
     fn test_risk_score_network_domains() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::AllowDomains(vec!["example.com".to_string()]),
-            process: ProcessCapability {
-                no_fork: true,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
+        let caps = SandboxCapabilities {
+            network: NetworkPolicy::AllowHosts {
+                hosts: vec!["example.com".to_string()],
             },
-            environment: EnvironmentCapability::Restricted,
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
-        assert_eq!(score, 25, "AllowDomains network adds 15 points");
+        assert_eq!(score, 25, "AllowHosts network adds 15 points");
     }
 
     #[test]
     fn test_risk_score_exec() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::Deny,
-            process: ProcessCapability {
-                no_fork: false, // Allow fork/exec
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            spawn_subprocess: true,
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 0);
@@ -321,24 +276,18 @@ mod tests {
 
     #[test]
     fn test_risk_score_escalations() {
-        let caps = Capabilities::default();
+        let caps = SandboxCapabilities::default();
         let score = AuditQuery::calculate_risk_score(&caps, 3);
         assert_eq!(score, 40, "3 escalations add 30 points to base 10");
     }
 
     #[test]
     fn test_risk_score_combined() {
-        let caps = Capabilities {
-            filesystem: vec![FileSystemCapability::ReadWrite {
-                path: PathBuf::from("/tmp"),
-            }],
-            network: NetworkCapability::AllowAll,
-            process: ProcessCapability {
-                no_fork: false,
-                max_execution_time: 300,
-                max_memory_mb: Some(512),
-            },
-            environment: EnvironmentCapability::Restricted,
+        let caps = SandboxCapabilities {
+            fs_write: vec![PathBuf::from("/tmp")],
+            network: NetworkPolicy::AllowAll,
+            spawn_subprocess: true,
+            ..Default::default()
         };
 
         let score = AuditQuery::calculate_risk_score(&caps, 2);

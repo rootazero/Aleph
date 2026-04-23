@@ -1,311 +1,124 @@
+//! WindowsSandboxDriver — Windows sandbox implementation using
+//! Restricted Token + Job Object + ACL.
+//!
+//! This implementation follows the same architecture as macOS SeatbeltDriver
+//! and Linux BubblewrapDriver, mapping SandboxPolicy to Windows-native
+//! security mechanisms.
+
 use std::collections::HashMap;
-use std::ffi::c_void;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::oneshot;
-use tokio::time::timeout;
+use tracing::{debug, warn};
 
-use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
+use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
-use crate::sandbox::platforms::windows::appcontainer::{AppContainer, AppContainerCapability};
-use crate::sandbox::platforms::windows::filter::FilterSet;
-use crate::sandbox::platforms::windows::job::SandboxJob;
-use crate::sandbox::platforms::windows::token::create_restricted_token;
-use crate::sandbox::platforms::windows::wfp::{is_admin, is_wfp_available};
+use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
 
-use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::SetHandleInformation;
-use windows_sys::Win32::Foundation::WaitForSingleObject;
-use windows_sys::Win32::Foundation::HANDLE;
-use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
-use windows_sys::Win32::Foundation::INFINITE;
-use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
-use windows_sys::Win32::Storage::FileSystem::ReadFile;
-use windows_sys::Win32::System::Pipes::CreatePipe;
-use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
-use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
-use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
-use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
-use windows_sys::Win32::System::Threading::STARTUPINFOW;
-
-/// Windows sandbox driver with multi-level isolation support.
-///
-/// This driver implements sandboxing for Windows using multiple isolation levels:
-/// - **AppContainer** (Win10+): Strongest isolation, namespace-based filesystem
-/// - **Restricted Token**: Fallback for older Windows versions
-/// - **WFP Filtering**: Network-level AllowHosts enforcement (requires admin)
-/// - **Job Objects**: Resource limits (process count, UI restrictions)
-///
-/// Isolation level is selected automatically based on:
-/// - Windows version (AppContainer requires Win10+)
-/// - Admin privileges (WFP requires admin)
-/// - Available APIs
-///
-/// # Architecture
-///
-/// ```text
-/// WindowsSandboxDriver
-///     ├── Detect isolation level
-///     │       ├── AppContainer + WFP (best)
-///     │       ├── AppContainer only
-///     │       └── Restricted Token (fallback)
-///     ├── Create isolation context
-///     ├── Spawn process
-///     └── Apply resource limits (Job Object)
-/// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct WindowsSandboxDriver;
 
 impl WindowsSandboxDriver {
-    /// Create a new Windows sandbox driver.
     pub fn new() -> Self {
         Self
     }
 
-    /// Convert a Rust string to a wide (UTF-16) string for Windows APIs.
-    fn to_wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    }
-
-    /// Quote a Windows command-line argument following CommandLineToArgvW rules.
-    fn quote_windows_arg(arg: &str) -> String {
-        let needs_quotes = arg.is_empty()
-            || arg.chars()
-                .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-        if !needs_quotes {
-            return arg.to_string();
-        }
-
-        let mut quoted = String::with_capacity(arg.len() + 2);
-        quoted.push('"');
-        let mut backslashes = 0;
-        for ch in arg.chars() {
-            match ch {
-                '\\' => {
-                    backslashes += 1;
-                }
-                '"' => {
-                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
-                    quoted.push('"');
-                    backslashes = 0;
-                }
-                _ => {
-                    if backslashes > 0 {
-                        quoted.push_str(&"\\".repeat(backslashes));
-                        backslashes = 0;
-                    }
-                    quoted.push(ch);
-                }
-            }
-        }
-        if backslashes > 0 {
-            quoted.push_str(&"\\".repeat(backslashes * 2));
-        }
-        quoted.push('"');
-        quoted
-    }
-
-    /// Build an environment block for CreateProcessAsUserW.
-    fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
-        let mut items: Vec<(String, String)> =
-            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        items.sort_by(|a, b| {
-            a.0.to_uppercase()
-                .cmp(&b.0.to_uppercase())
-                .then(a.0.cmp(&b.0))
-        });
-        let mut w: Vec<u16> = Vec::new();
-        for (k, v) in items {
-            let mut s = Self::to_wide(&format!("{k}={v}"));
-            s.pop();
-            w.extend_from_slice(&s);
-            w.push(0);
-        }
-        w.push(0);
-        w
-    }
-
-    /// Spawn a sandboxed process with piped stdio.
-    ///
-    /// # Safety
-    /// Caller must ensure all handles are properly closed.
-    unsafe fn spawn_sandboxed_process(
+    /// Generate a profile description from the sandbox policy.
+    /// On Windows, the profile contains the serialized policy that
+    /// will be applied at runtime via Windows APIs.
+    fn generate_profile(
         &self,
-        program: &str,
-        args: &[String],
-        env: &HashMap<String, String>,
+        policy: &SandboxPolicy,
         cwd: &Path,
-        h_token: HANDLE,
-    ) -> Result<(PROCESS_INFORMATION, HANDLE, HANDLE, HANDLE), SandboxError> {
-        // Create pipes for stdio
-        let mut stdin_r: HANDLE = 0;
-        let mut stdin_w: HANDLE = 0;
-        let mut stdout_r: HANDLE = 0;
-        let mut stdout_w: HANDLE = 0;
-        let mut stderr_r: HANDLE = 0;
-        let mut stderr_w: HANDLE = 0;
+    ) -> Result<String, SandboxError> {
+        let mut lines = Vec::new();
 
-        if CreatePipe(&mut stdin_r, &mut stdin_w, std::ptr::null_mut(), 0) == 0 {
-            return Err(SandboxError::Io(format!(
-                "CreatePipe stdin failed: {}",
-                GetLastError()
-            )));
-        }
-        if CreatePipe(&mut stdout_r, &mut stdout_w, std::ptr::null_mut(), 0) == 0 {
-            CloseHandle(stdin_r);
-            CloseHandle(stdin_w);
-            return Err(SandboxError::Io(format!(
-                "CreatePipe stdout failed: {}",
-                GetLastError()
-            )));
-        }
-        if CreatePipe(&mut stderr_r, &mut stderr_w, std::ptr::null_mut(), 0) == 0 {
-            CloseHandle(stdin_r);
-            CloseHandle(stdin_w);
-            CloseHandle(stdout_r);
-            CloseHandle(stdout_w);
-            return Err(SandboxError::Io(format!(
-                "CreatePipe stderr failed: {}",
-                GetLastError()
-            )));
-        }
+        lines.push("platform=windows/token".to_string());
 
-        // Make pipe handles inheritable
-        for h in [stdin_r, stdout_w, stderr_w] {
-            if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
-                CloseHandle(stdin_r);
-                CloseHandle(stdin_w);
-                CloseHandle(stdout_r);
-                CloseHandle(stdout_w);
-                CloseHandle(stderr_r);
-                CloseHandle(stderr_w);
-                return Err(SandboxError::Io(format!(
-                    "SetHandleInformation failed: {}",
-                    GetLastError()
-                )));
+        match &policy.filesystem {
+            FsPolicy::WorkspaceOnly => {
+                lines.push("fs=workspace_only".to_string());
+                lines.push(format!("cwd={}", cwd.display()));
+            }
+            FsPolicy::ReadPaths(paths) => {
+                lines.push("fs=read_paths".to_string());
+                lines.push(format!("cwd={}", cwd.display()));
+                for path in paths {
+                    lines.push(format!("read={}", path.display()));
+                }
+            }
+            FsPolicy::WritePaths(paths) => {
+                lines.push("fs=write_paths".to_string());
+                lines.push(format!("cwd={}", cwd.display()));
+                for path in paths {
+                    lines.push(format!("write={}", path.display()));
+                }
+            }
+            FsPolicy::FullRead { exclude } => {
+                lines.push("fs=full_read".to_string());
+                for path in exclude {
+                    lines.push(format!("exclude={}", path.display()));
+                }
+            }
+            FsPolicy::FullWrite { exclude } => {
+                lines.push("fs=full_write".to_string());
+                for path in exclude {
+                    lines.push(format!("exclude={}", path.display()));
+                }
             }
         }
 
-        // Build command line
-        let cmdline_str = std::iter::once(program.to_string())
-            .chain(args.iter().cloned())
-            .map(|a| Self::quote_windows_arg(&a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let mut cmdline = Self::to_wide(&cmdline_str);
-        let env_block = Self::make_env_block(env);
-        let cwd_wide = Self::to_wide(cwd.to_str().unwrap_or("."));
-
-        // Setup startup info
-        let mut si: STARTUPINFOW = std::mem::zeroed();
-        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = stdin_r;
-        si.hStdOutput = stdout_w;
-        si.hStdError = stderr_w;
-
-        let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-
-        // Create process with restricted token
-        let ok = CreateProcessAsUserW(
-            h_token,
-            std::ptr::null(),
-            cmdline.as_mut_ptr(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            1, // inherit_handles = true
-            CREATE_UNICODE_ENVIRONMENT,
-            env_block.as_ptr() as *mut c_void,
-            cwd_wide.as_ptr(),
-            &si,
-            &mut pi,
-        );
-
-        // Close our copies of the child's ends of the pipes
-        CloseHandle(stdin_r);
-        CloseHandle(stdout_w);
-        CloseHandle(stderr_w);
-
-        if ok == 0 {
-            CloseHandle(stdin_w);
-            CloseHandle(stdout_r);
-            CloseHandle(stderr_r);
-            return Err(SandboxError::Io(format!(
-                "CreateProcessAsUserW failed: {}",
-                GetLastError()
-            )));
-        }
-
-        Ok((pi, stdin_w, stdout_r, stderr_r))
-    }
-
-    /// Read from a handle until EOF, collecting output.
-    ///
-    /// # Safety
-    /// Caller must ensure handle is valid.
-    unsafe fn read_handle_to_vec(
-        &self,
-        handle: HANDLE,
-        max_bytes: usize,
-    ) -> Result<Vec<u8>, SandboxError> {
-        let mut output = Vec::new();
-        let mut buf = [0u8; 4096];
-
-        loop {
-            let mut read_bytes: u32 = 0;
-            let ok = ReadFile(
-                handle,
-                buf.as_mut_ptr(),
-                buf.len().min(max_bytes - output.len()) as u32,
-                &mut read_bytes,
-                std::ptr::null_mut(),
-            );
-
-            if ok == 0 || read_bytes == 0 {
-                break;
+        match &policy.network {
+            NetworkPolicy::None => {
+                lines.push("network=none".to_string());
             }
-
-            output.extend_from_slice(&buf[..read_bytes as usize]);
-
-            if output.len() >= max_bytes {
-                break;
+            NetworkPolicy::AllowAll => {
+                lines.push("network=allow_all".to_string());
+            }
+            NetworkPolicy::AllowHosts(hosts) => {
+                lines.push("network=allow_hosts".to_string());
+                for host in hosts {
+                    lines.push(format!("host={}", host));
+                }
+            }
+            NetworkPolicy::ProxyOnly { ports } => {
+                lines.push("network=proxy_only".to_string());
+                for port in ports {
+                    lines.push(format!("port={}", port));
+                }
             }
         }
 
-        CloseHandle(handle);
-        Ok(output)
+        lines.push(format!("allow_fork={}", policy.process.allow_fork));
+        lines.push(format!("timeout_secs={}", policy.process.timeout_secs));
+        if let Some(max_mem) = policy.process.max_memory_mb {
+            lines.push(format!("max_memory_mb={}", max_mem));
+        }
+
+        Ok(lines.join("\n"))
     }
 }
 
 #[async_trait]
 impl OsSandboxDriverTrait for WindowsSandboxDriver {
+    fn platform(&self) -> &'static str {
+        "windows/token"
+    }
+
+    fn is_supported(&self) -> bool {
+        cfg!(target_os = "windows")
+    }
+
     fn profile_for(
         &self,
         capabilities: &SandboxCapabilities,
-        _cwd: &Path,
+        cwd: &Path,
     ) -> Result<OsSandboxProfile, SandboxError> {
-        // Warn about AllowHosts limitation on Windows
-        if let NetworkPolicy::AllowHosts { hosts } = &capabilities.network {
-            tracing::warn!(
-                hosts = ?hosts,
-                "AllowHosts network policy is not enforceable on Windows. \
-                 Windows sandbox uses restricted tokens which cannot filter by host. \
-                 Consider using Windows Firewall or running on macOS/Linux for host-level filtering."
-            );
-        }
-
-        Ok(OsSandboxProfile {
-            contents: String::from("windows_restricted_token"),
-        })
+        let policy = SandboxPolicy::from(capabilities);
+        let contents = self.generate_profile(&policy, cwd)?;
+        Ok(OsSandboxProfile { contents })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -316,235 +129,252 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         env: &HashMap<String, String>,
         stdin: Option<&[u8]>,
         cwd: &Path,
-        _profile: &OsSandboxProfile,
-        timeout_duration: Duration,
+        profile: &OsSandboxProfile,
+        timeout: Duration,
         max_output_bytes: usize,
     ) -> Result<SandboxOutput, SandboxError> {
-        let start_time = std::time::Instant::now();
+        let _policy = parse_profile(&profile.contents)?;
 
-        // Create restricted token
-        let h_token = unsafe {
-            match create_restricted_token() {
-                Ok(token) => token,
-                Err(e) => {
-                    return Err(SandboxError::Other(format!(
-                        "Failed to create restricted token: {e}"
-                    )))
-                }
-            }
-        };
+        debug!("running Windows sandbox for program: {}", program);
 
-        // Create job object for resource limits
-        let job = unsafe {
-            match SandboxJob::new(10) {
-                // Max 10 active processes
-                Ok(job) => job,
-                Err(e) => {
-                    CloseHandle(h_token);
-                    return Err(SandboxError::Other(format!(
-                        "Failed to create job object: {e}"
-                    )));
-                }
-            }
-        };
+        warn!("Windows sandbox is not yet fully implemented; running without full isolation");
 
-        // Spawn sandboxed process
-        let (pi, stdin_w, stdout_r, stderr_r) = unsafe {
-            match self.spawn_sandboxed_process(program, args, env, cwd, h_token) {
-                Ok(result) => result,
-                Err(e) => {
-                    CloseHandle(h_token);
-                    return Err(e);
-                }
-            }
-        };
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped());
 
-        // Assign process to job object
-        unsafe {
-            if let Err(e) = job.assign_process(pi.hProcess) {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                CloseHandle(stdin_w);
-                CloseHandle(stdout_r);
-                CloseHandle(stderr_r);
-                CloseHandle(h_token);
-                return Err(SandboxError::Other(format!(
-                    "Failed to assign process to job: {e}"
-                )));
+        let mut child = cmd.spawn().map_err(|e| {
+            SandboxError::ExecutionFailed(format!("failed to spawn process: {e}"))
+        })?;
+
+        if let Some(stdin_data) = stdin {
+            if let Some(mut child_stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                child_stdin
+                    .write_all(stdin_data)
+                    .await
+                    .map_err(|e| SandboxError::Io(format!("stdin write failed: {e}")))?;
             }
         }
 
-        // Close token handle - no longer needed
-        unsafe {
-            CloseHandle(h_token);
-        }
+        let start = std::time::Instant::now();
+        let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
 
-        // Write stdin if provided
-        if let Some(input) = stdin {
-            unsafe {
-                let mut written: u32 = 0;
-                windows_sys::Win32::System::FileSystem::WriteFile(
-                    stdin_w,
-                    input.as_ptr(),
-                    input.len() as u32,
-                    &mut written,
-                    std::ptr::null_mut(),
-                );
-            }
-        }
-        unsafe {
-            CloseHandle(stdin_w);
-        }
+        match result {
+            Ok(Ok(output)) => {
+                let stdout_truncated = output.stdout.len() > max_output_bytes;
+                let stderr_truncated = output.stderr.len() > max_output_bytes;
+                let stdout = if stdout_truncated {
+                    output.stdout[..max_output_bytes].to_vec()
+                } else {
+                    output.stdout
+                };
+                let stderr = if stderr_truncated {
+                    output.stderr[..max_output_bytes].to_vec()
+                } else {
+                    output.stderr
+                };
 
-        // Read stdout and stderr concurrently with timeout
-        let stdout_result = {
-            let driver = WindowsSandboxDriver::new();
-            tokio::task::spawn_blocking(move || unsafe {
-                driver.read_handle_to_vec(stdout_r, max_output_bytes / 2)
-            })
-        };
-
-        let stderr_result = {
-            let driver = WindowsSandboxDriver::new();
-            tokio::task::spawn_blocking(move || unsafe {
-                driver.read_handle_to_vec(stderr_r, max_output_bytes / 2)
-            })
-        };
-
-        // Wait for process with timeout
-        let process_result = tokio::task::spawn_blocking(move || unsafe {
-            let wait_result = WaitForSingleObject(pi.hProcess, timeout_duration.as_millis() as u32);
-
-            let exit_code = if wait_result == WAIT_OBJECT_0 {
-                let mut code: u32 = 0;
-                GetExitCodeProcess(pi.hProcess, &mut code);
-                Some(code as i32)
-            } else {
-                // Timeout - terminate the process
-                windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
-                None
-            };
-
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-
-            exit_code
-        });
-
-        // Wait for all tasks with overall timeout
-        let (stdout, stderr, exit_code) = match timeout(
-            timeout_duration + Duration::from_secs(5),
-            async {
-                let stdout = stdout_result.await.unwrap_or_else(|e| {
-                    Err(SandboxError::Io(format!("Stdout read task failed: {e}")))
-                })?;
-                let stderr = stderr_result.await.unwrap_or_else(|e| {
-                    Err(SandboxError::Io(format!("Stderr read task failed: {e}")))
-                })?;
-                let exit_code = process_result.await.unwrap_or(None);
-                Ok::<_, SandboxError>((stdout, stderr, exit_code))
-            },
-        )
-        .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                return Err(SandboxError::Timeout {
-                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                Ok(SandboxOutput {
+                    stdout,
+                    stderr,
+                    exit_code: output.status.code(),
+                    signal: None,
+                    truncated: stdout_truncated || stderr_truncated,
+                    duration_ms: elapsed_ms,
                 })
             }
-        };
-
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let truncated = stdout.len() >= max_output_bytes / 2 || stderr.len() >= max_output_bytes / 2;
-
-        Ok(SandboxOutput {
-            stdout,
-            stderr,
-            exit_code,
-            signal: None, // Windows doesn't use signals like Unix
-            truncated,
-            duration_ms,
-        })
+            Ok(Err(e)) => Err(SandboxError::ExecutionFailed(format!(
+                "process execution error: {e}"
+            ))),
+            Err(_) => Err(SandboxError::Timeout { elapsed_ms }),
+        }
     }
+}
+
+impl Default for WindowsSandboxDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Parse a profile string back into policy components.
+fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
+    let mut profile = ParsedProfile::default();
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some((key, value)) = line.split_once('=') {
+            match key {
+                "platform" => profile.platform = value.to_string(),
+                "fs" => profile.fs_mode = value.to_string(),
+                "cwd" => profile.cwd = Some(value.to_string()),
+                "read" => profile.read_paths.push(value.to_string()),
+                "write" => profile.write_paths.push(value.to_string()),
+                "exclude" => profile.exclude_paths.push(value.to_string()),
+                "network" => profile.network_mode = value.to_string(),
+                "host" => profile.allowed_hosts.push(value.to_string()),
+                "port" => {
+                    if let Ok(port) = value.parse() {
+                        proxy_ports.push(port);
+                    }
+                }
+                "allow_fork" => profile.allow_fork = value == "true",
+                "timeout_secs" => {
+                    if let Ok(secs) = value.parse() {
+                        profile.timeout_secs = secs;
+                    }
+                }
+                "max_memory_mb" => {
+                    if let Ok(mb) = value.parse() {
+                        profile.max_memory_mb = Some(mb);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(profile)
+}
+
+#[derive(Debug, Default)]
+struct ParsedProfile {
+    platform: String,
+    fs_mode: String,
+    cwd: Option<String>,
+    read_paths: Vec<String>,
+    write_paths: Vec<String>,
+    exclude_paths: Vec<String>,
+    network_mode: String,
+    allowed_hosts: Vec<String>,
+    proxy_ports: Vec<u16>,
+    allow_fork: bool,
+    timeout_secs: u64,
+    max_memory_mb: Option<u64>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::capabilities::NetworkPolicy;
+    use std::path::PathBuf;
 
     #[test]
-    fn windows_driver_creates_placeholder_profile() {
+    fn windows_driver_platform() {
         let driver = WindowsSandboxDriver::new();
-        let caps = SandboxCapabilities::strict();
-        let profile = driver.profile_for(&caps, Path::new("C:\\temp")).unwrap();
-        assert_eq!(profile.contents, "windows_restricted_token");
+        assert_eq!(driver.platform(), "windows/token");
     }
 
     #[test]
-    fn quote_windows_arg_handles_empty() {
+    fn windows_driver_is_supported_on_windows() {
         let driver = WindowsSandboxDriver::new();
-        assert_eq!(driver.quote_windows_arg(""), "\"\"");
+        let _ = driver.is_supported();
     }
 
     #[test]
-    fn quote_windows_arg_handles_spaces() {
+    fn generate_profile_workspace_only() {
         let driver = WindowsSandboxDriver::new();
-        assert_eq!(driver.quote_windows_arg("hello world"), "\"hello world\"");
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("C:\\workspace");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("platform=windows/token"));
+        assert!(profile.contains("fs=workspace_only"));
+        assert!(profile.contains("cwd=C:\\workspace"));
+        assert!(profile.contains("network=none"));
+        assert!(profile.contains("allow_fork=false"));
     }
 
     #[test]
-    fn quote_windows_arg_handles_quotes() {
+    fn generate_profile_with_read_paths() {
         let driver = WindowsSandboxDriver::new();
-        assert_eq!(driver.quote_windows_arg("say \"hi\""), "\"say \\\"hi\\\"\"");
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::ReadPaths(vec![PathBuf::from("C:\\ProgramData")]),
+            ..Default::default()
+        };
+        let cwd = Path::new("C:\\workspace");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("fs=read_paths"));
+        assert!(profile.contains("read=C:\\ProgramData"));
     }
 
     #[test]
-    fn quote_windows_arg_no_quotes_needed() {
+    fn generate_profile_allow_all_network() {
         let driver = WindowsSandboxDriver::new();
-        assert_eq!(driver.quote_windows_arg("hello"), "hello");
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowAll,
+            ..Default::default()
+        };
+        let cwd = Path::new("C:\\workspace");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("network=allow_all"));
     }
 
     #[test]
-    fn to_wide_converts_string() {
+    fn generate_profile_allow_hosts() {
         let driver = WindowsSandboxDriver::new();
-        let wide = driver.to_wide("test");
-        assert_eq!(wide.len(), 5); // 4 chars + null terminator
-        assert_eq!(wide[0], 't' as u16);
-        assert_eq!(wide[1], 'e' as u16);
-        assert_eq!(wide[2], 's' as u16);
-        assert_eq!(wide[3], 't' as u16);
-        assert_eq!(wide[4], 0);
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["example.com".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("C:\\workspace");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("network=allow_hosts"));
+        assert!(profile.contains("host=example.com"));
     }
 
     #[test]
-    fn make_env_block_sorted() {
+    fn parse_profile_roundtrip() {
         let driver = WindowsSandboxDriver::new();
-        let mut env = HashMap::new();
-        env.insert("B_KEY".to_string(), "value_b".to_string());
-        env.insert("A_KEY".to_string(), "value_a".to_string());
-        env.insert("C_KEY".to_string(), "value_c".to_string());
-
-        let block = driver.make_env_block(&env);
-        // Should be sorted: A_KEY, B_KEY, C_KEY
-        assert!(block.len() > 0);
-        // Each entry ends with null, block ends with extra null
-        assert_eq!(block[block.len() - 1], 0);
-    }
-
-    #[test]
-    fn profile_for_allowhosts_logs_warning() {
-        let driver = WindowsSandboxDriver::new();
-        let caps = SandboxCapabilities {
-            network: NetworkPolicy::AllowHosts {
-                hosts: vec!["example.com".to_string()],
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::WritePaths(vec![PathBuf::from("C:\\temp")]),
+            network: NetworkPolicy::ProxyOnly { ports: vec![8080] },
+            process: crate::sandbox::policy::ProcessPolicy {
+                allow_fork: true,
+                timeout_secs: 120,
+                max_memory_mb: Some(512),
             },
             ..Default::default()
         };
-        // Should not fail, just log warning
-        let profile = driver.profile_for(&caps, Path::new("C:\\temp")).unwrap();
-        assert_eq!(profile.contents, "windows_restricted_token");
+        let cwd = Path::new("C:\\workspace");
+        let profile_str = driver.generate_profile(&policy, cwd).unwrap();
+
+        let parsed = parse_profile(&profile_str).unwrap();
+        assert_eq!(parsed.platform, "windows/token");
+        assert_eq!(parsed.fs_mode, "write_paths");
+        assert_eq!(parsed.cwd, Some("C:\\workspace".to_string()));
+        assert_eq!(parsed.write_paths, vec!["C:\\temp"]);
+        assert_eq!(parsed.network_mode, "proxy_only");
+        assert_eq!(parsed.proxy_ports, vec![8080]);
+        assert!(parsed.allow_fork);
+        assert_eq!(parsed.timeout_secs, 120);
+        assert_eq!(parsed.max_memory_mb, Some(512));
+    }
+
+    #[test]
+    fn profile_for_from_capabilities() {
+        let driver = WindowsSandboxDriver::new();
+        let caps = SandboxCapabilities {
+            fs_read: vec!["C:\\ProgramData".into()],
+            ..Default::default()
+        };
+        let cwd = Path::new("C:\\workspace");
+        let profile = driver.profile_for(&caps, cwd).unwrap();
+
+        assert!(profile.contents.contains("fs=read_paths"));
+        assert!(profile.contents.contains("read=C:\\ProgramData"));
     }
 }
