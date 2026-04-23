@@ -39,7 +39,7 @@ impl SandboxJob {
     /// Caller must ensure the job object is properly closed.
     pub unsafe fn new(max_active_processes: u32) -> Result<Self, String> {
         let handle = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-        if handle == 0 {
+        if handle.is_null() {
             return Err(format!("CreateJobObjectW failed: {}", GetLastError()));
         }
 
@@ -58,7 +58,7 @@ impl SandboxJob {
         );
 
         if ok == 0 {
-            CloseHandle(handle);
+            let _ = CloseHandle(handle);
             return Err(format!(
                 "SetInformationJobObject(ExtendedLimit) failed: {}",
                 GetLastError()
@@ -84,7 +84,7 @@ impl SandboxJob {
         );
 
         if ok == 0 {
-            CloseHandle(handle);
+            let _ = CloseHandle(handle);
             return Err(format!(
                 "SetInformationJobObject(UIRestrictions) failed: {}",
                 GetLastError()
@@ -117,7 +117,7 @@ impl SandboxJob {
 
 impl Drop for SandboxJob {
     fn drop(&mut self) {
-        if self.handle != 0 {
+        if !self.handle.is_null() {
             unsafe {
                 CloseHandle(self.handle);
             }

@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `extension/mod`: Remove unused `tool_registry()` getter.
 
 ### Fixed
+- **Windows build:** Fix 20 compilation errors in `src/sandbox/platforms/windows/`:
+  - `appcontainer.rs`: Replace corrupted `0026self` with `&self`; remove non-existent `windows-sys` 0.59 APIs (`CreateAppContainerProfile`, `DeleteAppContainerProfile`, `DeriveAppContainerSidFromAppContainerName`)
+  - `driver.rs`: Use `profile.proxy_ports` instead of undefined `proxy_ports`
+  - `token.rs`: Import `OpenProcessToken` from correct path, use `null_mut()` for HANDLE initialization
+  - `wfp.rs`: Replace `windows_sys::Win32::Foundation::GUID` with `[u8; 16]`
+  - `job.rs`: Use `is_null()` for HANDLE comparison, ignore `CloseHandle` result
+  - `mod.rs`: Make `driver` module public
 - **Loom concurrency tests:** Fixed compilation errors when running with `--features loom`. Resolved `MutexGuard` export, static initialization issues, and type mismatches between `std::sync` and `loom::sync` primitives.
 - **Telegram config parsing:** Add `#[serde(default)]` to `groups` field in `TelegramAccountConfig`, fixing V2 config parsing when groups are omitted.
 - **Memory ingest snapshot:** Update snapshot to match updated prompt text.

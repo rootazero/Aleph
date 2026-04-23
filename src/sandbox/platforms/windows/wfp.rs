@@ -28,7 +28,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 pub struct WfpFilter {
     engine_handle: HANDLE,
     filter_ids: Vec<u64>,
-    sublayer_guid: windows_sys::Win32::Foundation::GUID,
+    sublayer_guid: [u8; 16],
 }
 
 impl WfpFilter {
@@ -99,7 +99,7 @@ impl WfpFilter {
 impl Drop for WfpFilter {
     fn drop(&mut self) {
         // Cleanup: Remove all filters and close WFP engine
-        if self.engine_handle != 0 {
+        if !self.engine_handle.is_null() {
             unsafe {
                 CloseHandle(self.engine_handle);
             }

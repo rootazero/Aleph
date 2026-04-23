@@ -12,7 +12,7 @@
 
 mod acl;
 mod appcontainer;
-mod driver;
+pub mod driver;
 mod filter;
 mod job;
 mod token;

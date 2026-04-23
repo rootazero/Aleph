@@ -165,8 +165,8 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
 
             let pid = child.id().unwrap_or(0);
             if pid != 0 {
-                let handle = child.raw_handle().unwrap_or(0);
-                if handle != 0 {
+                let handle = child.raw_handle().unwrap_or(std::ptr::null_mut());
+                if !handle.is_null() {
                     let _ = unsafe { job.assign_process(handle as _) };
                 }
             }
@@ -254,7 +254,7 @@ fn parse_profile(contents: &str) -> Result<ParsedProfile, SandboxError> {
                 "host" => profile.allowed_hosts.push(value.to_string()),
                 "port" => {
                     if let Ok(port) = value.parse() {
-                        proxy_ports.push(port);
+                        profile.proxy_ports.push(port);
                     }
                 }
                 "allow_fork" => profile.allow_fork = value == "true",

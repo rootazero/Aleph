@@ -32,6 +32,7 @@ use windows_sys::Win32::Security::TOKEN_DUPLICATE;
 use windows_sys::Win32::Security::TOKEN_PRIVILEGES;
 use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::OpenProcessToken;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
@@ -149,9 +150,8 @@ unsafe fn get_current_token_for_restriction() -> Result<HANDLE, String> {
         | TOKEN_ADJUST_PRIVILEGES
         | TOKEN_ADJUST_SESSIONID;
 
-    let mut h_token: HANDLE = 0;
-    let ok =
-        windows_sys::Win32::Security::OpenProcessToken(GetCurrentProcess(), desired, &mut h_token);
+    let mut h_token: HANDLE = std::ptr::null_mut();
+    let ok = OpenProcessToken(GetCurrentProcess(), desired, &mut h_token);
 
     if ok == 0 {
         return Err(format!("OpenProcessToken failed: {}", GetLastError()));
@@ -234,7 +234,7 @@ pub unsafe fn create_restricted_token() -> Result<HANDLE, String> {
     }
 
     // Create the restricted token
-    let mut h_restricted: HANDLE = 0;
+    let mut h_restricted: HANDLE = std::ptr::null_mut();
     let ok = CreateRestrictedToken(
         h_token,
         DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
