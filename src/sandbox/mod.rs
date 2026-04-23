@@ -18,6 +18,9 @@ pub mod exec_approval;
 pub mod factory;
 pub mod workspace;
 
+#[cfg(target_os = "windows")]
+pub mod platforms;
+
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
 pub use command::{SandboxCommand, SandboxError, SandboxOutput};
 pub use config::SandboxConfig;
