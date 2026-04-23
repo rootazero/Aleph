@@ -16,6 +16,7 @@ pub mod context;
 pub mod driver;
 pub mod exec_approval;
 pub mod factory;
+pub mod policy;
 pub mod workspace;
 
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};
@@ -24,6 +25,7 @@ pub use config::SandboxConfig;
 pub use context::current_session;
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
+pub use policy::{EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {

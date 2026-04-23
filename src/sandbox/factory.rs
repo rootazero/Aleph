@@ -69,6 +69,14 @@ mod tests {
 
     #[async_trait]
     impl OsSandboxDriverTrait for UnusedDriver {
+        fn platform(&self) -> &'static str {
+            "unused"
+        }
+
+        fn is_supported(&self) -> bool {
+            false
+        }
+
         fn profile_for(
             &self,
             _capabilities: &SandboxCapabilities,
@@ -190,6 +198,14 @@ mod tests {
 
     #[async_trait]
     impl OsSandboxDriverTrait for FakeRunDriver {
+        fn platform(&self) -> &'static str {
+            "fake"
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
         fn profile_for(
             &self,
             _capabilities: &SandboxCapabilities,
