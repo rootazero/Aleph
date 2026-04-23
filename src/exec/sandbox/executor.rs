@@ -1,12 +1,8 @@
-//! OsSandboxDriver — OS-level sandbox-exec profile driver (macOS).
+//! OsSandboxDriver — DEPRECATED: Use `crate::sandbox::platforms::macos::SeatbeltDriver`.
 //!
-//! Provides the OS-level sandbox execution orchestration consumed by
-//! `WorkspaceSandbox` in `src/sandbox/`. Owns profile generation, subprocess
-//! spawning, cleanup, and audit logging.
-//!
-//! Previously named `SandboxManager`; renamed in Phase 3 Task 4 so the
-//! "OS driver" role is explicit relative to the higher-level `Sandbox` trait
-//! in `src/sandbox/mod.rs`. Do NOT confuse this with that agent-level trait.
+//! This module is retained for backward compatibility during Phase 1 migration.
+//! It will be removed in Phase 4. All new code should use the platform-specific
+//! drivers in `crate::sandbox::platforms`.
 
 use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxCommand};

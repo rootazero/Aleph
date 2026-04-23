@@ -540,15 +540,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
-        use alephcore::exec::sandbox::platforms::MacOSSandbox;
-        use alephcore::exec::sandbox::OsSandboxDriver;
-        use alephcore::sandbox::{build_sandbox, OsSandboxDriverTrait};
+        use alephcore::sandbox::{build_sandbox, create_platform_driver};
 
-        // macOS seatbelt adapter today; Linux/Windows stubs in the driver.
-        let os_adapter: Arc<dyn alephcore::exec::sandbox::SandboxAdapter> =
-            Arc::new(MacOSSandbox::new());
-        let os_driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(OsSandboxDriver::new(os_adapter));
-
+        let os_driver = create_platform_driver();
         build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone())
     };
     if !args.daemon {

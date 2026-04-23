@@ -45,6 +45,9 @@ pub enum SandboxError {
     #[error("timeout after {elapsed_ms}ms")]
     Timeout { elapsed_ms: u64 },
 
+    #[error("execution failed: {0}")]
+    ExecutionFailed(String),
+
     #[error("{0}")]
     Other(String),
 }

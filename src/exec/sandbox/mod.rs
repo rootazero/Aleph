@@ -1,6 +1,8 @@
-//! Sandbox subsystem for secure execution of AI-generated skills.
+//! Sandbox subsystem — DEPRECATED.
 //!
-//! Provides OS-native sandboxing with fine-grained permission control.
+//! This module is being phased out in favor of `crate::sandbox`. All new code
+//! should use the platform-specific drivers in `crate::sandbox::platforms`.
+//! These exports are retained for backward compatibility during migration.
 
 pub mod adapter;
 pub mod audit;
