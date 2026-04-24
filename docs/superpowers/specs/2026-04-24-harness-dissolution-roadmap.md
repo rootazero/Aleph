@@ -148,7 +148,7 @@ src/harness/
 | **P1** | `P1-context-engine` | Context engineering consolidation | 🟢 Low¹ | 3–5 days¹ | `src/context/{budget,compact}/` unified (see note ¹) |
 | **P2** | `P2-prompt-assembly` | Prompt assembly consolidation | 🟡 Medium | 2 weeks | 3-way merge → `src/prompt_assembly/`; `PromptAssembler` trait |
 | **P3** | `P3-guardrails` | Guardrails facade | 🟡 Medium | 1.5 weeks | `src/guardrails/` with InputGuard/OutputGuard/ToolCallGuard; delegates to existing backing stores |
-| **P4** | `P4-verification` | Verification & feedback loop | 🟡 Medium | 1.5 weeks | `src/verification/` absorbs stop_hooks; rule / visual / LLM-judge contracts |
+| **P4** | `P4-verification` | Verification & feedback loop | 🟢 Low² | 1–2 hours² | `src/verification/` houses StopHookHandler + ShellStopHook only (see note ²) |
 | **P5** | `P5-subagents` | Subagent orchestration collapse | 🔴 High | 3 weeks | `src/subagents/` from 4-way merge (agents + teams + orchestrator + group_chat); `supervisor/` renamed out; `SubagentOrchestrator` trait; Fork / Handoff / Graph modes explicit |
 | **P6** | `P6-checkpoint-boot` | State checkpoint + boot assembly | 🟢 Low | 1 week | `src/session/checkpoint/`; `src/runtime/boot.rs` assembly order documented |
 | **P7** | `P7-state-layer` | State layer reorganization (added 2026-04-24) | 🟡 Medium | 1.5 weeks | Decide StateDatabase home (merge into `src/session/` or new `src/state/`); delete gutted `src/resilience/`; 20+ consumers updated |
@@ -156,6 +156,8 @@ src/harness/
 **Total**: ~13.5 weeks / ~3.5 months.
 
 ¹ **P1 YAGNI downscoping (2026-04-24)**: During P1 brainstorm, the `ContextEngine` trait and `src/context/window/` subdirectory were explicitly deferred. The existing `CompactionStrategy` trait already provides the pluggable surface, and "window" concerns remain distributed across `ContextBudgetConfig` and `CompactorConfig` fields without sufficient mass to justify a standalone module. Additionally, `src/compressor/` was deleted (confirmed dead code, zero consumers) rather than "merged" as originally framed in §3.2. Risk downgraded from 🟡 Medium to 🟢 Low; estimate shortened from 2 weeks to 3–5 days. See P1 design §2 Decision 3 and §9 for rationale.
+
+² **P4 YAGNI downscoping + orphan-code deletion (2026-04-24)**: During P4 brainstorm, the roadmap's "rule / visual / LLM-judge contracts" commitment was retracted. Aleph's verification logic lives entirely in prompt templates (see `src/thinker/layers/agent_role.rs` VERDICT block) per R8/R10; no Rust-level verifier trait has a present consumer. A separate finding: `VerifyStopHook` (194 lines in `src/verification/verify_stop_hook.rs`) was orphaned code — zero production instantiations since its April 2026 introduction in commit b54877d7f — and was deleted per the P1 compressor precedent (dead code with zero consumers gets removed, not renamed). Risk downgraded 🟡 Medium → 🟢 Low; estimate shortened 1.5 weeks → 1–2 hours. See P4 design §2–§4 for details.
 
 ### 4.3 Dependency Graph
 
@@ -224,7 +226,7 @@ These do not block this roadmap but will need resolution during each phase's bra
 | P1 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p1-context-management-design.md](./2026-04-24-p1-context-management-design.md) | [2026-04-24-p1-context-management.md](../plans/2026-04-24-p1-context-management.md) |
 | P2 | 📋 Planned | — | — | — | — |
 | P3 | 📋 Planned | — | — | — | — |
-| P4 | 📋 Planned | — | — | — | — |
+| P4 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p4-verification-design.md](./2026-04-24-p4-verification-design.md) | [2026-04-24-p4-verification.md](../plans/2026-04-24-p4-verification.md) |
 | P5 | 📋 Planned | — | — | — | — |
 | P6 | 📋 Planned | — | — | — | — |
 | P7 | 📋 Planned | — | — | — | — |
