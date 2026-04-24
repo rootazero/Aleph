@@ -9,6 +9,7 @@ pub mod ax;
 pub mod media;
 pub mod permission;
 pub mod pim;
+pub mod power;
 pub mod screen;
 pub mod system;
 
@@ -17,5 +18,6 @@ pub use ax::AccessibilityCapability;
 pub use media::MediaCapability;
 pub use permission::PermissionCapability;
 pub use pim::PimCapability;
+pub use power::{InhibitorGuard, PowerCapability};
 pub use screen::ScreenCapability;
 pub use system::SystemCapability;
