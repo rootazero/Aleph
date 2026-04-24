@@ -111,6 +111,49 @@
     "title": "ClickParams",
     "type": "object"
   },
+  "ClipParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "duration_secs": {
+        "description": "Duration in seconds. Caller clamps to [0.25, 60.0].",
+        "format": "double",
+        "type": "number"
+      },
+      "with_audio": {
+        "description": "Mix microphone audio into the clip.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "duration_secs",
+      "with_audio"
+    ],
+    "title": "ClipParams",
+    "type": "object"
+  },
+  "ClipResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "duration_secs": {
+        "format": "double",
+        "type": "number"
+      },
+      "file_path": {
+        "description": "Absolute path to the recorded MP4/MOV.",
+        "type": "string"
+      },
+      "has_audio": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "duration_secs",
+      "file_path",
+      "has_audio"
+    ],
+    "title": "ClipResult",
+    "type": "object"
+  },
   "DragParams": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
@@ -538,6 +581,47 @@
       "direction"
     ],
     "title": "ScrollParams",
+    "type": "object"
+  },
+  "SnapParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "quality": {
+        "description": "JPEG quality, 0.0 – 1.0. Caller is expected to clamp; helper rejects values outside [0.05, 1.0] with ERR_INVALID_PARAMS.",
+        "format": "float",
+        "type": "number"
+      }
+    },
+    "required": [
+      "quality"
+    ],
+    "title": "SnapParams",
+    "type": "object"
+  },
+  "SnapResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "height": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "image_base64": {
+        "description": "Base64-encoded JPEG.",
+        "type": "string"
+      },
+      "width": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "height",
+      "image_base64",
+      "width"
+    ],
+    "title": "SnapResult",
     "type": "object"
   },
   "TypeTextParams": {

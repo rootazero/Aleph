@@ -109,5 +109,23 @@ fn main() {
         serde_json::to_value(schema_for!(methods::input::DragParams)).unwrap(),
     );
 
+    // media.camera.*
+    out.insert(
+        "SnapParams",
+        serde_json::to_value(schema_for!(methods::media::SnapParams)).unwrap(),
+    );
+    out.insert(
+        "SnapResult",
+        serde_json::to_value(schema_for!(methods::media::SnapResult)).unwrap(),
+    );
+    out.insert(
+        "ClipParams",
+        serde_json::to_value(schema_for!(methods::media::ClipParams)).unwrap(),
+    );
+    out.insert(
+        "ClipResult",
+        serde_json::to_value(schema_for!(methods::media::ClipResult)).unwrap(),
+    );
+
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
