@@ -272,3 +272,7 @@ test-camera-e2e: swift-bridge
 # End-to-end: audio device listing + recording via the Swift helper. Requires microphone permission.
 test-audio-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test audio_e2e -- --ignored --nocapture
+
+# End-to-end: speech recognition via the Swift helper. Requires Speech + Microphone TCC.
+test-speech-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test speech_e2e -- --ignored --nocapture
