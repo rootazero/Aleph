@@ -27,8 +27,7 @@ pub mod trace_replay;
 // Re-export commonly used types at crate root
 pub use auth::{GuestScope, IdentityContext, Role};
 pub use desktop_bridge::{
-    BridgeErrorResponse, BridgeRequest, BridgeRpcError, BridgeSuccessResponse, CanvasPosition,
-    ScreenRegion,
+    BridgeErrorResponse, BridgeRequest, BridgeRpcError, BridgeSuccessResponse,
 };
 pub use discovery::DiscoveredInstance;
 pub use events::{
