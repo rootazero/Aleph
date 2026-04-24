@@ -1,0 +1,621 @@
+{
+  "CaptureParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "Region": {
+        "properties": {
+          "height": {
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "double",
+            "type": "number"
+          },
+          "x": {
+            "format": "double",
+            "type": "number"
+          },
+          "y": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "height",
+          "width",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "display_id": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "region": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/Region"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "title": "CaptureParams",
+    "type": "object"
+  },
+  "CaptureResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "height": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "png_base64": {
+        "type": "string"
+      },
+      "width": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "height",
+      "png_base64",
+      "width"
+    ],
+    "title": "CaptureResult",
+    "type": "object"
+  },
+  "ClickParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "MouseButton": {
+        "enum": [
+          "left",
+          "right",
+          "middle"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "button": {
+        "$ref": "#/definitions/MouseButton"
+      },
+      "x": {
+        "format": "double",
+        "type": "number"
+      },
+      "y": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "button",
+      "x",
+      "y"
+    ],
+    "title": "ClickParams",
+    "type": "object"
+  },
+  "DragParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "duration_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "end_x": {
+        "format": "double",
+        "type": "number"
+      },
+      "end_y": {
+        "format": "double",
+        "type": "number"
+      },
+      "start_x": {
+        "format": "double",
+        "type": "number"
+      },
+      "start_y": {
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "end_x",
+      "end_y",
+      "start_x",
+      "start_y"
+    ],
+    "title": "DragParams",
+    "type": "object"
+  },
+  "ErrorResponse": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "RpcError": {
+        "properties": {
+          "code": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "error": {
+        "$ref": "#/definitions/RpcError"
+      },
+      "id": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "jsonrpc": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "error",
+      "jsonrpc"
+    ],
+    "title": "ErrorResponse",
+    "type": "object"
+  },
+  "HandshakeParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "protocol_version": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "rust_version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "protocol_version",
+      "rust_version"
+    ],
+    "title": "HandshakeParams",
+    "type": "object"
+  },
+  "HandshakeResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "protocol_version": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "supported_methods": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "swift_version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "protocol_version",
+      "supported_methods",
+      "swift_version"
+    ],
+    "title": "HandshakeResult",
+    "type": "object"
+  },
+  "KeyComboParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "modifiers": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "key",
+      "modifiers"
+    ],
+    "title": "KeyComboParams",
+    "type": "object"
+  },
+  "ListDisplaysResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "DisplayInfo": {
+        "properties": {
+          "bounds": {
+            "$ref": "#/definitions/Region"
+          },
+          "id": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "primary": {
+            "type": "boolean"
+          },
+          "scale": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bounds",
+          "id",
+          "primary",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "Region": {
+        "properties": {
+          "height": {
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "double",
+            "type": "number"
+          },
+          "x": {
+            "format": "double",
+            "type": "number"
+          },
+          "y": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "height",
+          "width",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "displays": {
+        "items": {
+          "$ref": "#/definitions/DisplayInfo"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "displays"
+    ],
+    "title": "ListDisplaysResult",
+    "type": "object"
+  },
+  "Notification": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "jsonrpc": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "params": true
+    },
+    "required": [
+      "jsonrpc",
+      "method"
+    ],
+    "title": "Notification",
+    "type": "object"
+  },
+  "OcrParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "fast_mode": {
+        "default": false,
+        "type": "boolean"
+      },
+      "image_base64": {
+        "type": "string"
+      },
+      "languages": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "image_base64"
+    ],
+    "title": "OcrParams",
+    "type": "object"
+  },
+  "OcrResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "OcrBlock": {
+        "properties": {
+          "bbox": {
+            "$ref": "#/definitions/Region"
+          },
+          "confidence": {
+            "format": "float",
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bbox",
+          "confidence",
+          "text"
+        ],
+        "type": "object"
+      },
+      "Region": {
+        "properties": {
+          "height": {
+            "format": "double",
+            "type": "number"
+          },
+          "width": {
+            "format": "double",
+            "type": "number"
+          },
+          "x": {
+            "format": "double",
+            "type": "number"
+          },
+          "y": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "height",
+          "width",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "blocks": {
+        "items": {
+          "$ref": "#/definitions/OcrBlock"
+        },
+        "type": "array"
+      },
+      "full_text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "blocks",
+      "full_text"
+    ],
+    "title": "OcrResult",
+    "type": "object"
+  },
+  "PingParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "PingParams",
+    "type": "object"
+  },
+  "PingResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "pong": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "pong"
+    ],
+    "title": "PingResult",
+    "type": "object"
+  },
+  "Request": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "JSON-RPC 2.0 request with u64 id (replaces old String-based id).",
+    "properties": {
+      "id": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "jsonrpc": {
+        "type": "string"
+      },
+      "method": {
+        "type": "string"
+      },
+      "params": true
+    },
+    "required": [
+      "id",
+      "jsonrpc",
+      "method"
+    ],
+    "title": "Request",
+    "type": "object"
+  },
+  "Response": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "id": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "jsonrpc": {
+        "type": "string"
+      },
+      "result": true
+    },
+    "required": [
+      "id",
+      "jsonrpc",
+      "result"
+    ],
+    "title": "Response",
+    "type": "object"
+  },
+  "RpcError": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "code": {
+        "format": "int32",
+        "type": "integer"
+      },
+      "data": true,
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "code",
+      "message"
+    ],
+    "title": "RpcError",
+    "type": "object"
+  },
+  "ScrollParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "amount": {
+        "format": "int32",
+        "type": "integer"
+      },
+      "direction": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "amount",
+      "direction"
+    ],
+    "title": "ScrollParams",
+    "type": "object"
+  },
+  "TypeTextParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "TypeTextParams",
+    "type": "object"
+  },
+  "WindowFocusParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "window_id": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "window_id"
+    ],
+    "title": "FocusParams",
+    "type": "object"
+  },
+  "WindowListParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ListParams",
+    "type": "object"
+  },
+  "WindowListResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "WindowInfo": {
+        "properties": {
+          "id": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "pid": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "pid",
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "windows": {
+        "items": {
+          "$ref": "#/definitions/WindowInfo"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "windows"
+    ],
+    "title": "ListResult",
+    "type": "object"
+  }
+}

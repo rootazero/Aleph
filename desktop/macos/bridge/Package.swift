@@ -15,5 +15,11 @@ let package = Package(
             ],
             path: "Sources/AlephBridge"
         ),
+        .testTarget(
+            name: "AlephBridgeTests",
+            dependencies: ["AlephBridge"],
+            path: "Tests/AlephBridgeTests",
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )
