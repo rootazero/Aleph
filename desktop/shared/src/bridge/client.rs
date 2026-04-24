@@ -71,10 +71,10 @@ impl SwiftBridge {
         // aleph-server shutdown propagate cleanly). The Swift helper also
         // polls getppid() and exits if it gets reparented to init (ppid=1).
         #[cfg(unix)]
+        // SAFETY: the pre_exec closure only calls async-signal-safe syscalls
+        // (setpgid) and returns an error via io::Error, not panic.
         unsafe {
-            use std::os::unix::process::CommandExt;
             cmd.pre_exec(|| {
-                // setpgid(0, 0) makes this process its own group leader.
                 if libc::setpgid(0, 0) == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -310,6 +310,26 @@ impl SwiftBridge {
             .map_err(|_| DesktopError::BridgeFailed("inflight dropped".into()))??;
         serde_json::from_value(raw)
             .map_err(|e| DesktopError::BridgeFailed(format!("decode result: {e}")))
+    }
+
+    /// Send the Stage 0 `bridge.handshake` request and return the helper's
+    /// version + supported method list. Mostly used at startup + in e2e
+    /// tests; individual capabilities do not need to call this first.
+    pub async fn handshake(
+        &self,
+        rust_version: &str,
+    ) -> Result<aleph_protocol::desktop_bridge::methods::bridge::HandshakeResult> {
+        use aleph_protocol::desktop_bridge::methods::bridge::{
+            HandshakeParams, METHOD_HANDSHAKE,
+        };
+        self.call(
+            METHOD_HANDSHAKE,
+            HandshakeParams {
+                rust_version: rust_version.into(),
+                protocol_version: 2,
+            },
+        )
+        .await
     }
 }
 

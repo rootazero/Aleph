@@ -247,3 +247,20 @@ test-probes:
 # Playwright E2E tests (Layer 3) — requires `just wasm` for UI tests
 test-e2e:
     npx playwright test --project=chromium
+
+# ─── Desktop Bridge (codex-inspired JSON-RPC helper) ───
+
+# Dump Rust-side desktop-bridge schemas to JSON (source of truth for Swift golden tests)
+bridge-schema:
+    @mkdir -p desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures
+    cargo run -p aleph-protocol --bin export_desktop_bridge_schema \
+        > desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures/schema.json
+    @echo "✓ schema.json written to desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures/"
+
+# Run Swift-side bridge unit tests (golden fixtures, codec, router)
+bridge-test:
+    cd desktop/macos/bridge && swift test
+
+# End-to-end: build Swift helper, then run ignored Rust e2e tests against it
+test-bridge-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test bridge_e2e -- --ignored --nocapture

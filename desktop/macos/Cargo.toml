@@ -45,3 +45,8 @@ objc2-speech = { version = "0.3", features = [
     "block2",
 ] }
 core-foundation = "0.10"
+
+[dev-dependencies]
+# End-to-end test against the real compiled AlephBridge helper.
+aleph-protocol = { path = "../../shared/protocol" }
+tokio = { version = "1", features = ["process", "rt-multi-thread", "macros"] }

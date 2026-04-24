@@ -2,13 +2,20 @@ import Foundation
 
 /// JSON-RPC 2.0 server over stdin/stdout with newline-delimited messages.
 ///
-/// Reads a line at a time from stdin on a background dispatch source, parses
-/// it as a `Request`, dispatches to the `Router` from inside a detached task
-/// (to keep concurrent requests from head-of-line blocking each other), and
-/// writes the encoded Response / ErrorResponse back to stdout.
-actor Server {
+/// Reads a line at a time from stdin, parses it as a `Request`, dispatches to
+/// the `Router` from inside a detached child task (so concurrent requests do
+/// not head-of-line block each other), and writes the encoded Response /
+/// ErrorResponse back to stdout.
+///
+/// `Server` is a class (not an actor) on purpose: the reader loop calls the
+/// synchronous blocking `read(2)` syscall and would otherwise hold actor
+/// isolation across that block, starving handler child tasks. State accessed
+/// from handlers (`router`) is itself an actor, and stdout writes are
+/// serialized by `stdoutLock`.
+final class Server {
     let router: Router
     private let stderr = FileHandle.standardError
+    private let stdoutLock = NSLock()
 
     init(router: Router) {
         self.router = router
@@ -16,8 +23,8 @@ actor Server {
 
     func run() async {
         let reader = LineReader(fileDescriptor: FileHandle.standardInput.fileDescriptor)
-        // Use a TaskGroup so all in-flight request handlers finish before run()
-        // returns — guarantees responses are flushed before the process exits.
+        // TaskGroup so all in-flight handlers finish before run() returns —
+        // guarantees responses flush before the process exits on stdin close.
         await withTaskGroup(of: Void.self) { group in
             while let line = reader.nextLine() {
                 let snapshot = line
@@ -25,7 +32,6 @@ actor Server {
                     await self?.handleLine(snapshot)
                 }
             }
-            // Drain remaining tasks before falling through.
             await group.waitForAll()
         }
         stderr.write("aleph-bridge: stdin closed, exiting\n".data(using: .utf8)!)
@@ -36,38 +42,29 @@ actor Server {
             let req = try Codec.decode(line, as: Request.self)
             do {
                 let result = try await router.handle(method: req.method, params: req.params)
-                let resp = Response(id: req.id, result: result)
-                await write(resp)
+                write(Response(id: req.id, result: result))
             } catch let err as RpcError {
-                let resp = ErrorResponse(id: req.id, error: err)
-                await write(resp)
+                write(ErrorResponse(id: req.id, error: err))
             } catch {
-                let resp = ErrorResponse(
+                write(ErrorResponse(
                     id: req.id,
-                    error: RpcError(
-                        code: -32003, // ERR_PLATFORM
-                        message: "\(error)",
-                        data: nil
-                    )
-                )
-                await write(resp)
+                    error: RpcError(code: -32003, message: "\(error)", data: nil)
+                ))
             }
         } catch {
             stderr.write("aleph-bridge: parse error: \(error)\n".data(using: .utf8)!)
-            // Emit a parse-error with no id so the client at least sees something.
-            let resp = ErrorResponse(
+            write(ErrorResponse(
                 id: nil,
                 error: RpcError(code: -32700, message: "\(error)", data: nil)
-            )
-            await write(resp)
+            ))
         }
     }
 
-    private func write<T: Encodable>(_ msg: T) async {
+    private func write<T: Encodable>(_ msg: T) {
         guard let data = try? Codec.encode(msg) else { return }
         let stdout = FileHandle.standardOutput
-        // FileHandle writes are synchronous; wrap in a do/catch to survive a
-        // broken pipe if the Rust client has exited.
+        stdoutLock.lock()
+        defer { stdoutLock.unlock() }
         do {
             try stdout.write(contentsOf: data)
         } catch {

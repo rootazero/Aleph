@@ -207,6 +207,7 @@ name = "aleph-desktop-macos"
 version = "0.1.0"
 dependencies = [
  "aleph-desktop",
+ "aleph-protocol",
  "async-trait",
  "base64 0.22.1",
  "block2 0.6.2",
