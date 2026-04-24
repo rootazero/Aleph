@@ -218,7 +218,7 @@ These do not block this roadmap but will need resolution during each phase's bra
 
 | Phase | Status | Started | Completed | Spec | Plan |
 |-------|--------|---------|-----------|------|------|
-| P0 | 📋 Planned | — | — | [2026-04-24-p0-slim-harness-design.md](./2026-04-24-p0-slim-harness-design.md) | — |
+| P0 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p0-slim-harness-design.md](./2026-04-24-p0-slim-harness-design.md) | [2026-04-24-p0-slim-harness.md](../plans/2026-04-24-p0-slim-harness.md) |
 | P1 | 📋 Planned | — | — | — | — |
 | P2 | 📋 Planned | — | — | — | — |
 | P3 | 📋 Planned | — | — | — | — |
