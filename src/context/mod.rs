@@ -3,6 +3,8 @@
 pub mod environment;
 pub mod memory_context;
 pub mod session_info;
+pub mod budget;
+pub mod compact;
 
 pub use environment::EnvironmentInfo;
 pub use memory_context::{ConversationSnippet, MemoryContext, MemoryFact};

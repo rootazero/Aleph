@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
-use crate::harness::context_budget::LoopDirective;
+use crate::context::budget::LoopDirective;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 use crate::harness::trait_def::{Harness, HarnessError, TurnState};

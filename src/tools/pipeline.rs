@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::memory::compaction::file_content_tracker::FileContentTracker;
-use crate::harness::context_budget::pressure::estimate_tokens_smart;
+use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::tools::runtime::{LoopToolRegistry, ToolResult};
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::result_store::ToolResultStore;

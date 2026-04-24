@@ -208,7 +208,7 @@ mod tests {
         CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
         TokenEstimate,
     };
-    use crate::harness::context_budget::ContextPressure;
+    use crate::context::budget::ContextPressure;
 
     // -------------------------------------------------------------------------
     // Helper

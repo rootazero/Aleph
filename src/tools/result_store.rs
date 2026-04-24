@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::harness::context_budget::pressure::estimate_tokens_smart;
+use crate::context::budget::pressure::estimate_tokens_smart;
 
 /// Prefix used to identify persisted-result reference lines.
 const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";

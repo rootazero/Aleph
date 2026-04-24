@@ -7,8 +7,6 @@ pub mod adapters;
 pub mod agent;
 pub mod callback;
 pub mod chain_context;
-pub mod context_budget;
-pub mod context_compactor;
 pub mod deps;
 pub mod loop_callback;
 pub mod provider_bridge;

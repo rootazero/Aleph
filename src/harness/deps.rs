@@ -8,8 +8,8 @@
 //! the factory function (`build_sandbox`) returns `Arc<dyn Sandbox>` directly,
 //! so we hold the sandbox instance rather than a factory.
 
-use crate::harness::context_budget::ContextBudget;
-use crate::harness::context_compactor::ContextCompactor;
+use crate::context::budget::ContextBudget;
+use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::skill_prefetch::SkillPrefetcher;
 use crate::harness::stop_hooks::StopHookHandler;
 use crate::harness::trace_sink::TraceSink;

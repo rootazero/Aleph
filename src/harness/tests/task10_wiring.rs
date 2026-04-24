@@ -18,8 +18,8 @@ use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::Result as AlephResult;
-use crate::harness::context_budget::{ContextBudget, ContextBudgetConfig};
-use crate::harness::context_compactor::{CompactorConfig, ContextCompactor};
+use crate::context::budget::{ContextBudget, ContextBudgetConfig};
+use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::harness::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};

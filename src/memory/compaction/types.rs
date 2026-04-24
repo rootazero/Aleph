@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::harness::context_budget::ContextPressure;
+use crate::context::budget::ContextPressure;
 use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
