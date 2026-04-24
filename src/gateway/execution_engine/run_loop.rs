@@ -113,7 +113,7 @@ impl<R: ToolRegistry + 'static> crate::tools::refresh::ToolRefreshSource
     }
 
     fn fetch_tools(&self) -> Vec<Box<dyn crate::tools::runtime::LoopTool>> {
-        crate::harness::adapters::build_tool_adapters_from_tools(
+        crate::tools::adapters::build_tool_adapters_from_tools(
             self.tool_registry.clone(),
             &self.merged_tools(),
             self.default_working_dir.clone(),
@@ -414,7 +414,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             //    MCP refresh. `LoopToolRegistry` is built from the resolved
             //    `allowed_tools` so the view is identical to the retiring
             //    registry path.
-            let loop_registry = Arc::new(crate::harness::adapters::build_registry_from_tools(
+            let loop_registry = Arc::new(crate::tools::adapters::build_registry_from_tools(
                 self.tool_registry.clone(),
                 &allowed_tools,
                 default_working_dir.clone(),

@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::tool_execution_context::CascadePolicy;
+use crate::tools::execution_context::CascadePolicy;
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
 use crate::tools::runtime::LoopToolRegistry;

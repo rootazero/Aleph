@@ -3,16 +3,11 @@
 //! Phase 4b of the managed-agents refactor.
 //! Spec: docs/superpowers/specs/2026-04-19-harness-think-act-design.md
 
-pub mod adapters;
 pub mod agent;
 pub mod callback;
 pub mod chain_context;
 pub mod deps;
 pub mod loop_callback;
-pub mod provider_bridge;
-pub mod skill_prefetch;
-pub mod tool_execution_context;
-pub mod tool_summary;
 pub mod trace;
 pub mod trace_sink;
 pub mod trait_def;
