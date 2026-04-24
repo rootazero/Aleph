@@ -1,6 +1,7 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod ax;
 mod escape_listener;
 pub mod hotkey;
 mod permission;
@@ -17,8 +18,8 @@ use aleph_desktop::media_types::{
 };
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
-    SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::Result;
@@ -27,6 +28,7 @@ use async_trait::async_trait;
 use tracing::debug;
 
 use automation::MacOSAutomation;
+use ax::BridgeAccessibility;
 use escape_listener::EscapeListener;
 use permission::MacOSPermission;
 use pim::MacOSPim;
@@ -41,6 +43,7 @@ pub struct MacOSPlatform {
     permission: MacOSPermission,
     pim: MacOSPim,
     system: MacOSSystem,
+    ax: BridgeAccessibility,
     bridge: Arc<SwiftBridge>,
 }
 
@@ -83,6 +86,7 @@ impl MacOSPlatform {
             permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
+            ax: BridgeAccessibility::new(Arc::clone(&bridge)),
             bridge,
         }
     }
@@ -159,6 +163,10 @@ impl DesktopPlatform for MacOSPlatform {
 
     fn media(&self) -> Option<&dyn MediaCapability> {
         Some(self)
+    }
+
+    fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+        Some(&self.ax)
     }
 
     fn escape_listener(&self) -> Option<&dyn EscapeAbort> {

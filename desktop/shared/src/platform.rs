@@ -1,8 +1,8 @@
 //! Platform aggregator trait.
 
 use crate::traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
-    SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, ScreenCapability, SystemCapability,
 };
 
 /// Cross-platform escape abort interface.
@@ -55,6 +55,13 @@ pub trait DesktopPlatform: Send + Sync {
 
     /// Media capture (camera, audio devices), if available.
     fn media(&self) -> Option<&dyn MediaCapability>;
+
+    /// Accessibility (AX) tree queries, if available.
+    ///
+    /// Only macOS currently implements this; other platforms return `None`.
+    fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+        None
+    }
 
     /// Escape key abort listener, if available on this platform.
     fn escape_listener(&self) -> Option<&dyn EscapeAbort> {

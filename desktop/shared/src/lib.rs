@@ -41,8 +41,8 @@ pub use bridge::client::SwiftBridge;
 // Re-export new capability traits.
 pub use platform::{DesktopPlatform, EscapeAbort};
 pub use traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
-    SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, ScreenCapability, SystemCapability,
 };
 
 use serde::{Deserialize, Serialize};

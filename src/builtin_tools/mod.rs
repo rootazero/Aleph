@@ -117,7 +117,11 @@ pub use config_guide::{
     GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool,
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
-pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
+pub use desktop::{
+    DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopOutput,
+    DesktopTool,
+};
 pub use error::ToolError;
 pub use file_ops::{FileEditTool, FileOpsArgs, FileOpsTool, FileReadTool, FileWriteTool};
 pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};

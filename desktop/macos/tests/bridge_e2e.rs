@@ -65,3 +65,38 @@ async fn ping_returns_pong_true() {
         .expect("bridge.ping failed");
     assert!(pong.pong);
 }
+
+/// Smoke test for `ax.query_focused`.
+///
+/// On developer machines where the helper has been granted Accessibility,
+/// the call should succeed with either `Some(_)` or `None` element.  On CI
+/// or fresh dev machines without permission, the helper returns the
+/// structured `permission denied: accessibility` error — which this test
+/// also accepts.  Any other error path is a real failure.
+#[tokio::test]
+#[ignore]
+async fn ax_query_focused_returns_element_or_permission_error() {
+    use aleph_protocol::desktop_bridge::methods::ax::{QueryFocusedParams, QueryResult};
+
+    let path = helper_path();
+    assert!(
+        path.exists(),
+        "helper not built at {}; run `just swift-bridge` first",
+        path.display()
+    );
+
+    let bridge = SwiftBridge::new(path);
+    let res: std::result::Result<QueryResult, _> = bridge
+        .call("ax.query_focused", QueryFocusedParams {})
+        .await;
+
+    match res {
+        Ok(_) => {
+            // Permission granted. element may be Some or None — both are fine.
+        }
+        Err(e) if format!("{e}").contains("permission denied") => {
+            // Expected on machines without Accessibility permission.
+        }
+        Err(e) => panic!("unexpected error from ax.query_focused: {e}"),
+    }
+}

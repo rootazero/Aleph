@@ -137,6 +137,15 @@ impl BuiltinToolRegistry {
         // Desktop tool — platform-native desktop/screen capability only.
         let desktop_tool = DesktopTool::new().with_platform(Arc::clone(&desktop_platform));
 
+        // AX query tools (macOS only; tools degrade gracefully on other platforms).
+        let desktop_ax_query_focused_tool =
+            crate::builtin_tools::DesktopAxQueryFocused::new()
+                .with_platform(Arc::clone(&desktop_platform));
+        let desktop_ax_query_tree_tool = crate::builtin_tools::DesktopAxQueryTree::new()
+            .with_platform(Arc::clone(&desktop_platform));
+        let desktop_ax_query_by_role_tool = crate::builtin_tools::DesktopAxQueryByRole::new()
+            .with_platform(Arc::clone(&desktop_platform));
+
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
@@ -905,6 +914,9 @@ impl BuiltinToolRegistry {
             self_config_tool,
             vault_store_tool,
             desktop_tool,
+            desktop_ax_query_focused_tool,
+            desktop_ax_query_tree_tool,
+            desktop_ax_query_by_role_tool,
             pim_tool,
             system_tool,
             automation_tool,

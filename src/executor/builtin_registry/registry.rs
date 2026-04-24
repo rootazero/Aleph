@@ -85,6 +85,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
     pub(crate) desktop_tool: crate::builtin_tools::DesktopTool,
+    /// Accessibility query tools (macOS-backed; graceful no-op on other platforms).
+    pub(crate) desktop_ax_query_focused_tool: crate::builtin_tools::DesktopAxQueryFocused,
+    pub(crate) desktop_ax_query_tree_tool: crate::builtin_tools::DesktopAxQueryTree,
+    pub(crate) desktop_ax_query_by_role_tool: crate::builtin_tools::DesktopAxQueryByRole,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: crate::builtin_tools::PimTool,
     /// System tool instance (app management, notifications, clipboard, system info)
@@ -496,6 +500,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
+            "desktop.ax_query_focused" => Box::pin(async move {
+                self.desktop_ax_query_focused_tool
+                    .call_json(arguments)
+                    .await
+            }),
+            "desktop.ax_query_tree" => Box::pin(async move {
+                self.desktop_ax_query_tree_tool.call_json(arguments).await
+            }),
+            "desktop.ax_query_by_role" => Box::pin(async move {
+                self.desktop_ax_query_by_role_tool
+                    .call_json(arguments)
+                    .await
+            }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
             "system" => Box::pin(async move { self.system_tool.call_json(arguments).await }),
             "automation" => {
