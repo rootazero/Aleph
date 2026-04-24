@@ -6,6 +6,7 @@
 
 pub mod envelope;
 pub mod errors;
+pub mod methods;
 
 pub use envelope::{ErrorResponse, Message, Notification, Request, Response, RpcError};
 pub use envelope::{BridgeErrorResponse, BridgeRequest, BridgeRpcError, BridgeSuccessResponse};
