@@ -54,26 +54,7 @@ private func requireAxTrusted() throws {
         throw RpcError(
             code: -32001,
             message: "permission denied: accessibility",
-            data: .object([
-                "kind": .string("accessibility"),
-                "status": .object([
-                    "kind": .string("accessibility"),
-                    "granted": .bool(false),
-                    "can_request_programmatically": .bool(false),
-                    "restricted": .bool(false),
-                ]),
-                "deep_link": .string(
-                    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
-                ),
-                "human_readable_steps": .array([
-                    .string("Open System Settings → Privacy & Security → Accessibility"),
-                    .string("Find aleph-server or AlephBridge in the list"),
-                    .string("Toggle the switch to enabled"),
-                ]),
-                "rationale": .string(
-                    "Aleph needs Accessibility permission to read UI element trees of other apps"
-                ),
-            ])
+            data: try encodeCodable(Perm.guide(.accessibility))
         )
     }
 }
