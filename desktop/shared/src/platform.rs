@@ -2,7 +2,7 @@
 
 use crate::traits::{
     AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
-    PimCapability, ScreenCapability, SystemCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
 };
 
 /// Cross-platform escape abort interface.
@@ -60,6 +60,11 @@ pub trait DesktopPlatform: Send + Sync {
     ///
     /// Only macOS currently implements this; other platforms return `None`.
     fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+        None
+    }
+
+    /// Power management — sleep inhibition, if available on this platform.
+    fn power(&self) -> Option<&dyn PowerCapability> {
         None
     }
 

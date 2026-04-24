@@ -1,8 +1,12 @@
 //! Windows platform implementation for Aleph desktop capabilities.
 
+mod sleep_inhibitor;
+
+pub use sleep_inhibitor::WindowsPower;
+
 use aleph_desktop::traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
-    SystemCapability,
+    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
+    ScreenCapability, SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
@@ -10,6 +14,7 @@ use aleph_desktop::NativeScreen;
 /// Windows platform with shared `NativeScreen` for screen capabilities.
 pub struct WindowsPlatform {
     screen: NativeScreen,
+    power: WindowsPower,
 }
 
 impl WindowsPlatform {
@@ -17,6 +22,7 @@ impl WindowsPlatform {
     pub fn new() -> Self {
         Self {
             screen: NativeScreen::new(),
+            power: WindowsPower::new(),
         }
     }
 }
@@ -54,6 +60,10 @@ impl DesktopPlatform for WindowsPlatform {
 
     fn media(&self) -> Option<&dyn MediaCapability> {
         None
+    }
+
+    fn power(&self) -> Option<&dyn PowerCapability> {
+        Some(&self.power)
     }
 }
 

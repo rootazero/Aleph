@@ -7,7 +7,10 @@ pub mod hotkey;
 mod permission;
 mod pim;
 mod screen;
+mod sleep_inhibitor;
 mod system;
+
+pub use sleep_inhibitor::MacosPower;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +22,7 @@ use aleph_desktop::media_types::{
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
     AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
-    PimCapability, ScreenCapability, SystemCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::Result;
@@ -44,6 +47,7 @@ pub struct MacOSPlatform {
     pim: MacOSPim,
     system: MacOSSystem,
     ax: BridgeAccessibility,
+    power: MacosPower,
     bridge: Arc<SwiftBridge>,
 }
 
@@ -87,6 +91,7 @@ impl MacOSPlatform {
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
             ax: BridgeAccessibility::new(Arc::clone(&bridge)),
+            power: MacosPower::new(),
             bridge,
         }
     }
@@ -167,6 +172,10 @@ impl DesktopPlatform for MacOSPlatform {
 
     fn ax(&self) -> Option<&dyn AccessibilityCapability> {
         Some(&self.ax)
+    }
+
+    fn power(&self) -> Option<&dyn PowerCapability> {
+        Some(&self.power)
     }
 
     fn escape_listener(&self) -> Option<&dyn EscapeAbort> {
