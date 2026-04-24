@@ -264,3 +264,7 @@ bridge-test:
 # End-to-end: build Swift helper, then run ignored Rust e2e tests against it
 test-bridge-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test bridge_e2e -- --ignored --nocapture
+
+# End-to-end: camera snap/clip via the Swift helper. Requires camera permission.
+test-camera-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test camera_e2e -- --ignored --nocapture

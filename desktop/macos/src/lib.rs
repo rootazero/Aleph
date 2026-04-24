@@ -75,7 +75,7 @@ impl MacOSPlatform {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
             escape: EscapeListener::new(),
-            media: MacOSMedia::new(),
+            media: MacOSMedia::new(Arc::clone(&bridge)),
             permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),

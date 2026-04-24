@@ -80,6 +80,7 @@ if CommandLine.arguments.count > 1 {
     Task {
         let router = Router()
         await registerBridgeHandlers(router)
+        await registerCameraHandlers(router)
         await ParentWatch().start()
         await Server(router: router).run()
         done.signal()

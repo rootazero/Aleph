@@ -8,6 +8,8 @@ rust-version.workspace = true
 
 [dependencies]
 aleph-desktop = { path = "../shared" }
+# JSON-RPC method / params / result types shared with the Swift helper.
+aleph-protocol = { path = "../../shared/protocol" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["process", "rt"] }
 serde = { version = "1", features = ["derive"] }
@@ -31,12 +33,10 @@ objc2-user-notifications = { version = "0.3", features = [
     "UNNotificationSettings",
 ] }
 block2 = "0.6"
-objc2-av-foundation = { version = "0.3", features = [
-    "AVCaptureDevice", "AVMediaFormat",
-    "AVCaptureSession", "AVCaptureInput",
-    "AVCapturePhotoOutput", "AVCaptureOutputBase",
-    "AVCaptureFileOutput", "AVCaptureOutput",
-] }
+# Kept only for permission.rs TCC checks (AVCaptureDevice::authorizationStatus*).
+# All camera-capture features (session/input/output/photo/movie) were removed
+# in T1a.2 — camera capture now lives in the Swift helper over JSON-RPC.
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 objc2-speech = { version = "0.3", features = [
     "SFSpeechRecognizer",
     "SFSpeechRecognitionRequest",
@@ -49,5 +49,4 @@ core-foundation = "0.10"
 
 [dev-dependencies]
 # End-to-end test against the real compiled AlephBridge helper.
-aleph-protocol = { path = "../../shared/protocol" }
 tokio = { version = "1", features = ["process", "rt-multi-thread", "macros"] }

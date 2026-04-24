@@ -1,11 +1,11 @@
-//! macOS media capture (camera photo/video, audio device listing).
+//! macOS media capabilities.
 //!
-//! Camera operations use native AVFoundation APIs:
-//! - Photos: AVCaptureSession + AVCapturePhotoOutput — captures JPEG from default camera
-//! - Video: AVCaptureSession + AVCaptureMovieFileOutput — records MOV from default camera
-//!
-//! Audio recording uses ffmpeg CLI (audio-only capture via AVFoundation is complex).
-//! Audio device listing uses CoreAudio C FFI directly.
+//! Camera operations proxy to the Swift helper over JSON-RPC
+//! (`media.camera.snap` / `media.camera.clip`). Audio recording uses the
+//! `ffmpeg` CLI (audio-only capture via AVFoundation is complex and will
+//! migrate in Stage 1b). Audio device listing uses CoreAudio C FFI directly.
+//! Speech-to-text uses SFSpeechRecognizer via `objc2-speech` and will migrate
+//! to the Swift helper in Stage 1c.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,11 +14,9 @@ use std::time::SystemTime;
 use aleph_desktop::media_types::*;
 use aleph_desktop::traits::MediaCapability;
 use aleph_desktop::Result;
+use aleph_desktop::SwiftBridge;
 use async_trait::async_trait;
-use base64::Engine;
 use tracing::{debug, warn};
-
-type PhotoDataSlot = Arc<std::sync::Mutex<Option<std::result::Result<Vec<u8>, String>>>>;
 
 // ---------------------------------------------------------------------------
 // CoreAudio C FFI for audio device listing
@@ -91,117 +89,15 @@ mod core_audio_ffi {
     }
 }
 
-// ---------------------------------------------------------------------------
-// AVFoundation capture delegates — MUST be at module scope to avoid
-// ObjC class re-registration panic on repeated calls.
-// ---------------------------------------------------------------------------
-
-mod av_capture_delegates {
-    use objc2::DefinedClass;
-    use objc2_av_foundation::AVCaptureConnection;
-    use objc2_av_foundation::{
-        AVCaptureFileOutput, AVCaptureFileOutputRecordingDelegate, AVCapturePhoto,
-        AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput,
-    };
-    use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSURL};
-    use std::sync::{Arc, Condvar, Mutex};
-
-    type PhotoDelegateData = Arc<Mutex<Option<Result<Vec<u8>, String>>>>;
-
-    // ── Photo capture delegate ──────────────────────────────────
-
-    pub struct PhotoDelegateIvars {
-        pub data: PhotoDelegateData,
-        pub signal: Arc<(Mutex<bool>, Condvar)>,
-    }
-
-    objc2::define_class!(
-        #[unsafe(super(NSObject))]
-        #[ivars = PhotoDelegateIvars]
-        #[name = "AlephPhotoCaptureDelegate"]
-        pub struct PhotoCaptureDelegate;
-
-        unsafe impl AVCapturePhotoCaptureDelegate for PhotoCaptureDelegate {
-            #[unsafe(method(captureOutput:didFinishProcessingPhoto:error:))]
-            fn _did_finish_processing(
-                &self,
-                _output: &AVCapturePhotoOutput,
-                photo: &AVCapturePhoto,
-                error: Option<&NSError>,
-            ) {
-                let ivars = self.ivars();
-
-                let result = if let Some(err) = error {
-                    Err(err.to_string())
-                } else {
-                    match unsafe { photo.fileDataRepresentation() } {
-                        Some(ns_data) => Ok(ns_data.to_vec()),
-                        None => Err("fileDataRepresentation returned nil".into()),
-                    }
-                };
-
-                {
-                    let mut guard = ivars.data.lock().unwrap_or_else(|e| e.into_inner());
-                    *guard = Some(result);
-                }
-                let (ref lock, ref cvar) = *ivars.signal;
-                let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-                *done = true;
-                cvar.notify_all();
-            }
-        }
-
-        unsafe impl NSObjectProtocol for PhotoCaptureDelegate {}
-    );
-
-    // ── Movie recording delegate ────────────────────────────────
-
-    pub struct MovieDelegateIvars {
-        pub error: Arc<Mutex<Option<String>>>,
-        pub signal: Arc<(Mutex<bool>, Condvar)>,
-    }
-
-    objc2::define_class!(
-        #[unsafe(super(NSObject))]
-        #[ivars = MovieDelegateIvars]
-        #[name = "AlephMovieRecordingDelegate"]
-        pub struct MovieRecordingDelegate;
-
-        unsafe impl AVCaptureFileOutputRecordingDelegate for MovieRecordingDelegate {
-            #[unsafe(method(captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:))]
-            fn _did_finish_recording(
-                &self,
-                _output: &AVCaptureFileOutput,
-                _url: &NSURL,
-                _connections: &NSArray<AVCaptureConnection>,
-                error: Option<&NSError>,
-            ) {
-                let ivars = self.ivars();
-                if let Some(err) = error {
-                    let mut guard = ivars.error.lock().unwrap_or_else(|e| e.into_inner());
-                    *guard = Some(err.to_string());
-                }
-                let (ref lock, ref cvar) = *ivars.signal;
-                let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-                *done = true;
-                cvar.notify_all();
-            }
-        }
-
-        unsafe impl NSObjectProtocol for MovieRecordingDelegate {}
-    );
-}
-
-use av_capture_delegates::*;
-
-/// macOS media capability using native AVFoundation + CoreAudio FFI.
+/// macOS media capability. Camera calls are proxied to the Swift helper via
+/// the shared long-lived `SwiftBridge`; audio + speech remain native for now.
 pub struct MacOSMedia {
-    _private: (),
+    bridge: Arc<SwiftBridge>,
 }
 
 impl MacOSMedia {
-    pub fn new() -> Self {
-        Self { _private: () }
+    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
+        Self { bridge }
     }
 }
 
@@ -241,285 +137,6 @@ async fn check_tool_available(tool: &str) -> bool {
         .await
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-// ---------------------------------------------------------------------------
-// Camera snap via native AVFoundation (AVCapturePhotoOutput)
-// ---------------------------------------------------------------------------
-
-fn snap_native_blocking() -> Result<CameraSnapResult> {
-    use objc2::rc::Retained;
-    use objc2::runtime::ProtocolObject;
-    use objc2::AllocAnyThread;
-    use objc2_av_foundation::{
-        AVCaptureDevice, AVCaptureDeviceInput, AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput,
-        AVCapturePhotoSettings, AVCaptureSession, AVMediaTypeVideo,
-    };
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::time::Duration;
-
-    // 1. Get default video device
-    let media_type = unsafe { AVMediaTypeVideo }
-        .ok_or_else(|| bridge_err("AVMediaTypeVideo is not available"))?;
-    let device = unsafe { AVCaptureDevice::defaultDeviceWithMediaType(media_type) }
-        .ok_or_else(|| bridge_err("No camera device found"))?;
-
-    // 2. Create input from device
-    let input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&device) }
-        .map_err(|e| bridge_err(&format!("Failed to create device input: {e}")))?;
-
-    // 3. Create session and add input
-    let session = unsafe { AVCaptureSession::new() };
-    let input_ref: &objc2_av_foundation::AVCaptureInput = &input;
-    if !unsafe { session.canAddInput(input_ref) } {
-        return Err(bridge_err("Cannot add camera input to session"));
-    }
-    unsafe { session.addInput(input_ref) };
-
-    // 4. Create photo output and add to session
-    let photo_output = unsafe { AVCapturePhotoOutput::new() };
-    let output_ref: &objc2_av_foundation::AVCaptureOutput = &photo_output;
-    if !unsafe { session.canAddOutput(output_ref) } {
-        return Err(bridge_err("Cannot add photo output to session"));
-    }
-    unsafe { session.addOutput(output_ref) };
-
-    // 5. Start session (blocks until running)
-    unsafe { session.startRunning() };
-
-    // 6. Wait for auto-exposure stabilization (~0.5s)
-    std::thread::sleep(Duration::from_millis(500));
-
-    // 7. Create delegate with signal channel
-    let data_slot: PhotoDataSlot = Arc::new(Mutex::new(None));
-    let signal = Arc::new((Mutex::new(false), Condvar::new()));
-
-    let delegate_ivars = PhotoDelegateIvars {
-        data: data_slot.clone(),
-        signal: signal.clone(),
-    };
-    let delegate: Retained<PhotoCaptureDelegate> = {
-        let alloc = PhotoCaptureDelegate::alloc().set_ivars(delegate_ivars);
-        unsafe { objc2::msg_send![super(alloc), init] }
-    };
-
-    // 8. Capture photo with default JPEG settings
-    let settings = unsafe { AVCapturePhotoSettings::photoSettings() };
-    let delegate_proto: &ProtocolObject<dyn AVCapturePhotoCaptureDelegate> =
-        ProtocolObject::from_ref(&*delegate);
-    unsafe {
-        photo_output.capturePhotoWithSettings_delegate(&settings, delegate_proto);
-    }
-
-    // 9. Wait for delegate callback (timeout 10s)
-    let (ref lock, ref cvar) = *signal;
-    let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let timeout = Duration::from_secs(10);
-    while !*done {
-        let (guard, wait_result) = cvar
-            .wait_timeout(done, timeout)
-            .unwrap_or_else(|e| e.into_inner());
-        done = guard;
-        if wait_result.timed_out() && !*done {
-            unsafe { session.stopRunning() };
-            return Err(bridge_err("Photo capture timed out after 10 seconds"));
-        }
-    }
-
-    // 10. Stop session
-    unsafe { session.stopRunning() };
-
-    // 11. Extract JPEG data
-    let result = {
-        let guard = data_slot.lock().unwrap_or_else(|e| e.into_inner());
-        guard
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| Err("No photo data received".into()))
-    };
-
-    let jpeg_bytes = result.map_err(|e| bridge_err(&format!("Photo capture failed: {e}")))?;
-
-    // 12. Get dimensions and encode to base64
-    let (width, height) = image_dimensions_from_bytes(&jpeg_bytes);
-    let image_base64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
-
-    Ok(CameraSnapResult {
-        image_base64,
-        width,
-        height,
-    })
-}
-
-/// Extract image dimensions from in-memory JPEG/HEIC bytes.
-fn image_dimensions_from_bytes(data: &[u8]) -> (u32, u32) {
-    // Write to a temp file for image crate to read dimensions
-    let tmp = media_dir().join(format!("_tmp_dim_{}.jpg", timestamp_suffix()));
-    if std::fs::write(&tmp, data).is_ok() {
-        let dims = image::image_dimensions(&tmp).unwrap_or((0, 0));
-        let _ = std::fs::remove_file(&tmp);
-        dims
-    } else {
-        (0, 0)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Camera clip via native AVFoundation (AVCaptureMovieFileOutput)
-// ---------------------------------------------------------------------------
-
-fn clip_native_blocking(config: &CameraClipConfig) -> Result<CameraClipResult> {
-    use objc2::rc::Retained;
-    use objc2::runtime::ProtocolObject;
-    use objc2::AllocAnyThread;
-    use objc2_av_foundation::{
-        AVCaptureDevice, AVCaptureDeviceInput, AVCaptureFileOutputRecordingDelegate,
-        AVCaptureMovieFileOutput, AVCaptureSession, AVMediaTypeAudio, AVMediaTypeVideo,
-    };
-    use objc2_foundation::NSURL;
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::time::Duration;
-
-    let out_path = media_dir().join(format!("camera_clip_{}.mov", timestamp_suffix()));
-
-    // 1. Get default video device
-    let video_type = unsafe { AVMediaTypeVideo }
-        .ok_or_else(|| bridge_err("AVMediaTypeVideo is not available"))?;
-    let video_device = unsafe { AVCaptureDevice::defaultDeviceWithMediaType(video_type) }
-        .ok_or_else(|| bridge_err("No camera device found"))?;
-
-    // 2. Create session and add video input
-    let session = unsafe { AVCaptureSession::new() };
-
-    let video_input = unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&video_device) }
-        .map_err(|e| bridge_err(&format!("Failed to create video input: {e}")))?;
-
-    let video_input_ref: &objc2_av_foundation::AVCaptureInput = &video_input;
-    if !unsafe { session.canAddInput(video_input_ref) } {
-        return Err(bridge_err("Cannot add video input to session"));
-    }
-    unsafe { session.addInput(video_input_ref) };
-
-    // 3. Optionally add audio input
-    let has_audio = if config.with_audio {
-        let audio_type = unsafe { AVMediaTypeAudio };
-        if let Some(audio_type) = audio_type {
-            if let Some(audio_device) =
-                unsafe { AVCaptureDevice::defaultDeviceWithMediaType(audio_type) }
-            {
-                match unsafe { AVCaptureDeviceInput::deviceInputWithDevice_error(&audio_device) } {
-                    Ok(audio_input) => {
-                        let audio_input_ref: &objc2_av_foundation::AVCaptureInput = &audio_input;
-                        if unsafe { session.canAddInput(audio_input_ref) } {
-                            unsafe { session.addInput(audio_input_ref) };
-                            true
-                        } else {
-                            warn!("Cannot add audio input to session, recording video only");
-                            false
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to create audio input: {e}, recording video only");
-                        false
-                    }
-                }
-            } else {
-                warn!("No audio device found, recording video only");
-                false
-            }
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    // 4. Create movie file output and add to session
-    let movie_output = unsafe { AVCaptureMovieFileOutput::new() };
-    let output_ref: &objc2_av_foundation::AVCaptureOutput = &movie_output;
-    if !unsafe { session.canAddOutput(output_ref) } {
-        return Err(bridge_err("Cannot add movie output to session"));
-    }
-    unsafe { session.addOutput(output_ref) };
-
-    // 5. Start session
-    unsafe { session.startRunning() };
-
-    // Brief warmup for auto-exposure
-    std::thread::sleep(Duration::from_millis(300));
-
-    // 6. Create delegate
-    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let signal = Arc::new((Mutex::new(false), Condvar::new()));
-
-    let delegate_ivars = MovieDelegateIvars {
-        error: error_slot.clone(),
-        signal: signal.clone(),
-    };
-    let delegate: Retained<MovieRecordingDelegate> = {
-        let alloc = MovieRecordingDelegate::alloc().set_ivars(delegate_ivars);
-        unsafe { objc2::msg_send![super(alloc), init] }
-    };
-
-    // 7. Start recording
-    let out_path_str = out_path.to_string_lossy();
-    let ns_str = objc2_foundation::NSString::from_str(&out_path_str);
-    let file_url = NSURL::fileURLWithPath(&ns_str);
-
-    let delegate_proto: &ProtocolObject<dyn AVCaptureFileOutputRecordingDelegate> =
-        ProtocolObject::from_ref(&*delegate);
-    let file_output: &objc2_av_foundation::AVCaptureFileOutput = &movie_output;
-    unsafe {
-        file_output.startRecordingToOutputFileURL_recordingDelegate(&file_url, delegate_proto);
-    }
-
-    // 8. Record for the specified duration
-    let record_duration = Duration::from_secs_f64(config.duration_secs);
-    std::thread::sleep(record_duration);
-
-    // 9. Stop recording
-    unsafe { file_output.stopRecording() };
-
-    // 10. Wait for delegate callback (timeout: duration + 10s buffer)
-    let timeout = Duration::from_secs(config.duration_secs as u64 + 10);
-    let (ref lock, ref cvar) = *signal;
-    let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-    while !*done {
-        let (guard, wait_result) = cvar
-            .wait_timeout(done, timeout)
-            .unwrap_or_else(|e| e.into_inner());
-        done = guard;
-        if wait_result.timed_out() && !*done {
-            unsafe { session.stopRunning() };
-            return Err(bridge_err("Movie recording delegate timed out"));
-        }
-    }
-
-    // 11. Stop session
-    unsafe { session.stopRunning() };
-
-    // 12. Check for errors
-    {
-        let guard = error_slot.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref err_msg) = *guard {
-            // AVFoundation reports "no error" with error code -11806 when
-            // recording is stopped normally; only fail on real errors
-            if !err_msg.contains("-11806") {
-                return Err(bridge_err(&format!("Movie recording failed: {err_msg}")));
-            }
-        }
-    }
-
-    // 13. Verify file exists
-    if !out_path.exists() {
-        return Err(bridge_err("Movie recording produced no output file"));
-    }
-
-    Ok(CameraClipResult {
-        file_path: out_path.to_string_lossy().into_owned(),
-        duration_secs: config.duration_secs,
-        has_audio,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -876,23 +493,54 @@ fn speech_to_text_blocking(
 #[async_trait]
 impl MediaCapability for MacOSMedia {
     async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
-        let _ = config; // AVFoundation handles quality internally
-        debug!("Taking camera photo via native AVFoundation");
-        tokio::task::spawn_blocking(snap_native_blocking)
+        use aleph_protocol::desktop_bridge::methods::media::{
+            SnapParams, SnapResult, METHOD_CAMERA_SNAP,
+        };
+        let config = config.clamped();
+        debug!(quality = config.quality, "Proxying camera snap to Swift helper");
+        let rpc: SnapResult = self
+            .bridge
+            .call(
+                METHOD_CAMERA_SNAP,
+                SnapParams {
+                    quality: config.quality,
+                },
+            )
             .await
-            .map_err(|e| bridge_err(&format!("Failed to spawn camera snap task: {e}")))?
+            .map_err(|e| bridge_err(&format!("media.camera.snap RPC: {e}")))?;
+        Ok(CameraSnapResult {
+            image_base64: rpc.image_base64,
+            width: rpc.width,
+            height: rpc.height,
+        })
     }
 
     async fn camera_clip(&self, config: CameraClipConfig) -> Result<CameraClipResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            ClipParams, ClipResult, METHOD_CAMERA_CLIP,
+        };
         let config = config.clamped();
         debug!(
             duration = config.duration_secs,
             audio = config.with_audio,
-            "Recording camera clip via native AVFoundation"
+            "Proxying camera clip to Swift helper"
         );
-        tokio::task::spawn_blocking(move || clip_native_blocking(&config))
+        let rpc: ClipResult = self
+            .bridge
+            .call(
+                METHOD_CAMERA_CLIP,
+                ClipParams {
+                    duration_secs: config.duration_secs,
+                    with_audio: config.with_audio,
+                },
+            )
             .await
-            .map_err(|e| bridge_err(&format!("Failed to spawn camera clip task: {e}")))?
+            .map_err(|e| bridge_err(&format!("media.camera.clip RPC: {e}")))?;
+        Ok(CameraClipResult {
+            file_path: rpc.file_path,
+            duration_secs: rpc.duration_secs,
+            has_audio: rpc.has_audio,
+        })
     }
 
     async fn record_audio(&self, config: AudioRecordConfig) -> Result<AudioRecordResult> {
