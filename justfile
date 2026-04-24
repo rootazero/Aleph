@@ -268,3 +268,7 @@ test-bridge-e2e: swift-bridge
 # End-to-end: camera snap/clip via the Swift helper. Requires camera permission.
 test-camera-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test camera_e2e -- --ignored --nocapture
+
+# End-to-end: audio device listing + recording via the Swift helper. Requires microphone permission.
+test-audio-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test audio_e2e -- --ignored --nocapture

@@ -81,6 +81,7 @@ if CommandLine.arguments.count > 1 {
         let router = Router()
         await registerBridgeHandlers(router)
         await registerCameraHandlers(router)
+        await registerAudioHandlers(router)
         await ParentWatch().start()
         await Server(router: router).run()
         done.signal()
