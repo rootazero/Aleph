@@ -166,6 +166,7 @@ dependencies = [
 name = "aleph-desktop"
 version = "0.1.0"
 dependencies = [
+ "aleph-protocol",
  "async-trait",
  "base64 0.22.1",
  "block2 0.6.2",
@@ -183,6 +184,7 @@ dependencies = [
  "objc2-vision",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

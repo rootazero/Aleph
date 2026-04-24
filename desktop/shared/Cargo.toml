@@ -25,6 +25,9 @@ tracing = { workspace = true }
 # Home directory resolution (for SwiftBridge default path)
 dirs = { workspace = true }
 
+# Desktop-bridge JSON-RPC schemas
+aleph-protocol = { path = "../../shared/protocol" }
+
 # Encoding
 base64 = { workspace = true }
 
@@ -69,3 +72,6 @@ core-foundation = "0.10"
 objc2-screen-capture-kit = "0.3"
 objc2-core-media = { version = "0.3", features = ["CMTime", "objc2"] }
 dispatch2 = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
