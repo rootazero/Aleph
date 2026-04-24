@@ -32,7 +32,10 @@ use crate::sync_primitives::Arc;
 pub mod context_window;
 pub mod fallback;
 pub mod summary_engine;
+pub mod summary_source;
 pub mod tool_compactor;
+
+pub use summary_source::SessionSummarySource;
 
 use crate::context::compact::tool_aware_chunker::{parse_semantic_units, ToolAwareChunker};
 use context_window::{estimate_tokens, partition_fresh_tail_pairs};
