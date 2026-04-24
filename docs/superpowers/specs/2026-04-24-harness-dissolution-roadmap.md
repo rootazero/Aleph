@@ -123,7 +123,7 @@ src/harness/
 | 6 | Tool Calling / Structured Output | `src/tools/calling/` | Absorb harness/provider_bridge split-out |
 | 7 | State & Checkpointing | `src/session/` (+ `checkpoint/` submodule) | Fill Git-style checkpoint contracts |
 | 8 | Error Handling | Cross-module (`HarnessError` + typed errors) | **Split** (revised in P0 brainstorm): (a) rename `src/resilient/` → `src/task_resilience/` — lands in P0; (b) `src/resilience/` StateDatabase relocation — deferred to new phase **P7** (architectural decision, 20+ consumers) |
-| 9 | Guardrails | **`src/guardrails/`** (new facade) | Aggregate security/sandbox/permission/approval/pii; InputGuard/OutputGuard/ToolCallGuard |
+| 9 | Guardrails | `src/{security,sandbox,approval,pii}/` (kept in place)³ | Orphan `src/permission/` deleted; facade and InputGuard/OutputGuard/ToolCallGuard traits retracted (see note ³) |
 | 10 | Verification & Feedback | **`src/verification/`** (new) | Absorb stop_hooks; add rule/visual/LLM-judge |
 | 11 | Subagent Orchestration | **`src/subagents/`** (new home) | **Collapse 4 dirs** (agents + teams + orchestrator + group_chat) + rename `supervisor/` → `src/process_supervisor/` (not subagent) |
 | 12 | Initialization & Environment | `src/init_unified/` + `src/config/` + new `src/runtime/boot.rs` | Document 12-module assembly order |
@@ -147,7 +147,7 @@ src/harness/
 | **P0** | `P0-slim-harness` | Harness physical slimming | 🟢 Low | 1 week | `src/harness/` down to 9 files; supervisor renamed; `resilience/` deleted |
 | **P1** | `P1-context-engine` | Context engineering consolidation | 🟢 Low¹ | 3–5 days¹ | `src/context/{budget,compact}/` unified (see note ¹) |
 | **P2** | `P2-prompt-assembly` | Prompt assembly consolidation | 🟡 Medium | 2 weeks | 3-way merge → `src/prompt_assembly/`; `PromptAssembler` trait |
-| **P3** | `P3-guardrails` | Guardrails facade | 🟡 Medium | 1.5 weeks | `src/guardrails/` with InputGuard/OutputGuard/ToolCallGuard; delegates to existing backing stores |
+| **P3** | `P3-guardrails` | Guardrails facade | 🟢 Low³ | 1–2 hours³ | Orphan `src/permission/` deleted; facade plan retracted (see note ³) |
 | **P4** | `P4-verification` | Verification & feedback loop | 🟢 Low² | 1–2 hours² | `src/verification/` houses StopHookHandler + ShellStopHook only (see note ²) |
 | **P5** | `P5-subagents` | Subagent orchestration collapse | 🔴 High | 3 weeks | `src/subagents/` from 4-way merge (agents + teams + orchestrator + group_chat); `supervisor/` renamed out; `SubagentOrchestrator` trait; Fork / Handoff / Graph modes explicit |
 | **P6** | `P6-checkpoint-boot` | State checkpoint + boot assembly | 🟢 Low | 1 week | `src/session/checkpoint/`; `src/runtime/boot.rs` assembly order documented |
@@ -158,6 +158,8 @@ src/harness/
 ¹ **P1 YAGNI downscoping (2026-04-24)**: During P1 brainstorm, the `ContextEngine` trait and `src/context/window/` subdirectory were explicitly deferred. The existing `CompactionStrategy` trait already provides the pluggable surface, and "window" concerns remain distributed across `ContextBudgetConfig` and `CompactorConfig` fields without sufficient mass to justify a standalone module. Additionally, `src/compressor/` was deleted (confirmed dead code, zero consumers) rather than "merged" as originally framed in §3.2. Risk downgraded from 🟡 Medium to 🟢 Low; estimate shortened from 2 weeks to 3–5 days. See P1 design §2 Decision 3 and §9 for rationale.
 
 ² **P4 YAGNI downscoping + orphan-code deletion (2026-04-24)**: During P4 brainstorm, the roadmap's "rule / visual / LLM-judge contracts" commitment was retracted. Aleph's verification logic lives entirely in prompt templates (see `src/thinker/layers/agent_role.rs` VERDICT block) per R8/R10; no Rust-level verifier trait has a present consumer. A separate finding: `VerifyStopHook` (194 lines in `src/verification/verify_stop_hook.rs`) was orphaned code — zero production instantiations since its April 2026 introduction in commit b54877d7f — and was deleted per the P1 compressor precedent (dead code with zero consumers gets removed, not renamed). Risk downgraded 🟡 Medium → 🟢 Low; estimate shortened 1.5 weeks → 1–2 hours. See P4 design §2–§4 for details.
+
+³ **P3 YAGNI retraction + orphan deletion (2026-04-25)**: P3 brainstorm audited the five modules originally proposed for the guardrails facade. Findings: (a) `src/permission/` was orphan code — zero external consumers since its April 2026 introduction in commit `1f7b33931` — and was deleted per the P1 (`compressor`) / P4 (`VerifyStopHook`) precedent (dead code with zero consumers gets removed, not relocated); (b) the four live modules (`security`, `sandbox`, `approval`, `pii`) serve genuinely distinct domains with distinct consumer footprints, so a parent `src/guardrails/` directory was rejected as adding hierarchy without solving any pain; (c) the planned `InputGuard` / `OutputGuard` / `ToolCallGuard` traits had no present consumer and were retracted (R3 + YAGNI). A separate fragmentation finding — three parallel exec-approval implementations (`src/exec/approval/`, `src/sandbox/exec_approval/`, `src/tools/middleware/permission/`) and six distinct `ApprovalDecision` types across the codebase — is layered/domain-distinct rather than a name collision, and is deferred to a future phase. Risk downgraded 🟡 Medium → 🟢 Low; estimate shortened 1.5 weeks → 1–2 hours. See P3 design §2–§3 for details.
 
 ### 4.3 Dependency Graph
 
@@ -225,7 +227,7 @@ These do not block this roadmap but will need resolution during each phase's bra
 | P0 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p0-slim-harness-design.md](./2026-04-24-p0-slim-harness-design.md) | [2026-04-24-p0-slim-harness.md](../plans/2026-04-24-p0-slim-harness.md) |
 | P1 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p1-context-management-design.md](./2026-04-24-p1-context-management-design.md) | [2026-04-24-p1-context-management.md](../plans/2026-04-24-p1-context-management.md) |
 | P2 | 📋 Planned | — | — | — | — |
-| P3 | 📋 Planned | — | — | — | — |
+| P3 | ✅ Complete | 2026-04-25 | 2026-04-25 | [2026-04-25-p3-guardrails-design.md](./2026-04-25-p3-guardrails-design.md) | [2026-04-25-p3-guardrails.md](../plans/2026-04-25-p3-guardrails.md) |
 | P4 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p4-verification-design.md](./2026-04-24-p4-verification-design.md) | [2026-04-24-p4-verification.md](../plans/2026-04-24-p4-verification.md) |
 | P5 | 📋 Planned | — | — | — | — |
 | P6 | 📋 Planned | — | — | — | — |
