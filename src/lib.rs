@@ -69,7 +69,6 @@ pub mod memory;
 pub mod metrics;
 pub mod orchestrator;
 pub mod payload;
-pub mod permission;
 pub mod pii;
 pub mod prompt;
 pub mod prompt_assembly;
