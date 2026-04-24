@@ -1,7 +1,7 @@
 //! Integration tests for PtySupervisor.
 //!
 //! These tests use real PTY processes to verify the supervisor works correctly.
-use crate::supervisor::{ClaudeSupervisor, SupervisorConfig, SupervisorEvent};
+use crate::process_supervisor::{ClaudeSupervisor, SupervisorConfig, SupervisorEvent};
 use std::time::Duration;
 
 /// Test spawning a simple echo command.

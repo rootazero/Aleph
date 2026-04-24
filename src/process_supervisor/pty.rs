@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use tokio::sync::mpsc;
 
 use crate::exec::SecretMasker;
-use crate::supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEvent};
+use crate::process_supervisor::types::{SupervisorConfig, SupervisorError, SupervisorEvent};
 
 /// PTY-based supervisor for controlling Claude Code and similar CLI tools.
 ///

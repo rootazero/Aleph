@@ -83,7 +83,7 @@ pub mod session;
 pub mod skill;
 
 pub mod harness;
-pub(crate) mod supervisor;
+pub(crate) mod process_supervisor;
 pub mod thinker;
 pub(crate) mod tool_output;
 pub mod tools;
