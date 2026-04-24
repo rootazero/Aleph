@@ -61,17 +61,33 @@ impl SwiftBridge {
     /// Spawn the helper subprocess and wire up reader + stderr tasks.
     /// This is the inner spawn — does NOT touch backoff or restart_window.
     async fn spawn_process(&self) -> Result<()> {
-        let mut child = Command::new(&self.binary_path)
-            .stdin(std::process::Stdio::piped())
+        let mut cmd = Command::new(&self.binary_path);
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                DesktopError::BridgeFailed(format!(
-                    "spawn {}: {e}",
-                    self.binary_path.display()
-                ))
-            })?;
+            .stderr(std::process::Stdio::piped());
+
+        // Place the helper in its own process group so it inherits the
+        // parent's controlling terminal signals (SIGTERM/SIGKILL on
+        // aleph-server shutdown propagate cleanly). The Swift helper also
+        // polls getppid() and exits if it gets reparented to init (ppid=1).
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                // setpgid(0, 0) makes this process its own group leader.
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            DesktopError::BridgeFailed(format!(
+                "spawn {}: {e}",
+                self.binary_path.display()
+            ))
+        })?;
 
         let stdin = child
             .stdin

@@ -38,6 +38,10 @@ image = { workspace = true }
 # Input automation
 enigo = { version = "0.3", features = ["serde"] }
 
+[target.'cfg(unix)'.dependencies]
+# setpgid on helper spawn so signals propagate when aleph-server exits.
+libc = "0.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",

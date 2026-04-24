@@ -176,6 +176,7 @@ dependencies = [
  "dispatch2",
  "enigo",
  "image",
+ "libc",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
  "objc2-core-media",
