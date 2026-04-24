@@ -32,6 +32,12 @@ pub enum DesktopError {
     /// The aleph-bridge Swift CLI binary failed or produced unexpected output.
     #[error("bridge failed: {0}")]
     BridgeFailed(String),
+
+    /// The bridge has been disabled after too many crashes inside the
+    /// restart window. Callers should surface this explicitly rather than
+    /// retrying.
+    #[error("desktop bridge disabled: {0}")]
+    BridgeDisabled(String),
 }
 
 /// Convenience result type for desktop operations.
