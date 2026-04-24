@@ -1,7 +1,8 @@
-//! Media camera + audio capture over JSON-RPC.
+//! Media camera + audio capture + speech recognition over JSON-RPC.
 //!
-//! Speech recognition lives alongside camera/audio in `MediaCapability` on
-//! the Rust side but is migrated in Stage 1c separately.
+//! All three media sub-domains proxy to the Swift `AlephBridge` helper over
+//! the shared long-lived `SwiftBridge`. Rust-side native media code is empty
+//! as of Stage 1c.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,8 @@ pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 
 pub const METHOD_AUDIO_LIST_DEVICES: &str = "media.audio.list_devices";
 pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
+
+pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
 
 /// Snap is essentially synchronous (<1s on a warm camera) but the AVCapture
 /// pipeline takes time to initialise on first use.
@@ -28,6 +31,10 @@ pub const SUGGESTED_TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
 /// `duration_secs * 1000 + RECORD_OVERHEAD_MS` rather than relying on a fixed
 /// constant, so we expose the overhead directly.
 pub const RECORD_OVERHEAD_MS: u64 = 5_000;
+
+/// Speech recognition has a hard 60-second limit (Apple's on-device budget)
+/// plus model warm-up on first call. Callers should budget accordingly.
+pub const SUGGESTED_TIMEOUT_MS_TRANSCRIBE: u64 = 65_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapParams {
@@ -99,6 +106,23 @@ pub struct RecordAudioResult {
     pub format: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TranscribeFileParams {
+    /// Absolute path to the audio file (m4a / wav / mp3 supported by SFSpeechRecognizer).
+    pub audio_path: String,
+    /// BCP-47 language tag (e.g. "en-US", "zh-Hans"). Helper rejects unknown
+    /// locales with ERR_INVALID_PARAMS.
+    pub language: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TranscribeFileResult {
+    /// Best transcription, formatted (punctuation + capitalization).
+    pub text: String,
+    /// Echo of the requested language.
+    pub language: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,14 +172,6 @@ mod tests {
         let back: ClipResult = serde_json::from_str(&j).unwrap();
         assert_eq!(back.file_path, "/tmp/x.mp4");
         assert!(back.has_audio);
-    }
-
-    #[test]
-    fn method_names_stable() {
-        assert_eq!(METHOD_CAMERA_SNAP, "media.camera.snap");
-        assert_eq!(METHOD_CAMERA_CLIP, "media.camera.clip");
-        assert_eq!(METHOD_AUDIO_LIST_DEVICES, "media.audio.list_devices");
-        assert_eq!(METHOD_AUDIO_RECORD, "media.audio.record");
     }
 
     #[test]
@@ -222,5 +238,38 @@ mod tests {
         assert_eq!(back.file_path, "/tmp/a.m4a");
         assert!((back.duration_secs - 5.0).abs() < 1e-6);
         assert_eq!(back.format, "m4a");
+    }
+
+    #[test]
+    fn transcribe_params_roundtrip() {
+        let p = TranscribeFileParams {
+            audio_path: "/tmp/a.m4a".into(),
+            language: "en-US".into(),
+        };
+        let j = serde_json::to_string(&p).unwrap();
+        let back: TranscribeFileParams = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.audio_path, "/tmp/a.m4a");
+        assert_eq!(back.language, "en-US");
+    }
+
+    #[test]
+    fn transcribe_result_roundtrip() {
+        let r = TranscribeFileResult {
+            text: "hello world".into(),
+            language: "en-US".into(),
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        let back: TranscribeFileResult = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.text, "hello world");
+        assert_eq!(back.language, "en-US");
+    }
+
+    #[test]
+    fn method_names_stable() {
+        assert_eq!(METHOD_CAMERA_SNAP, "media.camera.snap");
+        assert_eq!(METHOD_CAMERA_CLIP, "media.camera.clip");
+        assert_eq!(METHOD_AUDIO_LIST_DEVICES, "media.audio.list_devices");
+        assert_eq!(METHOD_AUDIO_RECORD, "media.audio.record");
+        assert_eq!(METHOD_SPEECH_TRANSCRIBE_FILE, "media.speech.transcribe_file");
     }
 }

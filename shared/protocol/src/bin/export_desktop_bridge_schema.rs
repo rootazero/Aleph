@@ -149,5 +149,15 @@ fn main() {
         serde_json::to_value(schema_for!(methods::media::RecordAudioResult)).unwrap(),
     );
 
+    // media.speech.*
+    out.insert(
+        "TranscribeFileParams",
+        serde_json::to_value(schema_for!(methods::media::TranscribeFileParams)).unwrap(),
+    );
+    out.insert(
+        "TranscribeFileResult",
+        serde_json::to_value(schema_for!(methods::media::TranscribeFileResult)).unwrap(),
+    );
+
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }

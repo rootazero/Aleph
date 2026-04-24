@@ -745,6 +745,44 @@
     "title": "SnapResult",
     "type": "object"
   },
+  "TranscribeFileParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "audio_path": {
+        "description": "Absolute path to the audio file (m4a / wav / mp3 supported by SFSpeechRecognizer).",
+        "type": "string"
+      },
+      "language": {
+        "description": "BCP-47 language tag (e.g. \"en-US\", \"zh-Hans\"). Helper rejects unknown locales with ERR_INVALID_PARAMS.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "audio_path",
+      "language"
+    ],
+    "title": "TranscribeFileParams",
+    "type": "object"
+  },
+  "TranscribeFileResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "language": {
+        "description": "Echo of the requested language.",
+        "type": "string"
+      },
+      "text": {
+        "description": "Best transcription, formatted (punctuation + capitalization).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "language",
+      "text"
+    ],
+    "title": "TranscribeFileResult",
+    "type": "object"
+  },
   "TypeTextParams": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
