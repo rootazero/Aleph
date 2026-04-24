@@ -145,7 +145,7 @@ src/harness/
 | Phase | Code | Theme | Risk | Estimate | Exit Artifact |
 |-------|------|-------|------|----------|---------------|
 | **P0** | `P0-slim-harness` | Harness physical slimming | 🟢 Low | 1 week | `src/harness/` down to 9 files; supervisor renamed; `resilience/` deleted |
-| **P1** | `P1-context-engine` | Context engineering consolidation | 🟡 Medium | 2 weeks | `src/context/{budget,compact,window}/` unified; `ContextEngine` trait |
+| **P1** | `P1-context-engine` | Context engineering consolidation | 🟢 Low¹ | 3–5 days¹ | `src/context/{budget,compact}/` unified (see note ¹) |
 | **P2** | `P2-prompt-assembly` | Prompt assembly consolidation | 🟡 Medium | 2 weeks | 3-way merge → `src/prompt_assembly/`; `PromptAssembler` trait |
 | **P3** | `P3-guardrails` | Guardrails facade | 🟡 Medium | 1.5 weeks | `src/guardrails/` with InputGuard/OutputGuard/ToolCallGuard; delegates to existing backing stores |
 | **P4** | `P4-verification` | Verification & feedback loop | 🟡 Medium | 1.5 weeks | `src/verification/` absorbs stop_hooks; rule / visual / LLM-judge contracts |
@@ -154,6 +154,8 @@ src/harness/
 | **P7** | `P7-state-layer` | State layer reorganization (added 2026-04-24) | 🟡 Medium | 1.5 weeks | Decide StateDatabase home (merge into `src/session/` or new `src/state/`); delete gutted `src/resilience/`; 20+ consumers updated |
 
 **Total**: ~13.5 weeks / ~3.5 months.
+
+¹ **P1 YAGNI downscoping (2026-04-24)**: During P1 brainstorm, the `ContextEngine` trait and `src/context/window/` subdirectory were explicitly deferred. The existing `CompactionStrategy` trait already provides the pluggable surface, and "window" concerns remain distributed across `ContextBudgetConfig` and `CompactorConfig` fields without sufficient mass to justify a standalone module. Additionally, `src/compressor/` was deleted (confirmed dead code, zero consumers) rather than "merged" as originally framed in §3.2. Risk downgraded from 🟡 Medium to 🟢 Low; estimate shortened from 2 weeks to 3–5 days. See P1 design §2 Decision 3 and §9 for rationale.
 
 ### 4.3 Dependency Graph
 
@@ -207,7 +209,7 @@ Each phase is a full independent cycle (new brainstorm session, not a continuati
 
 These do not block this roadmap but will need resolution during each phase's brainstorm:
 
-1. **P1**: How should the boundary between `src/memory/compaction/` (within-memory consolidation) and `src/context/compact/` (cross-turn compression) be drawn? The memory compaction is about offline memory → note refinement; the context compaction is about live conversation trimming. They should stay separate but need a shared trait vocabulary.
+1. **P1** ✅ **Resolved (2026-04-24)**: The original framing was inaccurate. `src/memory/compaction/` in fact held the live-conversation compaction framework (PressureLevel, CompactionStrategy trait, Orchestrator, etc.) rather than offline memory-note refinement. P1 relocated the framework to `src/context/compact/` and moved the one truly cross-session component (`session_summary_source`) into `src/memory/session_compactor/summary_source.rs`. The `src/memory/compaction/` directory no longer exists. See P1 design §2 Decision 1.
 2. **P2**: Should the unified prompt directory be named `src/prompt_assembly/` or keep `src/thinker/` (historical name)? `thinker` is misleading under R8 (thinking belongs to the LLM, not the assembler), so `prompt_assembly` is preferred, but it's a rename of ~30 files.
 3. **P5**: Of the 5 subagent directories, `src/supervisor/` seems to be PTY subprocess supervision (unrelated to subagent orchestration). Confirm this in P5 brainstorm and relocate to `src/process_supervisor/`.
 4. **P4**: `HarnessError` currently lives in `src/harness/trait_def.rs`. Does it stay there, or move to a top-level `src/error/harness.rs`? Cross-cutting error types are awkward either way.
@@ -219,7 +221,7 @@ These do not block this roadmap but will need resolution during each phase's bra
 | Phase | Status | Started | Completed | Spec | Plan |
 |-------|--------|---------|-----------|------|------|
 | P0 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p0-slim-harness-design.md](./2026-04-24-p0-slim-harness-design.md) | [2026-04-24-p0-slim-harness.md](../plans/2026-04-24-p0-slim-harness.md) |
-| P1 | 📋 Planned | — | — | — | — |
+| P1 | ✅ Complete | 2026-04-24 | 2026-04-24 | [2026-04-24-p1-context-management-design.md](./2026-04-24-p1-context-management-design.md) | [2026-04-24-p1-context-management.md](../plans/2026-04-24-p1-context-management.md) |
 | P2 | 📋 Planned | — | — | — | — |
 | P3 | 📋 Planned | — | — | — | — |
 | P4 | 📋 Planned | — | — | — | — |
