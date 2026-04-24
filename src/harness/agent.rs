@@ -562,16 +562,15 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
                 let tool_result_idx = tail_start + offset;
                 let tool_name =
                     resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
-                let text = serde_json::to_string(&output.value).unwrap_or_default();
-                messages.push(UnifiedMessage::ToolResult {
-                    tool_call_id: call_id.clone(),
-                    tool_name: tool_name.to_string(),
-                    content: vec![ContentBlock::Text {
-                        text,
-                        cache_control: None,
-                    }],
-                    is_error: false,
-                });
+                // Use ContentBlock::Json to preserve structure and avoid PII
+                // false-positives on numeric values (e.g., stock prices,
+                // index points) being mistaken for bank card numbers.
+                messages.push(UnifiedMessage::tool_result_json(
+                    call_id.clone(),
+                    tool_name.to_string(),
+                    output.value.clone(),
+                    false,
+                ));
             }
             SessionEvent::ToolError {
                 call_id, error, ..
