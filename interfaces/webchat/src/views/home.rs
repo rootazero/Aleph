@@ -3,6 +3,7 @@ use crate::components::ui::*;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 fn format_uptime(secs: u64) -> String {
     let days = secs / 86400;
@@ -147,6 +148,177 @@ pub fn Home() -> impl IntoView {
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Failed to reconnect: {}", e).into());
+                }
+            }
+        });
+    };
+
+    let handle_restart_gateway = move |_| {
+        let state = state;
+        leptos::task::spawn_local(async move {
+            web_sys::console::log_1(&"Restarting gateway...".into());
+            match state.rpc_call("daemon.shutdown", serde_json::Value::Null).await {
+                Ok(_) => {
+                    web_sys::console::log_1(&"Shutdown command sent, triggering reconnect...".into());
+                    leptos::task::spawn_local(async move {
+                        let _ = state.reconnect().await;
+                    });
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to restart gateway: {}", e).into());
+                }
+            }
+        });
+    };
+
+    let handle_clear_buffer = move |_ev: web_sys::MouseEvent| {
+        let state = state;
+        leptos::task::spawn_local(async move {
+            web_sys::console::log_1(&"Clearing chat buffer...".into());
+            match state.rpc_call("chat.clear", serde_json::Value::Null).await {
+                Ok(_) => {
+                    web_sys::console::log_1(&"Chat buffer cleared successfully".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to clear buffer: {}", e).into());
+                }
+            }
+        });
+    };
+
+    let handle_export_memory = move |_ev: web_sys::MouseEvent| {
+        let state = state;
+        leptos::task::spawn_local(async move {
+            web_sys::console::log_1(&"Exporting memory...".into());
+            match MemoryApi::list_facts(&state, Some(1000)).await {
+                Ok(facts) => {
+                    let iso_str = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+                    let export_data = serde_json::json!({
+                        "export_type": "memory_facts",
+                        "exported_at": iso_str,
+                        "total_facts": facts.len(),
+                        "facts": facts,
+                    });
+                    let json_str = match serde_json::to_string_pretty(&export_data) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            web_sys::console::error_1(&format!("Failed to serialize memory: {}", e).into());
+                            return;
+                        }
+                    };
+                    let window = match web_sys::window() {
+                        Some(w) => w,
+                        None => return,
+                    };
+                    let document = match window.document() {
+                        Some(d) => d,
+                        None => return,
+                    };
+                    let blob = match web_sys::Blob::new_with_str_sequence(
+                        &js_sys::Array::of1(&json_str.into())) {
+                        Ok(b) => b,
+                        Err(_) => return,
+                    };
+                    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap_or_default();
+                    let link = match document.create_element("a") {
+                        Ok(el) => match el.dyn_into::<web_sys::HtmlAnchorElement>() {
+                            Ok(anchor) => anchor,
+                            Err(_) => return,
+                        },
+                        Err(_) => return,
+                    };
+                    let timestamp = js_sys::Date::new_0().to_iso_string().as_string()
+                        .unwrap_or_default()
+                        .replace(":", "-");
+                    link.set_href(&url);
+                    link.set_download(&format!("aleph-memory-export-{}.json", timestamp));
+                    let _ = document.body().map(|body| body.append_child(&link));
+                    link.click();
+                    let _ = document.body().map(|body| body.remove_child(&link));
+                    let _ = web_sys::Url::revoke_object_url(&url);
+                    web_sys::console::log_1(&"Memory exported successfully".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to export memory: {}", e).into());
+                }
+            }
+        });
+    };
+
+    let handle_clear_buffer = move |_ev: web_sys::MouseEvent| {
+        let state = state;
+        leptos::task::spawn_local(async move {
+            web_sys::console::log_1(&"Clearing chat buffer...".into());
+            match state.rpc_call("chat.clear", serde_json::Value::Null).await {
+                Ok(_) => {
+                    web_sys::console::log_1(&"Chat buffer cleared successfully".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to clear buffer: {}", e).into());
+                }
+            }
+        });
+    };
+
+    let handle_export_memory = move |_ev: web_sys::MouseEvent| {
+        let state = state;
+        leptos::task::spawn_local(async move {
+            web_sys::console::log_1(&"Exporting memory...".into());
+            match MemoryApi::list_facts(&state, Some(1000)).await {
+                Ok(facts) => {
+                    let export_data = serde_json::json!({
+                        "export_type": "memory_facts",
+                        "exported_at": js_sys::Date::new_0().to_iso_string().as_string(),
+                        "total_facts": facts.len(),
+                        "facts": facts,
+                    });
+                    
+                    // Convert to JSON string
+                    let json_str = match serde_json::to_string_pretty(&export_data) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            web_sys::console::error_1(&format!("Failed to serialize memory: {}", e).into());
+                            return;
+                        }
+                    };
+                    
+                    // Create a blob and download link
+                    let window = match web_sys::window() {
+                        Some(w) => w,
+                        None => return,
+                    };
+                    let document = match window.document() {
+                        Some(d) => d,
+                        None => return,
+                    };
+                    let blob = match web_sys::Blob::new_with_str_sequence(
+                        &js_sys::Array::of1(&json_str.into())) {
+                        Ok(b) => b,
+                        Err(_) => return,
+                    };
+                    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap_or_default();
+                    let link = match document.create_element("a") {
+                        Ok(el) => match el.dyn_into::<web_sys::HtmlAnchorElement>() {
+                            Ok(anchor) => anchor,
+                            Err(_) => return,
+                        },
+                        Err(_) => return,
+                    };
+                    
+                    let timestamp = js_sys::Date::new_0().to_iso_string().as_string()
+                        .unwrap_or_default()
+                        .replace(":", "-");
+                    link.set_href(&url);
+                    link.set_download(&format!("aleph-memory-export-{}.json", timestamp));
+                    let _ = document.body().map(|body| body.append_child(&link));
+                    link.click();
+                    let _ = document.body().map(|body| body.remove_child(&link));
+                    let _ = web_sys::Url::revoke_object_url(&url);
+                    
+                    web_sys::console::log_1(&"Memory exported successfully".into());
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Failed to export memory: {}", e).into());
                 }
             }
         });
@@ -431,16 +603,25 @@ pub fn Home() -> impl IntoView {
                 <div class="space-y-6">
                     <h3 class="text-xl font-semibold px-1">{move || t_string!(i18n, dashboard.sections.quick_actions).to_string()}</h3>
                     <div class="grid gap-3">
-                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.restart_gateway).to_string())>
+                        <QuickAction
+                            label=Signal::derive(move || t_string!(i18n, dashboard.actions.restart_gateway).to_string())
+                            on_click=Box::new(handle_restart_gateway)
+                        >
                             <path d="M23 4v6h-6" />
                             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
                         </QuickAction>
-                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.clear_buffer).to_string())>
+                        <QuickAction
+                            label=Signal::derive(move || t_string!(i18n, dashboard.actions.clear_buffer).to_string())
+                            on_click=Box::new(handle_clear_buffer)
+                        >
                             <path d="M3 6h18" />
                             <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
                             <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                         </QuickAction>
-                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.export_memory).to_string())>
+                        <QuickAction
+                            label=Signal::derive(move || t_string!(i18n, dashboard.actions.export_memory).to_string())
+                            on_click=Box::new(handle_export_memory)
+                        >
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                             <polyline points="7 10 12 15 17 10" />
                             <line x1="12" y1="15" x2="12" y2="3" />
@@ -476,9 +657,20 @@ fn StatCard(
 }
 
 #[component]
-fn QuickAction(label: Signal<String>, children: Children) -> impl IntoView {
+fn QuickAction(
+    label: Signal<String>,
+    #[prop(optional)] on_click: Option<Box<dyn Fn(web_sys::MouseEvent) + 'static>>,
+    children: Children,
+) -> impl IntoView {
     view! {
-        <button class="flex items-center justify-between p-4 rounded-xl bg-surface-raised border border-border hover:bg-surface-sunken hover:border-primary/30 transition-all group text-left w-full">
+        <button
+            on:click=move |ev| {
+                if let Some(ref handler) = on_click {
+                    handler(ev);
+                }
+            }
+            class="flex items-center justify-between p-4 rounded-xl bg-surface-raised border border-border hover:bg-surface-sunken hover:border-primary/30 transition-all group text-left w-full"
+        >
             <div class="flex items-center gap-3">
                 <svg width="20" height="20" attr:class="w-5 h-5 text-text-tertiary group-hover:text-primary transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     {children()}

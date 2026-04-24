@@ -125,17 +125,6 @@ impl InboundMessageRouter {
         };
         let old_key_resolved = old_key.with_epoch(current_epoch);
 
-        // Generate topic from recent history via LLM
-        let topic = self.generate_session_topic(&old_key_resolved).await;
-
-        // Close old session in database
-        if let Some(ref sm) = self.session_store {
-            if let Err(e) = sm.close_session(&old_key_resolved, topic.as_deref()).await {
-                warn!("[Router] Failed to close session: {}", e);
-            }
-        }
-
-        // Create new session with next epoch
         let new_key = old_key.with_epoch(current_epoch + 1);
         if let Some(ref sm) = self.session_store {
             if let Err(e) = sm.get_or_create(&new_key).await {
@@ -143,18 +132,24 @@ impl InboundMessageRouter {
             }
         }
 
-        // Send confirmation reply
         let locale = self.resolve_locale().await;
-        let topic_suffix = topic.map(|t| format!(" ({})", t)).unwrap_or_default();
         let reply_text = crate::gateway::i18n::t(
             crate::gateway::i18n::Msg::NewSessionStarted {
-                topic_suffix: &topic_suffix,
+                topic_suffix: "",
             },
             locale,
         );
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
             error!("[Router] Failed to send /new reply: {}", e);
+        }
+
+        let topic = self.generate_session_topic(&old_key_resolved).await;
+
+        if let Some(ref sm) = self.session_store {
+            if let Err(e) = sm.close_session(&old_key_resolved, topic.as_deref()).await {
+                warn!("[Router] Failed to close session: {}", e);
+            }
         }
 
         info!("[Router] New session created: {}", new_key.to_key_string());
