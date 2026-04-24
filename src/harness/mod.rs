@@ -10,15 +10,12 @@ pub mod chain_context;
 pub mod deps;
 pub mod loop_callback;
 pub mod provider_bridge;
-pub mod sections;
 pub mod skill_prefetch;
-pub mod stop_hooks;
 pub mod tool_execution_context;
 pub mod tool_summary;
 pub mod trace;
 pub mod trace_sink;
 pub mod trait_def;
-pub mod verify_stop_hook;
 
 pub use agent::AgentHarness;
 pub use callback::{HarnessCallback, NoopHarnessCallback};

@@ -27,7 +27,7 @@ use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::skill_prefetch::SkillPrefetcher;
-use crate::harness::stop_hooks::StopHookHandler;
+use crate::verification::stop_hooks::StopHookHandler;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;

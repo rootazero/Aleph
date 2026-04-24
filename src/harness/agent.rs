@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::context::budget::LoopDirective;
 use crate::harness::deps::HarnessDeps;
-use crate::harness::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
+use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 use crate::harness::trait_def::{Harness, HarnessError, TurnState};
 use crate::providers::adapter::{NativeToolCall, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
@@ -182,7 +182,7 @@ impl AgentHarness {
                 &self,
                 ctx: &StopHookContext,
                 cancel: &CancellationToken,
-            ) -> crate::harness::stop_hooks::StopHookVerdict {
+            ) -> crate::verification::stop_hooks::StopHookVerdict {
                 self.0.evaluate(ctx, cancel).await
             }
         }

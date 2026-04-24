@@ -172,7 +172,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // live in the AGENT identity directory (`~/.aleph/agents/{agent_id}/`).
         //
         // Phase 6b Task 4c flip: these identity fragments are now assembled by
-        // the `AgentHarness` prompt sections layer (`src/harness/sections`), so
+        // the `AgentHarness` prompt sections layer (`src/prompt_assembly/sections`), so
         // we no longer construct `IdentityFiles` / `SoulLayer` / `IdentityResolver`
         // directly here. The harness boot wires the same sources through
         // `HarnessDeps` at startup.
@@ -408,7 +408,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // `with_hook_executor`, `with_tool_refresh` (hook_executor is
             // user-tool-hooks, not yet re-wired), streaming_sink (replaced by
             // FlowStreamEvent::Delta), prompt_builder (harness owns prompt
-            // assembly via `src/harness/sections`).
+            // assembly via `src/prompt_assembly/sections`).
 
             // 1. Build per-request ToolService with SubagentTool + optional
             //    MCP refresh. `LoopToolRegistry` is built from the resolved

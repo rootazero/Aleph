@@ -73,6 +73,7 @@ pub mod payload;
 pub mod permission;
 pub mod pii;
 pub mod prompt;
+pub mod prompt_assembly;
 pub mod providers;
 pub mod routing;
 pub mod runtimes;
@@ -87,6 +88,7 @@ pub mod thinker;
 pub(crate) mod tool_output;
 pub mod tools;
 pub mod utils;
+pub mod verification;
 pub mod vision;
 pub mod wizard;
 

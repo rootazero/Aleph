@@ -11,7 +11,7 @@
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
 use crate::harness::skill_prefetch::SkillPrefetcher;
-use crate::harness::stop_hooks::StopHookHandler;
+use crate::verification::stop_hooks::StopHookHandler;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
