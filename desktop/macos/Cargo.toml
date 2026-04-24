@@ -37,12 +37,13 @@ block2 = "0.6"
 # All camera-capture features (session/input/output/photo/movie) were removed
 # in T1a.2 — camera capture now lives in the Swift helper over JSON-RPC.
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
+# Kept only for permission.rs TCC checks (SFSpeechRecognizer::authorizationStatus
+# + requestAuthorization). Actual speech-to-text recognition moved to the Swift
+# helper over JSON-RPC in Stage 1c — recognition-specific features
+# (SFSpeechRecognitionRequest / Result / Task, SFTranscription) were removed
+# together with desktop/macos/src/media.rs.
 objc2-speech = { version = "0.3", features = [
     "SFSpeechRecognizer",
-    "SFSpeechRecognitionRequest",
-    "SFSpeechRecognitionResult",
-    "SFSpeechRecognitionTask",
-    "SFTranscription",
     "block2",
 ] }
 core-foundation = "0.10"

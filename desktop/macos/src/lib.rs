@@ -3,7 +3,6 @@
 mod automation;
 mod escape_listener;
 pub mod hotkey;
-mod media;
 mod permission;
 mod pim;
 mod system;
@@ -11,6 +10,10 @@ mod system;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aleph_desktop::media_types::{
+    AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, CameraClipConfig, CameraClipResult,
+    CameraSnapConfig, CameraSnapResult, SpeechToTextConfig, SpeechToTextResult,
+};
 use aleph_desktop::platform::EscapeAbort;
 use aleph_desktop::traits::{
     AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
@@ -18,11 +21,13 @@ use aleph_desktop::traits::{
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
+use aleph_desktop::Result;
 use aleph_desktop::SwiftBridge;
+use async_trait::async_trait;
+use tracing::debug;
 
 use automation::MacOSAutomation;
 use escape_listener::EscapeListener;
-use media::MacOSMedia;
 use permission::MacOSPermission;
 use pim::MacOSPim;
 use system::MacOSSystem;
@@ -32,7 +37,6 @@ pub struct MacOSPlatform {
     screen: NativeScreen,
     automation: MacOSAutomation,
     escape: EscapeListener,
-    media: MacOSMedia,
     permission: MacOSPermission,
     pim: MacOSPim,
     system: MacOSSystem,
@@ -75,7 +79,6 @@ impl MacOSPlatform {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
             escape: EscapeListener::new(),
-            media: MacOSMedia::new(Arc::clone(&bridge)),
             permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
@@ -154,11 +157,153 @@ impl DesktopPlatform for MacOSPlatform {
     }
 
     fn media(&self) -> Option<&dyn MediaCapability> {
-        Some(&self.media)
+        Some(self)
     }
 
     fn escape_listener(&self) -> Option<&dyn EscapeAbort> {
         Some(&self.escape)
+    }
+}
+
+/// Shorthand for creating a BridgeFailed error.
+fn bridge_err(msg: &str) -> aleph_desktop::DesktopError {
+    aleph_desktop::DesktopError::BridgeFailed(msg.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// MediaCapability: camera + audio + speech proxied via the Swift helper.
+// All method bodies are thin RPC forwarders — no native AVFoundation /
+// SFSpeechRecognizer code lives on the Rust side as of Stage 1c.
+// ---------------------------------------------------------------------------
+#[async_trait]
+impl MediaCapability for MacOSPlatform {
+    async fn camera_snap(&self, config: CameraSnapConfig) -> Result<CameraSnapResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            SnapParams, SnapResult, METHOD_CAMERA_SNAP,
+        };
+        let config = config.clamped();
+        debug!(quality = config.quality, "Proxying camera snap to Swift helper");
+        let rpc: SnapResult = self
+            .bridge
+            .call(
+                METHOD_CAMERA_SNAP,
+                SnapParams {
+                    quality: config.quality,
+                },
+            )
+            .await
+            .map_err(|e| bridge_err(&format!("media.camera.snap RPC: {e}")))?;
+        Ok(CameraSnapResult {
+            image_base64: rpc.image_base64,
+            width: rpc.width,
+            height: rpc.height,
+        })
+    }
+
+    async fn camera_clip(&self, config: CameraClipConfig) -> Result<CameraClipResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            ClipParams, ClipResult, METHOD_CAMERA_CLIP,
+        };
+        let config = config.clamped();
+        debug!(
+            duration = config.duration_secs,
+            audio = config.with_audio,
+            "Proxying camera clip to Swift helper"
+        );
+        let rpc: ClipResult = self
+            .bridge
+            .call(
+                METHOD_CAMERA_CLIP,
+                ClipParams {
+                    duration_secs: config.duration_secs,
+                    with_audio: config.with_audio,
+                },
+            )
+            .await
+            .map_err(|e| bridge_err(&format!("media.camera.clip RPC: {e}")))?;
+        Ok(CameraClipResult {
+            file_path: rpc.file_path,
+            duration_secs: rpc.duration_secs,
+            has_audio: rpc.has_audio,
+        })
+    }
+
+    async fn record_audio(&self, config: AudioRecordConfig) -> Result<AudioRecordResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            RecordAudioParams, RecordAudioResult, METHOD_AUDIO_RECORD,
+        };
+        let config = config.clamped();
+        debug!(
+            duration = config.duration_secs,
+            "Proxying audio record to Swift helper"
+        );
+        let rpc: RecordAudioResult = self
+            .bridge
+            .call(
+                METHOD_AUDIO_RECORD,
+                RecordAudioParams {
+                    duration_secs: config.duration_secs,
+                },
+            )
+            .await
+            .map_err(|e| bridge_err(&format!("media.audio.record RPC: {e}")))?;
+        Ok(AudioRecordResult {
+            file_path: rpc.file_path,
+            duration_secs: rpc.duration_secs,
+            format: rpc.format,
+        })
+    }
+
+    async fn list_audio_devices(&self) -> Result<Vec<AudioDeviceInfo>> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            ListAudioDevicesParams, ListAudioDevicesResult, METHOD_AUDIO_LIST_DEVICES,
+        };
+        debug!("Proxying audio list_devices to Swift helper");
+        let rpc: ListAudioDevicesResult = self
+            .bridge
+            .call(METHOD_AUDIO_LIST_DEVICES, ListAudioDevicesParams {})
+            .await
+            .map_err(|e| bridge_err(&format!("media.audio.list_devices RPC: {e}")))?;
+        Ok(rpc
+            .devices
+            .into_iter()
+            .map(|d| AudioDeviceInfo {
+                uid: d.uid,
+                name: d.name,
+                is_input: d.is_input,
+                is_default: d.is_default,
+            })
+            .collect())
+    }
+
+    async fn speech_to_text(
+        &self,
+        audio_path: &str,
+        config: SpeechToTextConfig,
+    ) -> Result<SpeechToTextResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            TranscribeFileParams, TranscribeFileResult, METHOD_SPEECH_TRANSCRIBE_FILE,
+        };
+        debug!(
+            path = audio_path,
+            lang = %config.language,
+            "Proxying speech transcribe_file to Swift helper"
+        );
+        let rpc: TranscribeFileResult = self
+            .bridge
+            .call(
+                METHOD_SPEECH_TRANSCRIBE_FILE,
+                TranscribeFileParams {
+                    audio_path: audio_path.to_string(),
+                    language: config.language.clone(),
+                },
+            )
+            .await
+            .map_err(|e| bridge_err(&format!("media.speech.transcribe_file RPC: {e}")))?;
+        Ok(SpeechToTextResult {
+            text: rpc.text,
+            language: rpc.language,
+        })
     }
 }
 
