@@ -14,7 +14,6 @@
 pub mod codec;
 pub mod inflight;
 
-#[allow(dead_code)] // populated in T0.5
 pub mod client;
 
 #[allow(dead_code)] // populated in T0.6

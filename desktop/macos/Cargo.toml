@@ -9,10 +9,11 @@ rust-version.workspace = true
 [dependencies]
 aleph-desktop = { path = "../shared" }
 async-trait = "0.1"
-tokio = { version = "1", features = ["process"] }
+tokio = { version = "1", features = ["process", "rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+dirs = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 objc2 = "0.6"
