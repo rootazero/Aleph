@@ -89,6 +89,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_ax_query_focused_tool: crate::builtin_tools::DesktopAxQueryFocused,
     pub(crate) desktop_ax_query_tree_tool: crate::builtin_tools::DesktopAxQueryTree,
     pub(crate) desktop_ax_query_by_role_tool: crate::builtin_tools::DesktopAxQueryByRole,
+    /// Permission check tool (macOS-backed; graceful no-op on other platforms).
+    pub(crate) desktop_check_permissions_tool: crate::builtin_tools::DesktopCheckPermissions,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: crate::builtin_tools::PimTool,
     /// System tool instance (app management, notifications, clipboard, system info)
@@ -510,6 +512,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "desktop.ax_query_by_role" => Box::pin(async move {
                 self.desktop_ax_query_by_role_tool
+                    .call_json(arguments)
+                    .await
+            }),
+            "desktop.check_permissions" => Box::pin(async move {
+                self.desktop_check_permissions_tool
                     .call_json(arguments)
                     .await
             }),

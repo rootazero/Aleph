@@ -38,6 +38,15 @@ pub enum DesktopError {
     /// retrying.
     #[error("desktop bridge disabled: {0}")]
     BridgeDisabled(String),
+
+    /// A TCC permission was denied. The embedded `PermissionGuide` carries a
+    /// deep link, human-readable steps, and a rationale that the LLM should
+    /// relay to the user instead of just saying "permission denied".
+    #[error("permission denied: {kind:?}")]
+    PermissionDenied {
+        kind: aleph_protocol::desktop_bridge::methods::perm::PermissionKind,
+        guide: Box<aleph_protocol::desktop_bridge::methods::perm::PermissionGuide>,
+    },
 }
 
 /// Convenience result type for desktop operations.

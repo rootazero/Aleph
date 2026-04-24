@@ -192,11 +192,13 @@ impl AlephToolServer {
 
         use crate::builtin_tools::{
             DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
+            DesktopCheckPermissions,
         };
         self.tool(DesktopTool::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopAxQueryFocused::new().with_platform(Arc::clone(&desktop_platform)))
             .tool(DesktopAxQueryTree::new().with_platform(Arc::clone(&desktop_platform)))
-            .tool(DesktopAxQueryByRole::new().with_platform(desktop_platform))
+            .tool(DesktopAxQueryByRole::new().with_platform(Arc::clone(&desktop_platform)))
+            .tool(DesktopCheckPermissions::new().with_platform(desktop_platform))
     }
 
     /// Register the vision tool (image understanding + OCR).

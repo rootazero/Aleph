@@ -119,8 +119,8 @@ pub use config_guide::{
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use desktop::{
     DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
-    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs, DesktopOutput,
-    DesktopTool,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
+    DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopOutput, DesktopTool,
 };
 pub use error::ToolError;
 pub use file_ops::{FileEditTool, FileOpsArgs, FileOpsTool, FileReadTool, FileWriteTool};

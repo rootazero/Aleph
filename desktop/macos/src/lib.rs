@@ -83,7 +83,7 @@ impl MacOSPlatform {
             screen: MacOSScreen::new(Arc::clone(&bridge)),
             automation: MacOSAutomation::new(),
             escape: EscapeListener::new(),
-            permission: MacOSPermission::new(),
+            permission: MacOSPermission::new(Arc::clone(&bridge)),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
             ax: BridgeAccessibility::new(Arc::clone(&bridge)),

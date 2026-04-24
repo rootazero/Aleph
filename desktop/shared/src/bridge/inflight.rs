@@ -39,6 +39,16 @@ impl InflightTable {
         }
     }
 
+    /// Fail a specific in-flight request with a pre-built `DesktopError`.
+    ///
+    /// Used by the bridge client's error mapper so it can pass a structured
+    /// `DesktopError::PermissionDenied` without going through the string path.
+    pub async fn fail_err(&self, id: u64, err: DesktopError) {
+        if let Some(tx) = self.inner.lock().await.remove(&id) {
+            let _ = tx.send(Err(err));
+        }
+    }
+
     pub async fn fail_all(&self, reason: impl Into<String>) {
         let reason: String = reason.into();
         let mut guard = self.inner.lock().await;

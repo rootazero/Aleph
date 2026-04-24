@@ -69,6 +69,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "desktop.ax_query_focused",
             "desktop.ax_query_tree",
             "desktop.ax_query_by_role",
+            "desktop.check_permissions",
             "self_manage",
             "read_config_guide",
             "vault_store",

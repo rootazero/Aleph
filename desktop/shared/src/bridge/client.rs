@@ -19,12 +19,34 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
-use aleph_protocol::desktop_bridge::envelope::{Message, Request};
+use aleph_protocol::desktop_bridge::envelope::{Message, Request, RpcError};
+use aleph_protocol::desktop_bridge::errors::ERR_PERMISSION_DENIED;
+use aleph_protocol::desktop_bridge::methods::perm::PermissionGuide;
 
 use super::codec::{decode_line, encode};
 use super::inflight::InflightTable;
 use super::supervisor::{Backoff, RestartWindow};
 use crate::error::{DesktopError, Result};
+
+/// Convert a bridge `RpcError` into a `DesktopError`.
+///
+/// When `code == ERR_PERMISSION_DENIED` (-32001), the `data` field is
+/// deserialized as `PermissionGuide` and wrapped in
+/// `DesktopError::PermissionDenied` so the LLM can surface the deep link,
+/// steps, and rationale to the user.  All other errors become `BridgeFailed`.
+fn map_bridge_error(e: RpcError) -> DesktopError {
+    if e.code == ERR_PERMISSION_DENIED {
+        if let Some(data) = e.data {
+            if let Ok(guide) = serde_json::from_value::<PermissionGuide>(data) {
+                return DesktopError::PermissionDenied {
+                    kind: guide.kind,
+                    guide: Box::new(guide),
+                };
+            }
+        }
+    }
+    DesktopError::BridgeFailed(format!("bridge error {}: {}", e.code, e.message))
+}
 
 /// Long-lived RPC client for the `aleph-bridge` Swift helper.
 ///
@@ -119,9 +141,8 @@ impl SwiftBridge {
                     }
                     Ok(Message::Error(e)) => {
                         if let Some(id) = e.id {
-                            inflight
-                                .fail(id, format!("bridge error: {}", e.error.message))
-                                .await;
+                            let desktop_err = map_bridge_error(e.error);
+                            inflight.fail_err(id, desktop_err).await;
                         } else {
                             tracing::warn!(
                                 target: "bridge",

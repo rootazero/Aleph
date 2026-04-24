@@ -2,14 +2,24 @@
 //!
 //! Covers 6 permissions: ScreenRecording, Camera, Microphone,
 //! SpeechRecognition, Accessibility, Notifications.
+//!
+//! Three additional bridge-backed methods (`check_permission`, `guide_permission`,
+//! `open_settings`) route to the Swift helper via JSON-RPC (Stage 4).
 
 use std::ptr::NonNull;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aleph_desktop::permission_types::{PermissionInfo, PermissionStatus, TccPermission};
 use aleph_desktop::traits::PermissionCapability;
 use aleph_desktop::Result;
+use aleph_desktop::SwiftBridge;
+use aleph_protocol::desktop_bridge::methods::perm::{
+    CheckParams, GuideParams, OpenSettingsParams, OpenSettingsResult, PermissionGuide,
+    PermissionKind, PermissionStatus as ProtocolPermissionStatus, METHOD_CHECK, METHOD_GUIDE,
+    METHOD_OPEN_SETTINGS,
+};
 use async_trait::async_trait;
 use block2::RcBlock;
 use objc2::runtime::Bool;
@@ -43,13 +53,18 @@ extern "C" {
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// macOS TCC permission implementation.
+///
+/// The three legacy methods (`check`, `check_all`, `request`) use native
+/// objc2 FFI unchanged.  The three new methods (`check_permission`,
+/// `guide_permission`, `open_settings`) route to the Swift helper via the
+/// shared `SwiftBridge` RPC client.
 pub struct MacOSPermission {
-    _private: (),
+    bridge: Arc<SwiftBridge>,
 }
 
 impl MacOSPermission {
-    pub fn new() -> Self {
-        Self { _private: () }
+    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
+        Self { bridge }
     }
 }
 
@@ -341,6 +356,51 @@ impl PermissionCapability for MacOSPermission {
             .unwrap_or_else(|_| build_info(permission, PermissionStatus::Unknown));
         Ok(info)
     }
+
+    // -----------------------------------------------------------------------
+    // Bridge-backed methods (Stage 4) — route to Swift helper via JSON-RPC.
+    // -----------------------------------------------------------------------
+
+    async fn check_permission(
+        &self,
+        kind: PermissionKind,
+    ) -> Result<ProtocolPermissionStatus> {
+        self.bridge
+            .call(METHOD_CHECK, CheckParams { kind })
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::BridgeFailed(format!(
+                    "perm.check RPC: {e}"
+                ))
+            })
+    }
+
+    async fn guide_permission(
+        &self,
+        kind: PermissionKind,
+    ) -> Result<PermissionGuide> {
+        self.bridge
+            .call(METHOD_GUIDE, GuideParams { kind })
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::BridgeFailed(format!(
+                    "perm.guide RPC: {e}"
+                ))
+            })
+    }
+
+    async fn open_settings(&self, kind: PermissionKind) -> Result<bool> {
+        let r: OpenSettingsResult = self
+            .bridge
+            .call(METHOD_OPEN_SETTINGS, OpenSettingsParams { kind })
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::BridgeFailed(format!(
+                    "perm.open_settings RPC: {e}"
+                ))
+            })?;
+        Ok(r.ok)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +444,11 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let perm = MacOSPermission::new();
+        // Bridge not used by the legacy check_all path; any path is fine.
+        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from(
+            "/dev/null",
+        )));
+        let perm = MacOSPermission::new(bridge);
         let results = rt.block_on(async { perm.check_all().await.unwrap() });
         assert_eq!(results.len(), 6, "expected 6 permission results");
         // Verify each permission type is present.
