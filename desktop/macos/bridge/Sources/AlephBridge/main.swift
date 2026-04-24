@@ -83,6 +83,7 @@ if CommandLine.arguments.count > 1 {
         await registerCameraHandlers(router)
         await registerAudioHandlers(router)
         await registerSpeechHandlers(router)
+        await registerOcrHandlers(router)
         await ParentWatch().start()
         await Server(router: router).run()
         done.signal()

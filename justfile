@@ -276,3 +276,7 @@ test-audio-e2e: swift-bridge
 # End-to-end: speech recognition via the Swift helper. Requires Speech + Microphone TCC.
 test-speech-e2e: swift-bridge
     cargo test -p aleph-desktop-macos --test speech_e2e -- --ignored --nocapture
+
+# End-to-end: OCR via the Swift helper. Requires no TCC (image is supplied directly).
+test-ocr-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test ocr_e2e -- --ignored --nocapture

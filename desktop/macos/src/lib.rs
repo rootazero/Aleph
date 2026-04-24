@@ -5,6 +5,7 @@ mod escape_listener;
 pub mod hotkey;
 mod permission;
 mod pim;
+mod screen;
 mod system;
 
 use std::path::PathBuf;
@@ -20,7 +21,6 @@ use aleph_desktop::traits::{
     SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
-use aleph_desktop::NativeScreen;
 use aleph_desktop::Result;
 use aleph_desktop::SwiftBridge;
 use async_trait::async_trait;
@@ -30,11 +30,12 @@ use automation::MacOSAutomation;
 use escape_listener::EscapeListener;
 use permission::MacOSPermission;
 use pim::MacOSPim;
+use screen::MacOSScreen;
 use system::MacOSSystem;
 
-/// macOS platform with shared `NativeScreen` for screen capabilities.
+/// macOS platform with bridge-connected `MacOSScreen` for screen capabilities.
 pub struct MacOSPlatform {
-    screen: NativeScreen,
+    screen: MacOSScreen,
     automation: MacOSAutomation,
     escape: EscapeListener,
     permission: MacOSPermission,
@@ -76,7 +77,7 @@ impl MacOSPlatform {
         }
 
         Self {
-            screen: NativeScreen::new(),
+            screen: MacOSScreen::new(Arc::clone(&bridge)),
             automation: MacOSAutomation::new(),
             escape: EscapeListener::new(),
             permission: MacOSPermission::new(),
