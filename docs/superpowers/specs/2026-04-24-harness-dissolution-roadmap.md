@@ -106,7 +106,7 @@ src/harness/
 | `harness/verify_stop_hook.rs` | `src/verification/` | Same |
 | `harness/skill_prefetch.rs` | `src/skill/prefetch.rs` | Skill subsystem owns this |
 | `harness/sections/` (markdown + guidance) | `src/prompt_assembly/sections/` | Prompt source material |
-| `harness/adapters/` | `src/prompt_assembly/adapters/` | Data-source → prompt-segment adapters |
+| `harness/adapters/` | `src/tools/adapters/` | Tool-source bridges (BuiltinToolAdapter, McpToolAdapter, DaemonQueryTool, MemoryStoreTool, registry builders) — confirmed during P0 brainstorm |
 | `harness/provider_bridge.rs` | `src/providers/bridge.rs` | Provider protocol adapter |
 | `harness/tool_execution_context.rs` | `src/tools/execution_context.rs` | Tool domain |
 | `harness/tool_summary.rs` | `src/tool_output/summary.rs` | Existing tool_output absorbs it |
@@ -122,7 +122,7 @@ src/harness/
 | 5 | Prompt Assembly | **`src/prompt_assembly/`** | **Merge 3 locations** (thinker + prompt + harness/sections) |
 | 6 | Tool Calling / Structured Output | `src/tools/calling/` | Absorb harness/provider_bridge split-out |
 | 7 | State & Checkpointing | `src/session/` (+ `checkpoint/` submodule) | Fill Git-style checkpoint contracts |
-| 8 | Error Handling | Cross-module (`HarnessError` + typed errors) | Absorb `StateDatabase` from gutted `src/resilience/` into `src/session/` or a new `src/state/`, then delete `src/resilience/`; rename `src/resilient/` → `src/task_resilience/` |
+| 8 | Error Handling | Cross-module (`HarnessError` + typed errors) | **Split** (revised in P0 brainstorm): (a) rename `src/resilient/` → `src/task_resilience/` — lands in P0; (b) `src/resilience/` StateDatabase relocation — deferred to new phase **P7** (architectural decision, 20+ consumers) |
 | 9 | Guardrails | **`src/guardrails/`** (new facade) | Aggregate security/sandbox/permission/approval/pii; InputGuard/OutputGuard/ToolCallGuard |
 | 10 | Verification & Feedback | **`src/verification/`** (new) | Absorb stop_hooks; add rule/visual/LLM-judge |
 | 11 | Subagent Orchestration | **`src/subagents/`** (new home) | **Collapse 4 dirs** (agents + teams + orchestrator + group_chat) + rename `supervisor/` → `src/process_supervisor/` (not subagent) |
@@ -151,8 +151,9 @@ src/harness/
 | **P4** | `P4-verification` | Verification & feedback loop | 🟡 Medium | 1.5 weeks | `src/verification/` absorbs stop_hooks; rule / visual / LLM-judge contracts |
 | **P5** | `P5-subagents` | Subagent orchestration collapse | 🔴 High | 3 weeks | `src/subagents/` from 4-way merge (agents + teams + orchestrator + group_chat); `supervisor/` renamed out; `SubagentOrchestrator` trait; Fork / Handoff / Graph modes explicit |
 | **P6** | `P6-checkpoint-boot` | State checkpoint + boot assembly | 🟢 Low | 1 week | `src/session/checkpoint/`; `src/runtime/boot.rs` assembly order documented |
+| **P7** | `P7-state-layer` | State layer reorganization (added 2026-04-24) | 🟡 Medium | 1.5 weeks | Decide StateDatabase home (merge into `src/session/` or new `src/state/`); delete gutted `src/resilience/`; 20+ consumers updated |
 
-**Total**: ~12 weeks / ~3 months.
+**Total**: ~13.5 weeks / ~3.5 months.
 
 ### 4.3 Dependency Graph
 
@@ -217,13 +218,14 @@ These do not block this roadmap but will need resolution during each phase's bra
 
 | Phase | Status | Started | Completed | Spec | Plan |
 |-------|--------|---------|-----------|------|------|
-| P0 | 📋 Planned | — | — | — | — |
+| P0 | 📋 Planned | — | — | [2026-04-24-p0-slim-harness-design.md](./2026-04-24-p0-slim-harness-design.md) | — |
 | P1 | 📋 Planned | — | — | — | — |
 | P2 | 📋 Planned | — | — | — | — |
 | P3 | 📋 Planned | — | — | — | — |
 | P4 | 📋 Planned | — | — | — | — |
 | P5 | 📋 Planned | — | — | — | — |
 | P6 | 📋 Planned | — | — | — | — |
+| P7 | 📋 Planned | — | — | — | — |
 
 Legend: 📋 Planned · 🚧 In Progress · ✅ Complete · ⏸️ On Hold
 
