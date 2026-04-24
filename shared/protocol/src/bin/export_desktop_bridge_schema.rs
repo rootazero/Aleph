@@ -127,5 +127,27 @@ fn main() {
         serde_json::to_value(schema_for!(methods::media::ClipResult)).unwrap(),
     );
 
+    // media.audio.*
+    out.insert(
+        "ListAudioDevicesParams",
+        serde_json::to_value(schema_for!(methods::media::ListAudioDevicesParams)).unwrap(),
+    );
+    out.insert(
+        "ListAudioDevicesResult",
+        serde_json::to_value(schema_for!(methods::media::ListAudioDevicesResult)).unwrap(),
+    );
+    out.insert(
+        "AudioDeviceInfo",
+        serde_json::to_value(schema_for!(methods::media::AudioDeviceInfo)).unwrap(),
+    );
+    out.insert(
+        "RecordAudioParams",
+        serde_json::to_value(schema_for!(methods::media::RecordAudioParams)).unwrap(),
+    );
+    out.insert(
+        "RecordAudioResult",
+        serde_json::to_value(schema_for!(methods::media::RecordAudioResult)).unwrap(),
+    );
+
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }

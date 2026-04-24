@@ -1,4 +1,33 @@
 {
+  "AudioDeviceInfo": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "is_default": {
+        "description": "Whether this is the current default input device.",
+        "type": "boolean"
+      },
+      "is_input": {
+        "description": "Whether this is an input device.",
+        "type": "boolean"
+      },
+      "name": {
+        "description": "Human-readable device name.",
+        "type": "string"
+      },
+      "uid": {
+        "description": "Unique device identifier (CoreAudio UID).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "is_default",
+      "is_input",
+      "name",
+      "uid"
+    ],
+    "title": "AudioDeviceInfo",
+    "type": "object"
+  },
   "CaptureParams": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "definitions": {
@@ -300,6 +329,58 @@
     "title": "KeyComboParams",
     "type": "object"
   },
+  "ListAudioDevicesParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "List audio devices request. No parameters; sent as an empty struct for schema consistency with the rest of the RPC surface.",
+    "title": "ListAudioDevicesParams",
+    "type": "object"
+  },
+  "ListAudioDevicesResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AudioDeviceInfo": {
+        "properties": {
+          "is_default": {
+            "description": "Whether this is the current default input device.",
+            "type": "boolean"
+          },
+          "is_input": {
+            "description": "Whether this is an input device.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Human-readable device name.",
+            "type": "string"
+          },
+          "uid": {
+            "description": "Unique device identifier (CoreAudio UID).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "is_default",
+          "is_input",
+          "name",
+          "uid"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "devices": {
+        "description": "List of available audio devices.",
+        "items": {
+          "$ref": "#/definitions/AudioDeviceInfo"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "devices"
+    ],
+    "title": "ListAudioDevicesResult",
+    "type": "object"
+  },
   "ListDisplaysResult": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "definitions": {
@@ -498,6 +579,46 @@
       "pong"
     ],
     "title": "PingResult",
+    "type": "object"
+  },
+  "RecordAudioParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "duration_secs": {
+        "description": "Duration in seconds. Caller clamps to [0.25, 300.0].",
+        "format": "double",
+        "type": "number"
+      }
+    },
+    "required": [
+      "duration_secs"
+    ],
+    "title": "RecordAudioParams",
+    "type": "object"
+  },
+  "RecordAudioResult": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "duration_secs": {
+        "description": "Actual recording duration in seconds.",
+        "format": "double",
+        "type": "number"
+      },
+      "file_path": {
+        "description": "Absolute path to the recorded audio file.",
+        "type": "string"
+      },
+      "format": {
+        "description": "Audio format (e.g., \"m4a\").",
+        "type": "string"
+      }
+    },
+    "required": [
+      "duration_secs",
+      "file_path",
+      "format"
+    ],
+    "title": "RecordAudioResult",
     "type": "object"
   },
   "Request": {
