@@ -1,8 +1,29 @@
-//! SwiftBridge — spawn the `aleph-bridge` Swift CLI binary and parse JSON output.
+//! Desktop bridge — Swift helper subprocess + JSON-RPC client modules.
 //!
-//! `aleph-bridge` is a thin macOS-native Swift CLI that exposes system APIs
-//! (PIM, notifications, accessibility, etc.) as JSON-over-stdout commands.
-//! This module provides an ergonomic async wrapper around that binary.
+//! This module replaces the old `bridge.rs` single file with a focused
+//! submodule layout:
+//! - `codec`  : line-delimited JSON encode/decode.
+//! - `inflight` : in-flight RPC id -> oneshot reply channel table.
+//! - `client` (T0.5) : long-lived RPC client driving the helper subprocess.
+//! - `supervisor` (T0.6) : restart-on-crash supervisor + disabled mode.
+//!
+//! The legacy spawn-per-call `SwiftBridge` below is kept for one release so
+//! `desktop/macos/src/pim.rs` continues to compile; it is replaced by the
+//! new long-lived client in Task 0.5.
+
+pub mod codec;
+pub mod inflight;
+
+#[allow(dead_code)] // populated in T0.5
+pub mod client;
+
+#[allow(dead_code)] // populated in T0.6
+pub mod supervisor;
+
+// ---------------------------------------------------------------------------
+// Legacy SwiftBridge (spawn-per-call) — removed in T0.5 once the long-lived
+// client in `bridge::client` is wired up. DO NOT add new callers.
+// ---------------------------------------------------------------------------
 
 use std::path::PathBuf;
 
@@ -12,28 +33,17 @@ use tokio::process::Command;
 use crate::error::{DesktopError, Result};
 
 /// Wrapper for spawning the `aleph-bridge` Swift CLI and parsing its JSON output.
+///
+/// **Deprecated**: replaced by `bridge::client::SwiftBridgeClient` in T0.5.
 pub struct SwiftBridge {
-    /// Path to the `aleph-bridge` binary.
     pub(crate) binary_path: PathBuf,
 }
 
 impl SwiftBridge {
-    /// Create a `SwiftBridge` with an explicit path to the binary.
     pub fn new(binary_path: PathBuf) -> Self {
         Self { binary_path }
     }
 
-    /// Invoke a bridge command and deserialize its JSON stdout into `T`.
-    ///
-    /// The bridge CLI is called as:
-    /// ```text
-    /// aleph-bridge <domain> <action> [--key value ...]
-    /// ```
-    ///
-    /// Errors:
-    /// - Spawn failure → [`DesktopError::BridgeFailed`]
-    /// - Non-zero exit code → [`DesktopError::BridgeFailed`] with stderr
-    /// - JSON parse failure → [`DesktopError::BridgeFailed`] with raw stdout
     pub async fn call<T: DeserializeOwned>(
         &self,
         domain: &str,
@@ -43,7 +53,6 @@ impl SwiftBridge {
         let mut cmd = Command::new(&self.binary_path);
         cmd.arg(domain).arg(action);
 
-        // Pass extra arguments as --key value pairs.
         for (key, value) in args {
             cmd.arg(format!("--{key}"));
             cmd.arg(value);
@@ -72,28 +81,16 @@ impl SwiftBridge {
         })
     }
 
-    /// Return `true` if the bridge binary exists on the filesystem.
-    ///
-    /// Note: a bare name like `"aleph-bridge"` (no directory component) is
-    /// treated as always potentially available via `PATH`; this method only
-    /// does a filesystem check when the path has a directory component.
     pub fn is_available(&self) -> bool {
         if self.binary_path.components().count() > 1 {
             self.binary_path.exists()
         } else {
-            // Bare name — assume it might be on PATH; caller can do a real probe.
             true
         }
     }
 }
 
 impl Default for SwiftBridge {
-    /// Locate `aleph-bridge` using a four-step search:
-    ///
-    /// 1. Next to the current executable (side-by-side deployment).
-    /// 2. The repo-local Swift build artifact used during development.
-    /// 3. `~/.aleph/bin/aleph-bridge` (user-local install).
-    /// 4. Bare `"aleph-bridge"` (rely on `PATH`).
     fn default() -> Self {
         // 1. Sibling to the current exe.
         if let Ok(exe) = std::env::current_exe() {
@@ -109,9 +106,7 @@ impl Default for SwiftBridge {
                 }
             }
 
-            // 2. Repo-local dev build:
-            //    <repo>/target/{debug,release}/aleph-server
-            //      -> <repo>/desktop/macos/bridge/.build/release/AlephBridge
+            // 2. Repo-local dev build.
             if let Some(target_dir) = exe.parent().and_then(|p| p.parent()) {
                 if let Some(repo_root) = target_dir.parent() {
                     let candidate = repo_root
