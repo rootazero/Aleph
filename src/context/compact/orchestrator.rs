@@ -5,7 +5,7 @@ use crate::sync_primitives::Arc;
 
 use tracing::{error, info, warn};
 
-use crate::memory::compaction::types::{
+use super::types::{
     CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
 };
 
@@ -204,7 +204,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::memory::compaction::types::{
+    use super::super::types::{
         CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
         TokenEstimate,
     };

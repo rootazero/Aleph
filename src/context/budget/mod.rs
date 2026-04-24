@@ -12,7 +12,7 @@ pub mod pipeline;
 pub mod preflight;
 pub mod pressure;
 
-use crate::memory::compaction::PressureLevel;
+use crate::context::compact::PressureLevel;
 use crate::tools::runtime::ToolDefinition;
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn sense_pressure_returns_correct_level() {
-        use crate::memory::compaction::PressureLevel;
+        use crate::context::compact::PressureLevel;
         // Test that from_ratio mappings work correctly
         assert_eq!(PressureLevel::from_ratio(0.50), PressureLevel::Calm);
         assert_eq!(PressureLevel::from_ratio(0.65), PressureLevel::Preventive);

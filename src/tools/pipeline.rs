@@ -23,7 +23,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::memory::compaction::file_content_tracker::FileContentTracker;
+use crate::context::compact::file_content_tracker::FileContentTracker;
 use crate::context::budget::pressure::estimate_tokens_smart;
 use crate::tools::runtime::{LoopToolRegistry, ToolResult};
 use crate::tools::orchestrator::ToolOutcome;

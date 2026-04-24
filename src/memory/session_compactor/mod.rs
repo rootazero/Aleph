@@ -34,7 +34,7 @@ pub mod fallback;
 pub mod summary_engine;
 pub mod tool_compactor;
 
-use crate::memory::compaction::tool_aware_chunker::{parse_semantic_units, ToolAwareChunker};
+use crate::context::compact::tool_aware_chunker::{parse_semantic_units, ToolAwareChunker};
 use context_window::{estimate_tokens, partition_fresh_tail_pairs};
 use fallback::{deterministic_truncate, FallbackLevel};
 use summary_engine::summary_to_fact;
@@ -934,7 +934,7 @@ fn session_message_to_unified(
 // CompactionStrategy impl
 // ---------------------------------------------------------------------------
 
-use crate::memory::compaction::{
+use crate::context::compact::{
     CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
 };
 use std::future::Future;
@@ -1028,7 +1028,7 @@ mod tests {
 
 #[cfg(test)]
 mod chunker_integration_tests {
-    use crate::memory::compaction::tool_aware_chunker::{
+    use crate::context::compact::tool_aware_chunker::{
         parse_semantic_units, SemanticUnit, ToolAwareChunker,
     };
     use crate::providers::message::{ContentBlock, UnifiedMessage};

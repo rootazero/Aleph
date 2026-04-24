@@ -5,11 +5,11 @@
 
 use super::context_window::estimate_tokens;
 use super::fallback::{target_tokens, FallbackLevel};
-use crate::memory::compaction::summary_utils::IDENTIFIER_PRESERVATION;
+use crate::context::compact::summary_utils::IDENTIFIER_PRESERVATION;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, NoteType};
 
 // Re-export for backwards compatibility.
-pub use crate::memory::compaction::summary_utils::strip_analysis_block;
+pub use crate::context::compact::summary_utils::strip_analysis_block;
 
 // ---------------------------------------------------------------------------
 // Depth-aware prompt templates
