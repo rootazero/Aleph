@@ -94,7 +94,7 @@ pub mod wizard;
 
 pub mod daemon;
 pub mod resilience;
-pub mod resilient;
+pub mod task_resilience;
 pub mod scheduler;
 pub mod secrets;
 pub mod security;
@@ -233,7 +233,7 @@ pub use crate::wizard::{
 // Resilient Task Exports
 // =============================================================================
 
-pub use crate::resilient::{
+pub use crate::task_resilience::{
     classify_error, execute_resilient, DegradationReason, DegradationStrategy, ErrorClass, FnTask,
     PodcastResult, PodcastTask, ResilienceConfig, ResilientCronJob, ResilientExecutor,
     ResilientTask, TaskContext, TaskOutcome,

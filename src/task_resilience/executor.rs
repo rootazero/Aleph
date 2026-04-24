@@ -268,7 +268,7 @@ pub async fn execute_resilient<T: ResilientTask>(task: &T) -> TaskOutcome<T::Out
 mod tests {
     use super::*;
     use crate::error::AlephError;
-    use crate::resilient::ResilienceConfig;
+    use crate::task_resilience::ResilienceConfig;
     use crate::sync_primitives::Arc;
     use crate::sync_primitives::{AtomicU32, Ordering};
 
