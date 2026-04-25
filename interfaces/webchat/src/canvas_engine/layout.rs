@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::types::{CanvasEdge, CanvasNode, Vec2};
+use super::types::{CanvasEdge, CanvasNode, ClusterNode, Vec2, Vec3};
 
 /// FNV-1a 32-bit hash, deterministic across runs and platforms.
 fn fnv1a_32(bytes: &[u8]) -> u32 {
@@ -36,6 +36,127 @@ pub fn assign_sectors(relations: &[String]) -> HashMap<String, f32> {
         out.insert((*r).clone(), (i as f32) * std::f32::consts::TAU / k);
     }
     out
+}
+
+pub const R_1: f32 = 220.0;
+pub const R_2: f32 = 400.0;
+pub const Z_ACTIVE: f32 = 0.0;
+pub const Z_ONE_HOP: f32 = 60.0;
+pub const Z_TWO_HOP: f32 = 140.0;
+
+/// Compute ideal (target) positions for active + neighbors using radial geometry.
+pub fn compute_target_positions(
+    active: &CanvasNode,
+    one_hop: &[CanvasNode],
+    two_hop: &[CanvasNode],
+    clusters: &[ClusterNode],
+    edges: &[CanvasEdge],
+) -> HashMap<String, Vec3> {
+    let mut out = HashMap::new();
+    out.insert(active.id.clone(), Vec3::new(0.0, 0.0, Z_ACTIVE));
+
+    // Group 1-hop neighbors + clusters by their connecting relation
+    let mut by_relation: HashMap<String, Vec<(String, f32)>> = HashMap::new();
+    for n in one_hop {
+        let rel = relation_to_active(&active.id, &n.id, edges)
+            .unwrap_or_else(|| "_default".to_string());
+        let w = n.decay_score * n.edge_count.max(1) as f32;
+        by_relation.entry(rel).or_default().push((n.id.clone(), w));
+    }
+    for c in clusters {
+        by_relation
+            .entry(c.relation.clone())
+            .or_default()
+            .push((c.id.clone(), c.aggregated_weight));
+    }
+
+    // Adaptive R1 if crowded
+    let n_one = one_hop.len() + clusters.len();
+    let r1 = if n_one >= 16 {
+        R_1 + 12.0 * (n_one as f32 - 16.0)
+    } else {
+        R_1
+    };
+
+    // Assign sector center angles (evenly spaced, hash-ordered)
+    let relations: Vec<String> = by_relation.keys().cloned().collect();
+    let sector_centers = assign_sectors(&relations);
+
+    // Within each sector sort by weight descending
+    for members in by_relation.values_mut() {
+        members.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    let total_n = by_relation.values().map(|v| v.len()).sum::<usize>().max(1) as f32;
+
+    for (rel, members) in &by_relation {
+        let center_angle = sector_centers.get(rel).copied().unwrap_or(0.0);
+        let n_in_sector = members.len() as f32;
+        let sector_width =
+            (std::f32::consts::TAU * (n_in_sector / total_n)).max(0.15);
+        let delta = sector_width / (n_in_sector + 1.0);
+        for (i, (id, _w)) in members.iter().enumerate() {
+            // Alternate offsets: 0, +1, -1, +2, -2, …
+            let offset_steps = ((i + 1) / 2) as f32
+                * if i % 2 == 0 { 1.0 } else { -1.0 };
+            let theta = center_angle + offset_steps * delta;
+            let x = r1 * theta.cos();
+            let y = r1 * theta.sin();
+            out.insert(id.clone(), Vec3::new(x, y, Z_ONE_HOP));
+        }
+    }
+
+    // 2-hop nodes: orbit around their introducing 1-hop parent angle
+    for n in two_hop {
+        let parent_id = find_one_hop_parent(&n.id, one_hop, edges);
+        let parent_pos = parent_id.as_ref().and_then(|p| out.get(p)).copied();
+        let (px, py) = match parent_pos {
+            Some(p) => (p.x, p.y),
+            None => (R_1, 0.0),
+        };
+        let parent_angle = py.atan2(px);
+        let jitter =
+            (fnv1a_32(n.id.as_bytes()) as f32 / u32::MAX as f32 - 0.5) * 0.6;
+        let theta = parent_angle + jitter;
+        let x = R_2 * theta.cos();
+        let y = R_2 * theta.sin();
+        out.insert(n.id.clone(), Vec3::new(x, y, Z_TWO_HOP));
+    }
+
+    out
+}
+
+/// Return the relation label on the best (is_active_link) edge. Falls back to
+/// the first edge's relation when none is marked active.
+fn relation_to_active(
+    _active_id: &str,
+    _neighbor_id: &str,
+    edges: &[CanvasEdge],
+) -> Option<String> {
+    edges
+        .iter()
+        .find(|e| e.is_active_link)
+        .or_else(|| edges.first())
+        .map(|e| e.relation.clone())
+}
+
+/// Pick the highest-weight 1-hop node as the parent of a 2-hop node.
+/// The adapter is responsible for correct ordering; this is a fallback.
+fn find_one_hop_parent(
+    _two_hop_id: &str,
+    one_hop: &[CanvasNode],
+    _edges: &[CanvasEdge],
+) -> Option<String> {
+    one_hop
+        .iter()
+        .max_by(|a, b| {
+            (a.decay_score * a.edge_count as f32)
+                .partial_cmp(&(b.decay_score * b.edge_count as f32))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|n| n.id.clone())
 }
 
 pub struct LayoutConfig {
@@ -155,6 +276,68 @@ impl Default for ForceLayout {
 #[cfg(test)]
 mod radial_tests {
     use super::*;
+    use crate::canvas_engine::types::{CanvasEdge, CanvasNode, Color, Vec2};
+
+    fn n(id: &str, category: &str, hop: u8) -> CanvasNode {
+        CanvasNode {
+            id: id.to_string(),
+            name: id.to_string(),
+            category: category.to_string(),
+            color: Color::new(0, 0, 0),
+            radius: 30.0,
+            position: Vec2::new(0.0, 0.0),
+            velocity: Vec2::new(0.0, 0.0),
+            z: 0.0,
+            hop,
+            decay_score: 1.0,
+            edge_count: 1,
+            pinned: false,
+        }
+    }
+
+    fn e(from: usize, to: usize, relation: &str) -> CanvasEdge {
+        CanvasEdge {
+            from_idx: from,
+            to_idx: to,
+            relation: relation.to_string(),
+            is_wikilink: false,
+            is_active_link: true,
+        }
+    }
+
+    #[test]
+    fn compute_targets_active_at_origin() {
+        let active = n("a", "concept", 0);
+        let one_hop = vec![n("b", "concept", 1)];
+        let edges = vec![e(0, 1, "uses")];
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let pos_a = targets.get("a").unwrap();
+        assert_eq!(pos_a.x, 0.0);
+        assert_eq!(pos_a.y, 0.0);
+    }
+
+    #[test]
+    fn compute_targets_one_hop_at_r1() {
+        let active = n("a", "concept", 0);
+        let one_hop = vec![n("b", "concept", 1)];
+        let edges = vec![e(0, 1, "uses")];
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let pos_b = targets.get("b").unwrap();
+        let r = (pos_b.x.powi(2) + pos_b.y.powi(2)).sqrt();
+        assert!((r - 220.0).abs() < 1.0, "1-hop should be at radius 220, got {r}");
+    }
+
+    #[test]
+    fn compute_targets_two_hop_at_r2() {
+        let active = n("a", "concept", 0);
+        let one_hop = vec![n("b", "concept", 1)];
+        let two_hop = vec![n("c", "concept", 2)];
+        let edges = vec![e(0, 1, "uses"), e(1, 2, "part_of")];
+        let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges);
+        let pos_c = targets.get("c").unwrap();
+        let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
+        assert!((r - 400.0).abs() < 5.0, "2-hop should be at radius 400, got {r}");
+    }
 
     #[test]
     fn sector_hash_is_deterministic() {
