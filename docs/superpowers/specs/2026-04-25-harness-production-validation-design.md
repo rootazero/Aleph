@@ -136,7 +136,7 @@ From the roadmap §1.1:
 
 ---
 
-## 5. Scenario Matrix: 5 Sessions, 16 Sub-Scenarios
+## 5. Scenario Matrix: 5 Sessions, 18 Sub-Scenarios
 
 ### 5.1 S0 · Smoke Prelude (5 min — covers M1 + M12 baseline)
 
@@ -200,7 +200,7 @@ From the roadmap §1.1:
 | Cross-cut R9 | S4.3 |
 | Cross-cut Skill prefetch | S4.4 |
 
-**Total**: 4 themed sessions + 1 smoke = **5 sessions / 16 sub-scenarios / 100% module coverage**.
+**Total**: 4 themed sessions + 1 smoke = **5 sessions / 18 sub-scenarios / 100% module coverage**.
 
 ---
 
