@@ -6,10 +6,13 @@
 //! - exit 2: block stop (stdout = reason)
 //! - other: hook error (logged, does not block)
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
+
+use crate::config::types::StopHookConfig;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -61,6 +64,29 @@ impl StopHookHandler for ShellStopHook {
         let context_json = serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string());
         execute_shell_hook(self, &context_json, cancel).await
     }
+}
+
+/// Build a vector of stop-hook handlers from `config.toml [[stop_hooks]]`.
+///
+/// Returns `None` when the input is empty so `AgentHarnessRunner::stop_hooks`
+/// can stay `None` (zero-overhead path) and the loop short-circuits past the
+/// hook stage entirely; otherwise returns `Some(Arc<Vec<...>>)` ready to
+/// hand to the harness.
+pub fn build_from_config(cfgs: &[StopHookConfig]) -> Option<Arc<Vec<Arc<dyn StopHookHandler>>>> {
+    if cfgs.is_empty() {
+        return None;
+    }
+    let hooks: Vec<Arc<dyn StopHookHandler>> = cfgs
+        .iter()
+        .map(|c| {
+            let mut h = ShellStopHook::new(&c.name, &c.command);
+            if let Some(secs) = c.timeout_secs {
+                h = h.with_timeout(Duration::from_secs(secs));
+            }
+            Arc::new(h) as Arc<dyn StopHookHandler>
+        })
+        .collect();
+    Some(Arc::new(hooks))
 }
 
 // ---------------------------------------------------------------------------

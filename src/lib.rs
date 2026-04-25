@@ -127,6 +127,7 @@ pub use crate::config::{
     policies::CompressionPolicy,
     types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
+    types::stop_hooks::StopHookConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
     PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig, SmartFlowConfig,

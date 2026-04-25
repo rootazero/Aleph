@@ -1013,12 +1013,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // `tools.effective`. PHASE-6: unify with per-session AgentRegistry.
         let orchestrator_agent_registry =
             Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+        let stop_hook_configs = app_config.read().await.stop_hooks.clone();
         match initialize_orchestrator(
             orchestrator_agent_registry,
             session_service,
             tool_service.clone(),
             default_provider,
             sandbox.clone(),
+            &stop_hook_configs,
         )
         .await
         {

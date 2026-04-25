@@ -172,6 +172,11 @@ pub struct Config {
     /// Plugin marketplace registrations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin_marketplaces: HashMap<String, PluginMarketplaceEntry>,
+    /// Stop-hook entries (Phase 6b Task 10).
+    /// Each entry runs a shell command before the agent loop is allowed to
+    /// terminate; exit code 2 blocks the stop with stdout as the reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_hooks: Vec<StopHookConfig>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -360,6 +365,7 @@ impl Default for Config {
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
             plugin_marketplaces: HashMap::new(),
+            stop_hooks: Vec::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

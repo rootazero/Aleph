@@ -21,6 +21,8 @@ use alephcore::orchestrator::{
     harness_bridge::AgentHarnessRunner, loader::load_presets, resolver::RoutingOverrides,
     sandbox_factory::WorkspaceBuilder,
 };
+use alephcore::verification::stop_hooks::build_from_config as build_stop_hooks;
+use alephcore::StopHookConfig;
 
 /// Assemble the Phase 5 Orchestrator from already-constructed boot services.
 ///
@@ -33,6 +35,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     tool_service: Arc<dyn alephcore::tools::service::ToolService>,
     default_provider: Arc<dyn alephcore::providers::AiProvider>,
     sandbox: Arc<dyn alephcore::sandbox::Sandbox>,
+    stop_hook_configs: &[StopHookConfig],
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // Presets only — PHASE-6: load user flows from ~/.aleph/flows/.
     let presets =
@@ -62,18 +65,22 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // PHASE-6: populate named providers from AuthProfileRegistry. Only
     // `BrainRef::Default` works correctly until then — `Strict` returns
     // `ProviderUnavailable`.
-    // PHASE-6b Task-10: the optional triad (stop_hooks / context_budget /
-    // context_compactor) + skill_prefetcher stay `None` until the user-facing
-    // config surface for them lands. The harness supports both None and
-    // Some(...) shapes so Phase 6d can inject real instances without touching
-    // this boot path again.
+    // PHASE-6b Task-10: stop_hooks now wired from config.toml [[stop_hooks]].
+    // The remaining triad members (context_budget / context_compactor) plus
+    // skill_prefetcher stay `None` until their user-facing config surface
+    // lands. The harness supports both None and Some(...) shapes so future
+    // phases can inject real instances without touching this boot path again.
+    let stop_hooks = build_stop_hooks(stop_hook_configs);
+    let stop_hook_count = stop_hooks.as_ref().map(|h| h.len()).unwrap_or(0);
+    tracing::info!(count = stop_hook_count, "Stop hooks registered");
+
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
         tool_service,
         default_provider,
         named_providers: HashMap::new(),
-        stop_hooks: None,
+        stop_hooks,
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
