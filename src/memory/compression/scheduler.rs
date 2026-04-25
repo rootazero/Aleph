@@ -152,7 +152,7 @@ impl CompressionScheduler {
 // PostCompactCleanup impl
 // ---------------------------------------------------------------------------
 
-use crate::memory::compaction::{CompactionResult, PostCompactCleanup};
+use crate::context::compact::{CompactionResult, PostCompactCleanup};
 
 impl PostCompactCleanup for CompressionScheduler {
     fn cleanup_order(&self) -> u32 {
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn scheduler_resets_on_compact_complete() {
-        use crate::memory::compaction::{CompactionResult, PostCompactCleanup};
+        use crate::context::compact::{CompactionResult, PostCompactCleanup};
 
         let scheduler = CompressionScheduler::with_defaults();
         scheduler.increment_turns_by(15);

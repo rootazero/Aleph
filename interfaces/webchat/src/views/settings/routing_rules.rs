@@ -251,10 +251,8 @@ fn RuleEditor(
                 }
             },
             strip_prefix: None,
-            capabilities: None,
             intent_type: None,
             preferred_model: None,
-            context_format: None,
             icon: None,
         };
 

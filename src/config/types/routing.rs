@@ -77,12 +77,7 @@ pub struct RoutingRuleConfig {
     #[serde(default)]
     pub strip_prefix: Option<bool>,
 
-    // ===== Capability fields =====
-    /// Required capabilities (e.g., ["memory", "search", "mcp"])
-    /// Default: [] (no capabilities)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<Vec<String>>,
-
+    // ===== Routing hints =====
     /// Intent type identifier (for logging and UI display)
     /// Examples: "translation", "research", "code_generation", "skills:build-macos-apps"
     /// Default: "general"
@@ -95,12 +90,6 @@ pub struct RoutingRuleConfig {
     /// Must be a valid model profile ID (e.g., "claude-opus", "gpt-4o").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_model: Option<String>,
-
-    /// Context data injection format
-    /// Options: "markdown", "xml", "json"
-    /// Default: "markdown"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_format: Option<String>,
 
     // ===== Command Mode Display fields =====
     /// SF Symbol icon name for command mode display
@@ -120,10 +109,8 @@ impl RoutingRuleConfig {
             provider: Some(provider.to_string()),
             system_prompt: None,
             strip_prefix: None,
-            capabilities: None,
             intent_type: None,
             preferred_model: None,
-            context_format: None,
             icon: None,
         }
     }
@@ -137,10 +124,8 @@ impl RoutingRuleConfig {
             provider: Some(provider.to_string()),
             system_prompt: system_prompt.map(|s| s.to_string()),
             strip_prefix: Some(true),
-            capabilities: None,
             intent_type: None,
             preferred_model: None,
-            context_format: None,
             icon: None,
         }
     }
@@ -154,10 +139,8 @@ impl RoutingRuleConfig {
             provider: None,
             system_prompt: Some(system_prompt.to_string()),
             strip_prefix: None,
-            capabilities: None,
             intent_type: None,
             preferred_model: None,
-            context_format: None,
             icon: None,
         }
     }
@@ -215,20 +198,6 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Get capabilities (with default value)
-    pub fn get_capabilities(&self) -> Vec<crate::payload::Capability> {
-        use crate::payload::Capability;
-
-        self.capabilities
-            .as_ref()
-            .map(|caps| {
-                caps.iter()
-                    .filter_map(|s| Capability::parse(s).ok())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Get intent type (with default value)
     pub fn get_intent_type(&self) -> &str {
         self.intent_type.as_deref().unwrap_or("general")
@@ -237,16 +206,6 @@ impl RoutingRuleConfig {
     /// Get preferred model ID
     pub fn get_preferred_model(&self) -> Option<&str> {
         self.preferred_model.as_deref()
-    }
-
-    /// Get context format (with default value)
-    pub fn get_context_format(&self) -> crate::payload::ContextFormat {
-        use crate::payload::ContextFormat;
-
-        self.context_format
-            .as_ref()
-            .and_then(|s| ContextFormat::parse(s).ok())
-            .unwrap_or(ContextFormat::Markdown)
     }
 }
 

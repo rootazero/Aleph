@@ -7,8 +7,7 @@ use async_trait::async_trait;
 
 /// Unified interface for search providers
 ///
-/// All search backends (Tavily, Google, SearXNG, etc.) implement this trait
-/// to provide a consistent API to the CapabilityExecutor.
+/// All search backends (Tavily, Google, SearXNG, etc.) implement this trait.
 #[async_trait]
 pub trait SearchProvider: Send + Sync {
     /// Execute a search query

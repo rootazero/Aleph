@@ -43,7 +43,7 @@
 //!     ContextAggregator, InteractionManifest, InteractionParadigm,
 //!     SecurityContext, ResolvedContext,
 //! };
-//! use alephcore::prompt::ToolInfo;
+//! use alephcore::tools::info::ToolInfo;
 //!
 //! // Create manifests for WebRich channel with permissive security
 //! let interaction = InteractionManifest::new(InteractionParadigm::WebRich);

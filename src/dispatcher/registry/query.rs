@@ -96,14 +96,8 @@ impl ToolQuery {
                 provider: Some("openai".to_string()), // Will be overridden by default_provider
                 system_prompt: t.routing_system_prompt.clone(),
                 strip_prefix: Some(t.routing_strip_prefix),
-                capabilities: if t.routing_capabilities.is_empty() {
-                    None
-                } else {
-                    Some(t.routing_capabilities.clone())
-                },
                 intent_type: t.routing_intent_type.clone(),
                 preferred_model: None,
-                context_format: t.routing_context_format.clone(),
                 icon: t.icon.clone(),
             })
             .collect()
