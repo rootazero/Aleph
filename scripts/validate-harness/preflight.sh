@@ -79,8 +79,9 @@ for item in config.toml agents channels guides; do
     cp -R "$SRC_HOME/$item" "$DST_HOME/"
   fi
 done
-# Inner data/: only vault + shared token; DBs start fresh for clean evidence
-for item in secrets.vault .shared_token; do
+# Inner data/: vault + security.db (for vault decryption — token is master key) + shared token.
+# Other DBs (memory, sessions, traces, agent_events) start fresh for clean evidence.
+for item in secrets.vault security.db .shared_token; do
   if [[ -e "$SRC_HOME/data/$item" ]]; then
     cp "$SRC_HOME/data/$item" "$DST_HOME/data/"
   fi
