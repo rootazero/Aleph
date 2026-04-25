@@ -262,6 +262,7 @@ async fn budget_final_reply_short_circuits_to_done_with_hit_limit() {
         trace_sink: None,
         system_prompt: None,
         max_iterations: None,
+        power: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -319,6 +320,7 @@ async fn budget_warning_invokes_compactor_before_llm() {
         trace_sink: None,
         system_prompt: None,
         max_iterations: None,
+        power: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -390,6 +392,7 @@ async fn stop_hook_veto_forces_continue_and_injects_block_reason() {
         trace_sink: None,
         system_prompt: None,
         max_iterations: None,
+        power: None,
     };
     let harness = AgentHarness::new(deps);
 

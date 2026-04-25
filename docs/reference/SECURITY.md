@@ -1031,8 +1031,32 @@ blocked_hosts = ["*.malware.com"]
 
 ---
 
+## Swift helper isolation
+
+**The Swift `AlephBridge` helper process must not read or write any vault path,
+including `~/.aleph/data/`, `~/.aleph/.shared_token`, or any session or memory
+storage directory.** The vault's file lock is owned and held exclusively by the
+Rust core. Concurrent writes from any second writer — including the bridge
+helper — corrupt the encrypted vault and unrecoverably destroy all stored API
+keys, OAuth tokens, and embedding keys.
+
+This rule has already caused a production incident (the `.shared_token` event
+documented in CLAUDE.md). It must be treated as a hard constraint, not a
+guideline.
+
+Audit procedure: whenever a new handler is added to `AlephBridge`, the code
+reviewer must confirm the handler does not open, read, or write any file under
+`~/.aleph/`. The handler source file must include a comment of the form:
+
+```swift
+// Vault access: none. This handler only reads [describe what it reads].
+```
+
+Any handler that cannot include this comment must be redesigned before merging.
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
 - [Tool System](TOOL_SYSTEM.md) - How bash_exec works
 - [Gateway](GATEWAY.md) - Security RPC methods
+- [Desktop Bridge](DESKTOP_BRIDGE.md) - Bridge isolation invariants

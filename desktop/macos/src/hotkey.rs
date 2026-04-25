@@ -4,12 +4,30 @@
 //! and `NSEvent::addLocalMonitorForEventsMatchingMask_handler` (focused) to
 //! detect key presses system-wide.
 //!
-//! Requires Accessibility permission (`AXIsProcessTrusted`); without it the
-//! global monitor silently receives no events.
+//! Requires Accessibility **and** InputMonitoring TCC permissions; without them
+//! the global monitor silently receives no events.
+//!
+//! # Preflight (Stage 4)
+//!
+//! `start()` spawns a background Tokio task (Option B — keeps `start()` sync)
+//! that calls `perm.check` for InputMonitoring and Accessibility via the Swift
+//! bridge.  If either is missing it emits:
+//! - `tracing::warn!` with structured `kind`, `deep_link`, `rationale` fields
+//! - `HotkeyEvent::PermissionMissing(Box<PermissionGuide>)` on the existing
+//!   mpsc channel (best-effort send)
+//!
+//! Session-side surfacing requires a hotkey-event consumer in `src/` which does
+//! not yet exist — that wiring is out of scope for Stage 4.  The tracing + event
+//! channel emission is the contract for now.
 
 use std::ptr::NonNull;
 use std::sync::mpsc;
+use std::sync::Arc;
 
+use aleph_desktop::SwiftBridge;
+use aleph_protocol::desktop_bridge::methods::perm::{
+    CheckParams, GuideParams, PermissionGuide, PermissionKind, METHOD_CHECK, METHOD_GUIDE,
+};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -39,6 +57,8 @@ pub enum HotkeyEvent {
     KeyDown(HotkeyId),
     /// Key released (for PTT-style hold-to-talk).
     KeyUp(HotkeyId),
+    /// A required TCC permission is missing; contains a guide for the user.
+    PermissionMissing(Box<PermissionGuide>),
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +92,8 @@ const MODIFIER_MASK: NSEventModifierFlags = NSEventModifierFlags(
 /// # Usage
 ///
 /// ```ignore
-/// let (listener, rx) = HotkeyListener::new();
+/// let bridge = Arc::new(SwiftBridge::new(path));
+/// let (listener, rx) = HotkeyListener::new(bridge);
 /// let listener = listener
 ///     .register(1, 49, NSEventModifierFlags::Command.0, false)  // Cmd+Space
 ///     .register(2, 0x38, NSEventModifierFlags::Shift.0, true);  // Shift hold
@@ -88,16 +109,19 @@ pub struct HotkeyListener {
     hotkeys: Vec<RegisteredHotkey>,
     /// Monitor handles returned by NSEvent; kept alive for cleanup.
     monitors: Vec<Retained<AnyObject>>,
+    /// Bridge used for TCC permission preflight in `start()`.
+    bridge: Arc<SwiftBridge>,
 }
 
 impl HotkeyListener {
     /// Create a new listener and its corresponding event receiver.
-    pub fn new() -> (Self, mpsc::Receiver<HotkeyEvent>) {
+    pub fn new(bridge: Arc<SwiftBridge>) -> (Self, mpsc::Receiver<HotkeyEvent>) {
         let (tx, rx) = mpsc::channel();
         let listener = Self {
             tx,
             hotkeys: Vec::new(),
             monitors: Vec::new(),
+            bridge,
         };
         (listener, rx)
     }
@@ -133,8 +157,66 @@ impl HotkeyListener {
     /// The caller's thread **must** be running an `NSRunLoop` (or `CFRunLoop`)
     /// for the monitors to fire.  In a Tauri app this is typically the main
     /// thread.
+    ///
+    /// # Preflight (Stage 4, Option B)
+    ///
+    /// A background Tokio task is spawned to check InputMonitoring and
+    /// Accessibility permissions via the Swift bridge.  Any missing permission
+    /// results in a `tracing::warn!` and a `HotkeyEvent::PermissionMissing`
+    /// sent on the mpsc channel (best-effort).
     pub fn start(&mut self) {
-        // Accessibility check
+        // --- Permission preflight (Option B — background task, start() stays sync) ---
+        {
+            let bridge = Arc::clone(&self.bridge);
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                for kind in [PermissionKind::InputMonitoring, PermissionKind::Accessibility] {
+                    let params = CheckParams { kind };
+                    let result: Result<
+                        aleph_protocol::desktop_bridge::methods::perm::PermissionStatus,
+                        _,
+                    > = bridge.call(METHOD_CHECK, &params).await;
+
+                    match result {
+                        Ok(status) if !status.granted => {
+                            // Fetch the guide for actionable user-facing info.
+                            let guide: Option<PermissionGuide> = bridge
+                                .call(METHOD_GUIDE, &GuideParams { kind })
+                                .await
+                                .ok();
+                            let deep_link = guide
+                                .as_ref()
+                                .map(|g| g.deep_link.as_str())
+                                .unwrap_or("<unknown>");
+                            let rationale = guide
+                                .as_ref()
+                                .map(|g| g.rationale.as_str())
+                                .unwrap_or("<unknown>");
+                            warn!(
+                                kind = ?kind,
+                                deep_link = deep_link,
+                                rationale = rationale,
+                                "Hotkey preflight: TCC permission not granted; \
+                                 global monitor will receive no events for this kind"
+                            );
+                            if let Some(g) = guide {
+                                let _ = tx.send(HotkeyEvent::PermissionMissing(Box::new(g)));
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                kind = ?kind,
+                                error = %e,
+                                "Hotkey preflight: permission check failed"
+                            );
+                        }
+                        Ok(_) => {} // granted — nothing to do
+                    }
+                }
+            });
+        }
+
+        // Accessibility check (legacy FFI, belt-and-suspenders)
         let trusted = unsafe { AXIsProcessTrusted() };
         if !trusted {
             warn!(

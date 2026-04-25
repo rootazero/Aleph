@@ -332,6 +332,30 @@ returns `NoopSandbox`.
 | `src/tools/middleware/permission/agent_filter.rs` | `AgentPermissionFilter::build` |
 | `tests/sandbox_capability_approval.rs` | End-to-end capability approval flow |
 
+## Desktop Bridge boundary
+
+The Swift `AlephBridge` helper process runs **outside** the Rust sandbox: it
+must hold camera, microphone, speech, and accessibility TCC grants in its own
+bundle, and it calls native frameworks that cannot run inside a `sandbox-exec`
+profile. Conversely, the Rust core remains sandbox-friendly because all native
+API calls are proxied to the helper over stdio.
+
+Hard rules that must not be violated by any bridge handler:
+
+- The bridge process **must not** open any TCP or Unix domain socket. Only the
+  inherited stdio pipes are used for IPC.
+- The bridge **must not** read or write `~/.aleph/data/`, the `.shared_token`
+  file, or any other vault path. Vault access is exclusive to the Rust core.
+  Concurrent writes from a second process corrupt the encrypted vault and
+  unrecoverably destroy stored API keys, OAuth tokens, and embeddings (see
+  CLAUDE.md, `.shared_token` incident).
+- Permission status is owned by macOS TCC; the bridge merely reflects it via
+  `perm.check` and returns `PermissionGuide` in `-32001` errors. The bridge
+  does not grant or revoke permissions.
+- Any new bridge handler added in the future **must** include a comment
+  justifying why it does not touch `~/.aleph/`. Bridge code review checks this
+  invariant.
+
 ## References
 
 - **Spec:** `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md`

@@ -32,6 +32,25 @@ pub enum DesktopError {
     /// The aleph-bridge Swift CLI binary failed or produced unexpected output.
     #[error("bridge failed: {0}")]
     BridgeFailed(String),
+
+    /// The bridge has been disabled after too many crashes inside the
+    /// restart window. Callers should surface this explicitly rather than
+    /// retrying.
+    #[error("desktop bridge disabled: {0}")]
+    BridgeDisabled(String),
+
+    /// A platform-level error occurred (e.g. IOPMAssertion failure).
+    #[error("platform error: {0}")]
+    PlatformError(String),
+
+    /// A TCC permission was denied. The embedded `PermissionGuide` carries a
+    /// deep link, human-readable steps, and a rationale that the LLM should
+    /// relay to the user instead of just saying "permission denied".
+    #[error("permission denied: {kind:?}")]
+    PermissionDenied {
+        kind: aleph_protocol::desktop_bridge::methods::perm::PermissionKind,
+        guide: Box<aleph_protocol::desktop_bridge::methods::perm::PermissionGuide>,
+    },
 }
 
 /// Convenience result type for desktop operations.

@@ -26,9 +26,10 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, FileEditTool, FileOpsTool, FileReadTool,
-    FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SearchTool,
-    SelfManageTool, VaultStoreTool, WebFetchTool,
+    BashExecTool, CodeExecTool, DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
+    DesktopCheckPermissions, DesktopTool, FileEditTool, FileOpsTool, FileReadTool, FileWriteTool,
+    ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SearchTool, SelfManageTool,
+    VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -120,6 +121,26 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "desktop",
         description: "Control the desktop via platform-native capabilities: screenshots, OCR, keyboard/mouse, app launch, windows, and screen recording",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop.ax_query_focused",
+        description: "Return the UI element currently holding keyboard focus via the OS accessibility API (macOS)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop.ax_query_tree",
+        description: "Return the AX element tree for a process (frontmost if pid omitted); bounded by max_depth (default 6)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop.ax_query_by_role",
+        description: "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop.check_permissions",
+        description: "Check macOS TCC permission status for the kinds Aleph needs (accessibility, input monitoring, screen recording, camera, microphone)",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -513,6 +534,10 @@ pub fn create_tool_boxed(
         "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
+        "desktop.ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),
+        "desktop.ax_query_tree" => Some(Box::new(DesktopAxQueryTree::new())),
+        "desktop.ax_query_by_role" => Some(Box::new(DesktopAxQueryByRole::new())),
+        "desktop.check_permissions" => Some(Box::new(DesktopCheckPermissions::new())),
         "vault_store" => config
             .and_then(|c| c.shared_token_manager.as_ref())
             .map(|mgr| Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>),

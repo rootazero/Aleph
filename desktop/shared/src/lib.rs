@@ -31,11 +31,18 @@ pub mod traits;
 pub use error::{DesktopError, Result};
 pub use native_screen::NativeScreen;
 
+// Re-export the long-lived Swift helper RPC client at crate root so callers
+// can write `aleph_desktop::SwiftBridge` without reaching into the submodule.
+// Note: the legacy spawn-per-call type in `bridge/mod.rs` remains accessible
+// via `aleph_desktop::bridge::SwiftBridge` for the one remaining caller
+// (`desktop/macos/src/pim.rs`) until its own migration lands.
+pub use bridge::client::SwiftBridge;
+
 // Re-export new capability traits.
 pub use platform::{DesktopPlatform, EscapeAbort};
 pub use traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
-    SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, ScreenCapability, SystemCapability,
 };
 
 use serde::{Deserialize, Serialize};

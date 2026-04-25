@@ -25,6 +25,9 @@ tracing = { workspace = true }
 # Home directory resolution (for SwiftBridge default path)
 dirs = { workspace = true }
 
+# Desktop-bridge JSON-RPC schemas
+aleph-protocol = { path = "../../shared/protocol" }
+
 # Encoding
 base64 = { workspace = true }
 
@@ -34,6 +37,10 @@ image = { workspace = true }
 
 # Input automation
 enigo = { version = "0.3", features = ["serde"] }
+
+[target.'cfg(unix)'.dependencies]
+# setpgid on helper spawn so signals propagate when aleph-server exits.
+libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
@@ -58,14 +65,12 @@ windows = { version = "0.58", features = [
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSURL", "NSProcessInfo"] }
 block2 = "0.6"
-objc2-vision = { version = "0.3", features = [
-    "VNRecognizeTextRequest", "VNObservation",
-    "VNRequestHandler", "VNRequest", "VNTypes",
-    "objc2-core-foundation",
-] }
 objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "NSPasteboard"] }
 core-graphics = "0.25"
 core-foundation = "0.10"
 objc2-screen-capture-kit = "0.3"
 objc2-core-media = { version = "0.3", features = ["CMTime", "objc2"] }
 dispatch2 = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

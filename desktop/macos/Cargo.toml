@@ -8,11 +8,14 @@ rust-version.workspace = true
 
 [dependencies]
 aleph-desktop = { path = "../shared" }
+# JSON-RPC method / params / result types shared with the Swift helper.
+aleph-protocol = { path = "../../shared/protocol" }
 async-trait = "0.1"
-tokio = { version = "1", features = ["process"] }
+tokio = { version = "1", features = ["process", "rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+dirs = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 objc2 = "0.6"
@@ -30,18 +33,21 @@ objc2-user-notifications = { version = "0.3", features = [
     "UNNotificationSettings",
 ] }
 block2 = "0.6"
-objc2-av-foundation = { version = "0.3", features = [
-    "AVCaptureDevice", "AVMediaFormat",
-    "AVCaptureSession", "AVCaptureInput",
-    "AVCapturePhotoOutput", "AVCaptureOutputBase",
-    "AVCaptureFileOutput", "AVCaptureOutput",
-] }
+# Kept only for permission.rs TCC checks (AVCaptureDevice::authorizationStatus*).
+# All camera-capture features (session/input/output/photo/movie) were removed
+# in T1a.2 — camera capture now lives in the Swift helper over JSON-RPC.
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
+# Kept only for permission.rs TCC checks (SFSpeechRecognizer::authorizationStatus
+# + requestAuthorization). Actual speech-to-text recognition moved to the Swift
+# helper over JSON-RPC in Stage 1c — recognition-specific features
+# (SFSpeechRecognitionRequest / Result / Task, SFTranscription) were removed
+# together with desktop/macos/src/media.rs.
 objc2-speech = { version = "0.3", features = [
     "SFSpeechRecognizer",
-    "SFSpeechRecognitionRequest",
-    "SFSpeechRecognitionResult",
-    "SFSpeechRecognitionTask",
-    "SFTranscription",
     "block2",
 ] }
 core-foundation = "0.10"
+
+[dev-dependencies]
+# End-to-end test against the real compiled AlephBridge helper.
+tokio = { version = "1", features = ["process", "rt-multi-thread", "macros"] }

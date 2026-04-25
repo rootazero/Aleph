@@ -247,3 +247,36 @@ test-probes:
 # Playwright E2E tests (Layer 3) — requires `just wasm` for UI tests
 test-e2e:
     npx playwright test --project=chromium
+
+# ─── Desktop Bridge (codex-inspired JSON-RPC helper) ───
+
+# Dump Rust-side desktop-bridge schemas to JSON (source of truth for Swift golden tests)
+bridge-schema:
+    @mkdir -p desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures
+    cargo run -p aleph-protocol --bin export_desktop_bridge_schema \
+        > desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures/schema.json
+    @echo "✓ schema.json written to desktop/macos/bridge/Tests/AlephBridgeTests/Fixtures/"
+
+# Run Swift-side bridge unit tests (golden fixtures, codec, router)
+bridge-test:
+    cd desktop/macos/bridge && swift test
+
+# End-to-end: build Swift helper, then run ignored Rust e2e tests against it
+test-bridge-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test bridge_e2e -- --ignored --nocapture
+
+# End-to-end: camera snap/clip via the Swift helper. Requires camera permission.
+test-camera-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test camera_e2e -- --ignored --nocapture
+
+# End-to-end: audio device listing + recording via the Swift helper. Requires microphone permission.
+test-audio-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test audio_e2e -- --ignored --nocapture
+
+# End-to-end: speech recognition via the Swift helper. Requires Speech + Microphone TCC.
+test-speech-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test speech_e2e -- --ignored --nocapture
+
+# End-to-end: OCR via the Swift helper. Requires no TCC (image is supplied directly).
+test-ocr-e2e: swift-bridge
+    cargo test -p aleph-desktop-macos --test ocr_e2e -- --ignored --nocapture

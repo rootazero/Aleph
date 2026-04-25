@@ -1,13 +1,20 @@
 //! Desktop tool — sees and controls the desktop via the platform-native
 //! `desktop/*` capability layer.
 
+mod ax;
 mod native;
+mod perm;
 pub mod session_lock;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
+pub use ax::{
+    DesktopAxQueryByRole, DesktopAxQueryByRoleArgs, DesktopAxQueryFocused,
+    DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
+};
+pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use types::{DesktopArgs, DesktopOutput};
 
 use crate::sync_primitives::{Arc, Mutex};

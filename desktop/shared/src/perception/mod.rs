@@ -2,13 +2,13 @@
 //!
 //! This module provides platform-specific implementations for:
 //! - Screenshot capture via `xcap`
-//! - OCR via platform APIs (WinRT on Windows; not available on macOS/Linux)
+//! - OCR via platform APIs (WinRT on Windows; macOS OCR routes through the
+//!   Swift helper via `screen.ocr` RPC in `desktop/macos/src/screen.rs`)
 //! - Raw PNG capture for use as OCR input
 //!
 //! All functions are synchronous and should be called via
 //! `tokio::task::spawn_blocking` from async contexts.
 
-mod ocr_macos;
 mod ocr_windows;
 mod screen_record;
 mod screenshot;
@@ -29,8 +29,9 @@ use crate::OcrResult;
 /// # Platform support
 ///
 /// - **Windows**: Uses WinRT `OcrEngine` API (prefers zh-Hans, fallback to en-US).
-/// - **macOS/Linux**: Returns [`DesktopError::NotImplemented`] — macOS OCR is
-///   handled by the native Swift app.
+/// - **macOS**: Returns [`DesktopError::NotImplemented`] — macOS OCR is routed
+///   through the Swift helper via `screen.ocr` RPC in `desktop/macos/src/screen.rs`.
+/// - **Other**: Returns [`DesktopError::NotImplemented`].
 ///
 /// # Errors
 ///
@@ -42,16 +43,11 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         ocr_windows::windows_ocr(png_bytes)
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        ocr_macos::macos_ocr(png_bytes)
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = png_bytes;
         Err(DesktopError::NotImplemented(
-            "OCR not implemented on this platform".into(),
+            "OCR not implemented on this platform (macOS routes OCR through SwiftBridge; non-Windows non-macOS have no native implementation)".into(),
         ))
     }
 }
@@ -62,8 +58,8 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
 mod tests {
     use super::*;
 
-    /// On non-Windows/macOS platforms, `perform_ocr` should return `NotImplemented`.
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    /// On non-Windows platforms, `perform_ocr` should return `NotImplemented`.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_ocr_not_implemented_on_non_windows() {
         let dummy_png = b"fake png data";

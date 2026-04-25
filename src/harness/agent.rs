@@ -280,6 +280,19 @@ impl Harness for AgentHarness {
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
     ) -> Result<TurnState, HarnessError> {
+        // Hold a sleep-inhibit assertion for the duration of this turn so a long
+        // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
+        // automatically when this scope exits, releasing the IOPMAssertion.
+        let _sleep_guard = self.deps.power.as_ref().and_then(|power| {
+            match power.inhibit_sleep("Aleph agent loop") {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    tracing::debug!(target: "power", "sleep inhibitor unavailable: {e}");
+                    None
+                }
+            }
+        });
+
         // Kick off a throttled skill prefetch scan before the LLM call. The
         // scan runs in a background task; its result surfaces on the next
         // turn rather than blocking this one.
@@ -768,6 +781,7 @@ mod tests {
             trace_sink: None,
             system_prompt: Some("ROLE: SPEC-BOT".into()),
             max_iterations: None,
+            power: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -960,6 +974,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             max_iterations: Some(3),
+            power: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1009,6 +1024,7 @@ mod tests {
             trace_sink: None,
             system_prompt: None,
             max_iterations: None,
+            power: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

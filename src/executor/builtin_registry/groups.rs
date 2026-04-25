@@ -66,6 +66,10 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         name: "系统与配置",
         tools: &[
             "desktop",
+            "desktop.ax_query_focused",
+            "desktop.ax_query_tree",
+            "desktop.ax_query_by_role",
+            "desktop.check_permissions",
             "self_manage",
             "read_config_guide",
             "vault_store",
