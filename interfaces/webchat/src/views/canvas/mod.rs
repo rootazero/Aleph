@@ -13,6 +13,7 @@ use crate::api::graph::GraphApi;
 use crate::canvas_engine::adapter::{
     adapt_graph_response, GraphNeighborsResponse, GraphQueryResponse, NoteDetailResponse,
 };
+use detail_panel::DetailContent;
 use leptos::callback::Callback;
 
 use crate::canvas_engine::interaction::CanvasEvent;
@@ -32,6 +33,7 @@ pub fn CanvasView() -> impl IntoView {
     let (view_mode, set_view_mode) = signal(ViewMode::Global { top_k: 100 });
     let (selected_node, set_selected_node) = signal(None::<String>);
     let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
+    let (detail_content, set_detail_content) = signal(DetailContent::Closed);
     let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
     let search_query = RwSignal::new(String::new());
     // fold_threshold controls cluster folding granularity (6..=20); wired fully in T22
@@ -91,18 +93,23 @@ pub fn CanvasView() -> impl IntoView {
             Some(id) => {
                 spawn_local(async move {
                     match GraphApi::node_detail(&state, &id).await {
-                        Ok(detail) => set_node_detail.set(Some(detail)),
+                        Ok(detail) => {
+                            set_detail_content.set(DetailContent::Node { detail: detail.clone() });
+                            set_node_detail.set(Some(detail));
+                        }
                         Err(e) => {
                             web_sys::console::error_1(
                                 &format!("Failed to load node detail: {}", e).into(),
                             );
                             set_node_detail.set(None);
+                            set_detail_content.set(DetailContent::Closed);
                         }
                     }
                 });
             }
             None => {
                 set_node_detail.set(None);
+                set_detail_content.set(DetailContent::Closed);
             }
         }
     });
@@ -228,7 +235,12 @@ pub fn CanvasView() -> impl IntoView {
                 </div>
 
                 {move || has_detail().then(|| view! {
-                    <DetailPanel detail=node_detail />
+                    <DetailPanel
+                        content=detail_content
+                        on_jump_to=Callback::new(move |id: String| {
+                            set_selected_node.set(Some(id));
+                        })
+                    />
                 })}
             </div>
         </div>
