@@ -17,7 +17,7 @@ pub struct Backoff {
 
 impl Backoff {
     /// Returns the next delay and advances the ladder one step.
-    pub fn next(&mut self) -> Duration {
+    pub fn next_delay(&mut self) -> Duration {
         let secs: u64 = match self.step {
             0 => 1,
             1 => 2,
@@ -75,22 +75,22 @@ mod tests {
     #[test]
     fn backoff_progresses() {
         let mut s = Backoff::default();
-        assert_eq!(s.next(), Duration::from_secs(1));
-        assert_eq!(s.next(), Duration::from_secs(2));
-        assert_eq!(s.next(), Duration::from_secs(4));
-        assert_eq!(s.next(), Duration::from_secs(8));
-        assert_eq!(s.next(), Duration::from_secs(16));
-        assert_eq!(s.next(), Duration::from_secs(30));
-        assert_eq!(s.next(), Duration::from_secs(30));
+        assert_eq!(s.next_delay(), Duration::from_secs(1));
+        assert_eq!(s.next_delay(), Duration::from_secs(2));
+        assert_eq!(s.next_delay(), Duration::from_secs(4));
+        assert_eq!(s.next_delay(), Duration::from_secs(8));
+        assert_eq!(s.next_delay(), Duration::from_secs(16));
+        assert_eq!(s.next_delay(), Duration::from_secs(30));
+        assert_eq!(s.next_delay(), Duration::from_secs(30));
     }
 
     #[test]
     fn backoff_reset_returns_to_one_second() {
         let mut s = Backoff::default();
-        s.next();
-        s.next();
+        s.next_delay();
+        s.next_delay();
         s.reset();
-        assert_eq!(s.next(), Duration::from_secs(1));
+        assert_eq!(s.next_delay(), Duration::from_secs(1));
     }
 
     #[test]

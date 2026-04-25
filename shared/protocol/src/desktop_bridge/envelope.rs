@@ -51,11 +51,6 @@ pub enum Message {
     Notification(Notification),
 }
 
-// Legacy aliases — callers migrate to new names during T0.3 / remove in T6.1.
-pub type BridgeRequest = Request; // note: old struct used String id
-pub type BridgeSuccessResponse = Response;
-pub type BridgeErrorResponse = ErrorResponse;
-pub type BridgeRpcError = RpcError;
 
 #[cfg(test)]
 mod tests {

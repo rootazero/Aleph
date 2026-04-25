@@ -3,7 +3,7 @@
 //! Exposes three read-only AX operations:
 //! - `ax.query_focused` — element currently holding keyboard focus
 //! - `ax.query_tree`    — full subtree rooted at a given process (or the
-//!                        frontmost app if `pid` is omitted)
+//!   frontmost app if `pid` is omitted)
 //! - `ax.query_by_role` — collect all elements matching an AX role string
 
 use schemars::JsonSchema;

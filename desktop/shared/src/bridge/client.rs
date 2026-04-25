@@ -240,7 +240,7 @@ impl SwiftBridge {
                 }
                 // Advance backoff (but don't sleep here — let the caller retry
                 // on the next call so we don't hold up the thread for 1-30 s).
-                let _delay = self.backoff.lock().await.next();
+                let _delay = self.backoff.lock().await.next_delay();
                 Err(e)
             }
         }

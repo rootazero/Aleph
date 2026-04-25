@@ -460,9 +460,11 @@ impl SoulManifest {
                 .anti_patterns
                 .clone()
                 .non_empty_or(base.anti_patterns.clone()),
-            relationship: (self.relationship != RelationshipMode::default())
-                .then(|| self.relationship.clone())
-                .unwrap_or_else(|| base.relationship.clone()),
+            relationship: if self.relationship != RelationshipMode::default() {
+                self.relationship.clone()
+            } else {
+                base.relationship.clone()
+            },
             expertise: self.expertise.clone().non_empty_or(base.expertise.clone()),
             addendum: self.addendum.clone().or_else(|| base.addendum.clone()),
         }
