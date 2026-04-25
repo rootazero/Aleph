@@ -120,13 +120,9 @@ pub struct RoutingRuleConfigJson {
     #[serde(default)]
     pub strip_prefix: Option<bool>,
     #[serde(default)]
-    pub capabilities: Option<Vec<String>>,
-    #[serde(default)]
     pub intent_type: Option<String>,
     #[serde(default)]
     pub preferred_model: Option<String>,
-    #[serde(default)]
-    pub context_format: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
 }
@@ -150,10 +146,8 @@ pub async fn handle_create(
         provider: params.rule.provider,
         system_prompt: params.rule.system_prompt,
         strip_prefix: params.rule.strip_prefix,
-        capabilities: params.rule.capabilities,
         intent_type: params.rule.intent_type,
         preferred_model: params.rule.preferred_model,
-        context_format: params.rule.context_format,
         icon: params.rule.icon,
     };
 
@@ -236,10 +230,8 @@ pub async fn handle_update(
             provider: params.rule.provider,
             system_prompt: params.rule.system_prompt,
             strip_prefix: params.rule.strip_prefix,
-            capabilities: params.rule.capabilities,
             intent_type: params.rule.intent_type,
             preferred_model: params.rule.preferred_model,
-            context_format: params.rule.context_format,
             icon: params.rule.icon,
         };
 
