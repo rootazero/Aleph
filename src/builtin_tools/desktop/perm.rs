@@ -1,4 +1,4 @@
-//! `desktop.check_permissions` — query TCC permission status for the kinds
+//! `desktop_check_permissions` — query TCC permission status for the kinds
 //! that Aleph commonly depends on.
 //!
 //! When a kind is not granted, subsequent desktop calls return errors whose
@@ -62,7 +62,7 @@ impl DesktopCheckPermissions {
 
 #[async_trait]
 impl AlephTool for DesktopCheckPermissions {
-    const NAME: &'static str = "desktop.check_permissions";
+    const NAME: &'static str = "desktop_check_permissions";
     const DESCRIPTION: &'static str = concat!(
         "Check macOS TCC permission status for the kinds Aleph depends on.\n",
         "\n",

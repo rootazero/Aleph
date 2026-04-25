@@ -2,8 +2,8 @@
 //! `DesktopPlatform::ax()` for the three read-only AX operations.
 //!
 //! Each tool is a separate [`AlephTool`] so the LLM sees a small, focused
-//! surface (`desktop.ax_query_focused`, `desktop.ax_query_tree`,
-//! `desktop.ax_query_by_role`) rather than a catch-all `desktop.ax` verb.
+//! surface (`desktop_ax_query_focused`, `desktop_ax_query_tree`,
+//! `desktop_ax_query_by_role`) rather than a catch-all `desktop_ax` verb.
 //!
 //! All tools degrade gracefully when no `DesktopPlatform` is configured
 //! (e.g. headless server builds) or when the platform does not implement
@@ -75,7 +75,7 @@ fn bridge_err_output(err: impl std::fmt::Display) -> DesktopOutput {
     }
 }
 
-// ── desktop.ax_query_focused ────────────────────────────────────────────────
+// ── desktop_ax_query_focused ────────────────────────────────────────────────
 
 /// LLM tool: return the currently focused AX element.
 #[derive(Clone, Default)]
@@ -96,7 +96,7 @@ impl DesktopAxQueryFocused {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryFocused {
-    const NAME: &'static str = "desktop.ax_query_focused";
+    const NAME: &'static str = "desktop_ax_query_focused";
     const DESCRIPTION: &'static str =
         "Return the UI element currently holding keyboard focus via the OS accessibility API. \
          Response contains an `element` field (null if no focused element). \
@@ -125,7 +125,7 @@ impl AlephTool for DesktopAxQueryFocused {
     }
 }
 
-// ── desktop.ax_query_tree ───────────────────────────────────────────────────
+// ── desktop_ax_query_tree ───────────────────────────────────────────────────
 
 /// LLM tool: return the full AX subtree rooted at a process.
 #[derive(Clone, Default)]
@@ -146,7 +146,7 @@ impl DesktopAxQueryTree {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryTree {
-    const NAME: &'static str = "desktop.ax_query_tree";
+    const NAME: &'static str = "desktop_ax_query_tree";
     const DESCRIPTION: &'static str =
         "Return the AX element tree for a process (the frontmost app if `pid` is omitted). \
          Bounded by `max_depth` (default 6). Response contains an `element` field \
@@ -179,7 +179,7 @@ impl AlephTool for DesktopAxQueryTree {
     }
 }
 
-// ── desktop.ax_query_by_role ────────────────────────────────────────────────
+// ── desktop_ax_query_by_role ────────────────────────────────────────────────
 
 /// LLM tool: collect all AX elements matching a given role.
 #[derive(Clone, Default)]
@@ -200,7 +200,7 @@ impl DesktopAxQueryByRole {
 
 #[async_trait]
 impl AlephTool for DesktopAxQueryByRole {
-    const NAME: &'static str = "desktop.ax_query_by_role";
+    const NAME: &'static str = "desktop_ax_query_by_role";
     const DESCRIPTION: &'static str =
         "Collect all AX elements whose role matches `role` (e.g. \"AXButton\") in a process. \
          If `pid` is omitted, the frontmost application is queried. Response contains an \

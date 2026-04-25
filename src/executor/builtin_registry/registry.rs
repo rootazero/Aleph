@@ -502,20 +502,20 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
-            "desktop.ax_query_focused" => Box::pin(async move {
+            "desktop_ax_query_focused" => Box::pin(async move {
                 self.desktop_ax_query_focused_tool
                     .call_json(arguments)
                     .await
             }),
-            "desktop.ax_query_tree" => Box::pin(async move {
+            "desktop_ax_query_tree" => Box::pin(async move {
                 self.desktop_ax_query_tree_tool.call_json(arguments).await
             }),
-            "desktop.ax_query_by_role" => Box::pin(async move {
+            "desktop_ax_query_by_role" => Box::pin(async move {
                 self.desktop_ax_query_by_role_tool
                     .call_json(arguments)
                     .await
             }),
-            "desktop.check_permissions" => Box::pin(async move {
+            "desktop_check_permissions" => Box::pin(async move {
                 self.desktop_check_permissions_tool
                     .call_json(arguments)
                     .await
