@@ -35,14 +35,6 @@ use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
 use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
-// C FFI — Accessibility check
-// ---------------------------------------------------------------------------
-
-extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-
-// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -166,10 +158,12 @@ impl HotkeyListener {
     /// sent on the mpsc channel (best-effort).
     pub fn start(&mut self) {
         // --- Permission preflight (Option B — background task, start() stays sync) ---
-        {
+        // Only spawn the background check when we are inside a Tokio runtime.
+        // Falls through silently in sync test/CLI contexts.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let bridge = Arc::clone(&self.bridge);
             let tx = self.tx.clone();
-            tokio::spawn(async move {
+            handle.spawn(async move {
                 for kind in [PermissionKind::InputMonitoring, PermissionKind::Accessibility] {
                     let params = CheckParams { kind };
                     let result: Result<
@@ -216,15 +210,6 @@ impl HotkeyListener {
             });
         }
 
-        // Accessibility check (legacy FFI, belt-and-suspenders)
-        let trusted = unsafe { AXIsProcessTrusted() };
-        if !trusted {
-            warn!(
-                "Accessibility permission not granted (AXIsProcessTrusted = false). \
-                 Global hotkey monitor will not receive events."
-            );
-        }
-
         let mask = NSEventMask::KeyDown | NSEventMask::KeyUp | NSEventMask::FlagsChanged;
 
         // --- Global monitor (app not focused) --------------------------------
@@ -235,7 +220,10 @@ impl HotkeyListener {
             debug!("Global hotkey monitor installed");
             self.monitors.push(monitor);
         } else {
-            warn!("Failed to install global hotkey monitor");
+            warn!(
+                "Failed to install global hotkey monitor. \
+                 This usually means Accessibility or Input Monitoring TCC permission is denied."
+            );
         }
 
         // --- Local monitor (app focused) -------------------------------------

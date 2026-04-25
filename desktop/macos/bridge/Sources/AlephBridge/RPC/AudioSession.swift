@@ -72,7 +72,7 @@ actor AudioSession {
         guard recorder.prepareToRecord() else {
             throw RpcError(
                 code: -32004,
-                message: "audio.record: microphone permission denied",
+                message: "audio.record: prepareToRecord failed (permission denied or microphone in use)",
                 data: nil
             )
         }
@@ -80,7 +80,7 @@ actor AudioSession {
         guard recorder.record(forDuration: durationSecs) else {
             throw RpcError(
                 code: -32004,
-                message: "audio.record: microphone permission denied",
+                message: "audio.record: record() failed (permission denied or microphone in use)",
                 data: nil
             )
         }
