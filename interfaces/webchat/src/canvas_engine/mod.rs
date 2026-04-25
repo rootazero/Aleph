@@ -1,6 +1,11 @@
 pub mod adapter;
+pub mod cluster;
 pub mod interaction;
 pub mod layout;
+pub mod mini_map;
+pub mod navigation;
+pub mod prefetch;
 pub mod renderer;
+pub mod tween;
 pub mod types;
 pub mod viewport;

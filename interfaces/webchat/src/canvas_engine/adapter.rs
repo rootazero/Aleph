@@ -63,6 +63,10 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
                 position: Vec2::new(angle.cos() * spread, angle.sin() * spread),
                 velocity: Vec2::zero(),
                 pinned: false,
+                z: 0.0,
+                hop: 2,
+                decay_score: 1.0,
+                edge_count: dto.link_count,
             }
         })
         .collect();
@@ -84,6 +88,7 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
                 to_idx,
                 relation: String::new(),
                 is_wikilink: true,
+                is_active_link: false,
             })
         })
         .collect();

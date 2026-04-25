@@ -100,6 +100,11 @@ pub struct CanvasNode {
     pub position: Vec2,
     pub velocity: Vec2,
     pub pinned: bool,
+    // Radial navigation fields
+    pub z: f32,
+    pub hop: u8,         // 0 = active centre, 1 = one-hop, 2 = two-hop
+    pub decay_score: f32,
+    pub edge_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +113,7 @@ pub struct CanvasEdge {
     pub to_idx: usize,
     pub relation: String,
     pub is_wikilink: bool,
+    pub is_active_link: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,5 +152,89 @@ impl ViewState {
 impl Default for ViewState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Radial navigation types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vec3 {
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DepthAttrs {
+    pub scale: f32,
+    pub opacity: f32,
+    pub blur_px: f32,
+    pub sat_mul: f32,
+    pub glow_alpha: f32,
+    pub shadow_offset_y: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClusterNode {
+    pub id: String,
+    pub relation: String,
+    pub kind: String,
+    pub member_ids: Vec<String>,
+    pub representative_names: Vec<String>,
+    pub aggregated_weight: f32,
+    pub radius: f32,
+    pub world_pos: Vec2,
+    pub z: f32,
+    pub expanded: bool,
+}
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct Neighborhood {
+    pub center: CanvasNode,
+    pub one_hop: Vec<CanvasNode>,
+    pub two_hop: Vec<CanvasNode>,
+    pub clusters: Vec<ClusterNode>,
+    pub edges: Vec<CanvasEdge>,
+    pub target_positions: HashMap<String, Vec3>,
+    pub fetched_at_ms: f64, // performance.now() timestamp
+}
+
+#[derive(Debug, Clone)]
+pub enum NavState {
+    Idle,
+    Loading { target: String, since_ms: f64 },
+    Active { node_id: String, neighborhood: Neighborhood },
+    Animating {
+        from_id: String,
+        to_id: String,
+        from_neighborhood: Neighborhood,
+        to_neighborhood: Neighborhood,
+        t: f32,
+        duration_ms: u32,
+        started_at_ms: f64,
+    },
+    Error { target: String, reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vec3_new_constructs_correctly() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(v.x, 1.0);
+        assert_eq!(v.y, 2.0);
+        assert_eq!(v.z, 3.0);
     }
 }
