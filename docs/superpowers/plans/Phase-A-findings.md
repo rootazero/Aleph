@@ -79,3 +79,37 @@ Commit before Phase A: `235ab7c95803af34dfe6273b1ef912a982fbb7f9`
 
 - **aleph-replay-probe SHA**: N/A (not created)
 - **`/tmp/aleph-replay-strategy.txt` content**: `sql`
+
+---
+
+## TBD#4: stop-hook registration
+
+- **Runtime API**: no
+- **Config-time loading**: **no** (the wiring is incomplete)
+- **Evidence (file:line)**:
+  - `src/verification/stop_hooks.rs:20-25` — `pub trait StopHookHandler` exists.
+  - `src/verification/stop_hooks.rs:33-65` — `pub struct ShellStopHook` with constructor and `evaluate` method.
+  - `src/verification/stop_hooks.rs:121-135` — `pub async fn execute_stop_hooks(hooks: &[Box<dyn StopHookHandler>], ...)` runs hooks.
+  - `src/bin/aleph-server/commands/start/orchestrator_init.rs:65-80` — boot path explicitly hardcodes `stop_hooks: None`:
+    ```rust
+    // PHASE-6b Task-10: the optional triad (stop_hooks / context_budget /
+    // context_compactor) + skill_prefetcher stay `None` until the user-facing
+    // config surface for them lands.
+    let harness = Arc::new(AgentHarnessRunner {
+        ...
+        stop_hooks: None,
+        ...
+    });
+    ```
+  - `grep -rn "stop_hook\|stop_hooks" src/config/` — zero hits in `schema.rs`, no TOML wiring.
+  - `grep -rn "stop_hook" src/gateway/routes/ src/gateway/handlers/` — only matches a `FlowStreamEvent::StopHookBlock` UI-side event, no registration endpoint.
+
+- **S1.4 strategy**: **DEFER S1.4 — document gap**
+
+  Rationale:
+  - There is no surface (REST or config) to register a stop-hook at runtime in the current build.
+  - Wiring `stop_hooks: Some(...)` in `orchestrator_init.rs` requires either a config schema addition (new type in `src/config/types/`) or a runtime API (new gateway route) — both exceed Phase A's "≤10-line patch" envelope.
+  - Recommendation: in Phase D, mark S1.4 as **status=blocked** in `evidence.json` with reason `"stop-hook registration surface not yet wired (orchestrator_init.rs:76)"`. This is a known gap from harness-dissolution P0–P7 (the comment at orchestrator_init.rs:65-69 explicitly defers it to a future phase). It does not represent a regression from the dissolution.
+  - Severity in plan §6.4 is `high` (record-and-continue), so this is consistent with the tier policy.
+
+- **Hook spec (for future, when wired)**: `{ id: String, match_pattern: String, action: "stop" | "continue" }` — but not implementable today.
