@@ -55,4 +55,8 @@ pub struct HarnessDeps {
     /// after that many Continue turns and sets hit_limit=true. None → unbounded
     /// (current Gateway default).
     pub max_iterations: Option<usize>,
+    /// Optional power-management capability. When present, the harness inhibits
+    /// idle sleep for the duration of each turn so long-running Think→Act loops
+    /// don't get cut off by macOS putting the host to sleep.
+    pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
 }

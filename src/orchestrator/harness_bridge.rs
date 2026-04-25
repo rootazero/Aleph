@@ -114,6 +114,18 @@ impl HarnessRunner for AgentHarnessRunner {
         // Apply per-request tool_service override; fall back to the runner's
         // default when the caller supplies None.
         let tools = tool_service_override.unwrap_or_else(|| self.tool_service.clone());
+        // Wire the platform-specific power capability so the harness can
+        // inhibit idle sleep for the duration of each Think→Act turn.
+        let power: Option<std::sync::Arc<dyn aleph_desktop::traits::PowerCapability>> = {
+            #[cfg(target_os = "macos")]
+            { Some(std::sync::Arc::new(aleph_desktop_macos::MacosPower::new())) }
+            #[cfg(target_os = "linux")]
+            { Some(std::sync::Arc::new(aleph_desktop_linux::LinuxPower::new())) }
+            #[cfg(target_os = "windows")]
+            { Some(std::sync::Arc::new(aleph_desktop_windows::WindowsPower::new())) }
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+            { None }
+        };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -126,6 +138,7 @@ impl HarnessRunner for AgentHarnessRunner {
             trace_sink: trace_sink.clone(),
             system_prompt: None,
             max_iterations: None,
+            power,
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast

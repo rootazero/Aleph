@@ -189,6 +189,7 @@ pub async fn spawn(
         trace_sink: None,
         system_prompt: Some(system_prompt),
         max_iterations: max_iter,
+        power: None,
     };
     let harness = Arc::new(AgentHarness::new(deps));
 

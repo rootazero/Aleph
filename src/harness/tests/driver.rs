@@ -113,6 +113,7 @@ async fn session_driver_delegates_to_harness_run() {
         trace_sink: None,
         system_prompt: None,
         max_iterations: None,
+        power: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-delegation");
@@ -175,6 +176,7 @@ async fn session_driver_preserves_cancelled_semantics() {
         trace_sink: None,
         system_prompt: None,
         max_iterations: None,
+        power: None,
     });
 
     let sid: SessionId = SessionKey::ephemeral("driver-cancelled");
