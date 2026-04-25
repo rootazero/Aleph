@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Add, AddAssign, Mul, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,8 +195,6 @@ pub struct ClusterNode {
     pub z: f32,
     pub expanded: bool,
 }
-
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Neighborhood {
