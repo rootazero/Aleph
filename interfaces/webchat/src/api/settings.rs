@@ -3,6 +3,30 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // ============================================================================
+// User Preferences — client-side feature flags and UI preferences
+// ============================================================================
+
+/// Persisted user preferences that gate optional UI features.
+///
+/// All fields use `#[serde(default)]` so existing stored data that predates
+/// a field is deserialized without error (missing key → default value).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPrefs {
+    /// Enable the radial (neighborhood) navigation mode in the Canvas view.
+    /// When `false` (default), the existing global graph view is shown.
+    #[serde(default)]
+    pub canvas_radial_navigation: bool,
+}
+
+impl Default for UserPrefs {
+    fn default() -> Self {
+        Self {
+            canvas_radial_navigation: false,
+        }
+    }
+}
+
+// ============================================================================
 // General Config API
 // ============================================================================
 
