@@ -15,11 +15,14 @@ fn fnv1a_32(bytes: &[u8]) -> u32 {
 /// Map a relation name to a stable angle in [0, 2π).
 pub fn sector_center_angle(relation: &str) -> f32 {
     let h = fnv1a_32(relation.as_bytes());
-    (h as f32 / u32::MAX as f32) * std::f32::consts::TAU
+    ((h as f64 / u32::MAX as f64) * std::f64::consts::TAU) as f32
 }
 
-/// Distribute K relations evenly around [0, 2π) but preserve the relative order
-/// induced by `sector_center_angle` so spatial memory is consistent.
+/// Assign each relation an angle so the K relations are evenly spaced around the
+/// circle, in `[0, TAU)`. The relative order matches the FNV-1a hash order so
+/// spatial memory is consistent across renders. The assigned angles are
+/// `i * TAU / K` for `i in 0..K`; on the circle the gap between the last and
+/// first wraps naturally.
 pub fn assign_sectors(relations: &[String]) -> HashMap<String, f32> {
     let mut sorted: Vec<&String> = relations.iter().collect();
     sorted.sort_by(|a, b| {
