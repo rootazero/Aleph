@@ -273,10 +273,15 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     }
 }
 
-/// Compute hop distance from `center_id` to `target_id` given the edge list.
+/// Returns the hop distance from `center_id` to `target_id` for the radial
+/// navigation view. Output is clamped to `{0, 1, 2}`:
+///   - `0` if `target_id == center_id`
+///   - `1` if any edge directly connects them
+///   - `2` otherwise (any node further than 1 hop)
 ///
-/// Returns 0 if they are the same node, 1 if directly connected by an edge,
-/// or 2 otherwise (all other nodes in a depth-2 BFS result).
+/// This is intentional: the radial view only renders two rings, so anything
+/// beyond hop 1 is rendered on the outer ring regardless of true distance.
+/// Callers that need true graph distance should not use this helper.
 fn compute_hop_depth(center_id: &str, target_id: &str, edges: &[NoteLinkDto]) -> u8 {
     if center_id == target_id {
         return 0;
@@ -444,10 +449,15 @@ mod tests {
             );
         }
 
-        // concept/Cargo is directly linked from Rust → must be hop 1
-        if let Some(&h) = resp.hop_depth.get("concept/Cargo") {
-            assert_eq!(h, 1, "concept/Cargo must be hop 1");
-        }
+        // concept/Cargo is directly linked from Rust → must be present and hop 1.
+        // Use a hard expect() so the test fails (rather than silently passing)
+        // if the BFS regresses and stops returning the direct neighbor.
+        let h = resp
+            .hop_depth
+            .get("concept/Cargo")
+            .copied()
+            .expect("concept/Cargo must be in hop_depth");
+        assert_eq!(h, 1, "concept/Cargo must be hop 1");
     }
 
     #[tokio::test]
