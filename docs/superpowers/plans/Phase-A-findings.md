@@ -34,3 +34,18 @@ Commit before Phase A: `235ab7c95803af34dfe6273b1ef912a982fbb7f9`
   - Set `RUST_LOG=alephcore::harness=trace,alephcore::orchestrator=trace` in `preflight.sh` to capture all `loop.start`, `think`, `act`, `loop.end`, `tool_call.validated`, etc.
   - Scenario scripts grep server.log instead of `trace.jsonl`. Same evidence, zero production code change.
   - Update `preflight.sh` Step 6 — drop `ALEPH_TRACE_FILE`, add `RUST_LOG=...` and write logs to `$EVIDENCE_DIR/aleph-server.log` directly.
+
+---
+
+## TBD#2: vault storage
+
+- **Storage type**: file-based (AES-256-GCM)
+- **Evidence (file:line)**:
+  - `src/secrets/vault.rs:1-19` — module doc: "File-based encrypted storage for secrets using AES-256-GCM. Location: ~/.aleph/secrets.vault"
+  - `src/secrets/vault.rs:170-173` — `default_path()` uses `crate::utils::paths::get_config_dir().map(|d| d.join("secrets.vault"))`
+  - `src/utils/paths.rs:65-69` — `get_config_dir()` resolves to `home_dir().join(".aleph")` — fully `$HOME`-derived.
+  - `grep -rn "Security.framework\|Keychain\|SecItem\|kSecClass\|secret-service" src/vault/ src/secrets/ src/cred*/` — zero hits.
+  - `Cargo.toml:194` — `keyring = { version = "3", features = ["apple-native", ...] }` is a workspace dep but `grep -rln "keyring::" src/` shows it is **not** used by the vault path; `vault.rs` uses only `std::fs` + `bincode` + `aes-gcm`.
+
+- **HOME-redirect viable**: yes
+- **Fallback if no**: N/A (not needed — file-based vault is fully isolated by `HOME=$ALEPH_TEST_HOME`)
