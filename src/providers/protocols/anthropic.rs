@@ -17,21 +17,63 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// Sanitize a tool name to satisfy Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`.
+///
+/// Replaces any disallowed character with `_`, prefixes a letter when the
+/// resulting name doesn't start with one, and truncates to 128 chars. The
+/// transform is deterministic so identical inputs always sanitize to the same
+/// output, allowing a per-process `sanitized → original` map to round-trip.
+pub(crate) fn sanitize_anthropic_tool_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let needs_prefix = out
+        .chars()
+        .next()
+        .map(|c| !c.is_ascii_alphabetic())
+        .unwrap_or(true);
+    if needs_prefix {
+        out = format!("t_{}", out);
+    }
+    if out.len() > 128 {
+        out.truncate(128);
+    }
+    out
+}
+
+/// Shared map: sanitized tool name → original tool name.
+type ToolNameMap = Arc<RwLock<HashMap<String, String>>>;
+
 /// Anthropic protocol adapter
 pub struct AnthropicProtocol {
     client: Client,
+    /// Sanitized → original tool-name map. Populated when building requests
+    /// (so Anthropic accepts the names) and consulted while parsing the
+    /// streamed response (so the dispatcher receives the original names).
+    name_map: ToolNameMap,
 }
 
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            name_map: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// Build the endpoint URL
@@ -157,7 +199,7 @@ impl AnthropicProtocol {
                                 };
                                 blocks.push(ContentBlock::ToolUse {
                                     id: sanitized_id,
-                                    name: name.clone(),
+                                    name: sanitize_anthropic_tool_name(name),
                                     input,
                                 });
                             }
@@ -340,7 +382,10 @@ impl ProtocolAdapter for AnthropicProtocol {
                 })
         };
 
-        // Convert tool definitions to Anthropic format
+        // Convert tool definitions to Anthropic format. Tool names must satisfy
+        // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on
+        // outbound and remember the mapping so the streamed response can be
+        // mapped back to the dispatcher's original tool names.
         let tools = payload.tools.map(|tool_defs| {
             tool_defs
                 .iter()
@@ -354,8 +399,20 @@ impl ProtocolAdapter for AnthropicProtocol {
                     }
                     // Migrate schemars draft-07 schemas to draft 2020-12
                     crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
+                    let sanitized = sanitize_anthropic_tool_name(&td.name);
+                    if sanitized != td.name {
+                        if let Ok(mut map) = self.name_map.write() {
+                            if map.insert(sanitized.clone(), td.name.clone()).is_none() {
+                                warn!(
+                                    original = %td.name,
+                                    sanitized = %sanitized,
+                                    "Tool name sanitized for Anthropic compatibility"
+                                );
+                            }
+                        }
+                    }
                     AnthropicTool {
-                        name: td.name.clone(),
+                        name: sanitized,
                         description: td.description.clone(),
                         input_schema: schema,
                     }
@@ -484,6 +541,8 @@ impl ProtocolAdapter for AnthropicProtocol {
             pending: VecDeque<Result<ProviderDelta>>,
             /// Set to true after a terminal event to stop the stream
             done: bool,
+            /// Sanitized → original tool name map (shared with the protocol).
+            name_map: ToolNameMap,
         }
 
         let state = State {
@@ -492,6 +551,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             block_ids: IndexIdTracker::new(),
             pending: VecDeque::new(),
             done: false,
+            name_map: self.name_map.clone(),
         };
 
         let stream = futures::stream::unfold(state, |mut state| async move {
@@ -522,6 +582,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 data,
                                 &mut state.block_ids,
                                 &mut state.pending,
+                                Some(&state.name_map),
                             );
                             // If Done was queued, stop after draining pending
                             if state
@@ -550,6 +611,7 @@ impl ProtocolAdapter for AnthropicProtocol {
                                         data,
                                         &mut state.block_ids,
                                         &mut state.pending,
+                                        Some(&state.name_map),
                                     );
                                 }
                             }
@@ -598,6 +660,7 @@ pub(crate) fn parse_anthropic_sse_event(
     data: &str,
     block_ids: &mut IndexIdTracker,
     out: &mut VecDeque<Result<ProviderDelta>>,
+    name_map: Option<&ToolNameMap>,
 ) {
     let v: serde_json::Value = match serde_json::from_str(data) {
         Ok(v) => v,
@@ -625,12 +688,17 @@ pub(crate) fn parse_anthropic_sse_event(
             let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if block_type == "tool_use" {
                 let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let wire_name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                // Map sanitized → original so the dispatcher receives the
+                // tool name as it was registered (round-trip from build_request).
+                let name = name_map
+                    .and_then(|m| m.read().ok().and_then(|g| g.get(wire_name).cloned()))
+                    .unwrap_or_else(|| wire_name.to_string());
                 // Track index → id for subsequent input_json_delta events
                 block_ids.track(index, id.to_string());
                 out.push_back(Ok(ProviderDelta::ToolCallStart {
                     id: id.to_string(),
-                    name: name.to_string(),
+                    name,
                 }));
             }
             // text and thinking blocks: no delta emitted at start
@@ -757,6 +825,59 @@ mod tests {
         config.base_url = Some("https://custom.api.com/v1".to_string());
         let endpoint = AnthropicProtocol::build_endpoint(&config);
         assert_eq!(endpoint, "https://custom.api.com/v1/messages");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_passthrough() {
+        assert_eq!(sanitize_anthropic_tool_name("read_file"), "read_file");
+        assert_eq!(sanitize_anthropic_tool_name("get-data"), "get-data");
+        assert_eq!(sanitize_anthropic_tool_name("Tool123"), "Tool123");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_replaces_dots() {
+        assert_eq!(
+            sanitize_anthropic_tool_name("agents.bindings"),
+            "agents_bindings"
+        );
+        assert_eq!(
+            sanitize_anthropic_tool_name("channel.pairing.list"),
+            "channel_pairing_list"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_replaces_other_invalid_chars() {
+        assert_eq!(
+            sanitize_anthropic_tool_name("chrome-devtools-mcp@latest"),
+            "chrome-devtools-mcp_latest"
+        );
+        assert_eq!(sanitize_anthropic_tool_name("foo bar/baz"), "foo_bar_baz");
+        assert_eq!(sanitize_anthropic_tool_name("查询工具"), "t_____");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_prefixes_when_first_not_letter() {
+        assert_eq!(sanitize_anthropic_tool_name("123tool"), "t_123tool");
+        assert_eq!(sanitize_anthropic_tool_name("_tool"), "t__tool");
+        assert_eq!(sanitize_anthropic_tool_name(""), "t_");
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_truncates_to_128() {
+        let long = "a".repeat(200);
+        let out = sanitize_anthropic_tool_name(&long);
+        assert_eq!(out.len(), 128);
+        assert!(out.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn test_sanitize_tool_name_is_deterministic() {
+        // Same input must always produce same output (round-trip via name_map).
+        assert_eq!(
+            sanitize_anthropic_tool_name("foo.bar"),
+            sanitize_anthropic_tool_name("foo.bar")
+        );
     }
 
     #[test]
@@ -1118,7 +1239,7 @@ mod stream_tests {
     fn parse(data: &str) -> Vec<ProviderDelta> {
         let mut block_ids = IndexIdTracker::new();
         let mut pending = VecDeque::new();
-        parse_anthropic_sse_event(data, &mut block_ids, &mut pending);
+        parse_anthropic_sse_event(data, &mut block_ids, &mut pending, None);
         pending.into_iter().map(|r| r.unwrap()).collect()
     }
 
@@ -1128,7 +1249,7 @@ mod stream_tests {
         let mut all = Vec::new();
         for data in events {
             let mut pending = VecDeque::new();
-            parse_anthropic_sse_event(data, &mut block_ids, &mut pending);
+            parse_anthropic_sse_event(data, &mut block_ids, &mut pending, None);
             all.extend(pending.into_iter().map(|r| r.unwrap()));
         }
         all
