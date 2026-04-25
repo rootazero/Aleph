@@ -77,7 +77,7 @@ pub struct RoutingRuleConfig {
     #[serde(default)]
     pub strip_prefix: Option<bool>,
 
-    // ===== Capability fields =====
+    // ===== Routing hints =====
     /// Intent type identifier (for logging and UI display)
     /// Examples: "translation", "research", "code_generation", "skills:build-macos-apps"
     /// Default: "general"
@@ -207,7 +207,6 @@ impl RoutingRuleConfig {
     pub fn get_preferred_model(&self) -> Option<&str> {
         self.preferred_model.as_deref()
     }
-
 }
 
 // =============================================================================

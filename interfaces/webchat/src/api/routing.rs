@@ -30,13 +30,9 @@ pub struct RoutingRuleConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strip_prefix: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub intent_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
 }
