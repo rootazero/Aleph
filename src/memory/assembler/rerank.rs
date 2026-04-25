@@ -163,7 +163,7 @@ mod tests {
             full_content: "body".into(),
             source: ItemSource::Note {
                 path: id.into(),
-                category: "wiki".into(),
+                category: "reference".into(),
             },
             relevance: 0.5,
             updated_at: 0,

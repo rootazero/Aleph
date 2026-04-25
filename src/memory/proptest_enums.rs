@@ -28,7 +28,7 @@ fn arb_note_type() -> impl Strategy<Value = NoteType> {
         Just(NoteType::SubagentTranscript),
         Just(NoteType::Lesson),
         Just(NoteType::Skill),
-        Just(NoteType::Wiki),
+        Just(NoteType::Reference),
         Just(NoteType::Transcript),
     ]
 }

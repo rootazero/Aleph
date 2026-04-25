@@ -75,7 +75,7 @@ pub fn build_note_extraction_prompt(existing_titles: &[String]) -> String {
 
 Use "category/filename" format. The filename should be short: 1-3 words, kebab-case (e.g. "preference/editor", "learning/rust-async").
 
-CATEGORIES (use as path prefix): preference, plan, learning, project, personal, tool, lesson, skill, wiki, transcript, other
+CATEGORIES (use as path prefix): preference, plan, learning, project, personal, tool, lesson, skill, reference, transcript, other
 
 ## {titles_section}
 

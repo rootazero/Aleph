@@ -24,7 +24,7 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "tool",
     "lesson",
     "skill",
-    "wiki",
+    "reference",
     "transcript",
     "subagent-run",
     "subagent-session",
@@ -700,7 +700,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod wiki_hook_tests {
+mod reference_hook_tests {
     use super::*;
     use crate::memory::notes::note::KnowledgeNote;
     use crate::memory::notes::orientation::types::{

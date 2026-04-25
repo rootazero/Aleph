@@ -371,7 +371,7 @@ mod tests {
                 content: "x".repeat(10_000),
                 source: ItemSource::Note {
                     path: "a".into(),
-                    category: "wiki".into(),
+                    category: "reference".into(),
                 },
                 relevance: 1.0,
                 tokens: 0,

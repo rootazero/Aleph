@@ -92,7 +92,7 @@ impl DreamStage for NoteDecayStage {
             let score = compute_score(note.last_accessed_at, note.updated_at, now, incoming_count);
 
             // --- Determine archive threshold ---
-            let threshold = if note.category == "wiki" || note.category == "skill" {
+            let threshold = if note.category == "reference" || note.category == "skill" {
                 0.1_f64
             } else {
                 0.2_f64

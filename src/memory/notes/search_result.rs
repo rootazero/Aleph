@@ -75,9 +75,9 @@ mod tests {
     #[test]
     fn to_scored_fact_preserves_score() {
         let result = NoteSearchResult {
-            path: "wiki/rust".to_string(),
+            path: "reference/rust".to_string(),
             filename: "rust".to_string(),
-            category: "wiki".to_string(),
+            category: "reference".to_string(),
             tags: vec![],
             content: "Rust content".to_string(),
             score: 0.87,

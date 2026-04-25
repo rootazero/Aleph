@@ -65,14 +65,14 @@ mod tests {
         };
         let mut lookup = HashMap::new();
         lookup.insert(
-            "wiki/a".to_string(),
+            "reference/a".to_string(),
             NoteMeta {
                 title: "A".into(),
                 relevance: 0.5,
             },
         );
         lookup.insert(
-            "wiki/b".to_string(),
+            "reference/b".to_string(),
             NoteMeta {
                 title: "B".into(),
                 relevance: 0.8,

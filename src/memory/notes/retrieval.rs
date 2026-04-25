@@ -14,7 +14,7 @@ use crate::sync_primitives::Arc;
 /// A single note retrieved by vector similarity search.
 #[derive(Debug, Clone)]
 pub struct NoteContent {
-    /// Relative path within the agent directory, e.g. `"wiki/rust-ownership"`.
+    /// Relative path within the agent directory, e.g. `"reference/rust-ownership"`.
     pub path: String,
     /// Full markdown file content.
     pub content: String,
@@ -111,7 +111,7 @@ mod tests {
 
         // Insert an embedding but don't create the file
         let fake_embedding = vec![0.1_f32; 1024];
-        db.upsert_embedding("wiki/ghost-note", AGENT, &fake_embedding, 1024)
+        db.upsert_embedding("reference/ghost-note", AGENT, &fake_embedding, 1024)
             .await
             .unwrap();
 
@@ -131,7 +131,7 @@ mod tests {
         let db = create_test_db();
 
         // Create a note file on disk
-        let note_dir = memory_dir.join(AGENT).join("wiki");
+        let note_dir = memory_dir.join(AGENT).join("reference");
         fs::create_dir_all(&note_dir).await.unwrap();
         fs::write(
             note_dir.join("rust-ownership.md"),
@@ -142,7 +142,7 @@ mod tests {
 
         // Insert an embedding for this note
         let fake_embedding = vec![0.1_f32; 1024];
-        db.upsert_embedding("wiki/rust-ownership", AGENT, &fake_embedding, 1024)
+        db.upsert_embedding("reference/rust-ownership", AGENT, &fake_embedding, 1024)
             .await
             .unwrap();
 
@@ -153,7 +153,7 @@ mod tests {
         let results = retrieval.retrieve("ownership", AGENT, 5).await.unwrap();
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].path, "wiki/rust-ownership");
+        assert_eq!(results[0].path, "reference/rust-ownership");
         assert!(results[0].content.contains("Borrow checker"));
     }
 }

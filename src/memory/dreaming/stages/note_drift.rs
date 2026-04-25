@@ -54,7 +54,7 @@ impl DreamStage for NoteDriftStage {
 
         for recent_path in &recent_paths {
             // Fetch outgoing links for this note.
-            // NoteStore::get_outgoing_links expects the full `path` key (e.g. "wiki/rust").
+            // NoteStore::get_outgoing_links expects the full `path` key (e.g. "reference/rust").
             let links = match ctx
                 .indexer
                 .store()
@@ -280,7 +280,7 @@ async fn mark_stale(ctx: &DreamContext, path: &str) {
 }
 
 /// Construct the on-disk file path for a note given its `path` key
-/// (e.g. `"wiki/rust-ownership"`) inside `ctx`.
+/// (e.g. `"reference/rust-ownership"`) inside `ctx`.
 fn note_file_path(ctx: &DreamContext, path: &str) -> Option<std::path::PathBuf> {
     let (category, filename) = path.split_once('/')?;
     Some(
@@ -321,8 +321,8 @@ mod tests {
     fn should_run_false_no_recent_updates() {
         let old_ts = chrono::Utc::now().timestamp() - 8 * 86_400; // 8 days ago
         let notes = vec![
-            make_note("wiki/rust", "wiki", old_ts),
-            make_note("wiki/cargo", "wiki", old_ts),
+            make_note("reference/rust", "reference", old_ts),
+            make_note("reference/cargo", "reference", old_ts),
         ];
         let week_ago = chrono::Utc::now().timestamp() - 7 * 86_400;
         let should = notes.iter().any(|n| n.updated_at > week_ago);
@@ -334,8 +334,8 @@ mod tests {
         let recent_ts = chrono::Utc::now().timestamp() - 1 * 86_400; // 1 day ago
         let old_ts = chrono::Utc::now().timestamp() - 10 * 86_400;
         let notes = vec![
-            make_note("wiki/rust", "wiki", old_ts),
-            make_note("wiki/cargo", "wiki", recent_ts),
+            make_note("reference/rust", "reference", old_ts),
+            make_note("reference/cargo", "reference", recent_ts),
         ];
         let week_ago = chrono::Utc::now().timestamp() - 7 * 86_400;
         let should = notes.iter().any(|n| n.updated_at > week_ago);
@@ -351,7 +351,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.md");
 
-        let original = "---\ncategory: wiki\ntags: [rust]\n---\n\n- A fact\n";
+        let original = "---\ncategory: reference\ntags: [rust]\n---\n\n- A fact\n";
         tokio::fs::write(&file, original).await.unwrap();
 
         // Call the helper's logic directly via a thin wrapper that operates on
@@ -379,7 +379,7 @@ mod tests {
             "stale key must come first in frontmatter"
         );
         assert!(
-            result.contains("category: wiki"),
+            result.contains("category: reference"),
             "original fields preserved"
         );
         assert!(result.contains("- A fact"), "body preserved");
@@ -390,7 +390,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.md");
 
-        let original = "---\nstale: true\ncategory: wiki\n---\n\n- A fact\n";
+        let original = "---\nstale: true\ncategory: reference\n---\n\n- A fact\n";
         tokio::fs::write(&file, original).await.unwrap();
 
         // The guard condition `content.contains("stale:")` prevents double-insertion.
@@ -414,7 +414,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("note.md");
 
-        let original = "---\ncategory: wiki\n---\n\n- A fact\n";
+        let original = "---\ncategory: reference\n---\n\n- A fact\n";
         tokio::fs::write(&file, original).await.unwrap();
 
         let content = tokio::fs::read_to_string(&file).await.unwrap();
@@ -442,7 +442,7 @@ mod tests {
         let file = dir.path().join("note.md");
 
         let original =
-            "---\ncategory: wiki\n---\n\n- A fact\n\n## Superseded\n\n_Already marked._\n";
+            "---\ncategory: reference\n---\n\n- A fact\n\n## Superseded\n\n_Already marked._\n";
         tokio::fs::write(&file, original).await.unwrap();
 
         // Guard condition: if "## Superseded" already present, do nothing.
@@ -469,7 +469,7 @@ mod tests {
     fn resolve_link_path_finds_by_filename_segment() {
         // Simulate the relevant part of ctx.notes
         let notes = vec![
-            make_note("wiki/rust-ownership", "wiki", 0),
+            make_note("reference/rust-ownership", "reference", 0),
             make_note("preference/editor", "preference", 0),
         ];
         let target = "rust-ownership";
@@ -480,12 +480,12 @@ mod tests {
                 .map(|f| f == target)
                 .unwrap_or(false)
         });
-        assert_eq!(found.map(|n| n.path.as_str()), Some("wiki/rust-ownership"));
+        assert_eq!(found.map(|n| n.path.as_str()), Some("reference/rust-ownership"));
     }
 
     #[test]
     fn resolve_link_path_returns_none_for_unknown_target() {
-        let notes = vec![make_note("wiki/rust-ownership", "wiki", 0)];
+        let notes = vec![make_note("reference/rust-ownership", "reference", 0)];
         let target = "nonexistent-note";
         let found = notes.iter().find(|n| {
             n.path

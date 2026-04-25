@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn should_run_false_with_single_note() {
         let stage = NoteConsolidateStage;
-        let notes = vec![make_note("wiki/rust", "wiki")];
+        let notes = vec![make_note("reference/rust", "reference")];
         // Predicate: notes.len() >= 2
         assert!(
             !notes.len() >= 2,
@@ -583,8 +583,8 @@ mod tests {
     fn should_run_true_with_multiple_notes() {
         let stage = NoteConsolidateStage;
         let notes = vec![
-            make_note("wiki/rust", "wiki"),
-            make_note("wiki/rust-ownership", "wiki"),
+            make_note("reference/rust", "reference"),
+            make_note("reference/rust-ownership", "reference"),
         ];
         assert!(notes.len() >= 2, "two notes should trigger consolidation");
         let _ = stage;
@@ -614,9 +614,9 @@ mod tests {
     #[test]
     fn title_heuristic_finds_prefix_pair() {
         let notes = vec![
-            make_note("wiki/rust-ownership", "wiki"),
-            make_note("wiki/rust-ownership-rules", "wiki"),
-            make_note("wiki/python-async", "wiki"),
+            make_note("reference/rust-ownership", "reference"),
+            make_note("reference/rust-ownership-rules", "reference"),
+            make_note("reference/python-async", "reference"),
         ];
         let indices: Vec<usize> = (0..notes.len()).collect();
 

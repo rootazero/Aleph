@@ -182,12 +182,12 @@ mod tests {
         env.slots.push(EnvelopeSlot {
             kind: SlotKind::RelevantNotes,
             items: vec![item(
-                "note://wiki/rust-ownership",
+                "note://reference/rust-ownership",
                 "Rust ownership",
                 "body text",
                 ItemSource::Note {
-                    path: "wiki/rust-ownership".into(),
-                    category: "wiki".into(),
+                    path: "reference/rust-ownership".into(),
+                    category: "reference".into(),
                 },
             )],
             tokens_used: 2,
@@ -198,7 +198,7 @@ mod tests {
         assert!(out.trim_end().ends_with("</memory>"));
         assert!(out.contains("<relevant_notes>"));
         assert!(out.contains("</relevant_notes>"));
-        assert!(out.contains("[note://wiki/rust-ownership]"));
+        assert!(out.contains("[note://reference/rust-ownership]"));
         assert!(out.contains("body text"));
     }
 

@@ -64,7 +64,7 @@ pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisCont
 }
 
 /// Return the canonical lookup key for an item:
-/// - `ItemSource::Note`    → the note path  (e.g. `"wiki/rust"`)
+/// - `ItemSource::Note`    → the note path  (e.g. `"reference/rust"`)
 /// - everything else       → the item id    (e.g. `"note://raw/xyz"`)
 fn item_key(item: &EnvelopeItem) -> String {
     match &item.source {
@@ -88,7 +88,7 @@ mod tests {
             content: content.to_string(),
             source: ItemSource::Note {
                 path: path.to_string(),
-                category: "wiki".to_string(),
+                category: "reference".to_string(),
             },
             relevance,
             tokens: 20,
@@ -133,13 +133,13 @@ mod tests {
     fn items_become_tagged_blocks() {
         let items = vec![
             make_note_item(
-                "wiki/rust",
+                "reference/rust",
                 "Rust Lang",
                 "Rust is a systems language.",
                 0.91,
             ),
             make_note_item(
-                "wiki/ownership",
+                "reference/ownership",
                 "Ownership",
                 "Every value has one owner.",
                 0.73,
@@ -148,14 +148,14 @@ mod tests {
         let envelope = make_envelope("ownership?", items);
         let ctx = envelope_to_synthesis_context(&envelope);
 
-        assert!(ctx.user_prompt.contains("[path=wiki/rust score=0.910]"));
+        assert!(ctx.user_prompt.contains("[path=reference/rust score=0.910]"));
         assert!(ctx
             .user_prompt
-            .contains("[path=wiki/ownership score=0.730]"));
+            .contains("[path=reference/ownership score=0.730]"));
         assert_eq!(ctx.note_lookup.len(), 2);
-        assert_eq!(ctx.note_lookup.get("wiki/rust").unwrap().title, "Rust Lang");
+        assert_eq!(ctx.note_lookup.get("reference/rust").unwrap().title, "Rust Lang");
         assert!(
-            (ctx.note_lookup.get("wiki/ownership").unwrap().relevance - 0.73).abs() < 1e-6,
+            (ctx.note_lookup.get("reference/ownership").unwrap().relevance - 0.73).abs() < 1e-6,
             "relevance mismatch"
         );
     }

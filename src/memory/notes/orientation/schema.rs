@@ -168,8 +168,8 @@ updated: "2026-04-14"
 Aleph personal memory — general purpose.
 
 ## Categories (fixed by Aleph)
-preference | plan | learning | project | personal | tool | lesson | skill | wiki | other
-Special: synthesis (weekly dream output). skill/wiki have extra frontmatter — see NOTES.md §3.
+preference | plan | learning | project | personal | tool | lesson | skill | reference | other
+Special: synthesis (weekly dream output). skill/reference have extra frontmatter — see NOTES.md §3.
 
 ## Tag Taxonomy
 <!-- LLM maintained. New tag MUST appear here before use. -->

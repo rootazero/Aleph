@@ -830,20 +830,20 @@ mod tests {
     async fn get_notes_by_category_filters() {
         let backend = make_backend();
 
-        let wiki = make_note("rust", "wiki");
+        let reference = make_note("rust", "reference");
         let pref = make_note("editor", "preference");
-        backend.index_note(&wiki, "default", "wiki").await.unwrap();
+        backend.index_note(&reference, "default", "reference").await.unwrap();
         backend
             .index_note(&pref, "default", "preference")
             .await
             .unwrap();
 
-        let wikis = backend
-            .get_notes_by_category("default", "wiki", 10)
+let references = backend
+        .get_notes_by_category("default", "reference", 10)
             .await
             .unwrap();
-        assert_eq!(wikis.len(), 1);
-        assert_eq!(wikis[0].category, "wiki");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].category, "reference");
 
         let prefs = backend
             .get_notes_by_category("default", "preference", 10)

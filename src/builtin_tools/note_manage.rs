@@ -1,7 +1,7 @@
 //! note_manage — unified LLM tool for CRUD operations on all note categories.
 //!
 //! Replaces `wiki_manage` and extends coverage to all note categories:
-//! preference, plan, learning, project, personal, tool, lesson, skill, wiki,
+//! preference, plan, learning, project, personal, tool, lesson, skill, reference,
 //! transcript, other, and the subagent-* family.
 
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ const VALID_CATEGORIES: &[&str] = &[
     "tool",
     "lesson",
     "skill",
-    "wiki",
+    "reference",
     "transcript",
     "other",
     "subagent-run",
@@ -66,7 +66,7 @@ pub struct NoteManageArgs {
     pub action: NoteManageAction,
 
     /// Note category: preference, plan, learning, project, personal, tool,
-    /// lesson, skill, wiki, transcript, other, subagent-run, subagent-session,
+    /// lesson, skill, reference, transcript, other, subagent-run, subagent-session,
     /// subagent-checkpoint, subagent-transcript.
     /// Required for create/update/append/delete; optional filter for list.
     #[serde(default)]
@@ -570,7 +570,7 @@ impl AlephTool for NoteManageTool {
     const DESCRIPTION: &'static str =
         "Create, update, append, query, list, or delete personal knowledge notes. \
          Notes are markdown files organized by category (preference, plan, learning, \
-         project, personal, tool, lesson, skill, wiki, transcript, other). \
+         project, personal, tool, lesson, skill, reference, transcript, other). \
          Use this tool to store and retrieve long-term knowledge and preferences.";
 
     type Args = NoteManageArgs;
@@ -582,7 +582,7 @@ impl AlephTool for NoteManageTool {
             "note_manage(action='update', category='preference', filename='editor-prefs', content='- Prefers Neovim\\n- Uses LazyVim config')".to_string(),
             "note_manage(action='append', category='skill', filename='rust-skills', facts=['Learned async/await patterns'], links=['Tokio'])".to_string(),
             "note_manage(action='query', query='vim editor preferences', limit=5)".to_string(),
-            "note_manage(action='list', category='wiki')".to_string(),
+            "note_manage(action='list', category='reference')".to_string(),
             "note_manage(action='delete', category='plan', filename='old-plan')".to_string(),
         ])
     }
@@ -610,7 +610,7 @@ pub fn frontmatter_template(category: &str, title: &str, tags: &[String]) -> Str
     let now = chrono::Local::now().format("%Y-%m-%d").to_string();
     let tags_str = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
     match category {
-        "wiki" => format!(
+        "reference" => format!(
             "---\ntitle: {title}\naliases: []\ntags: {tags_str}\nsources: []\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
         ),
         "skill" => format!(
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn test_frontmatter_wiki_template() {
         let tags = vec!["rust".to_string(), "memory".to_string()];
-        let fm = frontmatter_template("wiki", "Rust Ownership", &tags);
+        let fm = frontmatter_template("reference", "Rust Ownership", &tags);
         assert!(fm.contains("title: Rust Ownership"));
         assert!(fm.contains("aliases: []"));
         assert!(fm.contains("sources: []"));
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_valid_category_check() {
-        assert!(validate_category("wiki").is_ok());
+        assert!(validate_category("reference").is_ok());
         assert!(validate_category("preference").is_ok());
         assert!(validate_category("subagent-run").is_ok());
         assert!(validate_category("unknown-cat").is_err());

@@ -21,8 +21,8 @@ updated: "YYYY-MM-DD"
 <1-3 sentences describing what this agent's memory is about. Use the user's hint if present.>
 
 ## Categories (fixed by Aleph)
-preference | plan | learning | project | personal | tool | lesson | skill | wiki | other
-Special: synthesis (weekly dream output). skill/wiki carry extra frontmatter.
+preference | plan | learning | project | personal | tool | lesson | skill | reference | other
+Special: synthesis (weekly dream output). skill/reference carry extra frontmatter.
 
 ## Tag Taxonomy
 <!-- LLM maintained. New tag MUST appear here before use. -->

@@ -28,7 +28,7 @@ pub enum MemoryBrowseAction {
 pub struct MemoryBrowseArgs {
     /// Action to perform: list (browse categories/files) or read (get note content).
     pub action: MemoryBrowseAction,
-    /// For list: optional category name ("wiki", "preference", etc.) to list files within.
+    /// For list: optional category name ("reference", "preference", etc.) to list files within.
     /// For read: full note path like "wiki/rust-ownership".
     #[serde(default)]
     pub path: Option<String>,
@@ -125,7 +125,7 @@ impl MemoryBrowseTool {
 
     pub(crate) async fn handle_read(&self, path: &str) -> Result<MemoryBrowseOutput> {
         let (category, filename) = path.split_once('/').ok_or_else(|| {
-            AlephError::tool("path must be 'category/filename' (e.g. 'wiki/rust-ownership')")
+            AlephError::tool("path must be 'category/filename' (e.g. 'reference/rust-ownership')")
         })?;
 
         let file = self
@@ -160,7 +160,7 @@ impl AlephTool for MemoryBrowseTool {
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
             "memory_browse(action='list')  // list all categories".to_string(),
-            "memory_browse(action='list', path='wiki')  // list notes in wiki category".to_string(),
+            "memory_browse(action='list', path='reference')  // list notes in reference category".to_string(),
             "memory_browse(action='read', path='wiki/rust-ownership')  // read one note"
                 .to_string(),
         ])
@@ -203,7 +203,7 @@ mod tests {
     async fn list_top_level_returns_categories_only() {
         let (tool, dir) = setup().await;
         let agent_dir = dir.path().join("default");
-        tokio::fs::create_dir_all(agent_dir.join("wiki"))
+        tokio::fs::create_dir_all(agent_dir.join("reference"))
             .await
             .unwrap();
         tokio::fs::create_dir_all(agent_dir.join("preference"))
@@ -218,7 +218,7 @@ mod tests {
 
         let result = tool.handle_list(None).await.unwrap();
         let entries = result.entries.unwrap();
-        assert_eq!(entries, vec!["preference".to_string(), "wiki".to_string()]);
+        assert_eq!(entries, vec!["preference".to_string(), "reference".to_string()]);
     }
 
     #[tokio::test]
@@ -236,7 +236,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = tool.handle_list(Some("wiki")).await.unwrap();
+        let result = tool.handle_list(Some("reference")).await.unwrap();
         let entries = result.entries.unwrap();
         assert_eq!(entries, vec!["go".to_string(), "rust".to_string()]);
     }

@@ -377,7 +377,7 @@ mod tests {
             "reason": "novel synthesis",
             "proposed_title": "test-query-result",
             "tags": ["rust", "async"],
-            "links": ["wiki/tokio"]
+            "links": ["reference/tokio"]
         }"#;
         let provider = Arc::new(RecordingMockProvider::new(llm_response.into()));
         let filer = DefaultQueryFiler {

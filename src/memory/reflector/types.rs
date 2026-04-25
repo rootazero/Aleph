@@ -15,7 +15,7 @@ pub struct Synthesis {
 /// A single cited note.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NoteRef {
-    /// `category/filename` path, e.g. `"wiki/rust-ownership"`.
+    /// `category/filename` path, e.g. `"reference/rust-ownership"`.
     pub path: String,
     /// Human-readable title, resolved from the note store (never from LLM).
     pub title: String,
@@ -58,7 +58,7 @@ mod tests {
         let s = Synthesis {
             text: "Rust uses ownership.".into(),
             sources: vec![NoteRef {
-                path: "wiki/rust-ownership".into(),
+                path: "reference/rust-ownership".into(),
                 title: "Rust Ownership".into(),
                 relevance: 0.91,
             }],

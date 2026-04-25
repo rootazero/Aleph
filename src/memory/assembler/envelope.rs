@@ -86,12 +86,12 @@ mod tests {
             slots: vec![EnvelopeSlot {
                 kind: SlotKind::RelevantNotes,
                 items: vec![EnvelopeItem {
-                    id: "note://wiki/rust-ownership".into(),
+                    id: "note://reference/rust-ownership".into(),
                     title: "Rust ownership".into(),
                     content: "body".into(),
                     source: ItemSource::Note {
-                        path: "wiki/rust-ownership".into(),
-                        category: "wiki".into(),
+                        path: "reference/rust-ownership".into(),
+                        category: "reference".into(),
                     },
                     relevance: 0.82,
                     tokens: 10,

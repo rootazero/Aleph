@@ -25,7 +25,7 @@ All note categories are enumerated by `CATEGORY_DIRS` in `src/memory/notes/index
     ├── tool/*.md
     ├── lesson/*.md
     ├── skill/*.md
-    ├── wiki/*.md
+    ├── reference/*.md
     ├── transcript/*.md
     ├── subagent-run/*.md
     ├── subagent-session/*.md
@@ -53,7 +53,7 @@ updated: "{YYYY-MM-DD}"
 
 The parser's `Frontmatter` struct declares every field `#[serde(default)]`, so missing values fall through to empty strings / empty vectors rather than erroring. Dates are parsed as `YYYY-MM-DD` (UTC midnight) by `parse_date_to_unix`; empty / missing dates yield `0`.
 
-### 3.2 Wiki-specific (`category = "wiki"`)
+### 3.2 Reference-specific (`category = "reference"`)
 
 ```yaml
 ---
@@ -66,7 +66,7 @@ updated: "{YYYY-MM-DD}"
 ---
 ```
 
-`title`, `aliases`, and `sources` are wiki-specific extensions emitted by `frontmatter_template("wiki", ...)`. The current `KnowledgeNote` parser does **not** bind `title`, `aliases`, or `sources` into struct fields — they are preserved on disk but not surfaced in the in-memory `KnowledgeNote` beyond the filename-derived `title` field and the common `tags` vector. Treat them as forward-compatible metadata.
+`title`, `aliases`, and `sources` are reference-specific extensions emitted by `frontmatter_template("reference", ...)`. The current `KnowledgeNote` parser does **not** bind `title`, `aliases`, or `sources` into struct fields — they are preserved on disk but not surfaced in the in-memory `KnowledgeNote` beyond the filename-derived `title` field and the common `tags` vector. Treat them as forward-compatible metadata.
 
 ### 3.3 Skill-specific (`category = "skill"`)
 
@@ -80,7 +80,7 @@ updated: "{YYYY-MM-DD}"
 ---
 ```
 
-The literal string `scope: persona` is emitted verbatim by `frontmatter_template("skill", ...)`. This marks skill notes as agent-persona-scoped content so downstream consumers can distinguish them from regular knowledge entries. As with wiki, the `scope` field is preserved in the file but not parsed into the `KnowledgeNote` struct.
+The literal string `scope: persona` is emitted verbatim by `frontmatter_template("skill", ...)`. This marks skill notes as agent-persona-scoped content so downstream consumers can distinguish them from regular knowledge entries. As with reference, the `scope` field is preserved in the file but not parsed into the `KnowledgeNote` struct.
 
 ## 4. `KnowledgeNote` Data Model
 
@@ -221,7 +221,7 @@ Write entry points on `NoteIndexer`:
 
 ```rust
 pub struct NoteIndexEntry {
-    pub path: String,        // "wiki/rust-ownership"
+    pub path: String,        // "reference/rust-ownership"
     pub filename: String,    // "rust-ownership"
     pub agent_id: String,
     pub category: String,
@@ -329,11 +329,11 @@ CREATE INDEX IF NOT EXISTS idx_recall_day_bucket
 
 `init_schema` also calls `drop_obsolete_facts_tables`, which runs `DROP TABLE IF EXISTS facts / facts_fts / facts_vec_768 / facts_vec_1024 / facts_vec_1536 / graph_nodes / graph_edges / memory_entities` as a one-time cleanup on existing databases.
 
-## 9. Wiki Post-Write Hooks
+## 9. Reference Post-Write Hooks
 
 `src/wiki/git.rs` defines `WikiGitManager` — `ensure_repo` runs `git init`, `ensure_agent_dir` creates per-agent directories, and `commit_changes` auto-commits on page changes. `src/wiki/index.rs` defines `generate_index_content` (builds a markdown table of every wiki page) and `write_index` (writes `index.md` into the agent's wiki directory).
 
-**However**, nothing in the current write path invokes either module. A codebase-wide grep for `WikiGitManager`, `wiki_git`, `generate_index_content`, and `write_index` returns only `src/wiki/git.rs` and `src/wiki/index.rs` themselves — there are no call sites in `src/builtin_tools/note_manage.rs`, `src/memory/notes/indexer.rs`, or `src/memory/compression/service.rs`. When a `wiki`-category note is created or updated through `note_manage` or the compression pipeline, the markdown file is written and indexed normally, but **no git commit is produced and no `index.md` is regenerated**. The wiki-specific machinery exists as a dormant module; wiring it to the note write path is future work.
+**However**, nothing in the current write path invokes either module. A codebase-wide grep for `WikiGitManager`, `wiki_git`, `generate_index_content`, and `write_index` returns only `src/wiki/git.rs` and `src/wiki/index.rs` themselves — there are no call sites in `src/builtin_tools/note_manage.rs`, `src/memory/notes/indexer.rs`, or `src/memory/compression/service.rs`. When a `reference`-category note is created or updated through `note_manage` or the compression pipeline, the markdown file is written and indexed normally, but **no git commit is produced and no `index.md` is regenerated**. The wiki-specific machinery exists as a dormant module; wiring it to the note write path is future work.
 
 ## 10. Skills as Notes
 
@@ -377,7 +377,7 @@ pub struct NoteManageArgs {
 
 Every action runs `validate_category(category)` against the tool's own copy of the category list (which matches `CATEGORY_DIRS` plus the four `subagent-*` categories, see lines 22–38 of `note_manage.rs`). Unknown categories are rejected with a listing of valid values. Create and update both run input through `sanitize_title` before the filename is ever joined into a path.
 
-Category-specific frontmatter comes from `frontmatter_template(category, title, tags)` at the bottom of `note_manage.rs`. The three branches (`wiki`, `skill`, default) produce the YAML shown in §3.
+Category-specific frontmatter comes from `frontmatter_template(category, title, tags)` at the bottom of `note_manage.rs`. The three branches (`reference`, `skill`, default) produce the YAML shown in §3.
 
 **Deprecation status (verified by grep):**
 

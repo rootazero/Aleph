@@ -121,7 +121,7 @@ mod resolve_tests {
     #[tokio::test]
     async fn resolves_exact_path() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki")
+        db.index_note(&make_note("rust"), "default", "reference")
             .await
             .unwrap();
 
@@ -132,7 +132,7 @@ mod resolve_tests {
     #[tokio::test]
     async fn resolves_unique_filename() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki")
+        db.index_note(&make_note("rust"), "default", "reference")
             .await
             .unwrap();
 
@@ -143,7 +143,7 @@ mod resolve_tests {
     #[tokio::test]
     async fn returns_none_for_ambiguous() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki")
+        db.index_note(&make_note("rust"), "default", "reference")
             .await
             .unwrap();
         db.index_note(&make_note("rust"), "default", "learning")
@@ -164,7 +164,7 @@ mod resolve_tests {
     #[tokio::test]
     async fn returns_none_for_wrong_path() {
         let db = create_test_db();
-        db.index_note(&make_note("rust"), "default", "wiki")
+        db.index_note(&make_note("rust"), "default", "reference")
             .await
             .unwrap();
 

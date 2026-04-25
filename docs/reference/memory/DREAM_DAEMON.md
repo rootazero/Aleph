@@ -184,7 +184,7 @@ link_weight    = min(incoming_count / 3.0, 1.0)
 
 `incoming_count` comes from `NoteStore::get_incoming_links(filename, agent_id)` — the links table stores raw filenames as targets, so the stage passes the filename extracted from `category/filename`.
 
-**Threshold + destination.** `wiki` / `skill` archive when `score < 0.1`; every other category when `score < 0.2`. Destination: `memory_dir/{agent_id}/archive/{category}/{filename}.md`. `tokio::fs::create_dir_all` creates the dir; `tokio::fs::rename` moves the file atomically; on success the index row is removed via `NoteStore::remove_note_index`, cache evicted, `notes_archived` increments.
+**Threshold + destination.** `reference` / `skill` archive when `score < 0.1`; every other category when `score < 0.2`. Destination: `memory_dir/{agent_id}/archive/{category}/{filename}.md`. `tokio::fs::create_dir_all` creates the dir; `tokio::fs::rename` moves the file atomically; on success the index row is removed via `NoteStore::remove_note_index`, cache evicted, `notes_archived` increments.
 
 **Recall-signal dependency.** `last_accessed_at` + `incoming_count` distinguish "dormant but valuable" from "abandoned"; the `recall_signals` table (§8) persists every retrieval and keeps `last_accessed_at` fresh. Forward-link: [Notes (L1)](NOTES.md) §8.
 

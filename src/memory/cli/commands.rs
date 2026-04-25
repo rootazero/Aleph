@@ -11,7 +11,7 @@ use crate::memory::store::MemoryBackend;
 /// Filter options for listing notes
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
-    /// Filter by category (e.g. "preference", "wiki")
+    /// Filter by category (e.g. "preference", "reference")
     pub category: Option<String>,
     /// Keyword filter on path / filename
     pub query: Option<String>,
@@ -491,17 +491,17 @@ mod tests {
     #[test]
     fn test_note_summary_csv_row() {
         let summary = NoteSummary {
-            path: "wiki/rust".to_string(),
+            path: "reference/rust".to_string(),
             filename: "rust".to_string(),
-            category: "wiki".to_string(),
+            category: "reference".to_string(),
             tags: vec!["systems".to_string(), "language".to_string()],
             link_count: 5,
             updated_at: 1234567890,
         };
 
         let csv = summary.to_csv_row();
-        assert!(csv.contains("wiki/rust"));
-        assert!(csv.contains("wiki"));
+        assert!(csv.contains("reference/rust"));
+        assert!(csv.contains("reference"));
         assert!(csv.contains("5"));
     }
 

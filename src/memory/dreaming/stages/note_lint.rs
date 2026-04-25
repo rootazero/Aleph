@@ -304,7 +304,7 @@ mod tests {
     fn ensure_frontmatter_no_change_when_complete() {
         let content = "\
 ---
-category: wiki
+category: reference
 tags: [rust]
 created: 2026-04-01
 updated: 2026-04-10
@@ -313,7 +313,7 @@ updated: 2026-04-10
 - A fact
 ";
         assert!(
-            ensure_frontmatter(content, "wiki").is_none(),
+            ensure_frontmatter(content, "reference").is_none(),
             "Complete frontmatter should not be modified"
         );
     }
@@ -353,9 +353,9 @@ category: preference
     #[test]
     fn ensure_frontmatter_malformed_no_closing_unchanged() {
         // Frontmatter opened but never closed — don't touch it
-        let content = "---\ncategory: wiki\n\n- A fact\n";
+        let content = "---\ncategory: reference\n\n- A fact\n";
         assert!(
-            ensure_frontmatter(content, "wiki").is_none(),
+            ensure_frontmatter(content, "reference").is_none(),
             "Malformed frontmatter (no closing ---) should not be modified"
         );
     }

@@ -216,10 +216,10 @@ mod llm_path_tests {
 
     #[tokio::test]
     async fn synthesise_parses_llm_json_and_overlays_titles() {
-        let canned = r#"{"text":"Rust enforces ownership.","sources":[{"path":"wiki/rust","relevance":0.91}]}"#;
+        let canned = r#"{"text":"Rust enforces ownership.","sources":[{"path":"reference/rust","relevance":0.91}]}"#;
         let provider: Arc<dyn crate::providers::AiProvider> =
             Arc::new(RecordingMockProvider::new(canned.to_string()));
-        let ctx = ctx_with_lookup(&[("wiki/rust", "Rust Lang", 0.91)]);
+        let ctx = ctx_with_lookup(&[("reference/rust", "Rust Lang", 0.91)]);
 
         let synthesis = MemoryReflector::synthesise_from_context(&ctx, &provider)
             .await
@@ -227,7 +227,7 @@ mod llm_path_tests {
 
         assert_eq!(synthesis.text, "Rust enforces ownership.");
         assert_eq!(synthesis.sources.len(), 1);
-        assert_eq!(synthesis.sources[0].path, "wiki/rust");
+        assert_eq!(synthesis.sources[0].path, "reference/rust");
         assert_eq!(
             synthesis.sources[0].title, "Rust Lang",
             "title must be overlaid from lookup, not from LLM"
@@ -237,17 +237,17 @@ mod llm_path_tests {
 
     #[tokio::test]
     async fn unknown_path_from_llm_is_dropped() {
-        let canned = r#"{"text":"x","sources":[{"path":"wiki/rust","relevance":0.5},{"path":"wiki/fake","relevance":0.99}]}"#;
+        let canned = r#"{"text":"x","sources":[{"path":"reference/rust","relevance":0.5},{"path":"reference/fake","relevance":0.99}]}"#;
         let provider: Arc<dyn crate::providers::AiProvider> =
             Arc::new(RecordingMockProvider::new(canned.to_string()));
-        let ctx = ctx_with_lookup(&[("wiki/rust", "Rust", 0.5)]);
+        let ctx = ctx_with_lookup(&[("reference/rust", "Rust", 0.5)]);
 
         let synthesis = MemoryReflector::synthesise_from_context(&ctx, &provider)
             .await
             .unwrap();
 
         assert_eq!(synthesis.sources.len(), 1, "fake path must be dropped");
-        assert_eq!(synthesis.sources[0].path, "wiki/rust");
+        assert_eq!(synthesis.sources[0].path, "reference/rust");
     }
 
     #[tokio::test]

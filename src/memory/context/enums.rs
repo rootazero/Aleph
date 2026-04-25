@@ -2,7 +2,7 @@
 //!
 //! In Aleph's memory system, a "Fact" ([`MemoryFact`](super::MemoryFact)) is the
 //! universal unit of persisted knowledge — not limited to factual statements, but
-//! encompassing preferences, wiki pages, skills, transcripts, synthesized insights,
+//! encompassing preferences, reference documents, skills, transcripts, synthesized insights,
 //! and agent experiences. Knowledge Notes are the primary structural layer, with
 //! wikilink-based linking replacing the deprecated graph_nodes/graph_edges system.
 
@@ -33,8 +33,8 @@ pub enum NoteType {
     Lesson,
     /// Reusable procedural knowledge extracted by LLM self-growth.
     Skill,
-    /// Structured Markdown wiki page (first-class knowledge document).
-    Wiki,
+    /// Structured reference document (first-class knowledge document).
+    Reference,
     /// Conversation transcript chunk (embedded for direct retrieval)
     Transcript,
     /// Other facts that don't fit above categories
@@ -63,7 +63,7 @@ impl NoteType {
             NoteType::Tool => "tool",
             NoteType::Lesson => "lesson",
             NoteType::Skill => "skill",
-            NoteType::Wiki => "wiki",
+            NoteType::Reference => "reference",
             NoteType::Transcript => "transcript",
             NoteType::Other => "other",
             NoteType::SubagentRun => "subagent_run",
@@ -87,7 +87,7 @@ impl NoteType {
             NoteType::Tool => "tool",
             NoteType::Lesson => "lesson",
             NoteType::Skill => "skill",
-            NoteType::Wiki => "wiki",
+            NoteType::Reference => "reference",
             NoteType::Transcript => "transcript",
             NoteType::Other => "other",
             NoteType::SubagentRun => "subagent-run",
@@ -113,7 +113,7 @@ impl NoteType {
             NoteType::Tool => "aleph://agent/tools/",
             NoteType::Lesson => "aleph://knowledge/lessons/",
             NoteType::Skill => "aleph://skills/",
-            NoteType::Wiki => "aleph://wiki/",
+            NoteType::Reference => "aleph://reference/",
             NoteType::Transcript => "aleph://transcript/",
             NoteType::Other => "aleph://knowledge/",
             NoteType::SubagentRun
@@ -129,7 +129,7 @@ impl NoteType {
             NoteType::Preference => MemoryCategory::Preferences,
             NoteType::Plan | NoteType::Personal => MemoryCategory::Profile,
             NoteType::Learning | NoteType::Project | NoteType::Other => MemoryCategory::Entities,
-            NoteType::Tool | NoteType::Skill | NoteType::Wiki => MemoryCategory::Patterns,
+            NoteType::Tool | NoteType::Skill | NoteType::Reference => MemoryCategory::Patterns,
             NoteType::Lesson => MemoryCategory::Cases,
             NoteType::SubagentRun | NoteType::SubagentSession | NoteType::SubagentCheckpoint => {
                 MemoryCategory::Cases
@@ -152,7 +152,7 @@ impl std::str::FromStr for NoteType {
             "tool" => Ok(NoteType::Tool),
             "lesson" => Ok(NoteType::Lesson),
             "skill" => Ok(NoteType::Skill),
-            "wiki" => Ok(NoteType::Wiki),
+            "reference" => Ok(NoteType::Reference),
             "subagent_run" => Ok(NoteType::SubagentRun),
             "subagent_session" => Ok(NoteType::SubagentSession),
             "subagent_checkpoint" => Ok(NoteType::SubagentCheckpoint),
@@ -457,21 +457,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wiki_note_type_roundtrips() {
-        let ft = NoteType::Wiki;
-        assert_eq!(ft.as_str(), "wiki");
-        assert_eq!(ft.to_string(), "wiki");
-        let parsed: NoteType = "wiki".parse().unwrap();
-        assert_eq!(parsed, NoteType::Wiki);
+    fn reference_note_type_roundtrips() {
+        let ft = NoteType::Reference;
+        assert_eq!(ft.as_str(), "reference");
+        assert_eq!(ft.to_string(), "reference");
+        let parsed: NoteType = "reference".parse().unwrap();
+        assert_eq!(parsed, NoteType::Reference);
     }
 
     #[test]
-    fn wiki_default_path() {
-        assert_eq!(NoteType::Wiki.default_path(), "aleph://wiki/");
+    fn reference_default_path() {
+        assert_eq!(NoteType::Reference.default_path(), "aleph://reference/");
     }
 
     #[test]
-    fn wiki_default_category() {
-        assert_eq!(NoteType::Wiki.default_category(), MemoryCategory::Patterns);
+    fn reference_default_category() {
+        assert_eq!(NoteType::Reference.default_category(), MemoryCategory::Patterns);
     }
 }

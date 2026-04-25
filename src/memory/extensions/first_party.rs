@@ -67,8 +67,8 @@ mod tests {
                 tokens: 1,
                 updated_at: 0,
                 source: ItemSource::Note {
-                    path: format!("wiki/{i}"),
-                    category: "wiki".into(),
+                    path: format!("reference/{i}"),
+                    category: "reference".into(),
                 },
                 extra: serde_json::Map::new(),
             })

@@ -11,10 +11,10 @@ use crate::memory::notes::KnowledgeNote;
 /// Lightweight index entry for a knowledge note (no full content).
 #[derive(Debug, Clone)]
 pub struct NoteIndexEntry {
-    pub path: String,     // "wiki/rust-ownership" (relative within agent)
+    pub path: String,     // "reference/rust-ownership" (relative within agent)
     pub filename: String, // "rust-ownership" (for global wikilink resolution)
     pub agent_id: String, // "default"
-    pub category: String, // "wiki"
+    pub category: String, // "reference"
     pub tags: Vec<String>,
     pub link_count: usize,
     pub created_at: i64,
@@ -25,7 +25,7 @@ pub struct NoteIndexEntry {
 /// Persistence contract for the notes index, link graph, and full-text search.
 ///
 /// All methods are scoped by `agent_id` to support the `memory/{agent_id}/{category}/`
-/// hierarchy.  Notes are identified by `path` (e.g. `"wiki/rust-ownership"`).
+/// hierarchy.  Notes are identified by `path` (e.g. `"reference/rust-ownership"`).
 #[async_trait]
 pub trait NoteStore: Send + Sync {
     /// Insert or update the index entry, links, and FTS content for a note.
@@ -209,16 +209,16 @@ mod tests {
     async fn stores_and_queries_links() {
         let db = create_test_db();
 
-        let note_a = sample_note("Rust", "wiki", vec!["Cargo", "Clippy"]);
-        let note_b = sample_note("Cargo", "wiki", vec!["Rust"]);
-        let note_c = sample_note("Clippy", "wiki", vec![]);
+        let note_a = sample_note("Rust", "reference", vec!["Cargo", "Clippy"]);
+        let note_b = sample_note("Cargo", "reference", vec!["Rust"]);
+        let note_c = sample_note("Clippy", "reference", vec![]);
 
-        db.index_note(&note_a, AGENT, "wiki").await.unwrap();
-        db.index_note(&note_b, AGENT, "wiki").await.unwrap();
-        db.index_note(&note_c, AGENT, "wiki").await.unwrap();
+        db.index_note(&note_a, AGENT, "reference").await.unwrap();
+        db.index_note(&note_b, AGENT, "reference").await.unwrap();
+        db.index_note(&note_c, AGENT, "reference").await.unwrap();
 
-        // Outgoing from Rust (from_note = "wiki/Rust", to_note = raw link targets)
-        let out = db.get_outgoing_links("wiki/Rust", AGENT).await.unwrap();
+        // Outgoing from Rust (from_note = "reference/Rust", to_note = raw link targets)
+        let out = db.get_outgoing_links("reference/Rust", AGENT).await.unwrap();
         assert_eq!(out.len(), 2);
         assert!(out.contains(&"Cargo".to_string()));
         assert!(out.contains(&"Clippy".to_string()));
@@ -227,29 +227,29 @@ mod tests {
         // so we query by the raw target name, not the full path.
         let inc = db.get_incoming_links("Rust", AGENT).await.unwrap();
         assert_eq!(inc.len(), 1);
-        assert!(inc[0].starts_with("wiki/Cargo"));
+        assert!(inc[0].starts_with("reference/Cargo"));
     }
 
     #[tokio::test]
     async fn find_by_filename_returns_paths() {
         let db = create_test_db();
 
-        let note = sample_note("rust-ownership", "wiki", vec![]);
-        db.index_note(&note, AGENT, "wiki").await.unwrap();
+        let note = sample_note("rust-ownership", "reference", vec![]);
+        db.index_note(&note, AGENT, "reference").await.unwrap();
 
         let paths = db.find_by_filename("rust-ownership", AGENT).await.unwrap();
-        assert_eq!(paths, vec!["wiki/rust-ownership"]);
+        assert_eq!(paths, vec!["reference/rust-ownership"]);
     }
 
     #[tokio::test]
     async fn list_notes_scoped_by_agent() {
         let db = create_test_db();
 
-        let note_a = sample_note("NoteA", "wiki", vec![]);
-        let note_b = sample_note("NoteB", "wiki", vec![]);
+        let note_a = sample_note("NoteA", "reference", vec![]);
+        let note_b = sample_note("NoteB", "reference", vec![]);
 
-        db.index_note(&note_a, "agent1", "wiki").await.unwrap();
-        db.index_note(&note_b, "agent2", "wiki").await.unwrap();
+        db.index_note(&note_a, "agent1", "reference").await.unwrap();
+        db.index_note(&note_b, "agent2", "reference").await.unwrap();
 
         let agent1_notes = db.list_notes("agent1").await.unwrap();
         assert_eq!(agent1_notes.len(), 1);

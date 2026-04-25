@@ -71,7 +71,7 @@ The memory system is exposed to the LLM through five built-in tools. Each links 
 
 | Tool | Purpose | Doc |
 |---|---|---|
-| `note_manage` | CRUD on notes (unified skill/wiki/other) | [NOTES.md §11](memory/NOTES.md) |
+| `note_manage` | CRUD on notes (unified skill/reference/other) | [NOTES.md §11](memory/NOTES.md) |
 | `memory_search` | Hybrid retrieval | [RETRIEVAL.md §11.1](memory/RETRIEVAL.md) |
 | `memory_browse` | Filesystem browser over notes | [RETRIEVAL.md §11.2](memory/RETRIEVAL.md) |
 | `memory_explore` | Multi-hop (Ripple) exploration | [RETRIEVAL.md §11.3](memory/RETRIEVAL.md) |
