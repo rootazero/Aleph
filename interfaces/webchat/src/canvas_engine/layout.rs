@@ -55,10 +55,12 @@ pub fn compute_target_positions(
     let mut out = HashMap::new();
     out.insert(active.id.clone(), Vec3::new(0.0, 0.0, Z_ACTIVE));
 
-    // Group 1-hop neighbors + clusters by their connecting relation
+    // Group 1-hop neighbors + clusters by their connecting relation.
+    // Canonical index ordering (T11 adapter): active=0, one_hop[i]=i+1.
     let mut by_relation: HashMap<String, Vec<(String, f32)>> = HashMap::new();
-    for n in one_hop {
-        let rel = relation_to_active(&active.id, &n.id, edges)
+    for (i, n) in one_hop.iter().enumerate() {
+        let neighbor_idx = i + 1;
+        let rel = relation_to_active(neighbor_idx, edges)
             .unwrap_or_else(|| "_default".to_string());
         let w = n.decay_score * n.edge_count.max(1) as f32;
         by_relation.entry(rel).or_default().push((n.id.clone(), w));
@@ -82,10 +84,12 @@ pub fn compute_target_positions(
     let relations: Vec<String> = by_relation.keys().cloned().collect();
     let sector_centers = assign_sectors(&relations);
 
-    // Within each sector sort by weight descending
+    // Within each sector sort by weight descending; tiebreak by id for stability.
     for members in by_relation.values_mut() {
         members.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
         });
     }
 
@@ -108,9 +112,11 @@ pub fn compute_target_positions(
         }
     }
 
-    // 2-hop nodes: orbit around their introducing 1-hop parent angle
-    for n in two_hop {
-        let parent_id = find_one_hop_parent(&n.id, one_hop, edges);
+    // 2-hop nodes: orbit around their introducing 1-hop parent angle.
+    // Canonical index ordering: two_hop[j] = 1 + one_hop.len() + j.
+    for (j, n) in two_hop.iter().enumerate() {
+        let two_hop_idx = 1 + one_hop.len() + j;
+        let parent_id = find_one_hop_parent(two_hop_idx, one_hop, edges);
         let parent_pos = parent_id.as_ref().and_then(|p| out.get(p)).copied();
         let (px, py) = match parent_pos {
             Some(p) => (p.x, p.y),
@@ -128,35 +134,41 @@ pub fn compute_target_positions(
     out
 }
 
-/// Return the relation label on the best (is_active_link) edge. Falls back to
-/// the first edge's relation when none is marked active.
-fn relation_to_active(
-    _active_id: &str,
-    _neighbor_id: &str,
-    edges: &[CanvasEdge],
-) -> Option<String> {
+/// Returns the relation label of the edge connecting the active node (index 0)
+/// to the neighbor at `neighbor_idx` (1..=one_hop.len()). Returns None if no
+/// such edge exists.
+fn relation_to_active(neighbor_idx: usize, edges: &[CanvasEdge]) -> Option<String> {
     edges
         .iter()
-        .find(|e| e.is_active_link)
-        .or_else(|| edges.first())
+        .find(|e| {
+            (e.from_idx == 0 && e.to_idx == neighbor_idx)
+                || (e.to_idx == 0 && e.from_idx == neighbor_idx)
+        })
         .map(|e| e.relation.clone())
 }
 
-/// Pick the highest-weight 1-hop node as the parent of a 2-hop node.
-/// The adapter is responsible for correct ordering; this is a fallback.
+/// Find the 1-hop node that introduces the given 2-hop node by walking edges.
+/// Returns the 1-hop node's id if any edge connects them, else None.
 fn find_one_hop_parent(
-    _two_hop_id: &str,
+    two_hop_idx: usize,
     one_hop: &[CanvasNode],
-    _edges: &[CanvasEdge],
+    edges: &[CanvasEdge],
 ) -> Option<String> {
-    one_hop
-        .iter()
-        .max_by(|a, b| {
-            (a.decay_score * a.edge_count as f32)
-                .partial_cmp(&(b.decay_score * b.edge_count as f32))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|n| n.id.clone())
+    edges.iter().find_map(|e| {
+        let other_idx = if e.from_idx == two_hop_idx {
+            Some(e.to_idx)
+        } else if e.to_idx == two_hop_idx {
+            Some(e.from_idx)
+        } else {
+            None
+        }?;
+        // Map other_idx back to a 1-hop position: 1..=one_hop.len()
+        if other_idx >= 1 && other_idx <= one_hop.len() {
+            Some(one_hop[other_idx - 1].id.clone())
+        } else {
+            None
+        }
+    })
 }
 
 pub struct LayoutConfig {
@@ -382,5 +394,26 @@ mod radial_tests {
             let gap = w[1] - w[0];
             assert!((gap - std::f32::consts::TAU / 4.0).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn compute_targets_groups_by_relation() {
+        // Active connected to b via "uses" and c via "part_of".
+        // Sectors should put b and c in DIFFERENT angular wedges.
+        let active = n("a", "concept", 0);
+        let one_hop = vec![n("b", "concept", 1), n("c", "concept", 1)];
+        let edges = vec![e(0, 1, "uses"), e(0, 2, "part_of")];
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let pos_b = targets.get("b").unwrap();
+        let pos_c = targets.get("c").unwrap();
+        let angle_b = pos_b.y.atan2(pos_b.x);
+        let angle_c = pos_c.y.atan2(pos_c.x);
+        // With 2 distinct relations, sectors are TAU/2 = π apart.
+        let diff = (angle_b - angle_c).abs();
+        let diff = diff.min(std::f32::consts::TAU - diff); // wrap-around
+        assert!(
+            (diff - std::f32::consts::PI).abs() < 0.5,
+            "b and c should be in opposite sectors, got angular diff {diff}"
+        );
     }
 }
