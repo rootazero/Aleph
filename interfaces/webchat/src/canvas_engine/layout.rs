@@ -480,10 +480,9 @@ impl RadialForceLayout {
         for id in &ids {
             let pos = self.positions[id];
             let tgt = self.targets[id];
-            let fx = cfg.target_attract * (tgt.x - pos.x);
-            let fy = cfg.target_attract * (tgt.y - pos.y);
-            forces.get_mut(id).unwrap().0 += fx;
-            forces.get_mut(id).unwrap().1 += fy;
+            let f = forces.get_mut(id).unwrap();
+            f.0 += cfg.target_attract * (tgt.x - pos.x);
+            f.1 += cfg.target_attract * (tgt.y - pos.y);
         }
 
         // Pairwise repulsion (O(n²); fine for ≤50 nodes)
@@ -494,21 +493,29 @@ impl RadialForceLayout {
                 let dx = pi.x - pj.x;
                 let dy = pi.y - pj.y;
                 let d2 = (dx * dx + dy * dy).max(1.0);
-                let f = cfg.repulsion / d2;
+                let f_mag = cfg.repulsion / d2;
                 let inv_d = 1.0 / d2.sqrt();
-                let fx = f * dx * inv_d;
-                let fy = f * dy * inv_d;
-                forces.get_mut(&ids[i]).unwrap().0 += fx;
-                forces.get_mut(&ids[i]).unwrap().1 += fy;
-                forces.get_mut(&ids[j]).unwrap().0 -= fx;
-                forces.get_mut(&ids[j]).unwrap().1 -= fy;
+                let fx = f_mag * dx * inv_d;
+                let fy = f_mag * dy * inv_d;
+                {
+                    let fi = forces.get_mut(&ids[i]).unwrap();
+                    fi.0 += fx;
+                    fi.1 += fy;
+                }
+                {
+                    let fj = forces.get_mut(&ids[j]).unwrap();
+                    fj.0 -= fx;
+                    fj.1 -= fy;
+                }
             }
         }
 
         // Integrate (skip pinned active)
         for id in &ids {
             if Some(id) == self.active_id.as_ref() {
-                self.velocities.insert(id.clone(), (0.0, 0.0));
+                if let Some(v) = self.velocities.get_mut(id) {
+                    *v = (0.0, 0.0);
+                }
                 if let Some(p) = self.positions.get_mut(id) {
                     p.x = 0.0;
                     p.y = 0.0;
