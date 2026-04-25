@@ -4,4 +4,3 @@
 //! - Compression of verbose tool outputs (e.g. Chrome DevTools MCP)
 
 pub(crate) mod compressor;
-pub mod summary;
