@@ -464,6 +464,23 @@ desktop/
 └── windows/                  # Windows native implementation
 ```
 
+## Swift Helper Process (macOS)
+
+aleph-server spawns `AlephBridge` (Swift) as a long-lived child process for
+native macOS API access. The process-level split of responsibilities:
+
+- **Swift owns**: AVFoundation (camera, audio), Vision (OCR),
+  Accessibility (AX tree), SFSpeechRecognizer (speech-to-text)
+- **Rust owns**: IOKit (`IOPMAssertion` for the sleep inhibitor), TCC
+  framework status checks via `objc2-av-foundation` / `objc2-speech` in
+  `permission.rs`, all business logic, vault, and sessions
+
+This satisfies architectural redline R1 (Brain–Limb separation): the Rust
+core defines `DesktopCapability` traits; the helper provides physical
+implementations over JSON-RPC 2.0 stdio. See
+[DESKTOP_BRIDGE.md](DESKTOP_BRIDGE.md) for the full protocol specification,
+method reference, error envelope, and debugging procedures.
+
 ### Web Chat Interface
 
 ```

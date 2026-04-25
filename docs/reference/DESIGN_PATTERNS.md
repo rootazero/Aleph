@@ -481,8 +481,50 @@ if id.starts_with("exp-") { ... } // Works via Deref to str
 
 ---
 
+## JSON-RPC Bridge Pattern
+
+When a system call must run inside a different language runtime (for example,
+AVFoundation which requires Swift/Objective-C), Aleph uses a long-lived
+JSON-RPC subprocess over stdio rather than spawning a new process per call or
+embedding a language runtime.
+
+The key design decisions and their rationale:
+
+**Stdio over sockets.** There are no port collisions, no permission prompts on
+a socket file, and parent death is detected automatically — when the parent
+closes the pipe the child's read returns EOF. Debugging is trivial: pipe any
+JSON line to the binary by hand to inspect its response.
+
+**Handshake-driven capability negotiation.** On startup the helper advertises
+its `supported_methods` list. The Rust client consults this list at runtime
+rather than inferring capability from the binary's version number. If a method
+is absent the client returns `DesktopError::BridgeDisabled` for that call,
+allowing graceful degradation without a hard version dependency.
+
+**Self-describing errors.** Every TCC-gated method that hits an unauthorized
+state returns a `-32001` error whose `data` field carries a `PermissionGuide`
+— a structured object containing `deep_link`, `human_readable_steps`, and
+`rationale`. The LLM can surface this guidance verbatim to the user without
+any out-of-band metadata lookups. See
+`desktop/shared/src/error.rs::From<JsonRpcError> for DesktopError`.
+
+**Long-lived process over spawn-per-call.** Spawning a new process per call
+adds roughly 50 ms cold-start latency, duplicates handshake state, and loses
+in-process caches (e.g., AVCaptureSession device enumeration). A long-lived
+process requires a supervisor with exponential backoff and a parent-death
+watchdog, both of which are implemented in `desktop/shared/src/bridge/`.
+
+The pattern is realized in `desktop/macos/bridge/` (Swift helper) and
+`desktop/shared/src/bridge/` (Rust client + supervisor). The schema is owned
+by Rust in `shared/protocol/src/desktop_bridge/` and exported to Swift as a
+golden JSON Schema fixture validated in CI. See
+[DESKTOP_BRIDGE.md](DESKTOP_BRIDGE.md) for the complete protocol reference.
+
+---
+
 ## Changelog
 
 | Date | Change | Author |
 |------|--------|--------|
 | 2026-02-09 | Initial document with Context and Newtype patterns | Architecture Team |
+| 2026-04-25 | Add JSON-RPC Bridge Pattern (Stage 6 desktop bridge) | Architecture Team |

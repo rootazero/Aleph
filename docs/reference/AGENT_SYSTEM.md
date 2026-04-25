@@ -734,6 +734,32 @@ pub struct LoopConfig {
 }
 ```
 
+### Sleep inhibitor
+
+Each Think→Act turn acquires an `IOPMAssertion` of type
+`PreventUserIdleSystemSleep` with the reason string `"Aleph agent loop"`. The
+assertion is held by an RAII `InhibitorGuard` whose `Drop` implementation
+releases it the moment the turn returns. Long-running agent turns can no longer
+be silently cut short by macOS putting the host to sleep mid-flight.
+
+The guard is acquired at the start of `run_turn` in
+`src/harness/agent.rs` and released automatically when the function returns,
+whether it succeeds, returns an error, or is cancelled. No explicit cleanup
+code is needed.
+
+To verify that an assertion is active while a turn is in flight:
+
+```bash
+pmset -g assertions | grep "Aleph agent loop"
+```
+
+The assertion disappears from the list the moment the turn completes.
+
+Implementation files:
+- `PowerCapability` trait: `desktop/shared/src/traits/power.rs`
+- macOS IOPMAssertion FFI: `desktop/macos/src/sleep_inhibitor.rs`
+- Agent loop wiring: `src/harness/agent.rs::run_turn`
+
 ---
 
 ## See Also
@@ -743,3 +769,4 @@ pub struct LoopConfig {
 - [Gateway](GATEWAY.md) - RPC interface
 - [Agent Design Philosophy](AGENT_DESIGN_PHILOSOPHY.md) - Design principles
 - [Memory System](MEMORY_SYSTEM.md) - Facts DB and vector search
+- [Desktop Bridge](DESKTOP_BRIDGE.md) - Swift helper process and JSON-RPC protocol
