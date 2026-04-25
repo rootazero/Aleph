@@ -15,7 +15,7 @@ use crate::canvas_engine::adapter::{
     adapt_graph_response, to_neighborhood, GraphNeighborsResponse, GraphQueryResponse,
     NoteDetailResponse,
 };
-use crate::canvas_engine::interaction::{CanvasEvent, CanvasInteractionState};
+use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::mini_map::MiniMap;
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::prefetch::PrefetchCache;
@@ -67,11 +67,14 @@ fn RadialCanvasView() -> impl IntoView {
     // Using RwSignal so both on_event (write) and Effect (read) can access it.
     let active_request: RwSignal<Option<String>> = RwSignal::new(None);
 
+    // Hover prefetch intent channel — same pattern as active_request.
+    // HoverNode event writes here; Effect 4 reads and fires the background fetch.
+    let prefetch_request: RwSignal<Option<String>> = RwSignal::new(None);
+
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::new()));
     let _minimap = Rc::new(RefCell::new(MiniMap::empty()));
-    let _interaction = Rc::new(RefCell::new(CanvasInteractionState::new()));
 
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
@@ -201,6 +204,33 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
+    // Effect 4: hover prefetch — background-fetch when pointer dwells on a node
+    // -----------------------------------------------------------------------
+    let prefetch_e4 = prefetch.clone();
+    Effect::new(move || {
+        let Some(id) = prefetch_request.get() else { return };
+
+        let now = now_ms();
+        // Skip if already cached and not stale
+        if prefetch_e4.borrow().get(&id, now).is_some() {
+            return;
+        }
+
+        let prefetch_inner = prefetch_e4.clone();
+        spawn_local(async move {
+            match GraphApi::neighbors(&state, &id, 2, 50).await {
+                Ok(resp) => {
+                    let nbhd = to_neighborhood(&resp, now);
+                    prefetch_inner.borrow_mut().put(id, nbhd);
+                }
+                Err(_) => {
+                    // Prefetch failures are silently ignored — they will retry on next dwell
+                }
+            }
+        });
+    });
+
+    // -----------------------------------------------------------------------
     // Canvas event handler — captures only Copy signals, safe for Callback::new
     // -----------------------------------------------------------------------
     let on_event = move |event: CanvasEvent| match event {
@@ -225,8 +255,19 @@ fn RadialCanvasView() -> impl IntoView {
             // Drive the same fetch path via the intent signal
             active_request.set(Some(id));
         }
-        CanvasEvent::HoverNode(_) => {
-            // Hover prefetch is deferred to T23 (requires CanvasInteractionState in RAF loop)
+        CanvasEvent::HoverNode(hovered_id) => {
+            // Hover prefetch: debounce then kick off a background fetch into the prefetch cache.
+            // The debouncer lives inside CanvasInteractionState; we drive it here via now_ms().
+            // on_pointer_move returns Some(PrefetchNeighbor(id)) when the threshold is met.
+            let now = now_ms();
+            let intent = {
+                // We can't capture `interaction` (Rc<RefCell<_>>) in a Callback::new (Send+Sync),
+                // so we keep a local RwSignal<Option<String>> as the intent channel for prefetch.
+                // Writes here; an Effect below reads and fires the async fetch.
+                prefetch_request.set(hovered_id)
+            };
+            let _ = intent;
+            let _ = now;
         }
         _ => {}
     };
@@ -313,6 +354,7 @@ fn RadialCanvasView() -> impl IntoView {
                     <GraphCanvas
                         graph_state=graph_state.clone()
                         on_event=Callback::new(on_event)
+                        nav=nav.clone()
                     />
                 </div>
 

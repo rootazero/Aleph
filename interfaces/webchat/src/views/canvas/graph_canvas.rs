@@ -10,7 +10,9 @@ use leptos::callback::Callback;
 
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::layout::ForceLayout;
-use crate::canvas_engine::renderer::Renderer;
+use crate::canvas_engine::navigation::NavController;
+use crate::canvas_engine::renderer::{draw_neighborhood, Renderer};
+use crate::canvas_engine::tween::lerp_node;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
 
@@ -29,6 +31,8 @@ pub struct GraphState {
     pub pan_target: Option<Vec2>,
     /// Animation progress (0.0 → 1.0).
     pub pan_progress: f64,
+    /// Drag offset for parallax (world-space delta since last pointer-down).
+    pub drag_offset: (f32, f32),
 }
 
 impl GraphState {
@@ -45,6 +49,7 @@ impl GraphState {
             is_running: false,
             pan_target: None,
             pan_progress: 0.0,
+            drag_offset: (0.0, 0.0),
         }
     }
 }
@@ -57,10 +62,59 @@ impl Default for GraphState {
 
 type RafClosure = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
+/// Returns `performance.now()` in milliseconds.
+fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or(0.0)
+}
+
+/// Build an interpolated Neighborhood at tween parameter `t` between `from` and `to`.
+/// The resulting neighborhood's `target_positions` map contains lerped Vec3 positions
+/// for every node id that appears in either neighborhood.
+fn build_interpolated_neighborhood(from: &Neighborhood, to: &Neighborhood, t: f32) -> Neighborhood {
+    let mut all_ids: HashSet<String> = HashSet::new();
+    all_ids.insert(from.center.id.clone());
+    all_ids.insert(to.center.id.clone());
+    all_ids.extend(from.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(from.two_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.two_hop.iter().map(|n| n.id.clone()));
+
+    let mut interp = to.clone();
+    for id in all_ids {
+        let r = lerp_node(&id, from, to, t);
+        interp.target_positions.insert(id, r.pos);
+    }
+    interp
+}
+
+/// Draw a simple placeholder when the nav is Idle, Loading, or in Error state.
+fn draw_placeholder(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    viewport: &Viewport,
+    message: &str,
+) {
+    ctx.set_fill_style_str("#080818");
+    ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
+
+    ctx.set_fill_style_str("rgba(148,163,184,0.5)");
+    ctx.set_font("14px sans-serif");
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    let _ = ctx.fill_text(message, viewport.width / 2.0, viewport.height / 2.0);
+}
+
 #[component]
 pub fn GraphCanvas(
     graph_state: Rc<RefCell<GraphState>>,
     on_event: Callback<CanvasEvent>,
+    /// Optional NavController for the radial navigation path.
+    /// When `Some`, the RAF loop uses NavState-aware rendering.
+    /// When `None`, falls back to the legacy flat `Renderer::draw`.
+    #[prop(optional)]
+    nav: Option<Rc<RefCell<NavController>>>,
 ) -> impl IntoView {
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let raf_handle: Rc<RefCell<Option<i32>>> = Rc::new(RefCell::new(None));
@@ -112,6 +166,7 @@ pub fn GraphCanvas(
 
         // Build the rAF loop
         let gs_render = gs.clone();
+        let nav_render = nav.clone();
         let raf_h_inner = raf_h.clone();
         let raf_c_inner = raf_c.clone();
 
@@ -141,6 +196,81 @@ pub fn GraphCanvas(
                     }
                 }
             }
+
+            // ---------------------------------------------------------------
+            // Radial nav branch: NavState-aware rendering
+            // ---------------------------------------------------------------
+            if let Some(ref nav_rc) = nav_render {
+                let now = now_ms();
+
+                // Advance animation state
+                nav_rc.borrow_mut().tick(now);
+
+                // Snapshot NavState to avoid holding borrow during draw
+                let nav_state = nav_rc.borrow().state.clone();
+                let drag = state.drag_offset;
+                let selected = state.selected_node.as_deref().map(str::to_string);
+                let hovered = state.hovered_node.as_deref().map(str::to_string);
+                let viewport = state.viewport.clone();
+                // Release the borrow before calling draw functions
+                drop(state);
+
+                match nav_state {
+                    NavState::Active { neighborhood, .. } => {
+                        draw_neighborhood(
+                            &ctx,
+                            &viewport,
+                            &neighborhood,
+                            drag,
+                            selected.as_deref(),
+                            hovered.as_deref(),
+                        );
+                    }
+                    NavState::Animating {
+                        from_neighborhood,
+                        to_neighborhood,
+                        t,
+                        ..
+                    } => {
+                        let interp =
+                            build_interpolated_neighborhood(&from_neighborhood, &to_neighborhood, t);
+                        draw_neighborhood(
+                            &ctx,
+                            &viewport,
+                            &interp,
+                            drag,
+                            selected.as_deref(),
+                            hovered.as_deref(),
+                        );
+                    }
+                    NavState::Loading { .. } => {
+                        draw_placeholder(&ctx, &viewport, "Loading…");
+                    }
+                    NavState::Error { ref reason, .. } => {
+                        let msg = format!("Error: {reason}");
+                        draw_placeholder(&ctx, &viewport, &msg);
+                    }
+                    NavState::Idle => {
+                        draw_placeholder(&ctx, &viewport, "");
+                    }
+                }
+
+                // Schedule next frame
+                if let Some(window) = web_sys::window() {
+                    let cb = raf_c_inner.borrow();
+                    if let Some(closure) = cb.as_ref() {
+                        let id = window
+                            .request_animation_frame(closure.as_ref().unchecked_ref())
+                            .unwrap_or(0);
+                        *raf_h_inner.borrow_mut() = Some(id);
+                    }
+                }
+                return;
+            }
+
+            // ---------------------------------------------------------------
+            // Legacy flat-graph branch (no nav controller)
+            // ---------------------------------------------------------------
 
             // Physics tick — use destructuring to get disjoint borrows
             if !state.layout.is_settled {
@@ -266,6 +396,9 @@ pub fn GraphCanvas(
 
         if state.interaction.is_panning {
             state.viewport.pan(dx, dy);
+            // Accumulate drag offset for parallax in the radial renderer
+            state.drag_offset.0 += dx as f32;
+            state.drag_offset.1 += dy as f32;
         } else if state.interaction.is_dragging_node {
             if let Some(idx) = state.interaction.dragged_node_idx {
                 let world = state.viewport.screen_to_world(screen);
@@ -301,6 +434,9 @@ pub fn GraphCanvas(
         }
 
         if state.interaction.is_click(screen) {
+            // Reset drag parallax offset on click (not a pan gesture)
+            state.drag_offset = (0.0, 0.0);
+
             let hit = state.viewport.hit_test(screen, &state.nodes);
             if let Some(idx) = hit {
                 let node_id = state.nodes[idx].id.clone();
@@ -327,6 +463,8 @@ pub fn GraphCanvas(
                 on_event.run(CanvasEvent::DeselectNode);
             }
         } else {
+            // Pan end: reset drag offset
+            state.drag_offset = (0.0, 0.0);
             // Reset drag/pan state only
             state.interaction.is_panning = false;
             state.interaction.is_dragging_node = false;
