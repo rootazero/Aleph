@@ -71,8 +71,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // lands. The harness supports both None and Some(...) shapes so future
     // phases can inject real instances without touching this boot path again.
     let stop_hooks = build_stop_hooks(stop_hook_configs);
-    let stop_hook_count = stop_hooks.as_ref().map(|h| h.len()).unwrap_or(0);
-    tracing::info!(count = stop_hook_count, "Stop hooks registered");
 
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
