@@ -68,3 +68,39 @@ impl Viewport {
             && screen.y <= self.height + margin
     }
 }
+
+/// Per-Z layer parallax offset. Z=0 → factor 1.0, Z=200 → factor 0.85.
+pub fn parallax_factor(z: f32) -> f32 {
+    1.0 - 0.15 * (z / 200.0).clamp(0.0, 1.0)
+}
+
+/// Compute additional position offset for a node when the viewport is dragged.
+pub fn parallax_offset(z: f32, drag_dx: f32, drag_dy: f32) -> (f32, f32) {
+    let f = parallax_factor(z);
+    (drag_dx * f, drag_dy * f)
+}
+
+#[cfg(test)]
+mod parallax_tests {
+    use super::*;
+
+    #[test]
+    fn z0_no_parallax_attenuation() {
+        assert!((parallax_factor(0.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn z200_max_attenuation() {
+        assert!((parallax_factor(200.0) - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parallax_offset_proportional_to_drag() {
+        let (dx, dy) = parallax_offset(0.0, 100.0, 50.0);
+        assert!((dx - 100.0).abs() < 1e-3);
+        assert!((dy - 50.0).abs() < 1e-3);
+        let (dx2, dy2) = parallax_offset(200.0, 100.0, 50.0);
+        assert!((dx2 - 85.0).abs() < 1e-3);
+        assert!((dy2 - 42.5).abs() < 1e-3);
+    }
+}
