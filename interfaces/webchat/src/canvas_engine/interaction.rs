@@ -50,3 +50,116 @@ impl Default for InteractionState {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Intent-based interaction layer (hover prefetch + keyboard nav)
+// ---------------------------------------------------------------------------
+
+use crate::canvas_engine::prefetch::HoverDebouncer;
+
+pub enum CanvasIntent {
+    None,
+    SetActive(String),
+    PrefetchNeighbor(String),
+    ExpandCluster(String),
+    BreadcrumbBack,
+    BreadcrumbForward,
+    OpenSearch,
+    ToggleGlobal,
+    CloseDetail,
+    HoverFocus(Direction),
+}
+
+#[allow(dead_code)]
+pub enum Direction {
+    Next,
+    Prev,
+}
+
+pub struct CanvasInteractionState {
+    pub debounce: HoverDebouncer,
+    pub hovered: Option<String>,
+}
+
+impl CanvasInteractionState {
+    pub fn new() -> Self {
+        Self { debounce: HoverDebouncer::new(), hovered: None }
+    }
+
+    pub fn on_pointer_move(&mut self, hovered: Option<&str>, now_ms: f64) -> Option<CanvasIntent> {
+        self.hovered = hovered.map(str::to_string);
+        self.debounce.note_hover(hovered, now_ms).map(CanvasIntent::PrefetchNeighbor)
+    }
+
+    pub fn on_click(&mut self, target: ClickTarget) -> CanvasIntent {
+        match target {
+            ClickTarget::Node(id) => CanvasIntent::SetActive(id),
+            ClickTarget::Cluster(id) => CanvasIntent::ExpandCluster(id),
+            ClickTarget::Empty => CanvasIntent::CloseDetail,
+            ClickTarget::Active => CanvasIntent::None,
+        }
+    }
+
+    pub fn on_keydown(&self, key: &str, alt: bool, _shift: bool) -> CanvasIntent {
+        match (key, alt) {
+            ("Tab", _) => CanvasIntent::HoverFocus(Direction::Next),
+            ("Enter", _) => match &self.hovered {
+                Some(id) => CanvasIntent::SetActive(id.clone()),
+                None => CanvasIntent::None,
+            },
+            ("Escape", _) => CanvasIntent::CloseDetail,
+            ("Backspace", _) | ("ArrowLeft", true) => CanvasIntent::BreadcrumbBack,
+            ("ArrowRight", true) => CanvasIntent::BreadcrumbForward,
+            ("/", _) => CanvasIntent::OpenSearch,
+            ("g", _) | ("G", _) => CanvasIntent::ToggleGlobal,
+            _ => CanvasIntent::None,
+        }
+    }
+}
+
+pub enum ClickTarget {
+    Node(String),
+    Cluster(String),
+    Active,
+    Empty,
+}
+
+#[cfg(test)]
+mod intent_tests {
+    use super::*;
+
+    #[test]
+    fn click_node_returns_set_active() {
+        let mut s = CanvasInteractionState::new();
+        match s.on_click(ClickTarget::Node("x".to_string())) {
+            CanvasIntent::SetActive(id) => assert_eq!(id, "x"),
+            _ => panic!("expected SetActive"),
+        }
+    }
+
+    #[test]
+    fn click_cluster_returns_expand() {
+        let mut s = CanvasInteractionState::new();
+        match s.on_click(ClickTarget::Cluster("c1".to_string())) {
+            CanvasIntent::ExpandCluster(id) => assert_eq!(id, "c1"),
+            _ => panic!("expected ExpandCluster"),
+        }
+    }
+
+    #[test]
+    fn keydown_escape_closes_detail() {
+        let s = CanvasInteractionState::new();
+        assert!(matches!(s.on_keydown("Escape", false, false), CanvasIntent::CloseDetail));
+    }
+
+    #[test]
+    fn pointer_move_triggers_prefetch_after_debounce() {
+        let mut s = CanvasInteractionState::new();
+        assert!(s.on_pointer_move(Some("x"), 0.0).is_none());
+        assert!(s.on_pointer_move(Some("x"), 100.0).is_none());
+        assert!(matches!(
+            s.on_pointer_move(Some("x"), 200.0),
+            Some(CanvasIntent::PrefetchNeighbor(_))
+        ));
+    }
+}
