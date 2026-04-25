@@ -127,7 +127,12 @@ fi
 # Step 8: Extract boot init events for S0.1 / S4.1
 # ----------------------------------------------------------------------------
 echo "==> [8/10] extracting boot events"
-grep -E "boot\.module\.init|boot\.complete|boot\.phase" "$LOG" \
+# Aleph emits per-subsystem human-readable INFO lines, not the structured
+# "boot.module.init / boot.complete / boot.phase" events from the design doc.
+# Capture the real signals: subsystem "initialized" / "Initializing" /
+# "Initialized" lines plus the gateway "Aleph listening on http" line that
+# marks boot complete. Scenario S0.1 / S4.1 grep against this snapshot.
+grep -E "[Ii]nitializ(ed|ing)|Aleph listening on http" "$LOG" \
   > "$ALEPH_TEST_EVIDENCE_DIR/boot.log" || true
 echo "    boot events → $ALEPH_TEST_EVIDENCE_DIR/boot.log ($(wc -l < "$ALEPH_TEST_EVIDENCE_DIR/boot.log" | xargs) lines)"
 
