@@ -212,3 +212,126 @@ impl Renderer {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Depth attribute computation
+// ---------------------------------------------------------------------------
+
+/// Compute per-layer visual modifiers based on Z depth.
+/// Z=0 → full brightness (active layer); Z=200 → maximum dimming.
+pub fn depth_attrs(z: f32) -> DepthAttrs {
+    let t = (z / 200.0).clamp(0.0, 1.0);
+    DepthAttrs {
+        scale: 1.0 - 0.30 * t,
+        opacity: 1.0 - 0.45 * t,
+        blur_px: 4.0 * t,
+        sat_mul: 1.0 - 0.40 * t,
+        glow_alpha: (1.0 - t) * 0.6,
+        shadow_offset_y: 6.0 + 4.0 * (1.0 - t),
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    #[test]
+    fn active_layer_full_brightness() {
+        let a = depth_attrs(0.0);
+        assert!((a.scale - 1.0).abs() < 1e-6);
+        assert!((a.opacity - 1.0).abs() < 1e-6);
+        assert!((a.blur_px - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn far_layer_dimmed() {
+        let a = depth_attrs(200.0);
+        assert!((a.scale - 0.7).abs() < 1e-3);
+        assert!((a.opacity - 0.55).abs() < 1e-3);
+        assert!((a.blur_px - 4.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn beyond_z_clamps() {
+        let a = depth_attrs(500.0);
+        assert!((a.scale - 0.7).abs() < 1e-3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Z-layered neighborhood renderer (used by T22 wiring)
+// ---------------------------------------------------------------------------
+
+/// Render a full neighborhood back-to-front (2-hop → clusters → 1-hop → active).
+pub fn draw_neighborhood(
+    ctx: &CanvasRenderingContext2d,
+    viewport: &Viewport,
+    nbhd: &Neighborhood,
+    drag: (f32, f32),
+    selected: Option<&str>,
+    hovered: Option<&str>,
+) {
+    // 1. Clear + bg gradient
+    paint_background(ctx, viewport);
+    ctx.save();
+    let _ = ctx.translate(viewport.offset.x, viewport.offset.y);
+    let _ = ctx.scale(viewport.scale, viewport.scale);
+
+    // 2. Layer A: 2-hop (back)
+    for n in &nbhd.two_hop {
+        draw_edges_for_node(ctx, n, nbhd, drag);
+    }
+    for n in &nbhd.two_hop {
+        draw_node(ctx, n, drag, selected, hovered);
+    }
+
+    // 3. Layer B: 1-hop + clusters
+    for c in &nbhd.clusters {
+        draw_cluster(ctx, c, drag, selected, hovered);
+    }
+    for n in &nbhd.one_hop {
+        draw_edges_for_node(ctx, n, nbhd, drag);
+    }
+    for n in &nbhd.one_hop {
+        draw_node(ctx, n, drag, selected, hovered);
+    }
+
+    // 4. Layer C: Active (front)
+    draw_node(ctx, &nbhd.center, drag, selected, hovered);
+
+    ctx.restore();
+}
+
+fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
+    // Solid dark fill; CanvasGradient feature not enabled in this build.
+    // T14/T15 can add a proper radial gradient once the feature is wired.
+    ctx.set_fill_style_str("#080818");
+    ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
+}
+
+// Stubs — filled in by Tasks 14 (edges) and 15 (nodes/clusters)
+fn draw_node(
+    _ctx: &CanvasRenderingContext2d,
+    _n: &CanvasNode,
+    _drag: (f32, f32),
+    _selected: Option<&str>,
+    _hovered: Option<&str>,
+) {
+}
+
+fn draw_cluster(
+    _ctx: &CanvasRenderingContext2d,
+    _c: &ClusterNode,
+    _drag: (f32, f32),
+    _selected: Option<&str>,
+    _hovered: Option<&str>,
+) {
+}
+
+fn draw_edges_for_node(
+    _ctx: &CanvasRenderingContext2d,
+    _n: &CanvasNode,
+    _nbhd: &Neighborhood,
+    _drag: (f32, f32),
+) {
+}
