@@ -45,7 +45,7 @@ fn default_search_limit() -> usize {
 
 // === Response types ===
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct NoteNodeDto {
     pub id: String,   // path: "wiki/rust-ownership"
     pub name: String, // display: "rust-ownership" (filename only)
@@ -55,7 +55,7 @@ pub struct NoteNodeDto {
     pub link_count: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct NoteLinkDto {
     pub from: String,
     pub to: String,
@@ -85,4 +85,17 @@ pub struct SearchResultDto {
 #[derive(Debug, Serialize)]
 pub struct GraphSearchResponse {
     pub results: Vec<SearchResultDto>,
+}
+
+// === graph.neighbors response (radial navigation) ===
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GraphNeighborsResponse {
+    /// The node that was queried — pinned at world origin in the radial layout.
+    pub center: NoteNodeDto,
+    /// Neighbor nodes (excludes the center node itself).
+    pub nodes: Vec<NoteNodeDto>,
+    /// Edges between all returned nodes (including center).
+    pub edges: Vec<NoteLinkDto>,
+    /// Hop distance from center for each neighbor node: 1 = direct, 2 = two hops.
+    pub hop_depth: std::collections::HashMap<String, u8>,
 }

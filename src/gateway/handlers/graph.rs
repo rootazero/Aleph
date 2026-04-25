@@ -5,9 +5,9 @@
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::graph_types::{
-    GraphNeighborsParams, GraphNodeDetailParams, GraphQueryParams, GraphQueryResponse,
-    GraphSearchParams, GraphSearchResponse, NoteDetailResponse, NoteLinkDto, NoteNodeDto,
-    SearchResultDto,
+    GraphNeighborsParams, GraphNeighborsResponse, GraphNodeDetailParams, GraphQueryParams,
+    GraphQueryResponse, GraphSearchParams, GraphSearchResponse, NoteDetailResponse, NoteLinkDto,
+    NoteNodeDto, SearchResultDto,
 };
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::store::MemoryBackend;
@@ -157,13 +157,49 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
         }
     };
 
-    let nodes: Vec<NoteNodeDto> = entries.iter().map(entry_to_dto).collect();
+    // Look up the center node entry so the frontend can pin it at world origin.
+    let center_entry = match db
+        .get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
+        .await
+    {
+        Ok(Some(e)) => e,
+        Ok(None) => {
+            return JsonRpcResponse::error(
+                req.id,
+                INVALID_PARAMS,
+                format!("node not found: {}", params.node_id),
+            )
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
+        }
+    };
+    let center = entry_to_dto(&center_entry);
+
+    // Exclude the center node itself from the neighbor list — it is already in `center`.
+    let nodes: Vec<NoteNodeDto> = entries
+        .iter()
+        .filter(|e| e.path != params.node_id)
+        .map(entry_to_dto)
+        .collect();
     let edges: Vec<NoteLinkDto> = links
         .into_iter()
         .map(|(from, to)| NoteLinkDto { from, to })
         .collect();
 
-    let response = GraphQueryResponse { nodes, edges };
+    // Compute hop distance (1 = direct edge to/from center, 2 = further).
+    let mut hop_depth = std::collections::HashMap::new();
+    for n in &nodes {
+        let depth = compute_hop_depth(&params.node_id, &n.id, &edges);
+        hop_depth.insert(n.id.clone(), depth);
+    }
+
+    let response = GraphNeighborsResponse {
+        center,
+        nodes,
+        edges,
+        hop_depth,
+    };
 
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
@@ -237,6 +273,24 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     }
 }
 
+/// Compute hop distance from `center_id` to `target_id` given the edge list.
+///
+/// Returns 0 if they are the same node, 1 if directly connected by an edge,
+/// or 2 otherwise (all other nodes in a depth-2 BFS result).
+fn compute_hop_depth(center_id: &str, target_id: &str, edges: &[NoteLinkDto]) -> u8 {
+    if center_id == target_id {
+        return 0;
+    }
+    let directly_connected = edges.iter().any(|e| {
+        (e.from == center_id && e.to == target_id) || (e.to == center_id && e.from == target_id)
+    });
+    if directly_connected {
+        1
+    } else {
+        2
+    }
+}
+
 /// Real implementation of graph.search.
 ///
 /// Full-text search over note content via NoteStore FTS index.
@@ -297,5 +351,125 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
         Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Serialize error: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::notes::store::NoteStore;
+    use crate::memory::notes::KnowledgeNote;
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+    use uuid::Uuid;
+
+    /// Create a fresh file-backed `MemoryBackend` for testing.
+    fn make_db() -> MemoryBackend {
+        let path = std::env::temp_dir().join(format!("graph_handler_test_{}", Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
+    }
+
+    fn make_note(title: &str, category: &str, links: Vec<&str>) -> KnowledgeNote {
+        KnowledgeNote {
+            title: title.to_string(),
+            category: category.to_string(),
+            tags: vec![],
+            facts: vec!["fact".to_string()],
+            links: links.into_iter().map(String::from).collect(),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_001_000,
+            content_hash: format!("hash_{title}"),
+        }
+    }
+
+    fn neighbors_request(node_id: &str, depth: u8, limit: usize) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "graph.neighbors".to_string(),
+            params: Some(serde_json::json!({
+                "node_id": node_id,
+                "depth": depth,
+                "limit": limit,
+            })),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_neighbors_returns_center_and_hop_depth() {
+        let db = make_db();
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+
+        // Seed: center="concept/Rust", hop-1="concept/Cargo", hop-2="concept/Clippy"
+        // Rust → Cargo, Cargo → Clippy. Link targets must be full paths so the
+        // BFS in get_neighbors (which matches to_note against from_note) traverses.
+        let rust = make_note("Rust", "concept", vec!["concept/Cargo"]);
+        let cargo = make_note("Cargo", "concept", vec!["concept/Clippy"]);
+        let clippy = make_note("Clippy", "concept", vec![]);
+        db.index_note(&rust, agent, "concept").await.unwrap();
+        db.index_note(&cargo, agent, "concept").await.unwrap();
+        db.index_note(&clippy, agent, "concept").await.unwrap();
+
+        let center_id = "concept/Rust";
+        let req = neighbors_request(center_id, 2, 50);
+        let resp_raw = handle_neighbors_impl(req, db).await;
+
+        // Must be a success response
+        assert!(
+            resp_raw.error.is_none(),
+            "expected success, got error: {:?}",
+            resp_raw.error
+        );
+        let result = resp_raw.result.expect("result must be present");
+
+        // Deserialize into GraphNeighborsResponse
+        let resp: GraphNeighborsResponse = serde_json::from_value(result).expect("deserialize");
+
+        // center field must equal the requested node_id
+        assert_eq!(
+            resp.center.id, center_id,
+            "center.id must equal request node_id"
+        );
+        assert_eq!(resp.center.name, "Rust");
+
+        // hop_depth must be populated for every returned neighbor
+        assert!(!resp.hop_depth.is_empty(), "hop_depth must not be empty");
+        for node in &resp.nodes {
+            let hop = resp.hop_depth.get(&node.id).copied();
+            assert!(
+                matches!(hop, Some(1) | Some(2)),
+                "hop for {} must be 1 or 2, got {:?}",
+                node.id,
+                hop
+            );
+        }
+
+        // concept/Cargo is directly linked from Rust → must be hop 1
+        if let Some(&h) = resp.hop_depth.get("concept/Cargo") {
+            assert_eq!(h, 1, "concept/Cargo must be hop 1");
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_neighbors_returns_not_found_for_missing_node() {
+        let db = make_db();
+        let req = neighbors_request("concept/DoesNotExist", 2, 50);
+        let resp = handle_neighbors_impl(req, db).await;
+        assert!(
+            resp.error.is_some(),
+            "expected error for missing center node"
+        );
+    }
+
+    #[test]
+    fn compute_hop_depth_direct_edge() {
+        let edges = vec![NoteLinkDto {
+            from: "A".to_string(),
+            to: "B".to_string(),
+        }];
+        assert_eq!(compute_hop_depth("A", "B", &edges), 1);
+        assert_eq!(compute_hop_depth("B", "A", &edges), 1); // reverse edge
+        assert_eq!(compute_hop_depth("A", "C", &edges), 2); // not connected
+        assert_eq!(compute_hop_depth("A", "A", &edges), 0); // self
     }
 }
