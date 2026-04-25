@@ -130,3 +130,38 @@ Commit before Phase A: `235ab7c95803af34dfe6273b1ef912a982fbb7f9`
   Since we are not creating `trace.jsonl` files (TBD#1 finding), the question of file-write contention is moot. `tracing-subscriber`'s file appender (`tracing-appender = "0.2"`, Cargo.toml:151) is internally serialized — multiple sessions writing to the same `aleph-server.log` is safe.
 
   If a future iteration adds a file-based `TraceSink`: shard per session-id (`trace-<sid>.jsonl`) since the trait's `&self` + `Send+Sync` bound implies a shared sink across concurrent sessions, and a single `File` write is **not** atomic without external locking.
+
+---
+
+## TBD#6: macOS TCC binding
+
+- **Binding**: binary path + code signature (HOME redirect transparent)
+- **Evidence (file:line)**:
+  - `desktop/macos/Cargo.toml:36-40` — comments confirm: "Kept only for permission.rs TCC checks (AVCaptureDevice::authorizationStatus*)"
+  - `desktop/macos/bridge/Sources/AlephBridge/RemindersCommands.swift:23` — `requestAccess(to: .reminder)`
+  - `desktop/macos/bridge/Sources/AlephBridge/ContactsCommands.swift:14` — `requestAccess(for: .contacts)`
+  - `desktop/macos/bridge/Sources/AlephBridge/CalendarCommands.swift:24` — `requestAccess(to: .event)`
+  - `desktop/macos/src/hotkey.rs:7,52,104,193,225` — TCC permission checks for Accessibility + InputMonitoring
+  - macOS TCC binds grants by **bundle identifier** (or unsigned binary path) plus code signature. Setting `HOME=$ALEPH_TEST_HOME` does not change the binary at `target/release/aleph-server`, so existing TCC grants on the user's machine apply transparently.
+
+- **Test rig touches desktop tools**: **no (by design)**
+  - `grep -rn "screen.capture\|audio.record\|hotkey\|accessibility" src/builtin_tools/ src/desktop/` — matches exist (e.g., `permission_tool.rs`, `media_tool.rs`, `desktop/ax.rs`) but none of M1–M12 in §5 of the spec require a desktop capability.
+  - All scenarios S0–S4 (per spec §5) operate on text + filesystem + provider HTTP only.
+
+- **skip-tcc fallback (documented for future)**: if a future scenario invokes a desktop tool and the test rig is run on a fresh macOS user without prior TCC grants, the tool will return `PermissionDenied`. Mark such scenarios `status=skip-tcc` in `evidence.json` and continue. Not a test failure.
+
+---
+
+## Summary for Phase B–D scripts
+
+Surprises that affect downstream phases:
+
+1. **TBD#1 — no trace.jsonl path**. Phase B's `preflight.sh` must drop `ALEPH_TRACE_FILE=...` and add `RUST_LOG=alephcore::harness=trace,alephcore::orchestrator=trace`. Scenario scripts grep `aleph-server.log` for trace events instead of `trace.jsonl`. Update spec §6.2 — the `trace_assertion` kind reads from `aleph-server.log` not `trace.jsonl`.
+
+2. **TBD#3 — no replay endpoint, no probe binary**. S3.2 reduces to a SQL-based projection check on `session_events` (severity=medium per spec §6.4, so this is acceptable). The `cargo test -p alephcore` already covers `replay_rebuilds_head_seq` at `src/session/actor.rs:230` for unit-level correctness. Spec §5.4 says "Unit test [...] already covers core; this is e2e proof." — SQL projection is sufficient e2e proof.
+
+3. **TBD#4 — stop-hook surface not wired**. S1.4 must be marked `blocked` (exit 2, the third tier in spec §6.3) with the documented reason. This is a known gap, not a regression. Spec §6.4 lists S1.4 as `high` severity; blocked means recorded but doesn't fail-fast.
+
+4. **TBD#5 — no trace.jsonl, so no sharding question**. `aleph-server.log` is single-file via `tracing-appender`'s internal serialization.
+
+These do not invalidate the dual-channel design; they reduce the surface to **SQLite + server.log + filesystem + curl** — channel B still works, just with one fewer evidence file.
