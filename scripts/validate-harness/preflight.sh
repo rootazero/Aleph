@@ -48,6 +48,25 @@ mkdir -p "$ALEPH_TEST_EVIDENCE_DIR"
 echo "    ALEPH_TEST_HOME=$ALEPH_TEST_HOME"
 echo "    ALEPH_TEST_EVIDENCE_DIR=$ALEPH_TEST_EVIDENCE_DIR"
 
+# Cleanup trap: on early abort (non-zero exit), kill aleph and remove test HOME.
+# Disarmed at the end of step 10 so a successful run leaves the test HOME intact.
+cleanup() {
+  local rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "==> aborting (rc=$rc); cleaning up" >&2
+    if [[ -n "${ALEPH_PID:-}" ]]; then
+      kill -TERM "$ALEPH_PID" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$ALEPH_PID" 2>/dev/null || true
+    fi
+    if [[ -n "${ALEPH_TEST_HOME:-}" && -d "$ALEPH_TEST_HOME" ]]; then
+      rm -rf "$ALEPH_TEST_HOME"
+      echo "==> removed $ALEPH_TEST_HOME" >&2
+    fi
+  fi
+}
+trap cleanup EXIT INT TERM
+
 # ----------------------------------------------------------------------------
 # Step 5: Copy real → test (vault, providers, skills config, agents)
 # ----------------------------------------------------------------------------
@@ -75,22 +94,24 @@ echo "$ALEPH_PID" > "$ALEPH_TEST_EVIDENCE_DIR/.aleph.pid"
 echo "    aleph started (pid=$ALEPH_PID, log=$LOG)"
 
 # ----------------------------------------------------------------------------
-# Step 7: Wait for /health 200 (60s timeout)
+# Step 7: Wait for /health 200 (90s timeout)
 # ----------------------------------------------------------------------------
-echo "==> [7/10] waiting for /health (60s timeout)"
-for i in $(seq 1 60); do
+echo "==> [7/10] waiting for /health (90s timeout)"
+HEALTH_OK=0
+for i in $(seq 1 90); do
   if curl -sf http://127.0.0.1:9090/health >/dev/null 2>&1; then
-    echo "    health OK after ${i}s"
+    echo "==> health OK after ${i}s"
+    HEALTH_OK=1
     break
   fi
   sleep 1
-  if [[ "$i" -eq 60 ]]; then
-    echo "FATAL: /health timeout" >&2
-    tail -50 "$LOG" >&2
-    kill -KILL "$ALEPH_PID" 2>/dev/null || true
-    exit 1
-  fi
 done
+if [[ "$HEALTH_OK" -ne 1 ]]; then
+  echo "FATAL: /health timeout after 90s" >&2
+  sleep 0.5  # allow log buffer to flush
+  tail -50 "$LOG" >&2
+  exit 1   # the EXIT trap (added in step 4) will kill aleph + clean test HOME
+fi
 
 # ----------------------------------------------------------------------------
 # Step 8: Extract boot init events for S0.1 / S4.1
@@ -104,11 +125,13 @@ echo "    boot events → $ALEPH_TEST_EVIDENCE_DIR/boot.log ($(wc -l < "$ALEPH_T
 # Step 9: Write run-meta.json
 # ----------------------------------------------------------------------------
 echo "==> [9/10] writing run-meta.json"
+ALEPH_VERSION=$(< VERSION)
+ALEPH_VERSION="${ALEPH_VERSION%$'\n'}"
 cat > "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json" <<EOF
 {
   "started_at": "$(date -u +%FT%TZ)",
   "build_commit": "$(git rev-parse HEAD)",
-  "aleph_version": "$(cat VERSION)",
+  "aleph_version": "$ALEPH_VERSION",
   "test_home": "$ALEPH_TEST_HOME",
   "evidence_dir": "$ALEPH_TEST_EVIDENCE_DIR",
   "gateway_token_prefix": "aleph-9976",
@@ -121,6 +144,7 @@ EOF
 # Step 10: Print operator instructions
 # ----------------------------------------------------------------------------
 echo "==> [10/10] preflight complete"
+trap - EXIT INT TERM   # disarm: success-path leaves test HOME for the operator
 cat <<EOF
 
 ================================================================================
@@ -141,6 +165,8 @@ cat <<EOF
   If you spawn a new shell and need these env vars, source this block:
     export ALEPH_TEST_HOME="$ALEPH_TEST_HOME"
     export ALEPH_TEST_EVIDENCE_DIR="$ALEPH_TEST_EVIDENCE_DIR"
+
+  Note: re-running preflight overwrites prior target/test-evidence/ contents.
 
   Tear-down (when done):
     kill \$(cat "$ALEPH_TEST_EVIDENCE_DIR/.aleph.pid")
