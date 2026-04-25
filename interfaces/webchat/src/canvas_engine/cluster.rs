@@ -3,7 +3,8 @@ use std::collections::HashMap;
 
 pub const FOLD_THRESHOLD: usize = 12;
 
-/// Fold neighbors of a single relation sector into ClusterNodes by category.
+/// Fold neighbors of a single relation sector into ClusterNodes,
+/// grouping by `CanvasNode::category` into `ClusterNode::kind` buckets.
 /// Returns (unfolded_nodes, clusters).
 pub fn fold_sector(
     neighbors: &[CanvasNode],
@@ -33,14 +34,15 @@ pub fn fold_sector(
             let representative_names: Vec<String> =
                 group.iter().take(3).map(|n| n.name.clone()).collect();
             let member_ids: Vec<String> = group.iter().map(|n| n.id.clone()).collect();
+            let radius = cluster_radius(member_ids.len());
             clusters.push(ClusterNode {
                 id: format!("cluster::{}::{}::{}", relation, category, active_id),
                 relation: relation.to_string(),
                 kind: category,
-                member_ids: member_ids.clone(),
+                member_ids,
                 representative_names,
                 aggregated_weight,
-                radius: cluster_radius(member_ids.len()),
+                radius,
                 world_pos: Vec2::new(0.0, 0.0),
                 z: 60.0,
                 expanded: false,
@@ -49,6 +51,9 @@ pub fn fold_sector(
             unfolded.extend(group);
         }
     }
+    // Sort clusters by kind for deterministic order — downstream sector-angle
+    // assignment (Tasks 6/11) depends on stable iteration across page loads.
+    clusters.sort_by(|a, b| a.kind.cmp(&b.kind));
     (unfolded, clusters)
 }
 
@@ -68,9 +73,11 @@ pub fn fallback_fold(
         wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
     });
     let kept: Vec<_> = neighbors.drain(..20).collect();
-    // Force-fold the remainder by category (threshold=1 folds every group)
-    let (_, clusters) = fold_sector(&neighbors, relation, active_id, 1);
-    (kept, clusters)
+    // Pass singletons through as unfolded; only fold groups of 2+.
+    let (mut singletons, clusters) = fold_sector(&neighbors, relation, active_id, 2);
+    let mut result = kept;
+    result.append(&mut singletons);
+    (result, clusters)
 }
 
 /// Compute ClusterNode display radius: 24 + 6 * log2(N), capped at 60.
@@ -158,5 +165,31 @@ mod tests {
         let (unfolded, clusters) = fallback_fold(neighbors, "uses", "active");
         assert_eq!(unfolded.len(), 20, "top 20 by weight kept");
         assert!(!clusters.is_empty(), "remainder force-folded");
+    }
+
+    #[test]
+    fn fallback_fold_singletons_stay_unfolded() {
+        // 30 nodes total. Node 0 (weight 0) is the unique "tool"; nodes 1..30 are
+        // "concept" with weights 1..29. After sort-by-weight-desc and drain(..20),
+        // the kept top 20 are weights 10..29 (all concepts). The remainder is
+        // weights 0..9: 9 concepts + 1 tool. Under threshold=2, the lone tool
+        // must NOT be force-folded into a 1-member cluster.
+        let neighbors: Vec<_> = (0..30)
+            .map(|i| {
+                let cat = if i == 0 { "tool" } else { "concept" };
+                mock_node(&format!("n{i}"), cat, i as f32)
+            })
+            .collect();
+        let (unfolded, clusters) = fallback_fold(neighbors, "uses", "active");
+        assert_eq!(unfolded.len(), 21, "20 top-weight + 1 singleton from remainder");
+        assert!(
+            clusters.iter().all(|c| c.member_ids.len() >= 2),
+            "no 1-member clusters allowed"
+        );
+        // The lone tool (id "n0") must appear among unfolded, not inside a cluster.
+        assert!(unfolded.iter().any(|n| n.id == "n0"));
+        assert!(clusters
+            .iter()
+            .all(|c| !c.member_ids.iter().any(|id| id == "n0")));
     }
 }
