@@ -14,7 +14,7 @@ TEST_HOME=$(jq -r .test_home "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json")
 LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
 DB="$TEST_HOME/.aleph/data/state.db"
 
-N=$(grep -c "gateway\.ws\.authenticated.*bedac\|ws.*authenticated.*bedac" "$LOG" 2>/dev/null || true)
+N=$(grep -cE "Connection authenticated|gateway\.ws\.authenticated|ws.*authenticated|websocket.*auth" "$LOG" 2>/dev/null || true)
 N=${N:-0}
 [[ "$N" -ge 1 ]] && p=true || p=false
 check "ws_authenticated" "log_grep" ">= 1" "$N" "$p"

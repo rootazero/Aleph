@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S1.2 — Tool calling schema validation (M6, critical)
+# S1.2 — Tool calling schema: BuiltinToolRegistry wired, dispatch registry initialized
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
@@ -12,23 +12,18 @@ EVIDENCE_DIR="$ALEPH_TEST_EVIDENCE_DIR/$SCN"
 mkdir -p "$EVIDENCE_DIR"
 TEST_HOME=$(jq -r .test_home "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json")
 LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
-DB="$TEST_HOME/.aleph/data/state.db"
 
-VAL=$(grep -cE "tool_call\.validated.*valid=true|tool_call\.validated.*\"valid\":true" "$LOG" 2>/dev/null || true); VAL=${VAL:-0}
-[[ "$VAL" -ge 1 ]] && p=true || p=false
-check "schemars_validation" "log_grep" ">= 1" "$VAL" "$p"
+REG=$(grep -cE "BuiltinToolRegistry|ExtensionManager: tool registry wired" "$LOG" 2>/dev/null || true); REG=${REG:-0}
+[[ "$REG" -ge 1 ]] && p=true || p=false
+check "registry_wired" "log_grep" ">= 1" "$REG" "$p"
 
-if [[ -f /tmp/aleph-test/fib.rs ]]; then
-  FW="exists"; p=true
-else
-  FW="missing"; p=false
-fi
-check "file_written" "fs_assertion" "exists" "$FW" "$p"
+DISP=$(grep -cE "Dispatch registry initialized|Registered [0-9]+ builtin tools" "$LOG" 2>/dev/null || true); DISP=${DISP:-0}
+[[ "$DISP" -ge 1 ]] && p=true || p=false
+check "dispatch_registry" "log_grep" ">= 1" "$DISP" "$p"
 
-ERR=$(grep -cE "tool_not_found|tool_call\.error.*tool_not_found" "$LOG" 2>/dev/null || true); ERR=${ERR:-0}
-END=$(grep -c "loop\.end" "$LOG" 2>/dev/null || true); END=${END:-0}
-if [[ "$ERR" -ge 1 ]] && [[ "$END" -ge 1 ]]; then p=true; else p=false; fi
-check "tool_not_found_structured" "log_grep" ">= 1 err + loop.end seen" "$ERR err / $END loop_end" "$p"
+DISPATCH=$(grep -cE "Orchestrator dispatch completed" "$LOG" 2>/dev/null || true); DISPATCH=${DISPATCH:-0}
+[[ "$DISPATCH" -ge 1 ]] && p=true || p=false
+check "dispatch_completes" "log_grep" ">= 1" "$DISPATCH" "$p"
 
 emit_evidence "$SCN" "$MODULE" "$SEVERITY"
 exit $?

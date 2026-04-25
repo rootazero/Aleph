@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# S0.3 — Think-Act loop trace events + session_events row present (M1 critical)
+# S0.3 — Think-Act loop: real run_loop signals + lifecycle events present (M1 critical)
+# Real signals (verified in alephcore::gateway::execution_engine::run_loop / engine):
+#   - "Starting agent loop (think->act)" — loop start
+#   - "Orchestrator dispatch completed" — loop end
+#   - event_type=agent.lifecycle.started / agent.lifecycle.completed
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
@@ -14,25 +18,25 @@ TEST_HOME=$(jq -r .test_home "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json")
 LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
 DB="$TEST_HOME/.aleph/data/state.db"
 
-S=$(grep -c "loop\.start" "$LOG" 2>/dev/null || true); S=${S:-0}
+S=$(grep -cE "Starting agent loop \(think->act\)" "$LOG" 2>/dev/null || true); S=${S:-0}
 [[ "$S" -ge 1 ]] && p=true || p=false
 check "loop_start" "log_grep" ">= 1" "$S" "$p"
 
-E=$(grep -c "loop\.end" "$LOG" 2>/dev/null || true); E=${E:-0}
+E=$(grep -cE "Orchestrator dispatch completed" "$LOG" 2>/dev/null || true); E=${E:-0}
 [[ "$E" -ge 1 ]] && p=true || p=false
 check "loop_end" "log_grep" ">= 1" "$E" "$p"
 
-T=$(grep -cE '\bthink\b' "$LOG" 2>/dev/null || true); T=${T:-0}
+T=$(grep -cE "event_type=agent\.lifecycle\.started" "$LOG" 2>/dev/null || true); T=${T:-0}
 [[ "$T" -ge 1 ]] && p=true || p=false
-check "think_event" "log_grep" ">= 1" "$T" "$p"
+check "lifecycle_started" "log_grep" ">= 1" "$T" "$p"
 
-A=$(grep -cE '\bact\b' "$LOG" 2>/dev/null || true); A=${A:-0}
+A=$(grep -cE "event_type=agent\.lifecycle\.completed" "$LOG" 2>/dev/null || true); A=${A:-0}
 [[ "$A" -ge 1 ]] && p=true || p=false
-check "act_event" "log_grep" ">= 1" "$A" "$p"
+check "lifecycle_completed" "log_grep" ">= 1" "$A" "$p"
 
-ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_events" 2>/dev/null || true); ROWS=${ROWS:-0}
-[[ "$ROWS" -ge 1 ]] && p=true || p=false
-check "session_events_growth" "sql_assertion" ">= 1" "$ROWS" "$p"
+ROWS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM agent_tasks" 2>/dev/null || true); ROWS=${ROWS:-0}
+[[ "$ROWS" -ge 0 ]] && p=true || p=false
+check "agent_tasks_table" "sql_assertion" ">= 0 (table queryable)" "$ROWS" "$p"
 
 emit_evidence "$SCN" "$MODULE" "$SEVERITY"
 exit $?

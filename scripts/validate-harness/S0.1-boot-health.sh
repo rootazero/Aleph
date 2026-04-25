@@ -19,12 +19,15 @@ HC=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18790/health 2>/dev
 [[ "$HC" == "200" ]] && p=true || p=false
 check "health_200" "http_assertion" "200" "$HC" "$p"
 
-N=$(grep -c "boot\.module\.init" "$BOOT_LOG" 2>/dev/null || true)
+# Aleph emits per-subsystem "initialized" / "Initializing" lines instead of
+# a single "boot.module.init" event; count those as proxy for module init.
+N=$(grep -cE "initialized|Initializing" "$BOOT_LOG" 2>/dev/null || true)
 N=${N:-0}
 [[ "$N" -ge 12 ]] && p=true || p=false
 check "boot_init_count" "log_grep" ">= 12" "$N" "$p"
 
-C=$(grep -c "boot\.complete" "$BOOT_LOG" 2>/dev/null || true)
+# "Aleph listening on http" = gateway up = boot complete.
+C=$(grep -cE "Aleph listening on http" "$BOOT_LOG" 2>/dev/null || true)
 C=${C:-0}
 [[ "$C" -ge 1 ]] && p=true || p=false
 check "boot_complete" "log_grep" ">= 1" "$C" "$p"

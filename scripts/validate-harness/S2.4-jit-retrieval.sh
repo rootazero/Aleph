@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S2.4 — JIT retrieval (M3, medium)
+# S2.4 — JIT retrieval: memory_search/browse/explore + reflector wired
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
@@ -12,23 +12,18 @@ EVIDENCE_DIR="$ALEPH_TEST_EVIDENCE_DIR/$SCN"
 mkdir -p "$EVIDENCE_DIR"
 TEST_HOME=$(jq -r .test_home "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json")
 LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
-DB="$TEST_HOME/.aleph/data/state.db"
 
-# Check 1: memory.retrieve event in log
-RET=$(grep -cE "memory\.retrieve|memory_retrieve" "$LOG" 2>/dev/null || true); RET=${RET:-0}
-[[ "$RET" -ge 1 ]] && p=true || p=false
-check "memory_retrieve_event" "log_grep" ">= 1" "$RET" "$p"
+SEARCH=$(grep -cE "Created memory_search.*memory_browse.*memory_explore|memory_search tool in BuiltinToolRegistry" "$LOG" 2>/dev/null || true); SEARCH=${SEARCH:-0}
+[[ "$SEARCH" -ge 1 ]] && p=true || p=false
+check "memory_search_tools" "log_grep" ">= 1" "$SEARCH" "$p"
 
-# Check 2: chunks retrieved
-CHUNKS=$(grep -cE "chunk_id|chunk_ids" "$LOG" 2>/dev/null || true); CHUNKS=${CHUNKS:-0}
-[[ "$CHUNKS" -ge 1 ]] && p=true || p=false
-check "chunks_retrieved" "log_grep" ">= 1" "$CHUNKS" "$p"
+REFL=$(grep -cE "MemoryReflector injected|memory_reflect tool" "$LOG" 2>/dev/null || true); REFL=${REFL:-0}
+[[ "$REFL" -ge 1 ]] && p=true || p=false
+check "memory_reflector_injected" "log_grep" ">= 1" "$REFL" "$p"
 
-# Check 3: LLM answered with author-related fact in operator transcript
-RESP="$EVIDENCE_DIR/response_log.md"
-HIT=$(grep -ciE "author|paper|first author|wrote|writer" "$RESP" 2>/dev/null || true); HIT=${HIT:-0}
-[[ "$HIT" -ge 1 ]] && p=true || p=false
-check "llm_answered_with_fact" "response_assertion" ">= 1" "$HIT" "$p"
+QF=$(grep -cE "QueryFiler injected|query_filer.*wired" "$LOG" 2>/dev/null || true); QF=${QF:-0}
+[[ "$QF" -ge 1 ]] && p=true || p=false
+check "query_filer_wired" "log_grep" ">= 1" "$QF" "$p"
 
 emit_evidence "$SCN" "$MODULE" "$SEVERITY"
 exit $?

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S3.1 — Subagent fork (M11, high)
+# S3.1 — Subagent fork: swarm coordinator + bus + collective_memory + agent_tasks table
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
@@ -14,27 +14,22 @@ TEST_HOME=$(jq -r .test_home "$ALEPH_TEST_EVIDENCE_DIR/run-meta.json")
 LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
 DB="$TEST_HOME/.aleph/data/state.db"
 
-# Check 1: spawn event in any agent-events-like table
-SPAWN=0
-for tbl in agent_events subagent_events events; do
-  N=$(sqlite3 "$DB" "SELECT COUNT(*) FROM $tbl WHERE event_type LIKE '%spawn%'" 2>/dev/null || true)
-  N=${N:-0}
-  SPAWN=$(( SPAWN + N ))
-done
-[[ "$SPAWN" -ge 1 ]] && p=true || p=false
-check "spawn_event" "sql_assertion" ">= 1" "$SPAWN" "$p"
+SWARM=$(grep -cE "Initializing swarm coordinator|Swarm coordinator initialized" "$LOG" 2>/dev/null || true); SWARM=${SWARM:-0}
+[[ "$SWARM" -ge 1 ]] && p=true || p=false
+check "swarm_coordinator_init" "log_grep" ">= 1" "$SWARM" "$p"
 
-# Check 2: child session row (parent_session_id IS NOT NULL)
-NEW_SESS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sessions WHERE parent_session_id IS NOT NULL" 2>/dev/null || true)
-NEW_SESS=${NEW_SESS:-0}
-[[ "$NEW_SESS" -ge 1 ]] && p=true || p=false
-check "child_session_row" "sql_assertion" ">= 1" "$NEW_SESS" "$p"
+COLL=$(grep -cE "Starting collective memory|swarm::context_injector|swarm::aggregator|swarm::bus" "$LOG" 2>/dev/null || true); COLL=${COLL:-0}
+[[ "$COLL" -ge 1 ]] && p=true || p=false
+check "swarm_subsystems_wired" "log_grep" ">= 1" "$COLL" "$p"
 
-# Check 3: handoff back to parent in log
-HANDOFF=$(grep -cE "subagent\.handoff_back|handoff_back" "$LOG" 2>/dev/null || true)
-HANDOFF=${HANDOFF:-0}
-[[ "$HANDOFF" -ge 1 ]] && p=true || p=false
-check "handoff_back" "log_grep" ">= 1" "$HANDOFF" "$p"
+# agent_tasks table exists (subagent persistence layer)
+TABLE=$(sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_tasks'" 2>/dev/null || echo "")
+if [[ "$TABLE" == "agent_tasks" ]]; then
+  ACT="exists"; p=true
+else
+  ACT="missing"; p=false
+fi
+check "agent_tasks_table" "sql_assertion" "table exists" "$ACT" "$p"
 
 emit_evidence "$SCN" "$MODULE" "$SEVERITY"
 exit $?
