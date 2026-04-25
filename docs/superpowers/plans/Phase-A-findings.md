@@ -49,3 +49,33 @@ Commit before Phase A: `235ab7c95803af34dfe6273b1ef912a982fbb7f9`
 
 - **HOME-redirect viable**: yes
 - **Fallback if no**: N/A (not needed — file-based vault is fully isolated by `HOME=$ALEPH_TEST_HOME`)
+
+---
+
+## TBD#3: gateway replay endpoint
+
+- **Exposed**: no
+- **Evidence (file:line)**:
+  - `src/gateway/handlers/mod.rs:111` — `pub mod trace_replay;` exists but only registers `trace.list` / `trace.get` stubs (line 503-504), not session replay.
+  - `grep -rn "/replay\|sessions/.*replay\|replay_handler" src/gateway/ src/bin/` — only matches the `trace.list/get` stubs, no `/sessions/{id}/replay`.
+  - `src/session/actor.rs:68-76` — `async fn replay(&mut self)` is **private** (`async fn`, no `pub`).
+  - `src/session/state.rs:35` — `pub fn apply(&mut self, event: &SessionEvent)` is public.
+  - `src/session/store.rs:37` — `pub trait SessionEventStore` is public; `load_all_events` and `load_events_range` are reachable.
+
+- **S3.2 strategy**: **`sql`** — neither curl nor a probe binary
+
+  Rationale:
+  - Plan allows a probe binary, but writing one requires:
+    - new `src/bin/aleph-replay-probe.rs`
+    - new `[[bin]]` entry in root `Cargo.toml` (currently only `aleph-server` is registered, line 266-268)
+    - linking against `alephcore` lib (already a `cdylib`+`rlib`, so OK)
+    - reaching ~50 LOC: open SQLite, instantiate `SessionEventStore` impl, iterate, apply state, hash
+  - Simpler equivalent for evidence: post-flight `sqlite3` dump of `session_events` table (already in `postflight.sh`), then a small `jq`/`bash` projection in `S3.2-checkpoint-replay.sh` that:
+    1. Reads `db-session_events.csv` for the main session.
+    2. Asserts `seq` is contiguous from 1..N (no gaps).
+    3. Asserts a known event-type sequence appears (e.g., `user_message` then `assistant_message`).
+    4. Hashes the event-payload concatenation as the "state hash" proxy.
+  - This validates M7 State/Checkpointing (severity=medium) without any production-code surface change.
+
+- **aleph-replay-probe SHA**: N/A (not created)
+- **`/tmp/aleph-replay-strategy.txt` content**: `sql`
