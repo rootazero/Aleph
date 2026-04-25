@@ -15,7 +15,7 @@ LOG="$TEST_HOME/.aleph/logs/aleph-server.log"
 DB="$TEST_HOME/.aleph/data/state.db"
 BOOT_LOG="$ALEPH_TEST_EVIDENCE_DIR/boot.log"
 
-HC=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9090/health 2>/dev/null || echo "000")
+HC=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18790/health 2>/dev/null || echo "000")
 [[ "$HC" == "200" ]] && p=true || p=false
 check "health_200" "http_assertion" "200" "$HC" "$p"
 

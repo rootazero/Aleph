@@ -26,7 +26,7 @@ COMP=$(grep -c "boot\.complete" "$BOOT_LOG" 2>/dev/null || true); COMP=${COMP:-0
 check "boot_complete_event" "log_grep" ">= 1" "$COMP" "$p"
 
 # Check 3: /health subsystem surface — be lenient if /health is sparse
-HEALTH_JSON=$(curl -sf http://127.0.0.1:9090/health 2>/dev/null || true)
+HEALTH_JSON=$(curl -sf http://127.0.0.1:18790/health 2>/dev/null || true)
 KEYS=0
 if [[ -n "$HEALTH_JSON" ]]; then
   KEYS=$(echo "$HEALTH_JSON" | jq -r '.subsystems // . | keys | length' 2>/dev/null || true)

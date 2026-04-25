@@ -20,10 +20,10 @@ if ps aux | grep "[a]leph-server" | grep -v zsh | grep -v cp | grep -v tail >/de
 fi
 
 # ----------------------------------------------------------------------------
-# Step 2: Port collision check (8080 webchat dev, 9090 gateway)
+# Step 2: Port collision check (18790 = aleph gateway + webchat panel)
 # ----------------------------------------------------------------------------
-echo "==> [2/10] checking ports 8080 and 9090"
-for port in 8080 9090; do
+echo "==> [2/10] checking port 18790"
+for port in 18790; do
   if lsof -i:"$port" >/dev/null 2>&1; then
     echo "FATAL: port $port is in use" >&2
     lsof -i:"$port" >&2
@@ -71,14 +71,23 @@ trap cleanup EXIT INT TERM
 # Step 5: Copy real → test (vault, providers, skills config, agents)
 # ----------------------------------------------------------------------------
 echo "==> [5/10] copying real config into test HOME"
-SRC="$HOME/.aleph/data"
-DST="$ALEPH_TEST_HOME/.aleph/data"
-for item in vault vault.bin secrets.vault .shared_token config.toml providers skills agents; do
-  if [[ -e "$SRC/$item" ]]; then
-    cp -R "$SRC/$item" "$DST/"
+SRC_HOME="$HOME/.aleph"
+DST_HOME="$ALEPH_TEST_HOME/.aleph"
+# Parent-level: config.toml, agents/, channels/, guides/ (per real ~/.aleph layout)
+for item in config.toml agents channels guides; do
+  if [[ -e "$SRC_HOME/$item" ]]; then
+    cp -R "$SRC_HOME/$item" "$DST_HOME/"
   fi
 done
-echo "    copied $(ls "$DST" 2>/dev/null | wc -l | xargs) items into test HOME"
+# Inner data/: only vault + shared token; DBs start fresh for clean evidence
+for item in secrets.vault .shared_token; do
+  if [[ -e "$SRC_HOME/data/$item" ]]; then
+    cp "$SRC_HOME/data/$item" "$DST_HOME/data/"
+  fi
+done
+PARENT_N=$(ls "$DST_HOME" 2>/dev/null | wc -l | xargs)
+DATA_N=$(ls "$DST_HOME/data" 2>/dev/null | wc -l | xargs)
+echo "    copied $PARENT_N parent items + $DATA_N data items into test HOME"
 
 # ----------------------------------------------------------------------------
 # Step 6: Start aleph with HOME redirect + RUST_LOG
@@ -99,7 +108,7 @@ echo "    aleph started (pid=$ALEPH_PID, log=$LOG)"
 echo "==> [7/10] waiting for /health (90s timeout)"
 HEALTH_OK=0
 for i in $(seq 1 90); do
-  if curl -sf http://127.0.0.1:9090/health >/dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:18790/health >/dev/null 2>&1; then
     echo "==> health OK after ${i}s"
     HEALTH_OK=1
     break
@@ -157,7 +166,7 @@ cat <<EOF
   Server log     : $LOG
 
   Webchat URL (open in browser):
-    http://127.0.0.1:8080/?token=aleph-9976129a-407d-4893-a96c-6467b24bedac
+    http://127.0.0.1:18790/?token=aleph-9976129a-407d-4893-a96c-6467b24bedac
 
   Next step — run the scenario suite:
     scripts/validate-harness/run-all.sh

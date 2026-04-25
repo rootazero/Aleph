@@ -13,7 +13,7 @@ cleanup() {
   fi
   # Belt-and-suspenders: kill anything still bound to the mock health port
   if command -v lsof >/dev/null 2>&1; then
-    lsof -ti :9090 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    lsof -ti :18790 2>/dev/null | xargs -r kill -9 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -150,7 +150,7 @@ class H(http.server.BaseHTTPRequestHandler):
     s.wfile.write(json.dumps({'subsystems':{f'm{i}':'ok' for i in range(12)}}).encode())
   def log_message(s,*a): pass
 socketserver.TCPServer.allow_reuse_address = True
-srv = socketserver.TCPServer(('127.0.0.1',9090), H)
+srv = socketserver.TCPServer(('127.0.0.1',18790), H)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 time.sleep(180)
 " &
