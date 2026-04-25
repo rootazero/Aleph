@@ -329,9 +329,126 @@ fn draw_cluster(
 }
 
 fn draw_edges_for_node(
-    _ctx: &CanvasRenderingContext2d,
-    _n: &CanvasNode,
-    _nbhd: &Neighborhood,
-    _drag: (f32, f32),
+    ctx: &CanvasRenderingContext2d,
+    n: &CanvasNode,
+    nbhd: &Neighborhood,
+    drag: (f32, f32),
 ) {
+    for e in &nbhd.edges {
+        let endpoints = endpoints_world_pos(e, nbhd, drag);
+        let (from_pos, to_pos, from_z, to_z) = match endpoints {
+            Some(t) => t,
+            None => continue,
+        };
+        // Draw each edge only once — from_idx < to_idx convention
+        if e.from_idx >= e.to_idx {
+            continue;
+        }
+        // Only draw edges that involve this node (by index in the neighborhood)
+        let n_idx = nbhd
+            .one_hop
+            .iter()
+            .position(|x| x.id == n.id)
+            .map(|i| i + 1)
+            .or_else(|| {
+                nbhd.two_hop
+                    .iter()
+                    .position(|x| x.id == n.id)
+                    .map(|i| i + 1 + nbhd.one_hop.len())
+            })
+            .unwrap_or(0);
+        if e.from_idx != n_idx && e.to_idx != n_idx {
+            continue;
+        }
+
+        let attrs_from = depth_attrs(from_z);
+        let attrs_to = depth_attrs(to_z);
+        let stroke_alpha = if e.is_active_link { 0.85_f32 } else { 0.25_f32 };
+
+        if e.is_wikilink {
+            let dashes = js_sys::Array::new();
+            dashes.push(&JsValue::from_f64(5.0));
+            dashes.push(&JsValue::from_f64(4.0));
+            let _ = ctx.set_line_dash(&dashes);
+        } else {
+            let solid = js_sys::Array::new();
+            let _ = ctx.set_line_dash(&solid);
+        }
+
+        // Bezier control point: perpendicular offset from midpoint
+        let mid_x = (from_pos.0 + to_pos.0) * 0.5;
+        let mid_y = (from_pos.1 + to_pos.1) * 0.5;
+        let dx = to_pos.0 - from_pos.0;
+        let dy = to_pos.1 - from_pos.1;
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let nx = -dy / len; // perpendicular unit vector
+        let ny = dx / len;
+        let curve_amt = 30.0_f32;
+        let cx = mid_x + nx * curve_amt;
+        let cy = mid_y + ny * curve_amt;
+
+        let grad = ctx.create_linear_gradient(
+            from_pos.0 as f64,
+            from_pos.1 as f64,
+            to_pos.0 as f64,
+            to_pos.1 as f64,
+        );
+        if e.is_active_link {
+            let _ = grad.add_color_stop(
+                0.0,
+                &format!("rgba(167,139,250,{:.3})", stroke_alpha * attrs_from.opacity),
+            );
+            let _ = grad.add_color_stop(
+                1.0,
+                &format!("rgba(76,29,149,{:.3})", stroke_alpha * attrs_to.opacity),
+            );
+        } else {
+            let _ = grad.add_color_stop(
+                0.0,
+                &format!("rgba(107,107,138,{:.3})", stroke_alpha * attrs_from.opacity),
+            );
+            let _ = grad.add_color_stop(
+                1.0,
+                &format!("rgba(42,42,58,{:.3})", stroke_alpha * attrs_to.opacity),
+            );
+        }
+
+        let avg_w = if e.is_active_link { (2.5 + 1.0) * 0.5 } else { (1.5 + 0.8) * 0.5 };
+
+        ctx.set_stroke_style_canvas_gradient(&grad);
+        ctx.set_line_width(avg_w as f64);
+        ctx.begin_path();
+        ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
+        ctx.quadratic_curve_to(cx as f64, cy as f64, to_pos.0 as f64, to_pos.1 as f64);
+        ctx.stroke();
+    }
+}
+
+fn endpoints_world_pos(
+    e: &CanvasEdge,
+    nbhd: &Neighborhood,
+    drag: (f32, f32),
+) -> Option<((f32, f32), (f32, f32), f32, f32)> {
+    let resolve = |idx: usize| -> Option<Vec3> {
+        if idx == 0 {
+            nbhd.target_positions.get(&nbhd.center.id).copied()
+        } else if idx <= nbhd.one_hop.len() {
+            let n = &nbhd.one_hop[idx - 1];
+            nbhd.target_positions.get(&n.id).copied()
+        } else {
+            let off = idx - 1 - nbhd.one_hop.len();
+            let n = nbhd.two_hop.get(off)?;
+            nbhd.target_positions.get(&n.id).copied()
+        }
+    };
+    let p1 = resolve(e.from_idx)?;
+    let p2 = resolve(e.to_idx)?;
+    let off1 = crate::canvas_engine::viewport::parallax_offset(p1.z, drag.0, drag.1);
+    let off2 = crate::canvas_engine::viewport::parallax_offset(p2.z, drag.0, drag.1);
+    Some((
+        (p1.x + off1.0, p1.y + off1.1),
+        (p2.x + off2.0, p2.y + off2.1),
+        p1.z,
+        p2.z,
+    ))
 }
