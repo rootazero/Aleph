@@ -34,6 +34,8 @@ pub fn CanvasView() -> impl IntoView {
     let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
     let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
     let search_query = RwSignal::new(String::new());
+    // fold_threshold controls cluster folding granularity (6..=20); wired fully in T22
+    let (fold_threshold, set_fold_threshold) = signal(12usize);
 
     // Non-reactive 60fps state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
@@ -206,6 +208,8 @@ pub fn CanvasView() -> impl IntoView {
                 search_query=search_query
                 on_toggle_mode=on_toggle_mode
                 on_search=on_search
+                fold_threshold=fold_threshold
+                set_fold_threshold=set_fold_threshold
             />
 
             {move || is_local().then(|| view! {

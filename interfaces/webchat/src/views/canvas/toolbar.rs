@@ -8,6 +8,8 @@ pub fn CanvasToolbar(
     search_query: RwSignal<String>,
     on_toggle_mode: impl Fn() + 'static + Copy,
     on_search: impl Fn(String) + 'static + Copy,
+    fold_threshold: ReadSignal<usize>,
+    set_fold_threshold: WriteSignal<usize>,
 ) -> impl IntoView {
     let input_value = RwSignal::new(String::new());
 
@@ -28,12 +30,17 @@ pub fn CanvasToolbar(
         }
     };
 
-    let mode_label = move || match view_mode.get() {
-        ViewMode::Global { .. } => "Global",
-        ViewMode::Local { .. } => "Local",
-    };
-
     let is_global = move || matches!(view_mode.get(), ViewMode::Global { .. });
+
+    let on_slider_input = move |ev: web_sys::Event| {
+        let target: Option<web_sys::HtmlInputElement> = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+        if let Some(input) = target {
+            let v: usize = input.value().parse().unwrap_or(12);
+            set_fold_threshold.set(v);
+        }
+    };
 
     view! {
         <div class="flex items-center gap-3 px-4 py-2 bg-surface-raised border-b border-border">
@@ -63,19 +70,48 @@ pub fn CanvasToolbar(
                 />
             </div>
 
-            // Global/Local toggle
-            <button
-                on:click=move |_| on_toggle_mode()
-                class=move || {
-                    if is_global() {
-                        "px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/20 text-primary border border-primary/30"
-                    } else {
-                        "px-3 py-1.5 text-xs font-medium rounded-lg bg-accent/20 text-accent border border-accent/30"
+            // Detail (fold threshold) slider
+            <div class="flex items-center gap-1.5 text-xs text-text-secondary">
+                <span>"Detail"</span>
+                <input
+                    type="range"
+                    min="6"
+                    max="20"
+                    step="1"
+                    class="w-20 accent-primary"
+                    prop:value=move || fold_threshold.get().to_string()
+                    on:input=on_slider_input
+                />
+                <span class="w-4 text-center">{move || fold_threshold.get()}</span>
+            </div>
+
+            // Local/Global two-button toggle
+            <div class="flex rounded-lg overflow-hidden border border-border">
+                <button
+                    on:click=move |_| { if is_global() { on_toggle_mode(); } }
+                    class=move || {
+                        if is_global() {
+                            "px-3 py-1.5 text-xs font-medium bg-primary/20 text-primary"
+                        } else {
+                            "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                        }
                     }
-                }
-            >
-                {mode_label}
-            </button>
+                >
+                    "Global"
+                </button>
+                <button
+                    on:click=move |_| { if !is_global() { on_toggle_mode(); } }
+                    class=move || {
+                        if !is_global() {
+                            "px-3 py-1.5 text-xs font-medium bg-accent/20 text-accent"
+                        } else {
+                            "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                        }
+                    }
+                >
+                    "Local"
+                </button>
+            </div>
         </div>
     }
 }
