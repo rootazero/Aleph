@@ -20,7 +20,7 @@ impl GraphApi {
         node_id: &str,
         depth: u8,
         limit: usize,
-    ) -> Result<GraphQueryResponse, String> {
+    ) -> Result<GraphNeighborsResponse, String> {
         let params = json!({ "node_id": node_id, "depth": depth, "limit": limit });
         let result = state.rpc_call("graph.neighbors", params).await?;
         serde_json::from_value(result)

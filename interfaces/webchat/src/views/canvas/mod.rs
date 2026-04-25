@@ -10,7 +10,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::canvas_engine::adapter::{adapt_graph_response, NoteDetailResponse};
+use crate::canvas_engine::adapter::{
+    adapt_graph_response, GraphNeighborsResponse, GraphQueryResponse, NoteDetailResponse,
+};
 use leptos::callback::Callback;
 
 use crate::canvas_engine::interaction::CanvasEvent;
@@ -46,12 +48,21 @@ pub fn CanvasView() -> impl IntoView {
         let gs = gs_load.clone();
 
         spawn_local(async move {
-            let result = match &mode {
+            // Fetch graph data; normalize GraphNeighborsResponse into GraphQueryResponse
+            // so the existing adapt_graph_response path works until Task 11 replaces it.
+            let result: Result<GraphQueryResponse, String> = match &mode {
                 ViewMode::Global { top_k } => GraphApi::query(&state, *top_k, vec![]).await,
                 ViewMode::Local {
                     center_node_id,
                     depth,
-                } => GraphApi::neighbors(&state, center_node_id, *depth, 200).await,
+                } => GraphApi::neighbors(&state, center_node_id, *depth, 200)
+                    .await
+                    .map(|r: GraphNeighborsResponse| {
+                        // Merge center into nodes so the flat adapter sees all nodes.
+                        let mut nodes = vec![r.center];
+                        nodes.extend(r.nodes);
+                        GraphQueryResponse { nodes, edges: r.edges }
+                    }),
             };
 
             match result {

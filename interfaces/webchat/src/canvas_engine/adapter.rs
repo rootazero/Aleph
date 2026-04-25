@@ -45,6 +45,21 @@ pub struct GraphSearchResponse {
     pub results: Vec<SearchResultDto>,
 }
 
+/// Deserialization target for the `graph.neighbors` RPC response (radial navigation).
+/// Mirrors the server's `GraphNeighborsResponse` in `src/gateway/handlers/graph_types.rs`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphNeighborsResponse {
+    /// The queried node, pinned at world origin in the radial layout.
+    pub center: NoteNodeDto,
+    /// Neighbor nodes (center excluded).
+    pub nodes: Vec<NoteNodeDto>,
+    /// Edges between all returned nodes (including center).
+    pub edges: Vec<NoteLinkDto>,
+    /// Hop distance from center: 1 = direct neighbor, 2 = two hops.
+    #[serde(default)]
+    pub hop_depth: HashMap<String, u8>,
+}
+
 pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, Vec<CanvasEdge>) {
     let total = response.nodes.len();
     let nodes: Vec<CanvasNode> = response
