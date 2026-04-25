@@ -309,23 +309,182 @@ fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
     ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
 }
 
-// Stubs — filled in by Tasks 14 (edges) and 15 (nodes/clusters)
 fn draw_node(
-    _ctx: &CanvasRenderingContext2d,
-    _n: &CanvasNode,
-    _drag: (f32, f32),
-    _selected: Option<&str>,
-    _hovered: Option<&str>,
+    ctx: &CanvasRenderingContext2d,
+    n: &CanvasNode,
+    drag: (f32, f32),
+    selected: Option<&str>,
+    hovered: Option<&str>,
 ) {
+    use std::f64::consts::TAU;
+
+    let attrs = depth_attrs(n.z);
+    let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
+    let cx = n.position.x as f32 + off.0;
+    let cy = n.position.y as f32 + off.1;
+    let r = (n.radius as f32 * attrs.scale) as f64;
+    let cx64 = cx as f64;
+    let cy64 = cy as f64;
+
+    let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
+    let is_hovered = hovered.map(|h| h == n.id).unwrap_or(false);
+    let is_active = n.hop == 0;
+
+    // 1. Shadow ellipse (depth-attenuated, Y-offset varies with depth)
+    let shadow_y = cy64 + attrs.shadow_offset_y as f64;
+    let shadow_alpha = 0.3 * attrs.opacity as f64;
+    ctx.set_fill_style_str(&format!("rgba(0,0,0,{shadow_alpha:.3})"));
+    ctx.begin_path();
+    let _ = ctx.ellipse(cx64, shadow_y, r * 1.1, r * 0.4, 0.0, 0.0, TAU);
+    ctx.fill();
+
+    // 2. Glow ring
+    //    Active centre: breathing animation (sin-based pulse)
+    //    Hovered/selected: static bright glow
+    let glow_alpha = if is_active {
+        let t = now_ms_in_seconds();
+        let breath = 0.85 + 0.15 * (t * std::f64::consts::TAU / 2.5).sin();
+        (attrs.glow_alpha as f64 * breath).clamp(0.0, 1.0)
+    } else if is_hovered || is_selected {
+        (attrs.glow_alpha as f64 * 1.4).clamp(0.0, 1.0)
+    } else {
+        attrs.glow_alpha as f64
+    };
+
+    if glow_alpha > 0.01 {
+        let glow_r = r + if is_selected || is_hovered { 8.0 } else { 4.0 };
+        let grad = ctx.create_radial_gradient(cx64, cy64, r * 0.5, cx64, cy64, glow_r);
+        let glow_color_inner = format!(
+            "rgba({},{},{},{:.3})",
+            n.color.r, n.color.g, n.color.b, glow_alpha
+        );
+        let glow_color_outer = format!(
+            "rgba({},{},{},0.0)",
+            n.color.r, n.color.g, n.color.b
+        );
+        if let Ok(grad) = grad {
+            let _ = grad.add_color_stop(0.0, &glow_color_inner);
+            let _ = grad.add_color_stop(1.0, &glow_color_outer);
+            ctx.set_fill_style_canvas_gradient(&grad);
+            ctx.begin_path();
+            let _ = ctx.arc(cx64, cy64, glow_r, 0.0, TAU);
+            ctx.fill();
+        }
+    }
+
+    // 3. Blur filter for 2-hop nodes
+    if attrs.blur_px > 0.5 {
+        ctx.set_filter(&format!("blur({:.1}px)", attrs.blur_px));
+    }
+
+    // 4. Body fill — saturation-attenuated by depth
+    let body_color = scale_color_saturation(&n.color, attrs.sat_mul, attrs.opacity);
+    ctx.set_fill_style_str(&body_color);
+    ctx.begin_path();
+    let _ = ctx.arc(cx64, cy64, r, 0.0, TAU);
+    ctx.fill();
+
+    // 5. Border
+    ctx.set_stroke_style_str("#1a1a2a");
+    ctx.set_line_width(1.0);
+    ctx.stroke();
+
+    // 6. Reset blur filter
+    if attrs.blur_px > 0.5 {
+        ctx.set_filter("none");
+    }
+
+    // 7. Icon — skipped (CanvasNode has no icon field; future enhancement)
+
+    // 8. Wiki badge — skipped (CanvasNode has no has_wiki field; future enhancement)
+
+    // 9. Label — show when node is large enough
+    if r >= 18.0 {
+        let label = if n.name.chars().count() > 20 {
+            let truncated: String = n.name.chars().take(19).collect();
+            format!("{truncated}\u{2026}")
+        } else {
+            n.name.clone()
+        };
+
+        let label_alpha = if is_selected || is_hovered {
+            attrs.opacity as f64
+        } else {
+            (attrs.opacity as f64 * 0.85).clamp(0.0, 1.0)
+        };
+        ctx.set_fill_style_str(&format!("rgba(226,232,240,{label_alpha:.3})"));
+        ctx.set_font("11px sans-serif");
+        ctx.set_text_align("center");
+        ctx.set_text_baseline("top");
+        let _ = ctx.fill_text(&label, cx64, cy64 + r + 4.0);
+    }
 }
 
 fn draw_cluster(
-    _ctx: &CanvasRenderingContext2d,
-    _c: &ClusterNode,
-    _drag: (f32, f32),
-    _selected: Option<&str>,
-    _hovered: Option<&str>,
+    ctx: &CanvasRenderingContext2d,
+    c: &ClusterNode,
+    drag: (f32, f32),
+    selected: Option<&str>,
+    hovered: Option<&str>,
 ) {
+    let attrs = depth_attrs(c.z);
+    let off = crate::canvas_engine::viewport::parallax_offset(c.z, drag.0, drag.1);
+    let cx = (c.world_pos.x as f32 + off.0) as f64;
+    let cy = (c.world_pos.y as f32 + off.1) as f64;
+    let r = (c.radius * attrs.scale) as f64;
+
+    // Bounding box: 2.4r wide, 1.6r tall
+    let w = r * 2.4;
+    let h = r * 1.6;
+    let x = cx - w / 2.0;
+    let y = cy - h / 2.0;
+    let corner_r = 8.0_f64;
+
+    let is_selected = selected.map(|s| s == c.id).unwrap_or(false);
+    let is_hovered = hovered.map(|h| h == c.id).unwrap_or(false);
+
+    // 1. Shadow ellipse
+    let shadow_alpha = 0.25 * attrs.opacity as f64;
+    ctx.set_fill_style_str(&format!("rgba(0,0,0,{shadow_alpha:.3})"));
+    ctx.begin_path();
+    let shadow_y = cy + attrs.shadow_offset_y as f64;
+    let _ = ctx.ellipse(cx, shadow_y, w * 0.5, h * 0.25, 0.0, 0.0, std::f64::consts::TAU);
+    ctx.fill();
+
+    // 2. Body: rounded rect with purple tint
+    let body_alpha = 0.30 * attrs.opacity as f64;
+    ctx.set_fill_style_str(&format!("rgba(124,58,237,{body_alpha:.3})"));
+    ctx.begin_path();
+    rounded_rect(ctx, x, y, w, h, corner_r);
+    ctx.fill();
+
+    // 3. Stroke
+    let stroke_alpha = attrs.opacity as f64;
+    ctx.set_stroke_style_str(&format!("rgba(167,139,250,{stroke_alpha:.3})"));
+    ctx.set_line_width(2.0);
+    ctx.begin_path();
+    rounded_rect(ctx, x, y, w, h, corner_r);
+    ctx.stroke();
+
+    // 4. Highlight outline if hovered or selected
+    if is_hovered || is_selected {
+        let pad = 3.0;
+        ctx.set_stroke_style_str("rgba(255,255,255,0.7)");
+        ctx.set_line_width(1.5);
+        ctx.begin_path();
+        rounded_rect(ctx, x - pad, y - pad, w + pad * 2.0, h + pad * 2.0, corner_r + pad);
+        ctx.stroke();
+    }
+
+    // 5. Label: "📚 +N kind" centered
+    let count = c.member_ids.len();
+    let label = format!("\u{1F4DA} +{count} {}", c.kind);
+    let label_alpha = attrs.opacity as f64;
+    ctx.set_fill_style_str(&format!("rgba(226,232,240,{label_alpha:.3})"));
+    ctx.set_font("11px sans-serif");
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+    let _ = ctx.fill_text(&label, cx, cy);
 }
 
 fn draw_edges_for_node(
@@ -422,6 +581,42 @@ fn draw_edges_for_node(
         ctx.quadratic_curve_to(cx as f64, cy as f64, to_pos.0 as f64, to_pos.1 as f64);
         ctx.stroke();
     }
+}
+
+/// Return current time in seconds using `performance.now()`.
+fn now_ms_in_seconds() -> f64 {
+    web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now() / 1000.0)
+        .unwrap_or(0.0)
+}
+
+/// Build a CSS rgba() string with saturation attenuated by `sat_mul` and given opacity.
+/// Approach: lerp each channel toward its luminance (desaturate) then apply opacity.
+fn scale_color_saturation(c: &Color, sat_mul: f32, opacity: f32) -> String {
+    // Perceived luminance weights (BT.601)
+    let lum = 0.299 * c.r as f32 + 0.587 * c.g as f32 + 0.114 * c.b as f32;
+    let r = (lum + (c.r as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
+    let g = (lum + (c.g as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
+    let b = (lum + (c.b as f32 - lum) * sat_mul).clamp(0.0, 255.0) as u8;
+    format!("rgba({r},{g},{b},{opacity:.3})")
+}
+
+/// Stroke a rounded rectangle path onto `ctx`.
+/// Caller is responsible for calling `fill()` or `stroke()` afterward.
+fn rounded_rect(ctx: &CanvasRenderingContext2d, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    // Clamp corner radius so it never exceeds half the shorter side
+    let r = r.min(w / 2.0).min(h / 2.0);
+    ctx.move_to(x + r, y);
+    ctx.line_to(x + w - r, y);
+    let _ = ctx.arc_to(x + w, y, x + w, y + r, r);
+    ctx.line_to(x + w, y + h - r);
+    let _ = ctx.arc_to(x + w, y + h, x + w - r, y + h, r);
+    ctx.line_to(x + r, y + h);
+    let _ = ctx.arc_to(x, y + h, x, y + h - r, r);
+    ctx.line_to(x, y + r);
+    let _ = ctx.arc_to(x, y, x + r, y, r);
+    ctx.close_path();
 }
 
 fn endpoints_world_pos(
