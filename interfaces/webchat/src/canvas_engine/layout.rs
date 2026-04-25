@@ -416,4 +416,122 @@ mod radial_tests {
             "b and c should be in opposite sectors, got angular diff {diff}"
         );
     }
+
+    #[test]
+    fn force_step_converges_within_60_iterations() {
+        let active = n("a", "concept", 0);
+        let one_hop: Vec<_> = (0..5).map(|i| n(&format!("h{i}"), "concept", 1)).collect();
+        let edges: Vec<_> = (0..5).map(|i| e(0, i + 1, "uses")).collect();
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+
+        let mut layout = RadialForceLayout::new(targets, ForceConfig::default());
+        for _ in 0..60 {
+            layout.step(0.016);
+        }
+        assert!(layout.kinetic_energy() < 1.0,
+            "expected KE < 1.0 after 60 iters, got {}", layout.kinetic_energy());
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ForceConfig {
+    pub target_attract: f32,
+    pub repulsion: f32,
+    pub damping: f32,
+    pub max_velocity: f32,
+}
+
+impl Default for ForceConfig {
+    fn default() -> Self {
+        Self {
+            target_attract: 0.15,
+            repulsion: 800.0,
+            damping: 0.85,
+            max_velocity: 50.0,
+        }
+    }
+}
+
+pub struct RadialForceLayout {
+    pub positions: HashMap<String, Vec3>,
+    pub velocities: HashMap<String, (f32, f32)>,
+    targets: HashMap<String, Vec3>,
+    config: ForceConfig,
+    active_id: Option<String>,
+}
+
+impl RadialForceLayout {
+    pub fn new(targets: HashMap<String, Vec3>, config: ForceConfig) -> Self {
+        let positions = targets.clone();
+        let velocities = targets.keys().map(|k| (k.clone(), (0.0_f32, 0.0_f32))).collect();
+        Self { positions, velocities, targets, config, active_id: None }
+    }
+
+    pub fn pin_active(&mut self, id: String) {
+        self.active_id = Some(id);
+    }
+
+    pub fn step(&mut self, dt: f32) {
+        let cfg = self.config;
+        let ids: Vec<String> = self.positions.keys().cloned().collect();
+        let mut forces: HashMap<String, (f32, f32)> = ids.iter().map(|i| (i.clone(), (0.0, 0.0))).collect();
+
+        // Spring force toward target
+        for id in &ids {
+            let pos = self.positions[id];
+            let tgt = self.targets[id];
+            let fx = cfg.target_attract * (tgt.x - pos.x);
+            let fy = cfg.target_attract * (tgt.y - pos.y);
+            forces.get_mut(id).unwrap().0 += fx;
+            forces.get_mut(id).unwrap().1 += fy;
+        }
+
+        // Pairwise repulsion (O(n²); fine for ≤50 nodes)
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let pi = self.positions[&ids[i]];
+                let pj = self.positions[&ids[j]];
+                let dx = pi.x - pj.x;
+                let dy = pi.y - pj.y;
+                let d2 = (dx * dx + dy * dy).max(1.0);
+                let f = cfg.repulsion / d2;
+                let inv_d = 1.0 / d2.sqrt();
+                let fx = f * dx * inv_d;
+                let fy = f * dy * inv_d;
+                forces.get_mut(&ids[i]).unwrap().0 += fx;
+                forces.get_mut(&ids[i]).unwrap().1 += fy;
+                forces.get_mut(&ids[j]).unwrap().0 -= fx;
+                forces.get_mut(&ids[j]).unwrap().1 -= fy;
+            }
+        }
+
+        // Integrate (skip pinned active)
+        for id in &ids {
+            if Some(id) == self.active_id.as_ref() {
+                self.velocities.insert(id.clone(), (0.0, 0.0));
+                if let Some(p) = self.positions.get_mut(id) {
+                    p.x = 0.0;
+                    p.y = 0.0;
+                }
+                continue;
+            }
+            let (fx, fy) = forces[id];
+            let v = self.velocities.get_mut(id).unwrap();
+            v.0 = (v.0 + fx * dt) * cfg.damping;
+            v.1 = (v.1 + fy * dt) * cfg.damping;
+            // Clamp velocity
+            let speed = (v.0 * v.0 + v.1 * v.1).sqrt();
+            if speed > cfg.max_velocity {
+                v.0 *= cfg.max_velocity / speed;
+                v.1 *= cfg.max_velocity / speed;
+            }
+            let pos = self.positions.get_mut(id).unwrap();
+            pos.x += v.0 * dt;
+            pos.y += v.1 * dt;
+        }
+    }
+
+    pub fn kinetic_energy(&self) -> f32 {
+        self.velocities.values().map(|(vx, vy)| vx * vx + vy * vy).sum::<f32>() * 0.5
+    }
 }
