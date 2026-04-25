@@ -113,3 +113,20 @@ Commit before Phase A: `235ab7c95803af34dfe6273b1ef912a982fbb7f9`
   - Severity in plan §6.4 is `high` (record-and-continue), so this is consistent with the tier policy.
 
 - **Hook spec (for future, when wired)**: `{ id: String, match_pattern: String, action: "stop" | "continue" }` — but not implementable today.
+
+---
+
+## TBD#5: trace concurrent-write safety
+
+- **Concurrency model**: **trait-only — concurrency is the impl's responsibility**
+- **Evidence (file:line)**:
+  - `src/harness/trace_sink.rs:1-19` — full file. `TraceSink` trait requires `Send + Sync`. `NoopTraceSink` is trivially safe. **No `Mutex`, `RwLock`, file lock, or sharding** in this module.
+  - `src/gateway/execution_engine/trace_sink_adapter.rs:1-72` — full file. `GatewayTraceSink` holds `Arc<dyn TraceFlushHandle>` and forwards calls. **No `Mutex`/`RwLock`** at this layer either; concurrency depends on the underlying `TraceFlushHandle` impl.
+  - `src/gateway/execution_engine/run_loop.rs:527-530` — production wraps `CallbackStateFlushHandle` (callback-state based; thread-safety is via `callback_state`'s internal `Arc`/`Mutex` discipline — out of scope for this probe).
+  - `src/orchestrator/dispatch.rs:101` — `Arc<dyn TraceSink>` is passed by Arc; multiple harness runs can share or each can hold its own.
+
+- **Evidence file layout**: **single `aleph-server.log`** (per the TBD#1 alternative path)
+
+  Since we are not creating `trace.jsonl` files (TBD#1 finding), the question of file-write contention is moot. `tracing-subscriber`'s file appender (`tracing-appender = "0.2"`, Cargo.toml:151) is internally serialized — multiple sessions writing to the same `aleph-server.log` is safe.
+
+  If a future iteration adds a file-based `TraceSink`: shard per session-id (`trace-<sid>.jsonl`) since the trait's `&self` + `Send+Sync` bound implies a shared sink across concurrent sessions, and a single `File` write is **not** atomic without external locking.
