@@ -32,7 +32,17 @@ impl MattermostMessageOps {
         server: &str,
         token: &str,
     ) -> Result<(String, String), ChannelError> {
-        let url = format!("{}/api/v4/users/me", server.trim_end_matches('/'));
+        Self::get_me_with_base(client, server, token, None).await
+    }
+
+    pub async fn get_me_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        api_base: Option<&str>,
+    ) -> Result<(String, String), ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
+        let url = format!("{base}/api/v4/users/me");
 
         let resp = client
             .get(&url)
@@ -71,7 +81,19 @@ impl MattermostMessageOps {
         text: &str,
         root_id: Option<&str>,
     ) -> Result<SendResult, ChannelError> {
-        let base = server.trim_end_matches('/');
+        Self::send_message_with_base(client, server, token, channel_id, text, root_id, None).await
+    }
+
+    pub async fn send_message_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        channel_id: &str,
+        text: &str,
+        root_id: Option<&str>,
+        api_base: Option<&str>,
+    ) -> Result<SendResult, ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
         let url = format!("{base}/api/v4/posts");
 
         // Mattermost natively supports standard Markdown, so format as Markdown
@@ -130,7 +152,17 @@ impl MattermostMessageOps {
         token: &str,
         channel_id: &str,
     ) -> Result<(), ChannelError> {
-        let base = server.trim_end_matches('/');
+        Self::send_typing_with_base(client, server, token, channel_id, None).await
+    }
+
+    pub async fn send_typing_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        channel_id: &str,
+        api_base: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
         let url = format!("{base}/api/v4/users/me/typing");
 
         let body = serde_json::json!({
@@ -144,6 +176,139 @@ impl MattermostMessageOps {
             .json(&body)
             .send()
             .await;
+
+        Ok(())
+    }
+
+    /// Edit a message via `PUT /api/v4/posts/{post_id}`.
+    pub async fn edit_message(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        message_id: &str,
+        new_text: &str,
+    ) -> Result<(), ChannelError> {
+        Self::edit_message_with_base(client, server, token, message_id, new_text, None).await
+    }
+
+    pub async fn edit_message_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        message_id: &str,
+        new_text: &str,
+        api_base: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
+        let url = format!("{base}/api/v4/posts/{message_id}");
+
+        let body = serde_json::json!({
+            "id": message_id,
+            "message": new_text,
+        });
+
+        let resp = client
+            .put(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("edit request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost edit failed {status}: {resp_body}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Delete a message via `DELETE /api/v4/posts/{post_id}`.
+    pub async fn delete_message(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        message_id: &str,
+    ) -> Result<(), ChannelError> {
+        Self::delete_message_with_base(client, server, token, message_id, None).await
+    }
+
+    pub async fn delete_message_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        message_id: &str,
+        api_base: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
+        let url = format!("{base}/api/v4/posts/{message_id}");
+
+        let resp = client
+            .delete(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("delete request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost delete failed {status}: {resp_body}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Add a reaction via `POST /api/v4/reactions`.
+    pub async fn react(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        user_id: &str,
+        message_id: &str,
+        emoji_name: &str,
+    ) -> Result<(), ChannelError> {
+        Self::react_with_base(client, server, token, user_id, message_id, emoji_name, None).await
+    }
+
+    pub async fn react_with_base(
+        client: &reqwest::Client,
+        server: &str,
+        token: &str,
+        user_id: &str,
+        message_id: &str,
+        emoji_name: &str,
+        api_base: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        let base = api_base.unwrap_or(server.trim_end_matches('/'));
+        let url = format!("{base}/api/v4/reactions");
+
+        let body = serde_json::json!({
+            "user_id": user_id,
+            "post_id": message_id,
+            "emoji_name": emoji_name,
+        });
+
+        let resp = client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("react request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let resp_body = resp.text().await.unwrap_or_default();
+            return Err(ChannelError::SendFailed(format!(
+                "Mattermost reaction failed {status}: {resp_body}"
+            )));
+        }
 
         Ok(())
     }

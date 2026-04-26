@@ -1,0 +1,6 @@
+{
+  "prefix": "irc.example.com",
+  "command": "PING",
+  "params": [],
+  "trailing": "irc.example.com"
+}

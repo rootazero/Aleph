@@ -1,0 +1,6 @@
+{
+  "prefix": "user1!~user1@irc.example.com",
+  "command": "PRIVMSG",
+  "params": ["#aleph"],
+  "trailing": "Hello bot, how are you?"
+}

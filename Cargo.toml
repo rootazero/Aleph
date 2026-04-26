@@ -328,6 +328,24 @@ name = "email_fixture_test"
 [[test]]
 name = "email_protocol_test"
 
+[[test]]
+name = "irc_contract_test"
+
+[[test]]
+name = "irc_fixture_test"
+
+[[test]]
+name = "irc_protocol_test"
+
+[[test]]
+name = "mattermost_contract_test"
+
+[[test]]
+name = "mattermost_fixture_test"
+
+[[test]]
+name = "mattermost_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true
