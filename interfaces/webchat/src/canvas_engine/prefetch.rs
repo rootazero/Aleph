@@ -6,7 +6,7 @@ pub const CACHE_TTL_MS: f64 = 60_000.0;
 pub const CACHE_CAPACITY: usize = 20;
 
 pub struct PrefetchCache {
-    entries: VecDeque<(String, Neighborhood)>,
+    entries: VecDeque<((String, usize), Neighborhood)>,
     capacity: usize,
     ttl_ms: f64,
 }
@@ -16,19 +16,21 @@ impl PrefetchCache {
         Self { entries: VecDeque::new(), capacity: CACHE_CAPACITY, ttl_ms: CACHE_TTL_MS }
     }
 
-    /// Insert or refresh a neighborhood in the cache.
-    pub fn put(&mut self, id: String, nbhd: Neighborhood) {
-        self.entries.retain(|(k, _)| k != &id);
-        self.entries.push_back((id, nbhd));
+    pub fn put(&mut self, id: String, threshold: usize, nbhd: Neighborhood) {
+        let key = (id, threshold);
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_back((key, nbhd));
         while self.entries.len() > self.capacity {
             self.entries.pop_front();
         }
     }
 
-    /// Look up a neighborhood; returns Some only if not expired.
-    pub fn get(&self, id: &str, now_ms: f64) -> Option<&Neighborhood> {
-        self.entries.iter().rev().find_map(|(k, v)| {
-            if k == id && now_ms - v.fetched_at_ms <= self.ttl_ms {
+    pub fn get(&self, id: &str, threshold: usize, now_ms: f64) -> Option<&Neighborhood> {
+        self.entries.iter().rev().find_map(|((k_id, k_thresh), v)| {
+            if k_id == id
+                && *k_thresh == threshold
+                && now_ms - v.fetched_at_ms <= self.ttl_ms
+            {
                 Some(v)
             } else {
                 None
@@ -38,12 +40,6 @@ impl PrefetchCache {
 
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-
-    /// Drop every cached neighborhood. Used when a layout parameter (e.g. the
-    /// fold threshold) changes so stale neighborhoods don't bleed through.
-    pub fn clear(&mut self) {
-        self.entries.clear();
     }
 }
 
@@ -117,26 +113,26 @@ mod tests {
     #[test]
     fn cache_put_then_get() {
         let mut c = PrefetchCache::new();
-        c.put("a".to_string(), nbhd("a", 0.0));
-        assert!(c.get("a", 100.0).is_some());
+        c.put("a".to_string(), 12, nbhd("a", 0.0));
+        assert!(c.get("a", 12, 100.0).is_some());
     }
 
     #[test]
     fn cache_expires_after_ttl() {
         let mut c = PrefetchCache::new();
-        c.put("a".to_string(), nbhd("a", 0.0));
-        assert!(c.get("a", CACHE_TTL_MS + 1.0).is_none());
+        c.put("a".to_string(), 12, nbhd("a", 0.0));
+        assert!(c.get("a", 12, CACHE_TTL_MS + 1.0).is_none());
     }
 
     #[test]
     fn cache_evicts_oldest_at_capacity() {
         let mut c = PrefetchCache::new();
         for i in 0..(CACHE_CAPACITY + 5) {
-            c.put(format!("n{i}"), nbhd(&format!("n{i}"), 0.0));
+            c.put(format!("n{i}"), 12, nbhd(&format!("n{i}"), 0.0));
         }
         assert_eq!(c.len(), CACHE_CAPACITY);
-        assert!(c.get("n0", 0.0).is_none());
-        assert!(c.get(&format!("n{}", CACHE_CAPACITY + 4), 0.0).is_some());
+        assert!(c.get("n0", 12, 0.0).is_none());
+        assert!(c.get(&format!("n{}", CACHE_CAPACITY + 4), 12, 0.0).is_some());
     }
 
     #[test]
@@ -153,5 +149,13 @@ mod tests {
         d.note_hover(Some("x"), 0.0);
         assert_eq!(d.note_hover(Some("y"), 100.0), None);
         assert_eq!(d.note_hover(Some("y"), 251.0), Some("y".to_string()));
+    }
+
+    #[test]
+    fn cache_miss_when_threshold_differs() {
+        let mut c = PrefetchCache::new();
+        c.put("a".to_string(), 12, nbhd("a", 0.0));
+        assert!(c.get("a", 12, 100.0).is_some(), "same threshold hits");
+        assert!(c.get("a", 6, 100.0).is_none(), "different threshold misses");
     }
 }

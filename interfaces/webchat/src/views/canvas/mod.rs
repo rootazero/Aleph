@@ -156,7 +156,7 @@ fn RadialCanvasView() -> impl IntoView {
         let now_ms = now_ms();
 
         // Prefetch cache hit → apply immediately without fetch
-        let cached = prefetch_req.borrow().get(&id, now_ms).cloned();
+        let cached = prefetch_req.borrow().get(&id, threshold, now_ms).cloned();
         if let Some(nbhd) = cached {
             let name = nbhd.center.name.clone();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
@@ -228,20 +228,20 @@ fn RadialCanvasView() -> impl IntoView {
         let Some(id) = prefetch_request.get() else { return };
 
         let now = now_ms();
+        let threshold = fold_threshold.get_untracked();
         // Skip if already cached and not stale
-        if prefetch_e4.borrow().get(&id, now).is_some() {
+        if prefetch_e4.borrow().get(&id, threshold, now).is_some() {
             return;
         }
 
         let prefetch_inner = prefetch_e4.clone();
-        let threshold = fold_threshold.get_untracked();
         spawn_local(async move {
             match GraphApi::neighbors(&state, &id, 3, 200).await {
                 Ok(resp) => {
                     let mut nbhd = to_neighborhood(&resp, now, threshold);
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
-                    prefetch_inner.borrow_mut().put(id, nbhd);
+                    prefetch_inner.borrow_mut().put(id, threshold, nbhd);
                 }
                 Err(_) => {
                     // Prefetch failures are silently ignored — they will retry on next dwell
@@ -255,7 +255,6 @@ fn RadialCanvasView() -> impl IntoView {
     // so the current neighborhood is refetched and re-folded with the new value.
     // -----------------------------------------------------------------------
     let nav_thresh = nav.clone();
-    let prefetch_thresh = prefetch.clone();
     Effect::new(move || {
         // Subscribe to the slider — must be the first reactive read in this Effect.
         let _threshold = fold_threshold.get();
@@ -269,10 +268,7 @@ fn RadialCanvasView() -> impl IntoView {
         };
         let Some(id) = center_id else { return };
 
-        // The prefetch cache is keyed by id only — entries computed under the
-        // old threshold would otherwise short-circuit Effect 2 and silently
-        // ignore the slider change.
-        prefetch_thresh.borrow_mut().clear();
+        // (cache key now includes threshold; Effect 5 itself will be removed in Task 8)
 
         // Force Effect 2 to re-fire even if active_request already holds `id`:
         // RwSignal dedupes by equality, so we round-trip via None.
