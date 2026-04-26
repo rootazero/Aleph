@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::{Add, AddAssign, Mul, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -126,33 +126,6 @@ pub enum ViewMode {
 pub struct BreadcrumbEntry {
     pub node_id: String,
     pub node_name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewState {
-    pub mode: ViewMode,
-    pub selected_node: Option<String>,
-    pub hovered_node: Option<String>,
-    pub breadcrumb: Vec<BreadcrumbEntry>,
-    pub kind_filter: HashSet<String>,
-}
-
-impl ViewState {
-    pub fn new() -> Self {
-        Self {
-            mode: ViewMode::Global { top_k: 100 },
-            selected_node: None,
-            hovered_node: None,
-            breadcrumb: vec![],
-            kind_filter: HashSet::new(),
-        }
-    }
-}
-
-impl Default for ViewState {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 // ---------------------------------------------------------------------------

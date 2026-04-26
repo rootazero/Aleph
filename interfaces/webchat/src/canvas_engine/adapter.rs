@@ -285,7 +285,7 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
                 velocity: Vec2::zero(),
                 pinned: false,
                 z: 0.0,
-                hop: 2, // placeholder; overwritten by to_neighborhood (Task 11)
+                hop: 2, // populated by `to_neighborhood` per `hop_depth`
                 decay_score: 1.0, // no decay data in global-graph response; populated in radial mode
                 edge_count: dto.link_count,
             }
