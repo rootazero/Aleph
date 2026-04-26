@@ -1,0 +1,8 @@
+{
+  "event": "posted",
+  "data": {
+    "post": "{\"id\":\"post-user-456\",\"channel_id\":\"ch-789\",\"message\":\"Hello bot!\",\"user_id\":\"user-456\",\"root_id\":\"\",\"create_at\":1700000000000}",
+    "channel_type": "O",
+    "sender_name": "alice"
+  }
+}

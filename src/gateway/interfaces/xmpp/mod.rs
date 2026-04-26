@@ -36,7 +36,8 @@ pub use message_ops::XmppMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -54,11 +55,17 @@ pub struct XmppChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Write channel for sending raw XMPP stanzas
     write_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
+    /// Test mode: skip TCP connection, allow direct stanza injection
+    test_mode: bool,
 }
 
 impl XmppChannel {
     /// Create a new XMPP channel
     pub fn new(id: impl Into<String>, config: XmppConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: XmppConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "XMPP".to_string(),
@@ -73,7 +80,13 @@ impl XmppChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             write_tx: Arc::new(RwLock::new(None)),
+            test_mode,
         }
+    }
+
+    /// Create an XMPP channel for testing (test mode enabled).
+    pub fn for_test(id: impl Into<String>, config: XmppConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     /// Get XMPP-specific capabilities
@@ -128,6 +141,14 @@ impl Channel for XmppChannel {
         let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("XMPP channel started in test mode");
+            return Ok(());
+        }
+
         // Spawn XMPP connection loop
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
@@ -177,9 +198,13 @@ impl Channel for XmppChannel {
             ChannelError::NotConnected("XMPP adapter not started - call start() first".to_string())
         })?;
 
-        // Determine message type based on conversation ID
-        // MUC rooms contain '@conference' or similar patterns
-        // We use groupchat for any room in the muc_rooms list
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("xmpp-test-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let conversation = message.conversation_id.as_str();
         let msg_type = if self.config.muc_rooms.iter().any(|r| r == conversation) {
             "groupchat"
@@ -191,8 +216,10 @@ impl Channel for XmppChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        // XMPP supports typing via XEP-0085 Chat State Notifications
-        // For now, send a <composing/> chat state
+        if self.test_mode {
+            return Ok(());
+        }
+
         let write_tx = self.write_tx.read().await;
         if let Some(write_tx) = write_tx.as_ref() {
             let stanza = format!(

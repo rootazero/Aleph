@@ -1,0 +1,6 @@
+{
+  "prefix": "irc.example.com",
+  "command": "001",
+  "params": ["alephbot"],
+  "trailing": "Welcome to the IRC network, alephbot"
+}

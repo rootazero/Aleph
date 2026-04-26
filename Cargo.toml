@@ -328,6 +328,142 @@ name = "email_fixture_test"
 [[test]]
 name = "email_protocol_test"
 
+[[test]]
+name = "irc_contract_test"
+
+[[test]]
+name = "irc_fixture_test"
+
+[[test]]
+name = "irc_protocol_test"
+
+[[test]]
+name = "mattermost_contract_test"
+
+[[test]]
+name = "mattermost_fixture_test"
+
+[[test]]
+name = "mattermost_protocol_test"
+
+[[test]]
+name = "line_contract_test"
+
+[[test]]
+name = "line_fixture_test"
+
+[[test]]
+name = "line_protocol_test"
+
+[[test]]
+name = "matrix_contract_test"
+
+[[test]]
+name = "matrix_fixture_test"
+
+[[test]]
+name = "matrix_protocol_test"
+
+[[test]]
+name = "discord_contract_test"
+
+[[test]]
+name = "discord_fixture_test"
+
+[[test]]
+name = "discord_protocol_test"
+
+# Batch 3a: CLI, Signal, XMPP, Nostr, MS Teams
+[[test]]
+name = "cli_contract_test"
+
+[[test]]
+name = "cli_fixture_test"
+
+[[test]]
+name = "cli_protocol_test"
+
+[[test]]
+name = "signal_contract_test"
+
+[[test]]
+name = "signal_fixture_test"
+
+[[test]]
+name = "signal_protocol_test"
+
+[[test]]
+name = "xmpp_contract_test"
+
+[[test]]
+name = "xmpp_fixture_test"
+
+[[test]]
+name = "xmpp_protocol_test"
+
+[[test]]
+name = "nostr_contract_test"
+
+[[test]]
+name = "nostr_fixture_test"
+
+[[test]]
+name = "nostr_protocol_test"
+
+[[test]]
+name = "msteams_contract_test"
+
+[[test]]
+name = "msteams_fixture_test"
+
+[[test]]
+name = "msteams_protocol_test"
+
+[[test]]
+name = "qq_contract_test"
+
+[[test]]
+name = "qq_fixture_test"
+
+[[test]]
+name = "qq_protocol_test"
+
+[[test]]
+name = "feishu_contract_test"
+
+[[test]]
+name = "feishu_fixture_test"
+
+[[test]]
+name = "feishu_protocol_test"
+
+[[test]]
+name = "imessage_contract_test"
+
+[[test]]
+name = "imessage_fixture_test"
+
+[[test]]
+name = "imessage_protocol_test"
+
+[[test]]
+name = "wechat_contract_test"
+
+[[test]]
+name = "wechat_fixture_test"
+
+[[test]]
+name = "wechat_protocol_test"
+
+[[test]]
+name = "whatsapp_contract_test"
+
+[[test]]
+name = "whatsapp_fixture_test"
+
+[[test]]
+name = "whatsapp_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true

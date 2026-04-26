@@ -34,7 +34,7 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -52,6 +52,8 @@ pub struct IrcChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Write channel for sending raw IRC commands
     write_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
+    /// Test mode: skip real TCP connection
+    test_mode: bool,
 }
 
 impl IrcChannel {
@@ -71,7 +73,15 @@ impl IrcChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             write_tx: Arc::new(RwLock::new(None)),
+            test_mode: false,
         }
+    }
+
+    /// Create an IRC channel for testing (no real TCP connection).
+    pub fn for_test(id: impl Into<String>, config: IrcConfig) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.test_mode = true;
+        channel
     }
 
     /// Get IRC-specific capabilities
@@ -126,6 +136,14 @@ impl Channel for IrcChannel {
         let (write_cmd_tx, write_cmd_rx) = mpsc::channel::<String>(64);
         *self.write_tx.write().await = Some(write_cmd_tx);
 
+        if self.test_mode {
+            // Test mode: skip TCP connection, mark as connected
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            return Ok(());
+        }
+
         // Spawn IRC connection loop
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
@@ -168,6 +186,15 @@ impl Channel for IrcChannel {
         let write_tx = write_tx.as_ref().ok_or_else(|| {
             ChannelError::NotConnected("IRC adapter not started - call start() first".to_string())
         })?;
+
+        if self.test_mode {
+            // In test mode, verify the channel exists but don't actually send
+            let _ = write_tx;
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("irc-sent-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
 
         IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text).await
     }

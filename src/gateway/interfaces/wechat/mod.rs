@@ -28,10 +28,15 @@ pub struct WeChatChannel {
     config: WeChatConfig,
     channel_state: ChannelState,
     runtime: Option<Arc<runtime::WeChatRuntime>>,
+    test_mode: bool,
 }
 
 impl WeChatChannel {
     pub fn new(id: impl Into<String>, config: WeChatConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: WeChatConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "WeChat".to_string(),
@@ -45,7 +50,12 @@ impl WeChatChannel {
             config,
             channel_state: ChannelState::new(100),
             runtime: None,
+            test_mode,
         }
+    }
+
+    pub fn for_test(id: impl Into<String>, config: WeChatConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -80,6 +90,14 @@ impl Channel for WeChatChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         self.config.validate().map_err(ChannelError::ConfigError)?;
+
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("WeChat channel started in test mode");
+            return Ok(());
+        }
 
         self.channel_state
             .set_status(ChannelStatus::Connecting)
@@ -118,6 +136,13 @@ impl Channel for WeChatChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("wechat-test-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let runtime = self
             .runtime
             .as_ref()
@@ -155,6 +180,10 @@ impl Channel for WeChatChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let runtime = self
             .runtime
             .as_ref()

@@ -53,6 +53,8 @@ pub struct MattermostChannel {
     bot_user_id: Arc<RwLock<Option<String>>>,
     /// HTTP client for Mattermost API calls
     client: reqwest::Client,
+    /// Optional custom API base URL for testing (e.g. mock server)
+    api_base: Option<String>,
 }
 
 impl MattermostChannel {
@@ -73,7 +75,15 @@ impl MattermostChannel {
             shutdown_tx: None,
             bot_user_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
+            api_base: None,
         }
+    }
+
+    /// Create a Mattermost channel configured for testing against a mock API server.
+    pub fn for_test(id: impl Into<String>, config: MattermostConfig, api_base: impl Into<String>) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.api_base = Some(api_base.into());
+        channel
     }
 
     /// Get Mattermost-specific capabilities
@@ -121,7 +131,8 @@ impl Channel for MattermostChannel {
 
         // Validate bot token via /api/v4/users/me
         let server = self.config.server_url_trimmed().to_string();
-        match MattermostMessageOps::get_me(&self.client, &server, &self.config.bot_token).await {
+        let api_base = self.api_base.as_deref();
+        match MattermostMessageOps::get_me_with_base(&self.client, &server, &self.config.bot_token, api_base).await {
             Ok((user_id, username)) => {
                 tracing::info!("Mattermost bot authenticated as {username} (user_id: {user_id})");
                 *self.bot_user_id.write().await = Some(user_id);
@@ -185,25 +196,28 @@ impl Channel for MattermostChannel {
         let root_id = message.reply_to.as_ref().map(|id| id.as_str().to_string());
 
         let server = self.config.server_url_trimmed().to_string();
+        let api_base = self.api_base.as_deref();
 
         // Send typing indicator if enabled
         if self.config.send_typing {
-            let _ = MattermostMessageOps::send_typing(
+            let _ = MattermostMessageOps::send_typing_with_base(
                 &self.client,
                 &server,
                 &self.config.bot_token,
                 message.conversation_id.as_str(),
+                api_base,
             )
             .await;
         }
 
-        MattermostMessageOps::send_message(
+        MattermostMessageOps::send_message_with_base(
             &self.client,
             &server,
             &self.config.bot_token,
             message.conversation_id.as_str(),
             &message.text,
             root_id.as_deref(),
+            api_base,
         )
         .await
     }
@@ -211,11 +225,13 @@ impl Channel for MattermostChannel {
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         if self.config.send_typing {
             let server = self.config.server_url_trimmed().to_string();
-            MattermostMessageOps::send_typing(
+            let api_base = self.api_base.as_deref();
+            MattermostMessageOps::send_typing_with_base(
                 &self.client,
                 &server,
                 &self.config.bot_token,
                 conversation_id.as_str(),
+                api_base,
             )
             .await
         } else {
@@ -229,33 +245,18 @@ impl Channel for MattermostChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        // Mattermost edit requires PUT /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
-        let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
+        let api_base = self.api_base.as_deref();
 
-        let body = serde_json::json!({
-            "id": message_id.as_str(),
-            "message": new_text,
-        });
-
-        let resp = self
-            .client
-            .put(&url)
-            .bearer_auth(&self.config.bot_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("edit request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let resp_body = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::SendFailed(format!(
-                "Mattermost edit failed {status}: {resp_body}"
-            )));
-        }
-
-        Ok(())
+        MattermostMessageOps::edit_message_with_base(
+            &self.client,
+            &server,
+            &self.config.bot_token,
+            message_id.as_str(),
+            new_text,
+            api_base,
+        )
+        .await
     }
 
     async fn delete(
@@ -263,27 +264,17 @@ impl Channel for MattermostChannel {
         _conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
-        // Mattermost delete: DELETE /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
-        let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
+        let api_base = self.api_base.as_deref();
 
-        let resp = self
-            .client
-            .delete(&url)
-            .bearer_auth(&self.config.bot_token)
-            .send()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("delete request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let resp_body = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::SendFailed(format!(
-                "Mattermost delete failed {status}: {resp_body}"
-            )));
-        }
-
-        Ok(())
+        MattermostMessageOps::delete_message_with_base(
+            &self.client,
+            &server,
+            &self.config.bot_token,
+            message_id.as_str(),
+            api_base,
+        )
+        .await
     }
 
     async fn react(
@@ -292,39 +283,24 @@ impl Channel for MattermostChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        // Mattermost reaction: POST /api/v4/reactions
         let server = self.config.server_url_trimmed().to_string();
-        let url = format!("{server}/api/v4/reactions");
+        let api_base = self.api_base.as_deref();
 
         let user_id = {
             let guard = self.bot_user_id.read().await;
             guard.as_deref().unwrap_or("").to_string()
         };
 
-        let body = serde_json::json!({
-            "user_id": user_id,
-            "post_id": message_id.as_str(),
-            "emoji_name": reaction,
-        });
-
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.config.bot_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("react request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let resp_body = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::SendFailed(format!(
-                "Mattermost reaction failed {status}: {resp_body}"
-            )));
-        }
-
-        Ok(())
+        MattermostMessageOps::react_with_base(
+            &self.client,
+            &server,
+            &self.config.bot_token,
+            &user_id,
+            message_id.as_str(),
+            reaction,
+            api_base,
+        )
+        .await
     }
 }
 

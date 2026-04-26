@@ -1,0 +1,8 @@
+{
+  "message_id": "wa-msg-123",
+  "from": "1234567890@s.whatsapp.net",
+  "conversation": "1234567890@s.whatsapp.net",
+  "text": "Hello from WhatsApp!",
+  "timestamp": 1704067200,
+  "is_group": false
+}

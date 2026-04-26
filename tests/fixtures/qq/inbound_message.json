@@ -1,0 +1,10 @@
+{
+  "id": "qq-msg-123",
+  "group_openid": "group-abc",
+  "author": {
+    "id": "user-456",
+    "username": "TestUser"
+  },
+  "content": "Hello from QQ!",
+  "timestamp": "2024-01-01T00:00:00Z"
+}

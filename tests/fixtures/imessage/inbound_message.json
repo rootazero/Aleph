@@ -1,0 +1,9 @@
+{
+  "rowid": 12345,
+  "guid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+  "text": "Hello from iMessage!",
+  "handle_id": 1,
+  "date": 694224000000000000,
+  "is_from_me": false,
+  "service": "iMessage"
+}

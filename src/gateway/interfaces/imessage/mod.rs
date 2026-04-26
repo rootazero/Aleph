@@ -51,11 +51,16 @@ pub struct IMessageChannel {
     running: Arc<AtomicBool>,
     poll_handle: Option<tokio::task::JoinHandle<()>>,
     channel_state: ChannelState,
+    test_mode: bool,
 }
 
 impl IMessageChannel {
     /// Create a new iMessage channel
     pub fn new(config: IMessageConfig) -> Self {
+        Self::with_mode(config, false)
+    }
+
+    fn with_mode(config: IMessageConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new("imessage"),
             name: "iMessage".to_string(),
@@ -86,7 +91,12 @@ impl IMessageChannel {
             running: Arc::new(AtomicBool::new(false)),
             poll_handle: None,
             channel_state: ChannelState::new(100),
+            test_mode,
         }
+    }
+
+    pub fn for_test(config: IMessageConfig) -> Self {
+        Self::with_mode(config, true)
     }
 
     /// Start the message polling loop
@@ -162,6 +172,14 @@ impl Channel for IMessageChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            info!("iMessage channel started in test mode");
+            return Ok(());
+        }
+
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -187,10 +205,6 @@ impl Channel for IMessageChannel {
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
-        if !self.running.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-
         info!("Stopping iMessage channel");
         self.running.store(false, Ordering::SeqCst);
 
@@ -213,6 +227,19 @@ impl Channel for IMessageChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(uuid::Uuid::new_v4().to_string()),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
+        if !self.running.load(Ordering::SeqCst) {
+            return Err(ChannelError::NotConnected(
+                "iMessage channel not started".to_string(),
+            ));
+        }
+
         let target = message.conversation_id.as_str();
 
         // Send text

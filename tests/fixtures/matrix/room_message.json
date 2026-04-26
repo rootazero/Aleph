@@ -1,0 +1,11 @@
+{
+  "type": "m.room.message",
+  "sender": "@user:example.com",
+  "content": {
+    "msgtype": "m.text",
+    "body": "Hello from Matrix!"
+  },
+  "event_id": "$event-123",
+  "origin_server_ts": 1700000000000,
+  "room_id": "!room:example.com"
+}

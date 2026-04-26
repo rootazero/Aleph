@@ -81,6 +81,8 @@ pub struct CliChannel {
     config: CliChannelConfig,
     cli_state: Arc<RwLock<CliChannelState>>,
     channel_state: ChannelState,
+    /// Test mode: skip stdin thread, allow inject_message without I/O
+    test_mode: bool,
 }
 
 impl CliChannel {
@@ -96,6 +98,14 @@ impl CliChannel {
 
     /// Create a new CLI channel with custom configuration
     pub fn with_config(config: CliChannelConfig) -> Self {
+        Self::with_config_and_mode(config, false)
+    }
+
+    /// Create a new CLI channel with custom configuration and test mode.
+    ///
+    /// In test mode, the channel skips spawning the stdin reader thread
+    /// and allows `inject_message` to work without blocking on I/O.
+    pub fn with_config_and_mode(config: CliChannelConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(&config.id),
             name: format!("CLI Channel ({})", config.id),
@@ -126,7 +136,17 @@ impl CliChannel {
             config,
             cli_state: Arc::new(RwLock::new(cli_state)),
             channel_state: ChannelState::new(100),
+            test_mode,
         }
+    }
+
+    /// Create a CLI channel for testing (test mode enabled).
+    pub fn for_test(id: impl Into<String>) -> Self {
+        let config = CliChannelConfig {
+            id: id.into(),
+            ..Default::default()
+        };
+        Self::with_config_and_mode(config, true)
     }
 
     /// Create a test message (useful for testing)
@@ -171,6 +191,15 @@ impl Channel for CliChannel {
         self.channel_state
             .set_status(ChannelStatus::Connecting)
             .await;
+
+        // In test mode, skip spawning the stdin reader thread
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            info!("CLI channel started in test mode: {}", self.info.id);
+            return Ok(());
+        }
 
         // Create shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
@@ -268,17 +297,18 @@ impl Channel for CliChannel {
             ));
         }
 
-        // Write to stdout
-        let mut stdout = io::stdout().lock();
-        writeln!(stdout, "\n{}", message.text)
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {}", e)))?;
-        stdout
-            .flush()
-            .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {}", e)))?;
+        // In test mode, skip stdout I/O
+        if !self.test_mode {
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "\n{}", message.text)
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {}", e)))?;
+            stdout
+                .flush()
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {}", e)))?;
 
-        // Print prompt for next input
-        print!("{}", self.config.prompt);
-        io::stdout().flush().ok();
+            print!("{}", self.config.prompt);
+            io::stdout().flush().ok();
+        }
 
         let message_id = MessageId::new(Uuid::new_v4().to_string());
         Ok(SendResult {
@@ -365,5 +395,53 @@ mod tests {
 
         let channel = factory.create(config).await.unwrap();
         assert_eq!(channel.id().as_str(), "factory-cli");
+    }
+
+    #[tokio::test]
+    async fn test_cli_test_mode_start_stop() {
+        let mut channel = CliChannel::for_test("test-cli");
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
+
+        channel.start().await.unwrap();
+        assert_eq!(channel.status(), ChannelStatus::Connected);
+
+        channel.stop().await.unwrap();
+        assert_eq!(channel.status(), ChannelStatus::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_cli_test_mode_send() {
+        let mut channel = CliChannel::for_test("test-cli");
+        channel.start().await.unwrap();
+
+        let msg = OutboundMessage::text("cli:main", "Hello test");
+        let result = channel.send(msg).await;
+        assert!(result.is_ok());
+
+        channel.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cli_test_mode_inject_and_receive() {
+        let mut channel = CliChannel::for_test("test-cli");
+        channel.start().await.unwrap();
+
+        let mut rx = channel.state().take_receiver().unwrap();
+
+        channel.inject_message("Injected message").await.unwrap();
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.text, "Injected message");
+        assert_eq!(received.conversation_id.as_str(), "cli:main");
+
+        channel.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cli_send_without_start() {
+        let channel = CliChannel::for_test("test-cli");
+        let msg = OutboundMessage::text("cli:main", "Hello");
+        let result = channel.send(msg).await;
+        assert!(matches!(result, Err(ChannelError::NotConnected(_))));
     }
 }

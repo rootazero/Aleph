@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "type": "message",
+      "timestamp": 1700000000000,
+      "source": {
+        "type": "user",
+        "userId": "U123456"
+      },
+      "message": {
+        "id": "line-msg-456",
+        "type": "text",
+        "text": "Hello from LINE!"
+      }
+    }
+  ]
+}

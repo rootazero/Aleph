@@ -78,11 +78,17 @@ pub struct MsTeamsChannel {
     conversation_refs: Arc<RwLock<HashMap<String, ConversationReference>>>,
     /// Reverse map: message_id → (conversation_id, inserted_at) for delete without conversation context
     sent_messages: Arc<RwLock<HashMap<String, (String, Instant)>>>,
+    /// Test mode: skip JWKS refresh, bypass JWT validation
+    test_mode: bool,
 }
 
 impl MsTeamsChannel {
     /// Create a new Teams channel instance.
     pub fn new(id: &str, config: MsTeamsConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: &str, config: MsTeamsConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "Microsoft Teams".to_string(),
@@ -125,7 +131,13 @@ impl MsTeamsChannel {
             config,
             conversation_refs: Arc::new(RwLock::new(HashMap::new())),
             sent_messages: Arc::new(RwLock::new(HashMap::new())),
+            test_mode,
         }
+    }
+
+    /// Create a Teams channel for testing (test mode enabled).
+    pub fn for_test(id: &str, config: MsTeamsConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     fn build_bot_client(config: &MsTeamsConfig) -> Arc<BotFrameworkClient> {
@@ -264,6 +276,12 @@ impl Channel for MsTeamsChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         info!(channel_id = %self.info.id, "Starting Microsoft Teams channel");
+
+        if self.test_mode {
+            self.state.set_status(ChannelStatus::Connected).await;
+            info!(channel_id = %self.info.id, "Microsoft Teams channel connected in test mode");
+            return Ok(());
+        }
 
         // Pre-fetch JWKS keys for inbound JWT validation
         if let Err(e) = self.jwt_validator.refresh_keys().await {
@@ -453,6 +471,10 @@ impl Channel for MsTeamsChannel {
 #[async_trait]
 impl WebhookHandler for MsTeamsChannel {
     fn verify(&self, headers: &HeaderMap, _body: &[u8]) -> bool {
+        if self.test_mode {
+            return headers.get("authorization").is_some();
+        }
+
         let token = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
             Some(auth) => {
                 if let Some(token) = auth.strip_prefix("Bearer ") {

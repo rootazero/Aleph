@@ -29,6 +29,8 @@ pub struct LineChannel {
     channel_state: ChannelState,
     api: Option<Arc<LineMessagingApi>>,
     shutdown_tx: Option<watch::Sender<bool>>,
+    /// Optional custom API base URL for testing (e.g. mock server)
+    api_base: Option<String>,
 }
 
 impl LineChannel {
@@ -47,7 +49,15 @@ impl LineChannel {
             channel_state: ChannelState::new(100),
             api: None,
             shutdown_tx: None,
+            api_base: None,
         }
+    }
+
+    /// Create a LINE channel configured for testing against a mock API server.
+    pub fn for_test(id: impl Into<String>, config: LineConfig, api_base: impl Into<String>) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.api_base = Some(api_base.into());
+        channel
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -98,31 +108,41 @@ impl Channel for LineChannel {
             .await;
         tracing::info!("Starting LINE channel...");
 
-        let api = Arc::new(LineMessagingApi::new(
-            self.config.channel_access_token.clone(),
-        ));
+        let api = if let Some(ref base) = self.api_base {
+            Arc::new(LineMessagingApi::with_base(
+                self.config.channel_access_token.clone(),
+                base.clone(),
+            ))
+        } else {
+            Arc::new(LineMessagingApi::new(
+                self.config.channel_access_token.clone(),
+            ))
+        };
         self.api = Some(api);
 
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-        let webhook_ctx = WebhookContext {
-            config: self.config.clone(),
-            channel_id: self.info.id.clone(),
-            sender: self.channel_state.sender(),
-            status_handle: self.channel_state.status_handle(),
-        };
+        if self.api_base.is_none() {
+            let webhook_ctx = WebhookContext {
+                config: self.config.clone(),
+                channel_id: self.info.id.clone(),
+                sender: self.channel_state.sender(),
+                status_handle: self.channel_state.status_handle(),
+            };
 
-        tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+            tokio::spawn(webhook::run_webhook_server(webhook_ctx));
+
+            tracing::info!(
+                "LINE channel started on {}:{}",
+                self.config.webhook_host,
+                self.config.webhook_port
+            );
+        }
 
         self.channel_state
             .set_status(ChannelStatus::Connected)
             .await;
-        tracing::info!(
-            "LINE channel started on {}:{}",
-            self.config.webhook_host,
-            self.config.webhook_port
-        );
         Ok(())
     }
 

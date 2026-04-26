@@ -15,10 +15,14 @@ pub struct LineMessagingApi {
 
 impl LineMessagingApi {
     pub fn new(channel_access_token: String) -> Self {
+        Self::with_base(channel_access_token, "https://api.line.me")
+    }
+
+    pub fn with_base(channel_access_token: String, api_base: impl Into<String>) -> Self {
         Self {
             http: Client::new(),
             channel_access_token,
-            api_base: "https://api.line.me".to_string(),
+            api_base: api_base.into(),
         }
     }
 

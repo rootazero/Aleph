@@ -11,7 +11,7 @@ pub use config::{QQAccountConfig, QQConfig, QQDmPolicy, QQGroupPolicy};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
 };
 use crate::gateway::interfaces::qq::types::QQEvent;
 use crate::sync_primitives::Arc;
@@ -26,10 +26,15 @@ pub struct QQChannel {
     event_handle: Option<tokio::task::JoinHandle<()>>,
     shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     reply_tracker: Arc<delivery::ReplyTracker>,
+    test_mode: bool,
 }
 
 impl QQChannel {
     pub fn new(id: impl Into<String>, config: QQConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: QQConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "QQ".to_string(),
@@ -47,7 +52,12 @@ impl QQChannel {
             event_handle: None,
             shutdown_tx: None,
             reply_tracker: Arc::new(delivery::ReplyTracker::new()),
+            test_mode,
         }
+    }
+
+    pub fn for_test(id: impl Into<String>, config: QQConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -81,6 +91,14 @@ impl Channel for QQChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("QQ channel started in test mode");
+            return Ok(());
+        }
+
         if self.config.accounts.is_empty() {
             return Err(ChannelError::ConfigError(
                 "No QQ accounts configured".to_string(),
@@ -184,6 +202,13 @@ impl Channel for QQChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("qq-test-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let api = self
             .api_client
             .as_ref()

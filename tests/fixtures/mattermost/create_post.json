@@ -1,0 +1,7 @@
+{
+  "id": "post-abc-123",
+  "channel_id": "ch-789",
+  "message": "Hello from Mattermost!",
+  "user_id": "user-bot-123",
+  "create_at": 1700000000000
+}
