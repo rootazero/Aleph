@@ -1,41 +1,48 @@
-use crate::canvas_engine::types::Neighborhood;
+use crate::canvas_engine::adapter::GraphNeighborsResponse;
 use std::collections::VecDeque;
 
 pub const HOVER_DEBOUNCE_MS: f64 = 150.0;
 pub const CACHE_TTL_MS: f64 = 60_000.0;
 pub const CACHE_CAPACITY: usize = 20;
 
+/// Bounded LRU cache of raw `GraphNeighborsResponse` payloads, keyed by center id.
+/// Each entry carries its own fetched-at timestamp because the raw payload has no
+/// such field (unlike `Neighborhood`).
 pub struct PrefetchCache {
-    entries: VecDeque<((String, usize), Neighborhood)>,
+    entries: VecDeque<(String, GraphNeighborsResponse, f64)>,
     capacity: usize,
     ttl_ms: f64,
 }
 
 impl PrefetchCache {
     pub fn new() -> Self {
-        Self { entries: VecDeque::new(), capacity: CACHE_CAPACITY, ttl_ms: CACHE_TTL_MS }
+        Self {
+            entries: VecDeque::new(),
+            capacity: CACHE_CAPACITY,
+            ttl_ms: CACHE_TTL_MS,
+        }
     }
 
-    pub fn put(&mut self, id: String, threshold: usize, nbhd: Neighborhood) {
-        let key = (id, threshold);
-        self.entries.retain(|(k, _)| k != &key);
-        self.entries.push_back((key, nbhd));
+    pub fn put(&mut self, id: String, raw: GraphNeighborsResponse, now_ms: f64) {
+        self.entries.retain(|(k, _, _)| k != &id);
+        self.entries.push_back((id, raw, now_ms));
         while self.entries.len() > self.capacity {
             self.entries.pop_front();
         }
     }
 
-    pub fn get(&self, id: &str, threshold: usize, now_ms: f64) -> Option<&Neighborhood> {
-        self.entries.iter().rev().find_map(|((k_id, k_thresh), v)| {
-            if k_id == id
-                && *k_thresh == threshold
-                && now_ms - v.fetched_at_ms <= self.ttl_ms
-            {
+    pub fn get(&self, id: &str, now_ms: f64) -> Option<&GraphNeighborsResponse> {
+        self.entries.iter().rev().find_map(|(k, v, fetched)| {
+            if k == id && now_ms - fetched <= self.ttl_ms {
                 Some(v)
             } else {
                 None
             }
         })
+    }
+
+    pub fn has(&self, id: &str, now_ms: f64) -> bool {
+        self.get(id, now_ms).is_some()
     }
 
     pub fn len(&self) -> usize {
@@ -81,58 +88,58 @@ impl HoverDebouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canvas_engine::types::*;
+    use crate::canvas_engine::adapter::{GraphNeighborsResponse, NoteNodeDto};
     use std::collections::HashMap;
 
-    fn nbhd(id: &str, fetched_at: f64) -> Neighborhood {
-        Neighborhood {
-            center: CanvasNode {
+    fn raw_resp(id: &str) -> GraphNeighborsResponse {
+        GraphNeighborsResponse {
+            center: NoteNodeDto {
                 id: id.to_string(),
                 name: id.to_string(),
+                path: format!("{id}.md"),
                 category: "concept".to_string(),
-                color: Color::new(0, 0, 0),
-                radius: 30.0,
-                position: Vec2::new(0.0, 0.0),
-                velocity: Vec2::new(0.0, 0.0),
-                z: 0.0,
-                hop: 0,
-                pinned: false,
-                decay_score: 1.0,
-                edge_count: 1,
+                tags: vec![],
+                link_count: 1,
             },
-            one_hop: vec![],
-            two_hop: vec![],
-            orphans: vec![],
-            clusters: vec![],
+            nodes: vec![],
             edges: vec![],
-            target_positions: HashMap::new(),
-            fetched_at_ms: fetched_at,
+            hop_depth: HashMap::new(),
         }
     }
 
     #[test]
     fn cache_put_then_get() {
         let mut c = PrefetchCache::new();
-        c.put("a".to_string(), 12, nbhd("a", 0.0));
-        assert!(c.get("a", 12, 100.0).is_some());
+        c.put("a".to_string(), raw_resp("a"), 0.0);
+        assert!(c.get("a", 100.0).is_some());
     }
 
     #[test]
     fn cache_expires_after_ttl() {
         let mut c = PrefetchCache::new();
-        c.put("a".to_string(), 12, nbhd("a", 0.0));
-        assert!(c.get("a", 12, CACHE_TTL_MS + 1.0).is_none());
+        c.put("a".to_string(), raw_resp("a"), 0.0);
+        assert!(c.get("a", CACHE_TTL_MS + 1.0).is_none());
     }
 
     #[test]
     fn cache_evicts_oldest_at_capacity() {
         let mut c = PrefetchCache::new();
         for i in 0..(CACHE_CAPACITY + 5) {
-            c.put(format!("n{i}"), 12, nbhd(&format!("n{i}"), 0.0));
+            c.put(format!("n{i}"), raw_resp(&format!("n{i}")), 0.0);
         }
         assert_eq!(c.len(), CACHE_CAPACITY);
-        assert!(c.get("n0", 12, 0.0).is_none());
-        assert!(c.get(&format!("n{}", CACHE_CAPACITY + 4), 12, 0.0).is_some());
+        assert!(c.get("n0", 0.0).is_none());
+        assert!(c.get(&format!("n{}", CACHE_CAPACITY + 4), 0.0).is_some());
+    }
+
+    #[test]
+    fn cache_serves_any_threshold_for_same_id() {
+        // The cache no longer discriminates by fold_threshold; a single put serves
+        // any caller-side threshold via `to_neighborhood(raw, _, threshold)`.
+        let mut c = PrefetchCache::new();
+        c.put("a".to_string(), raw_resp("a"), 0.0);
+        let v = c.get("a", 100.0).expect("present");
+        assert_eq!(v.center.id, "a");
     }
 
     #[test]
@@ -149,13 +156,5 @@ mod tests {
         d.note_hover(Some("x"), 0.0);
         assert_eq!(d.note_hover(Some("y"), 100.0), None);
         assert_eq!(d.note_hover(Some("y"), 251.0), Some("y".to_string()));
-    }
-
-    #[test]
-    fn cache_miss_when_threshold_differs() {
-        let mut c = PrefetchCache::new();
-        c.put("a".to_string(), 12, nbhd("a", 0.0));
-        assert!(c.get("a", 12, 100.0).is_some(), "same threshold hits");
-        assert!(c.get("a", 6, 100.0).is_none(), "different threshold misses");
     }
 }

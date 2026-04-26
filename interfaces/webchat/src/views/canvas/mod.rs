@@ -137,10 +137,9 @@ fn RadialCanvasView() -> impl IntoView {
                         + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
-                    let nbhd_for_cache = nbhd.clone();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
-                    prefetch_inner.borrow_mut().put(entry_id.clone(), threshold, nbhd_for_cache);
+                    prefetch_inner.borrow_mut().put(entry_id.clone(), resp.clone(), now_ms);
                     active_request.set(Some(entry_id.clone()));
                     set_focus_id.set(Some(entry_id));
                     set_focus_neighbors.set(neighbor_ids);
@@ -169,8 +168,11 @@ fn RadialCanvasView() -> impl IntoView {
         let now_ms = now_ms();
 
         // Prefetch cache hit → apply immediately without fetch
-        let cached = prefetch_req.borrow().get(&id, threshold, now_ms).cloned();
-        if let Some(nbhd) = cached {
+        let cached = prefetch_req.borrow().get(&id, now_ms).cloned();
+        if let Some(raw) = cached {
+            let mut nbhd = to_neighborhood(&raw, now_ms, threshold);
+            let dtos = all_dtos.get_untracked();
+            populate_orphans(&mut nbhd, &dtos);
             let name = nbhd.center.name.clone();
             let one_hop_len = nbhd.one_hop.len();
             let total_len = one_hop_len
@@ -257,9 +259,8 @@ fn RadialCanvasView() -> impl IntoView {
         let Some(id) = prefetch_request.get() else { return };
 
         let now = now_ms();
-        let threshold = fold_threshold.get_untracked();
         // Skip if already cached and not stale
-        if prefetch_e4.borrow().get(&id, threshold, now).is_some() {
+        if prefetch_e4.borrow().has(&id, now) {
             return;
         }
 
@@ -267,10 +268,7 @@ fn RadialCanvasView() -> impl IntoView {
         spawn_local(async move {
             match GraphApi::neighbors(&state, &id, 3, 200).await {
                 Ok(resp) => {
-                    let mut nbhd = to_neighborhood(&resp, now, threshold);
-                    let dtos = all_dtos.get_untracked();
-                    populate_orphans(&mut nbhd, &dtos);
-                    prefetch_inner.borrow_mut().put(id, threshold, nbhd);
+                    prefetch_inner.borrow_mut().put(id, resp, now);
                 }
                 Err(_) => {
                     // Prefetch failures are silently ignored — they will retry on next dwell
