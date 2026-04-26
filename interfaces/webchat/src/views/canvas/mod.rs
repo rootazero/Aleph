@@ -17,10 +17,11 @@ use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
 use crate::canvas_engine::adapter::{
-    populate_orphans, to_neighborhood, GraphQueryResponse, NoteDetailResponse, NoteNodeDto,
+    populate_orphans, to_neighborhood, GraphNeighborsResponse, GraphQueryResponse,
+    NoteDetailResponse, NoteNodeDto,
 };
 use crate::canvas_engine::interaction::CanvasEvent;
-use crate::canvas_engine::navigation::NavController;
+use crate::canvas_engine::navigation::{NavController, RETARGET_DURATION_MS};
 use crate::canvas_engine::prefetch::PrefetchCache;
 use crate::canvas_engine::types::BreadcrumbEntry;
 use detail_panel::DetailContent;
@@ -56,6 +57,11 @@ fn RadialCanvasView() -> impl IntoView {
     let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
     let search_query = RwSignal::new(String::new());
     let (fold_threshold, set_fold_threshold) = signal(12usize);
+
+    // Raw-response snapshot for the current center. Set after a successful Effect-fetch
+    // (or prefetch hit), cleared at the start of every Effect-fetch invocation.
+    // Effect-refold reads this to perform local re-fold without a network round-trip.
+    let last_response: RwSignal<Option<(String, GraphNeighborsResponse)>> = RwSignal::new(None);
 
     // Intent channel: on_event writes an id here, Effect picks it up and fetches.
     // Using RwSignal so both on_event (write) and Effect (read) can access it.
@@ -140,6 +146,7 @@ fn RadialCanvasView() -> impl IntoView {
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
                     prefetch_inner.borrow_mut().put(entry_id.clone(), resp.clone(), now_ms);
+                    last_response.set(Some((entry_id.clone(), resp)));
                     active_request.set(Some(entry_id.clone()));
                     set_focus_id.set(Some(entry_id));
                     set_focus_neighbors.set(neighbor_ids);
@@ -155,21 +162,25 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // Effect 2: active_request — fetch neighborhood when user clicks a node
+    // Effect-fetch: subscribes to `active_request` only.
+    // Fired on center change (node click / search / breadcrumb). Network fetch
+    // path; transitions to Loading then Active. Slider re-folds use Effect-refold.
     // -----------------------------------------------------------------------
     let nav_req = nav.clone();
     let prefetch_req = prefetch.clone();
     let gs_req = graph_state.clone();
     Effect::new(move || {
         let Some(id) = active_request.get() else { return };
-        // Subscribe to fold_threshold so the slider re-fires this Effect.
-        let threshold = fold_threshold.get();
-
         let now_ms = now_ms();
 
-        // Prefetch cache hit → apply immediately without fetch
+        // Sync prelude — invalidate stale snapshot, enter Loading
+        last_response.set(None);
+        nav_req.borrow_mut().enter(id.clone(), now_ms);
+
+        // Prefetch cache hit → fold + apply locally, no network
         let cached = prefetch_req.borrow().get(&id, now_ms).cloned();
         if let Some(raw) = cached {
+            let threshold = fold_threshold.get_untracked();
             let mut nbhd = to_neighborhood(&raw, now_ms, threshold);
             let dtos = all_dtos.get_untracked();
             populate_orphans(&mut nbhd, &dtos);
@@ -181,20 +192,21 @@ fn RadialCanvasView() -> impl IntoView {
                 nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
             nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
+            last_response.set(Some((id.clone(), raw)));
             set_focus_id.set(Some(id));
             set_focus_neighbors.set(neighbor_ids);
             set_visible_counts.set((one_hop_len, total_len));
             return;
         }
 
-        // Cache miss — transition to Loading, then fetch
-        nav_req.borrow_mut().enter(id.clone(), now_ms);
-
+        // Cache miss — fetch from network
         let nav_fetch = nav_req.clone();
         let gs_fetch = gs_req.clone();
+        let prefetch_fetch = prefetch_req.clone();
         spawn_local(async move {
             match GraphApi::neighbors(&state, &id, 3, 200).await {
                 Ok(resp) => {
+                    let threshold = fold_threshold.get_untracked();
                     let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
@@ -206,6 +218,8 @@ fn RadialCanvasView() -> impl IntoView {
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
                     nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
+                    prefetch_fetch.borrow_mut().put(id.clone(), resp.clone(), now_ms);
+                    last_response.set(Some((id.clone(), resp)));
                     set_focus_id.set(Some(id));
                     set_focus_neighbors.set(neighbor_ids);
                     set_visible_counts.set((one_hop_len, total_len));
@@ -275,6 +289,41 @@ fn RadialCanvasView() -> impl IntoView {
                 }
             }
         });
+    });
+
+    // -----------------------------------------------------------------------
+    // Effect-refold: subscribes to `fold_threshold` only.
+    // Fired on slider drag. Locally re-folds the cached raw response and drives
+    // an interruptible NavController.retarget tween. No network, no Loading frame.
+    // -----------------------------------------------------------------------
+    let nav_refold = nav.clone();
+    let gs_refold = graph_state.clone();
+    Effect::new(move || {
+        let threshold = fold_threshold.get().clamp(1, 1000);
+
+        // Snapshot last_response and active id without subscribing to them.
+        let Some((cached_id, raw)) = last_response.get_untracked() else { return };
+        if active_request.get_untracked().as_ref() != Some(&cached_id) {
+            return; // race: slider fired during a center transition
+        }
+
+        let now = now_ms();
+        let mut nbhd = to_neighborhood(&raw, now, threshold);
+        let dtos = all_dtos.get_untracked();
+        populate_orphans(&mut nbhd, &dtos);
+
+        let one_hop_len = nbhd.one_hop.len();
+        let total_len =
+            one_hop_len + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
+        let neighbor_ids: Vec<String> = nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
+
+        update_graph_state_nodes_only(&gs_refold, &nbhd);
+        nav_refold
+            .borrow_mut()
+            .retarget(nbhd, now, RETARGET_DURATION_MS);
+
+        set_focus_neighbors.set(neighbor_ids);
+        set_visible_counts.set((one_hop_len, total_len));
     });
 
     // -----------------------------------------------------------------------
@@ -475,5 +524,25 @@ fn seed_graph_state(
     gs.viewport.offset.y = gs.viewport.height / 2.0;
     gs.viewport.scale = 1.0;
     gs.drag_offset = (0.0, 0.0);
+}
+
+/// Refresh GraphState's node/edge buffers from a freshly folded `Neighborhood`
+/// without resetting viewport, scale, drag offset, selected node, or layout.
+/// Used by the slider re-fold path so the user's pan/zoom/drag survives a slider tick.
+fn update_graph_state_nodes_only(
+    gs: &Rc<RefCell<GraphState>>,
+    nbhd: &crate::canvas_engine::types::Neighborhood,
+) {
+    let nodes: Vec<_> = std::iter::once(nbhd.center.clone())
+        .chain(nbhd.one_hop.iter().cloned())
+        .chain(nbhd.two_hop.iter().cloned())
+        .chain(nbhd.orphans.iter().cloned())
+        .collect();
+    let edges = nbhd.edges.clone();
+    let mut gs = gs.borrow_mut();
+    gs.nodes = nodes;
+    gs.edges = edges;
+    // Intentionally NOT modified: viewport.{offset,scale}, drag_offset,
+    // selected_node, layout (no wake — radial uses target_positions, not physics).
 }
 
