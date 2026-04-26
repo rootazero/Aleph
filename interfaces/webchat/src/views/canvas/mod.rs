@@ -17,13 +17,12 @@ use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
 use crate::canvas_engine::adapter::{
-    adapt_graph_response, populate_orphans, to_neighborhood, GraphNeighborsResponse,
-    GraphQueryResponse, NoteDetailResponse, NoteNodeDto,
+    populate_orphans, to_neighborhood, GraphQueryResponse, NoteDetailResponse, NoteNodeDto,
 };
 use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::prefetch::PrefetchCache;
-use crate::canvas_engine::types::{BreadcrumbEntry, NavState, ViewMode};
+use crate::canvas_engine::types::BreadcrumbEntry;
 use detail_panel::DetailContent;
 use leptos::callback::Callback;
 
@@ -34,21 +33,9 @@ use detail_panel::DetailPanel;
 use graph_canvas::{GraphCanvas, GraphState};
 use toolbar::CanvasToolbar;
 
-/// Top-level dispatcher: reads the reactive feature flag from `DashboardState`
-/// and routes to the appropriate canvas view. The flag is initialized from
-/// localStorage in `DashboardState::new()` and mutated by the Settings panel.
 #[component]
 pub fn CanvasView() -> impl IntoView {
-    let state = expect_context::<DashboardState>();
-    let radial_enabled = state.canvas_radial_navigation;
-
-    view! {
-        {move || if radial_enabled.get() {
-            view! { <RadialCanvasView /> }.into_any()
-        } else {
-            view! { <LegacyCanvasView /> }.into_any()
-        }}
-    }
+    view! { <RadialCanvasView /> }
 }
 
 /// New radial navigation canvas — wired in T22.
@@ -63,7 +50,6 @@ fn RadialCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
     // Reactive signals (all Copy — safe to capture in Callback::new closures)
-    let (view_mode, set_view_mode) = signal(ViewMode::Global { top_k: 100 });
     let (selected_node, set_selected_node) = signal(None::<String>);
     let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
     let (detail_content, set_detail_content) = signal(DetailContent::Closed);
@@ -289,32 +275,6 @@ fn RadialCanvasView() -> impl IntoView {
     });
 
     // -----------------------------------------------------------------------
-    // Effect 5: fold_threshold change → bust cache, re-issue active_request
-    // so the current neighborhood is refetched and re-folded with the new value.
-    // -----------------------------------------------------------------------
-    let nav_thresh = nav.clone();
-    Effect::new(move || {
-        // Subscribe to the slider — must be the first reactive read in this Effect.
-        let _threshold = fold_threshold.get();
-
-        // Identify the node currently in focus. Idle/Loading/Error states have
-        // no center yet, so we just no-op until something is on screen.
-        let center_id = match &nav_thresh.borrow().state {
-            NavState::Active { node_id, .. } => Some(node_id.clone()),
-            NavState::Animating { to_id, .. } => Some(to_id.clone()),
-            _ => None,
-        };
-        let Some(id) = center_id else { return };
-
-        // (cache key now includes threshold; Effect 5 itself will be removed in Task 8)
-
-        // Force Effect 2 to re-fire even if active_request already holds `id`:
-        // RwSignal dedupes by equality, so we round-trip via None.
-        active_request.set(None);
-        active_request.set(Some(id));
-    });
-
-    // -----------------------------------------------------------------------
     // Canvas event handler — captures only Copy signals, safe for Callback::new
     // -----------------------------------------------------------------------
     let on_event = move |event: CanvasEvent| match event {
@@ -331,10 +291,6 @@ fn RadialCanvasView() -> impl IntoView {
                     node_id: id.clone(),
                     node_name: id.clone(),
                 });
-            });
-            set_view_mode.set(ViewMode::Local {
-                center_node_id: id.clone(),
-                depth: 2,
             });
             // Drive the same fetch path via the intent signal
             active_request.set(Some(id));
@@ -356,15 +312,6 @@ fn RadialCanvasView() -> impl IntoView {
         _ => {}
     };
 
-    let on_toggle_mode = move || match view_mode.get() {
-        ViewMode::Global { .. } => {}
-        ViewMode::Local { .. } => {
-            set_view_mode.set(ViewMode::Global { top_k: 100 });
-            set_breadcrumb.set(vec![]);
-            set_selected_node.set(None);
-        }
-    };
-
     let on_search = move |query: String| {
         if query.is_empty() {
             return;
@@ -379,10 +326,6 @@ fn RadialCanvasView() -> impl IntoView {
                             node_id: id.clone(),
                             node_name: name,
                         }]);
-                        set_view_mode.set(ViewMode::Local {
-                            center_node_id: id.clone(),
-                            depth: 2,
-                        });
                         // Trigger neighborhood fetch via the intent channel.
                         active_request.set(Some(id));
                     }
@@ -396,7 +339,6 @@ fn RadialCanvasView() -> impl IntoView {
 
     let on_breadcrumb_navigate = move |target: Option<String>| match target {
         None => {
-            set_view_mode.set(ViewMode::Global { top_k: 100 });
             set_breadcrumb.set(vec![]);
             set_selected_node.set(None);
         }
@@ -406,17 +348,13 @@ fn RadialCanvasView() -> impl IntoView {
                     entries.truncate(pos + 1);
                 }
             });
-            set_view_mode.set(ViewMode::Local {
-                center_node_id: id.clone(),
-                depth: 2,
-            });
             set_selected_node.set(None);
             // Re-center the radial neighborhood on the breadcrumb target.
             active_request.set(Some(id));
         }
     };
 
-    let is_local = move || matches!(view_mode.get(), ViewMode::Local { .. });
+    let has_breadcrumb = move || !breadcrumb_entries.get().is_empty();
     let has_detail = move || node_detail.get().is_some();
 
     view! {
@@ -429,7 +367,7 @@ fn RadialCanvasView() -> impl IntoView {
                 visible_counts=visible_counts
             />
 
-            {move || is_local().then(|| view! {
+            {move || has_breadcrumb().then(|| view! {
                 <Breadcrumb
                     entries=breadcrumb_entries
                     on_navigate=on_breadcrumb_navigate
@@ -536,241 +474,3 @@ fn seed_graph_state(
     gs.drag_offset = (0.0, 0.0);
 }
 
-/// Legacy canvas view — unchanged from pre-T22, kept as fallback when feature flag is off.
-#[component]
-fn LegacyCanvasView() -> impl IntoView {
-    let state = expect_context::<DashboardState>();
-
-    // Reactive signals
-    let (view_mode, set_view_mode) = signal(ViewMode::Global { top_k: 100 });
-    let (selected_node, set_selected_node) = signal(None::<String>);
-    let (node_detail, set_node_detail) = signal(None::<NoteDetailResponse>);
-    let (detail_content, set_detail_content) = signal(DetailContent::Closed);
-    let (breadcrumb_entries, set_breadcrumb) = signal(Vec::<BreadcrumbEntry>::new());
-    let search_query = RwSignal::new(String::new());
-    // fold_threshold controls cluster folding granularity (6..=20); wired fully in T22
-    let (fold_threshold, set_fold_threshold) = signal(12usize);
-    // Placeholder for toolbar's (K of N) counter — LegacyCanvasView is deleted in Task 8.
-    let (legacy_visible_counts, _) = signal((0usize, 0usize));
-
-    // Non-reactive 60fps state
-    let graph_state = Rc::new(RefCell::new(GraphState::new()));
-
-    // Load data when connected or view mode changes
-    let gs_load = graph_state.clone();
-    Effect::new(move || {
-        if !state.is_connected.get() {
-            return;
-        }
-        let mode = view_mode.get();
-        let gs = gs_load.clone();
-
-        spawn_local(async move {
-            // Fetch graph data; normalize GraphNeighborsResponse into GraphQueryResponse
-            // so the existing adapt_graph_response path works until Task 11 replaces it.
-            let result: Result<GraphQueryResponse, String> = match &mode {
-                ViewMode::Global { top_k } => GraphApi::query(&state, *top_k, vec![]).await,
-                ViewMode::Local {
-                    center_node_id,
-                    depth,
-                } => GraphApi::neighbors(&state, center_node_id, *depth, 200)
-                    .await
-                    .map(|r: GraphNeighborsResponse| {
-                        // Merge center into nodes so the flat adapter sees all nodes.
-                        let mut nodes = vec![r.center];
-                        nodes.extend(r.nodes);
-                        GraphQueryResponse { nodes, edges: r.edges }
-                    }),
-            };
-
-            match result {
-                Ok(response) => {
-                    let (nodes, edges) = adapt_graph_response(&response);
-                    let mut gs = gs.borrow_mut();
-                    gs.nodes = nodes;
-                    gs.edges = edges;
-                    gs.layout.wake();
-                    gs.selected_node = None;
-                    gs.hovered_node = None;
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to load graph: {}", e).into());
-                }
-            }
-        });
-    });
-
-    // Fetch node detail when selection changes
-    Effect::new(move || {
-        let node_id = selected_node.get();
-        match node_id {
-            Some(id) => {
-                spawn_local(async move {
-                    match GraphApi::node_detail(&state, &id).await {
-                        Ok(detail) => {
-                            set_detail_content.set(DetailContent::Node { detail: detail.clone() });
-                            set_node_detail.set(Some(detail));
-                        }
-                        Err(e) => {
-                            web_sys::console::error_1(
-                                &format!("Failed to load node detail: {}", e).into(),
-                            );
-                            set_node_detail.set(None);
-                            set_detail_content.set(DetailContent::Closed);
-                        }
-                    }
-                });
-            }
-            None => {
-                set_node_detail.set(None);
-                set_detail_content.set(DetailContent::Closed);
-            }
-        }
-    });
-
-    // Callbacks — must be Send+Sync for Callback::new, so no Rc<RefCell<_>> capture.
-    let on_event = move |event: CanvasEvent| match event {
-        CanvasEvent::SelectNode(id) => {
-            set_selected_node.set(Some(id));
-        }
-        CanvasEvent::DeselectNode => {
-            set_selected_node.set(None);
-        }
-        CanvasEvent::EnterLocalView(id) => {
-            // Push breadcrumb (use id as display name; detail fetch will supply the real name)
-            set_breadcrumb.update(|entries| {
-                entries.push(BreadcrumbEntry {
-                    node_id: id.clone(),
-                    node_name: id.clone(),
-                });
-            });
-            set_view_mode.set(ViewMode::Local {
-                center_node_id: id,
-                depth: 2,
-            });
-            set_selected_node.set(None);
-        }
-        CanvasEvent::HoverNode(_) => {
-            // Hover is handled in GraphState directly
-        }
-        _ => {}
-    };
-
-    let _on_toggle_mode = move || {
-        match view_mode.get() {
-            ViewMode::Global { .. } => {
-                // To enter Local view we need a center. Use the currently selected
-                // node if there is one; otherwise leave the view alone — the user
-                // has nothing to focus on.
-                if let Some(id) = selected_node.get() {
-                    set_breadcrumb.set(vec![BreadcrumbEntry {
-                        node_id: id.clone(),
-                        node_name: id.clone(),
-                    }]);
-                    set_view_mode.set(ViewMode::Local {
-                        center_node_id: id,
-                        depth: 2,
-                    });
-                } else {
-                    web_sys::console::warn_1(
-                        &"Click a node first to enter Local view".into(),
-                    );
-                }
-            }
-            ViewMode::Local { .. } => {
-                set_view_mode.set(ViewMode::Global { top_k: 100 });
-                set_breadcrumb.set(vec![]);
-                set_selected_node.set(None);
-            }
-        }
-    };
-
-    let on_search = move |query: String| {
-        if query.is_empty() {
-            return;
-        }
-        spawn_local(async move {
-            match GraphApi::search(&state, &query, 20).await {
-                Ok(response) => {
-                    if let Some(first) = response.results.first() {
-                        let id = first.id.clone();
-                        let name = first.name.clone();
-                        set_breadcrumb.set(vec![BreadcrumbEntry {
-                            node_id: id.clone(),
-                            node_name: name,
-                        }]);
-                        set_view_mode.set(ViewMode::Local {
-                            center_node_id: id,
-                            depth: 2,
-                        });
-                    }
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Search failed: {}", e).into());
-                }
-            }
-        });
-    };
-
-    let on_breadcrumb_navigate = move |target: Option<String>| match target {
-        None => {
-            // Go back to global
-            set_view_mode.set(ViewMode::Global { top_k: 100 });
-            set_breadcrumb.set(vec![]);
-            set_selected_node.set(None);
-        }
-        Some(id) => {
-            // Truncate breadcrumb to the navigated node
-            set_breadcrumb.update(|entries| {
-                if let Some(pos) = entries.iter().position(|e| e.node_id == id) {
-                    entries.truncate(pos + 1);
-                }
-            });
-            set_view_mode.set(ViewMode::Local {
-                center_node_id: id,
-                depth: 2,
-            });
-            set_selected_node.set(None);
-        }
-    };
-
-    let is_local = move || matches!(view_mode.get(), ViewMode::Local { .. });
-    let has_detail = move || node_detail.get().is_some();
-
-    view! {
-        <div class="flex flex-col h-full">
-            <CanvasToolbar
-                search_query=search_query
-                on_search=on_search
-                fold_threshold=fold_threshold
-                set_fold_threshold=set_fold_threshold
-                visible_counts=legacy_visible_counts
-            />
-
-            {move || is_local().then(|| view! {
-                <Breadcrumb
-                    entries=breadcrumb_entries
-                    on_navigate=on_breadcrumb_navigate
-                />
-            })}
-
-            <div class="flex flex-1 overflow-hidden">
-                <div class="flex-1 relative bg-[#0a0a0f]">
-                    <GraphCanvas
-                        graph_state=graph_state.clone()
-                        on_event=Callback::new(on_event)
-                    />
-                </div>
-
-                {move || has_detail().then(|| view! {
-                    <DetailPanel
-                        content=detail_content
-                        on_jump_to=Callback::new(move |id: String| {
-                            set_selected_node.set(Some(id));
-                        })
-                    />
-                })}
-            </div>
-        </div>
-    }
-}
