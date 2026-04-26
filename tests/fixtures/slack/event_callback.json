@@ -1,0 +1,17 @@
+{
+  "token": "test-token",
+  "team_id": "T123456",
+  "api_app_id": "A123456",
+  "event": {
+    "client_msg_id": "msg-123",
+    "type": "message",
+    "text": "Hello bot",
+    "user": "U123456",
+    "ts": "1234567890.123456",
+    "channel": "C12345",
+    "channel_type": "channel"
+  },
+  "type": "event_callback",
+  "event_id": "Ev123456",
+  "event_time": 1234567890
+}

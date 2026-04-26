@@ -1,0 +1,9 @@
+{
+  "message_id": "msg-123",
+  "conversation_id": "conv-456",
+  "sender_id": "user-789",
+  "sender_name": "Test User",
+  "text": "Hello from webhook",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "metadata": {}
+}

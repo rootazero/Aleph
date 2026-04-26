@@ -1,4 +1,7 @@
 pub mod channel_contract;
+pub mod mock_http;
+pub mod mock_tcp;
+pub mod mock_ws;
 
 use std::collections::HashMap;
 use std::future::Future;
