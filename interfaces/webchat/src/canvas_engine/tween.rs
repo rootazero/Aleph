@@ -1,5 +1,5 @@
 use crate::canvas_engine::types::{Neighborhood, Vec3};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Standard smoothstep ease-in-out: 3t² - 2t³.
 pub fn ease_in_out(t: f32) -> f32 {
@@ -61,6 +61,33 @@ pub fn lerp_node(
             opacity: 0.0,
         },
     }
+}
+
+/// Build an interpolated `Neighborhood` at tween parameter `t` between `from` and `to`.
+///
+/// The resulting neighborhood is structurally identical to `to` (same nodes, edges,
+/// clusters), but its `target_positions` map contains lerped Vec3 positions for every
+/// node id that appears in either neighborhood. Used by the rAF render loop and by
+/// `NavController::retarget` to snapshot the currently visible frame.
+pub(crate) fn build_interpolated_neighborhood(
+    from: &Neighborhood,
+    to: &Neighborhood,
+    t: f32,
+) -> Neighborhood {
+    let mut all_ids: HashSet<String> = HashSet::new();
+    all_ids.insert(from.center.id.clone());
+    all_ids.insert(to.center.id.clone());
+    all_ids.extend(from.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(from.two_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.one_hop.iter().map(|n| n.id.clone()));
+    all_ids.extend(to.two_hop.iter().map(|n| n.id.clone()));
+
+    let mut interp = to.clone();
+    for id in all_ids {
+        let r = lerp_node(&id, from, to, t);
+        interp.target_positions.insert(id, r.pos);
+    }
+    interp
 }
 
 #[cfg(test)]

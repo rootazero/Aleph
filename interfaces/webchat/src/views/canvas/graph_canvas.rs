@@ -12,7 +12,7 @@ use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::layout::ForceLayout;
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::renderer::{draw_neighborhood, Renderer};
-use crate::canvas_engine::tween::lerp_node;
+use crate::canvas_engine::tween::build_interpolated_neighborhood;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
 
@@ -68,26 +68,6 @@ fn now_ms() -> f64 {
         .and_then(|w| w.performance())
         .map(|p| p.now())
         .unwrap_or(0.0)
-}
-
-/// Build an interpolated Neighborhood at tween parameter `t` between `from` and `to`.
-/// The resulting neighborhood's `target_positions` map contains lerped Vec3 positions
-/// for every node id that appears in either neighborhood.
-fn build_interpolated_neighborhood(from: &Neighborhood, to: &Neighborhood, t: f32) -> Neighborhood {
-    let mut all_ids: HashSet<String> = HashSet::new();
-    all_ids.insert(from.center.id.clone());
-    all_ids.insert(to.center.id.clone());
-    all_ids.extend(from.one_hop.iter().map(|n| n.id.clone()));
-    all_ids.extend(from.two_hop.iter().map(|n| n.id.clone()));
-    all_ids.extend(to.one_hop.iter().map(|n| n.id.clone()));
-    all_ids.extend(to.two_hop.iter().map(|n| n.id.clone()));
-
-    let mut interp = to.clone();
-    for id in all_ids {
-        let r = lerp_node(&id, from, to, t);
-        interp.target_positions.insert(id, r.pos);
-    }
-    interp
 }
 
 /// Draw a simple placeholder when the nav is Idle, Loading, or in Error state.
