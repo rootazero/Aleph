@@ -88,6 +88,7 @@ fn RadialCanvasView() -> impl IntoView {
     let nav_init = nav.clone();
     let gs_init = graph_state.clone();
     let minimap_init = minimap.clone();
+    let prefetch_init = prefetch.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
             return;
@@ -95,6 +96,7 @@ fn RadialCanvasView() -> impl IntoView {
         let nav_inner = nav_init.clone();
         let gs_inner = gs_init.clone();
         let minimap_inner = minimap_init.clone();
+        let prefetch_inner = prefetch_init.clone();
 
         spawn_local(async move {
             let now_ms = now_ms();
@@ -135,8 +137,11 @@ fn RadialCanvasView() -> impl IntoView {
                         + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
+                    let nbhd_for_cache = nbhd.clone();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
+                    prefetch_inner.borrow_mut().put(entry_id.clone(), threshold, nbhd_for_cache);
+                    active_request.set(Some(entry_id.clone()));
                     set_focus_id.set(Some(entry_id));
                     set_focus_neighbors.set(neighbor_ids);
                     set_visible_counts.set((one_hop_len, total_len));
