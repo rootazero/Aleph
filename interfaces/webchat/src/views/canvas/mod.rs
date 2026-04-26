@@ -94,6 +94,7 @@ fn RadialCanvasView() -> impl IntoView {
     let minimap: Rc<RefCell<GlobalMiniMap>> = Rc::new(RefCell::new(GlobalMiniMap::empty(200.0)));
     let (focus_id, set_focus_id) = signal(None::<String>);
     let (focus_neighbors, set_focus_neighbors) = signal(Vec::<String>::new());
+    let (visible_counts, set_visible_counts) = signal((0usize, 0usize));
 
     // -----------------------------------------------------------------------
     // Effect 1: initial mount — pick entry point and fetch first neighborhood
@@ -143,12 +144,16 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
+                    let one_hop_len = nbhd.one_hop.len();
+                    let total_len = one_hop_len
+                        + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
                     set_focus_id.set(Some(entry_id));
                     set_focus_neighbors.set(neighbor_ids);
+                    set_visible_counts.set((one_hop_len, total_len));
                 }
                 Err(e) => {
                     web_sys::console::error_1(
@@ -176,12 +181,16 @@ fn RadialCanvasView() -> impl IntoView {
         let cached = prefetch_req.borrow().get(&id, threshold, now_ms).cloned();
         if let Some(nbhd) = cached {
             let name = nbhd.center.name.clone();
+            let one_hop_len = nbhd.one_hop.len();
+            let total_len = one_hop_len
+                + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
             let neighbor_ids: Vec<String> =
                 nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
             nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
             set_focus_id.set(Some(id));
             set_focus_neighbors.set(neighbor_ids);
+            set_visible_counts.set((one_hop_len, total_len));
             return;
         }
 
@@ -197,12 +206,16 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
+                    let one_hop_len = nbhd.one_hop.len();
+                    let total_len = one_hop_len
+                        + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
                     nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
                     set_focus_id.set(Some(id));
                     set_focus_neighbors.set(neighbor_ids);
+                    set_visible_counts.set((one_hop_len, total_len));
                 }
                 Err(e) => {
                     nav_fetch.borrow_mut().fail(id.clone(), e.clone());
@@ -409,13 +422,11 @@ fn RadialCanvasView() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             <CanvasToolbar
-                view_mode=view_mode
                 search_query=search_query
-                on_toggle_mode=on_toggle_mode
                 on_search=on_search
                 fold_threshold=fold_threshold
                 set_fold_threshold=set_fold_threshold
-                is_radial=true
+                visible_counts=visible_counts
             />
 
             {move || is_local().then(|| view! {
@@ -539,6 +550,8 @@ fn LegacyCanvasView() -> impl IntoView {
     let search_query = RwSignal::new(String::new());
     // fold_threshold controls cluster folding granularity (6..=20); wired fully in T22
     let (fold_threshold, set_fold_threshold) = signal(12usize);
+    // Placeholder for toolbar's (K of N) counter — LegacyCanvasView is deleted in Task 8.
+    let (legacy_visible_counts, _) = signal((0usize, 0usize));
 
     // Non-reactive 60fps state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
@@ -643,7 +656,7 @@ fn LegacyCanvasView() -> impl IntoView {
         _ => {}
     };
 
-    let on_toggle_mode = move || {
+    let _on_toggle_mode = move || {
         match view_mode.get() {
             ViewMode::Global { .. } => {
                 // To enter Local view we need a center. Use the currently selected
@@ -727,12 +740,11 @@ fn LegacyCanvasView() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             <CanvasToolbar
-                view_mode=view_mode
                 search_query=search_query
-                on_toggle_mode=on_toggle_mode
                 on_search=on_search
                 fold_threshold=fold_threshold
                 set_fold_threshold=set_fold_threshold
+                visible_counts=legacy_visible_counts
             />
 
             {move || is_local().then(|| view! {
