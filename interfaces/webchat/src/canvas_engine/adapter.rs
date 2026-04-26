@@ -60,7 +60,7 @@ pub struct GraphNeighborsResponse {
     pub hop_depth: HashMap<String, u8>,
 }
 
-use crate::canvas_engine::cluster::{fallback_fold, fold_sector};
+use crate::canvas_engine::cluster::group_by_category_into_clusters;
 use crate::canvas_engine::layout::compute_target_positions;
 
 /// Build a `Neighborhood` from a `GraphNeighborsResponse`.
@@ -104,37 +104,23 @@ pub fn to_neighborhood(
         })
         .collect();
 
-    // Group 1-hop nodes by the relation label on the edge to center.
-    // Since NoteLinkDto carries no relation field, we use "_default" for all.
-    // The group key is still useful as a stable sector for layout.
-    let mut by_relation: HashMap<String, Vec<CanvasNode>> = HashMap::new();
-    for (i, n) in one_hop.iter().enumerate() {
-        let neighbor_idx = i + 1;
-        let rel = edges
-            .iter()
-            .find(|e| {
-                e.is_active_link
-                    && ((e.from_idx == 0 && e.to_idx == neighbor_idx)
-                        || (e.to_idx == 0 && e.from_idx == neighbor_idx))
-            })
-            .map(|e| e.relation.clone())
-            .unwrap_or_else(|| "_default".to_string());
-        by_relation.entry(rel).or_default().push(n.clone());
-    }
-
-    let mut filtered_one_hop: Vec<CanvasNode> = Vec::new();
-    let mut clusters: Vec<ClusterNode> = Vec::new();
-    for (rel, group) in by_relation {
-        let (mut unfolded, mut group_clusters) =
-            fold_sector(&group, &rel, &resp.center.id, fold_threshold);
-        if unfolded.len() >= 30 {
-            let (kept, more_clusters) = fallback_fold(unfolded, &rel, &resp.center.id);
-            unfolded = kept;
-            group_clusters.extend(more_clusters);
-        }
-        filtered_one_hop.extend(unfolded);
-        clusters.extend(group_clusters);
-    }
+    // Top-K folding: show at most `fold_threshold` 1-hop nodes (the highest-weight
+    // ones), and fold the remainder into one ClusterNode per category. The previous
+    // by-relation grouping was a no-op since NoteLinkDto carries no relation field.
+    let (filtered_one_hop, clusters): (Vec<CanvasNode>, Vec<ClusterNode>) =
+        if one_hop.len() <= fold_threshold {
+            (one_hop, Vec::new())
+        } else {
+            let mut sorted = one_hop;
+            sorted.sort_by(|a, b| {
+                let wa = a.decay_score * a.edge_count as f32;
+                let wb = b.decay_score * b.edge_count as f32;
+                wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let kept: Vec<CanvasNode> = sorted.drain(..fold_threshold).collect();
+            let folded = group_by_category_into_clusters(sorted, &resp.center.id);
+            (kept, folded)
+        };
 
     let target_positions =
         compute_target_positions(&center, &filtered_one_hop, &two_hop, &clusters, &edges);
@@ -341,6 +327,93 @@ mod tests {
             tags: vec![],
             link_count: 1,
         }
+    }
+
+    fn make_resp_with_n_one_hop(n: usize, category: &str) -> GraphNeighborsResponse {
+        let mut resp = GraphNeighborsResponse {
+            center: NoteNodeDto {
+                id: "center".to_string(),
+                name: "center".to_string(),
+                path: "center.md".to_string(),
+                category: "concept".to_string(),
+                tags: vec![],
+                link_count: 1,
+            },
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            hop_depth: HashMap::new(),
+        };
+        for i in 0..n {
+            let id = format!("n{i}");
+            resp.nodes.push(NoteNodeDto {
+                id: id.clone(),
+                name: id.clone(),
+                path: format!("n{i}.md"),
+                category: category.to_string(),
+                tags: vec![],
+                link_count: 1,
+            });
+            resp.hop_depth.insert(id, 1);
+        }
+        resp
+    }
+
+    #[test]
+    fn top_k_fold_keeps_all_when_under_threshold() {
+        let resp = make_resp_with_n_one_hop(8, "concept");
+        let nb = to_neighborhood(&resp, 0.0, 12);
+        assert_eq!(nb.one_hop.len(), 8);
+        assert_eq!(nb.clusters.len(), 0);
+    }
+
+    #[test]
+    fn top_k_fold_keeps_top_k_by_weight() {
+        let mut resp = make_resp_with_n_one_hop(20, "concept");
+        // Set weights: node "n0" highest, "n19" lowest
+        for (i, n) in resp.nodes.iter_mut().enumerate() {
+            n.link_count = (20 - i).max(1);
+        }
+        let nb = to_neighborhood(&resp, 0.0, 5);
+        assert_eq!(nb.one_hop.len(), 5);
+        let kept_ids: Vec<&str> = nb.one_hop.iter().map(|n| n.id.as_str()).collect();
+        for i in 0..5 {
+            let expected = format!("n{i}");
+            assert!(
+                kept_ids.contains(&expected.as_str()),
+                "n{i} should be kept (top weight)"
+            );
+        }
+    }
+
+    #[test]
+    fn top_k_fold_remainder_splits_by_category() {
+        // 3 categories of 8 each = 24 total; threshold=10 => 10 unfolded, 14 in clusters across categories.
+        // Weights are interleaved across categories (round-robin) so the top-10 by weight
+        // always spans all 3 categories, guaranteeing each category appears in the remainder.
+        let cats = ["concept", "reference", "topic"];
+        let mut resp = make_resp_with_n_one_hop(0, "concept");
+        // Insert 24 nodes interleaved: concept/reference/topic/concept/...
+        // link_count descends from 24 so node 0 is heaviest.
+        for global_idx in 0..24usize {
+            let cat = cats[global_idx % 3];
+            let id = format!("n{global_idx}");
+            resp.nodes.push(NoteNodeDto {
+                id: id.clone(),
+                name: format!("name{global_idx}"),
+                path: format!("n{global_idx}.md"),
+                category: cat.to_string(),
+                tags: vec![],
+                link_count: 24 - global_idx, // unique, descending weight
+            });
+            resp.hop_depth.insert(id, 1);
+        }
+        // Top 10 by weight = indices 0-9 → 4 concept (0,3,6,9) + 3 reference (1,4,7) + 3 topic (2,5,8).
+        // Remainder 14 = 4 concept + 5 reference + 5 topic → 3 clusters.
+        let nb = to_neighborhood(&resp, 0.0, 10);
+        assert_eq!(nb.one_hop.len(), 10);
+        assert_eq!(nb.clusters.len(), 3, "one cluster per category");
+        let total_in_clusters: usize = nb.clusters.iter().map(|c| c.member_ids.len()).sum();
+        assert_eq!(total_in_clusters, 14);
     }
 
     #[test]
