@@ -128,6 +128,8 @@ pub struct DiscordChannel {
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// HTTP client for sending messages (serenity's Http)
     http: Option<Arc<serenity::http::Http>>,
+    /// Test mode: skip real gateway connection, return mock results
+    test_mode: bool,
 }
 
 impl DiscordChannel {
@@ -154,7 +156,14 @@ impl DiscordChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             http: None,
+            test_mode: false,
         }
+    }
+
+    pub fn for_test(id: impl Into<String>, config: DiscordConfig) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.test_mode = true;
+        channel
     }
 
     /// Create a new Discord channel with nested config (multi-account support)
@@ -181,6 +190,7 @@ impl DiscordChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             http: None,
+            test_mode: false,
         }
     }
 
@@ -628,6 +638,14 @@ impl Channel for DiscordChannel {
             .await;
         tracing::info!("Starting Discord channel...");
 
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("Discord channel started in test mode");
+            return Ok(());
+        }
+
         // Build gateway intents
         let mut intents = GatewayIntents::empty();
         if self.config.intents.guild_messages {
@@ -714,6 +732,17 @@ impl Channel for DiscordChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Discord channel not started".to_string(),
+                ));
+            }
+            return Ok(SendResult {
+                message_id: MessageId::new("discord-test-msg-id".to_string()),
+                timestamp: chrono::Utc::now(),
+            });
+        }
         let http = self
             .http
             .as_ref()
@@ -786,6 +815,14 @@ impl Channel for DiscordChannel {
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Discord channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let http = self
             .http
             .as_ref()
@@ -820,6 +857,14 @@ impl Channel for DiscordChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Discord channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let http = self
             .http
             .as_ref()
@@ -842,6 +887,14 @@ impl Channel for DiscordChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Discord channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let http = self
             .http
             .as_ref()
@@ -864,6 +917,14 @@ impl Channel for DiscordChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Discord channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let http = self
             .http
             .as_ref()

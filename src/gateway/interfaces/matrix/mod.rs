@@ -30,6 +30,8 @@ pub struct MatrixChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     client: Option<Arc<client::MatrixSdkClient>>,
     deduper: Option<Arc<dedupe::EventDeduper>>,
+    /// Test mode: skip real SDK connection, return mock results
+    test_mode: bool,
 }
 
 impl MatrixChannel {
@@ -49,7 +51,14 @@ impl MatrixChannel {
             shutdown_tx: None,
             client: None,
             deduper: None,
+            test_mode: false,
         }
+    }
+
+    pub fn for_test(id: impl Into<String>, config: MatrixConfig) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.test_mode = true;
+        channel
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -96,6 +105,12 @@ impl Channel for MatrixChannel {
         self.config.validate().map_err(ChannelError::ConfigError)?;
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Matrix channel...");
+
+        if self.test_mode {
+            self.set_status(ChannelStatus::Connected).await;
+            tracing::info!("Matrix channel started in test mode");
+            return Ok(());
+        }
 
         let sdk_client = Arc::new(client::MatrixSdkClient::connect(&self.config).await?);
         tracing::info!("Matrix bot authenticated as {}", sdk_client.user_id());
@@ -144,15 +159,34 @@ impl Channel for MatrixChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Matrix channel not started".to_string(),
+                ));
+            }
+            return Ok(SendResult {
+                message_id: MessageId::new("matrix-test-msg-id".to_string()),
+                timestamp: chrono::Utc::now(),
+            });
+        }
         let client = self.client()?;
         outbound::send_message(client.inner(), message).await
     }
 
-    async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
+    async fn send_typing(&self, _conversation_id: &ConversationId) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Matrix channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let client = self.client()?;
         if self.config.send_typing {
             if let Some(ref c) = self.client {
-                outbound::send_typing(client.inner(), conversation_id, c.user_id(), true).await?;
+                outbound::send_typing(client.inner(), _conversation_id, c.user_id(), true).await?;
             }
         }
         Ok(())
@@ -160,33 +194,57 @@ impl Channel for MatrixChannel {
 
     async fn edit(
         &self,
-        conversation_id: &ConversationId,
-        message_id: &MessageId,
-        new_text: &str,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _new_text: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Matrix channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let client = self.client()?;
-        outbound::edit_message(client.inner(), conversation_id, message_id, new_text).await?;
+        outbound::edit_message(client.inner(), _conversation_id, _message_id, _new_text).await?;
         Ok(())
     }
 
     async fn react(
         &self,
-        conversation_id: &ConversationId,
-        message_id: &MessageId,
-        reaction: &str,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
+        _reaction: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Matrix channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let client = self.client()?;
-        outbound::send_reaction(client.inner(), conversation_id, message_id, reaction).await?;
+        outbound::send_reaction(client.inner(), _conversation_id, _message_id, _reaction).await?;
         Ok(())
     }
 
     async fn delete(
         &self,
-        conversation_id: &ConversationId,
-        message_id: &MessageId,
+        _conversation_id: &ConversationId,
+        _message_id: &MessageId,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            if self.status() != ChannelStatus::Connected {
+                return Err(ChannelError::NotConnected(
+                    "Matrix channel not started".to_string(),
+                ));
+            }
+            return Ok(());
+        }
         let client = self.client()?;
-        outbound::delete_message(client.inner(), conversation_id, message_id).await?;
+        outbound::delete_message(client.inner(), _conversation_id, _message_id).await?;
         Ok(())
     }
 }

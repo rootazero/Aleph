@@ -173,6 +173,55 @@ impl MattermostApiMock {
     }
 }
 
+pub struct LineApiMock;
+
+impl LineApiMock {
+    pub async fn push_message(server: &MockServer) {
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/bot/message/push"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sentMessages": [
+                    { "id": "line-msg-123", "quoteToken": "quote-abc" }
+                ]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    pub async fn reply_message(server: &MockServer) {
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/v2/bot/message/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sentMessages": [
+                    { "id": "line-msg-456", "quoteToken": "quote-def" }
+                ]
+            })))
+            .mount(server)
+            .await;
+    }
+
+    pub async fn delete_message(server: &MockServer) {
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path_regex("/v2/bot/message/.*/delete"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(server)
+            .await;
+    }
+
+    pub async fn get_profile(server: &MockServer) {
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path_regex("/v2/bot/profile/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "displayName": "Test User",
+                "userId": "U123456",
+                "pictureUrl": "https://example.com/photo.jpg",
+                "statusMessage": "Hello!"
+            })))
+            .mount(server)
+            .await;
+    }
+}
+
 pub struct WebhookMock;
 
 impl WebhookMock {

@@ -346,6 +346,33 @@ name = "mattermost_fixture_test"
 [[test]]
 name = "mattermost_protocol_test"
 
+[[test]]
+name = "line_contract_test"
+
+[[test]]
+name = "line_fixture_test"
+
+[[test]]
+name = "line_protocol_test"
+
+[[test]]
+name = "matrix_contract_test"
+
+[[test]]
+name = "matrix_fixture_test"
+
+[[test]]
+name = "matrix_protocol_test"
+
+[[test]]
+name = "discord_contract_test"
+
+[[test]]
+name = "discord_fixture_test"
+
+[[test]]
+name = "discord_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true
