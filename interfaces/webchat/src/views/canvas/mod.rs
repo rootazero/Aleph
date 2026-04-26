@@ -10,16 +10,15 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::graph::GraphApi;
-use crate::api::settings::UserPrefs;
 use crate::canvas_engine::adapter::{
-    adapt_graph_response, to_neighborhood, GraphNeighborsResponse, GraphQueryResponse,
-    NoteDetailResponse,
+    adapt_graph_response, populate_orphans, to_neighborhood, GraphNeighborsResponse,
+    GraphQueryResponse, NoteDetailResponse, NoteNodeDto,
 };
 use crate::canvas_engine::interaction::CanvasEvent;
 use crate::canvas_engine::mini_map::MiniMap;
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::prefetch::PrefetchCache;
-use crate::canvas_engine::types::{BreadcrumbEntry, ViewMode};
+use crate::canvas_engine::types::{BreadcrumbEntry, NavState, ViewMode};
 use detail_panel::DetailContent;
 use leptos::callback::Callback;
 
@@ -30,16 +29,20 @@ use detail_panel::DetailPanel;
 use graph_canvas::{GraphCanvas, GraphState};
 use toolbar::CanvasToolbar;
 
-/// Top-level dispatcher: reads the feature flag and routes to the appropriate canvas view.
+/// Top-level dispatcher: reads the reactive feature flag from `DashboardState`
+/// and routes to the appropriate canvas view. The flag is initialized from
+/// localStorage in `DashboardState::new()` and mutated by the Settings panel.
 #[component]
 pub fn CanvasView() -> impl IntoView {
-    // Read feature flag from UserPrefs (defaults to false until loaded from server).
-    // T21 added the struct; we initialize from Default for now.
-    let prefs = UserPrefs::default();
-    if prefs.canvas_radial_navigation {
-        view! { <RadialCanvasView /> }.into_any()
-    } else {
-        view! { <LegacyCanvasView /> }.into_any()
+    let state = expect_context::<DashboardState>();
+    let radial_enabled = state.canvas_radial_navigation;
+
+    view! {
+        {move || if radial_enabled.get() {
+            view! { <RadialCanvasView /> }.into_any()
+        } else {
+            view! { <LegacyCanvasView /> }.into_any()
+        }}
     }
 }
 
@@ -71,6 +74,10 @@ fn RadialCanvasView() -> impl IntoView {
     // HoverNode event writes here; Effect 4 reads and fires the background fetch.
     let prefetch_request: RwSignal<Option<String>> = RwSignal::new(None);
 
+    // Full-graph node cache — populated once on mount, used to compute the
+    // ghost-dot ring of orphans (nodes outside the current connected component).
+    let all_dtos: RwSignal<Vec<NoteNodeDto>> = RwSignal::new(Vec::new());
+
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::new()));
@@ -94,7 +101,14 @@ fn RadialCanvasView() -> impl IntoView {
         spawn_local(async move {
             let now_ms = now_ms();
 
-            // Entry point: localStorage "canvas_entry" → graph.query top-1
+            // Always fetch the full graph: needed for entry pick fallback AND
+            // for the ghost-dot ring (orphans = all nodes - in-view nodes).
+            let query_result = GraphApi::query(&state, 500, vec![]).await.ok();
+            if let Some(ref r) = query_result {
+                all_dtos.set(r.nodes.clone());
+            }
+
+            // Entry point: localStorage "canvas_entry" → highest-degree node
             let entry_id: Option<String> = web_sys::window()
                 .and_then(|w| w.local_storage().ok().flatten())
                 .and_then(|ls| ls.get_item("canvas_entry").ok().flatten())
@@ -102,20 +116,19 @@ fn RadialCanvasView() -> impl IntoView {
 
             let entry_id = match entry_id {
                 Some(id) => Some(id),
-                None => GraphApi::query(&state, 1, vec![])
-                    .await
-                    .ok()
-                    .and_then(|r| r.nodes.into_iter().next())
-                    .map(|n| n.id),
+                None => query_result.as_ref().and_then(pick_highest_degree),
             };
 
             let Some(entry_id) = entry_id else { return };
 
             nav_inner.borrow_mut().enter(entry_id.clone(), now_ms);
 
-            match GraphApi::neighbors(&state, &entry_id, 2, 50).await {
+            let threshold = fold_threshold.get_untracked();
+            match GraphApi::neighbors(&state, &entry_id, 3, 200).await {
                 Ok(resp) => {
-                    let nbhd = to_neighborhood(&resp, now_ms);
+                    let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
+                    let dtos = all_dtos.get_untracked();
+                    populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
                     nav_inner.borrow_mut().fulfilled(entry_id, name, nbhd);
@@ -137,6 +150,8 @@ fn RadialCanvasView() -> impl IntoView {
     let gs_req = graph_state.clone();
     Effect::new(move || {
         let Some(id) = active_request.get() else { return };
+        // Subscribe to fold_threshold so the slider re-fires this Effect.
+        let threshold = fold_threshold.get();
 
         let now_ms = now_ms();
 
@@ -155,9 +170,11 @@ fn RadialCanvasView() -> impl IntoView {
         let nav_fetch = nav_req.clone();
         let gs_fetch = gs_req.clone();
         spawn_local(async move {
-            match GraphApi::neighbors(&state, &id, 2, 50).await {
+            match GraphApi::neighbors(&state, &id, 3, 200).await {
                 Ok(resp) => {
-                    let nbhd = to_neighborhood(&resp, now_ms);
+                    let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
+                    let dtos = all_dtos.get_untracked();
+                    populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
                     nav_fetch.borrow_mut().fulfilled(id, name, nbhd);
@@ -217,10 +234,13 @@ fn RadialCanvasView() -> impl IntoView {
         }
 
         let prefetch_inner = prefetch_e4.clone();
+        let threshold = fold_threshold.get_untracked();
         spawn_local(async move {
-            match GraphApi::neighbors(&state, &id, 2, 50).await {
+            match GraphApi::neighbors(&state, &id, 3, 200).await {
                 Ok(resp) => {
-                    let nbhd = to_neighborhood(&resp, now);
+                    let mut nbhd = to_neighborhood(&resp, now, threshold);
+                    let dtos = all_dtos.get_untracked();
+                    populate_orphans(&mut nbhd, &dtos);
                     prefetch_inner.borrow_mut().put(id, nbhd);
                 }
                 Err(_) => {
@@ -228,6 +248,36 @@ fn RadialCanvasView() -> impl IntoView {
                 }
             }
         });
+    });
+
+    // -----------------------------------------------------------------------
+    // Effect 5: fold_threshold change → bust cache, re-issue active_request
+    // so the current neighborhood is refetched and re-folded with the new value.
+    // -----------------------------------------------------------------------
+    let nav_thresh = nav.clone();
+    let prefetch_thresh = prefetch.clone();
+    Effect::new(move || {
+        // Subscribe to the slider — must be the first reactive read in this Effect.
+        let _threshold = fold_threshold.get();
+
+        // Identify the node currently in focus. Idle/Loading/Error states have
+        // no center yet, so we just no-op until something is on screen.
+        let center_id = match &nav_thresh.borrow().state {
+            NavState::Active { node_id, .. } => Some(node_id.clone()),
+            NavState::Animating { to_id, .. } => Some(to_id.clone()),
+            _ => None,
+        };
+        let Some(id) = center_id else { return };
+
+        // The prefetch cache is keyed by id only — entries computed under the
+        // old threshold would otherwise short-circuit Effect 2 and silently
+        // ignore the slider change.
+        prefetch_thresh.borrow_mut().clear();
+
+        // Force Effect 2 to re-fire even if active_request already holds `id`:
+        // RwSignal dedupes by equality, so we round-trip via None.
+        active_request.set(None);
+        active_request.set(Some(id));
     });
 
     // -----------------------------------------------------------------------
@@ -296,9 +346,11 @@ fn RadialCanvasView() -> impl IntoView {
                             node_name: name,
                         }]);
                         set_view_mode.set(ViewMode::Local {
-                            center_node_id: id,
+                            center_node_id: id.clone(),
                             depth: 2,
                         });
+                        // Trigger neighborhood fetch via the intent channel.
+                        active_request.set(Some(id));
                     }
                 }
                 Err(e) => {
@@ -321,10 +373,12 @@ fn RadialCanvasView() -> impl IntoView {
                 }
             });
             set_view_mode.set(ViewMode::Local {
-                center_node_id: id,
+                center_node_id: id.clone(),
                 depth: 2,
             });
             set_selected_node.set(None);
+            // Re-center the radial neighborhood on the breadcrumb target.
+            active_request.set(Some(id));
         }
     };
 
@@ -340,6 +394,7 @@ fn RadialCanvasView() -> impl IntoView {
                 on_search=on_search
                 fold_threshold=fold_threshold
                 set_fold_threshold=set_fold_threshold
+                is_radial=true
             />
 
             {move || is_local().then(|| view! {
@@ -371,6 +426,23 @@ fn RadialCanvasView() -> impl IntoView {
     }
 }
 
+/// Pick the most-connected node from a `GraphQueryResponse` as the radial entry point.
+///
+/// Falls back to the first node if the response contains no edges, so an isolated
+/// vault still renders at least one center node.
+fn pick_highest_degree(resp: &GraphQueryResponse) -> Option<String> {
+    use std::collections::HashMap;
+    let mut degree: HashMap<&str, usize> = HashMap::new();
+    for e in &resp.edges {
+        *degree.entry(e.from.as_str()).or_insert(0) += 1;
+        *degree.entry(e.to.as_str()).or_insert(0) += 1;
+    }
+    resp.nodes
+        .iter()
+        .max_by_key(|n| degree.get(n.id.as_str()).copied().unwrap_or(0))
+        .map(|n| n.id.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers shared by RadialCanvasView Effects
 // ---------------------------------------------------------------------------
@@ -384,6 +456,11 @@ fn now_ms() -> f64 {
 }
 
 /// Flatten a `Neighborhood` into `GraphState.nodes/edges` and wake the physics engine.
+///
+/// Also recenters the viewport so the radial layout's world origin (where the
+/// active center sits) maps to the canvas geometric center. Without this,
+/// switching focus could leave the new center anywhere on screen depending on
+/// previous pan/zoom state.
 fn seed_graph_state(
     gs: &Rc<RefCell<GraphState>>,
     nbhd: &crate::canvas_engine::types::Neighborhood,
@@ -392,6 +469,9 @@ fn seed_graph_state(
     let nodes: Vec<_> = std::iter::once(nbhd.center.clone())
         .chain(nbhd.one_hop.iter().cloned())
         .chain(nbhd.two_hop.iter().cloned())
+        // Orphans land here too so the click hit-test (which iterates gs.nodes)
+        // can resolve a ghost-dot click into a re-center request.
+        .chain(nbhd.orphans.iter().cloned())
         .collect();
     let edges = nbhd.edges.clone();
     let mut gs = gs.borrow_mut();
@@ -399,6 +479,11 @@ fn seed_graph_state(
     gs.edges = edges;
     gs.layout.wake();
     gs.selected_node = selected;
+    // Recenter: world (0,0) → canvas center, reset zoom + drag
+    gs.viewport.offset.x = gs.viewport.width / 2.0;
+    gs.viewport.offset.y = gs.viewport.height / 2.0;
+    gs.viewport.scale = 1.0;
+    gs.drag_offset = (0.0, 0.0);
 }
 
 /// Legacy canvas view — unchanged from pre-T22, kept as fallback when feature flag is off.
@@ -520,10 +605,25 @@ fn LegacyCanvasView() -> impl IntoView {
     };
 
     let on_toggle_mode = move || {
-        let current = view_mode.get();
-        match current {
+        match view_mode.get() {
             ViewMode::Global { .. } => {
-                // Stay in global (no-op unless there's a selected node)
+                // To enter Local view we need a center. Use the currently selected
+                // node if there is one; otherwise leave the view alone — the user
+                // has nothing to focus on.
+                if let Some(id) = selected_node.get() {
+                    set_breadcrumb.set(vec![BreadcrumbEntry {
+                        node_id: id.clone(),
+                        node_name: id.clone(),
+                    }]);
+                    set_view_mode.set(ViewMode::Local {
+                        center_node_id: id,
+                        depth: 2,
+                    });
+                } else {
+                    web_sys::console::warn_1(
+                        &"Click a node first to enter Local view".into(),
+                    );
+                }
             }
             ViewMode::Local { .. } => {
                 set_view_mode.set(ViewMode::Global { top_k: 100 });

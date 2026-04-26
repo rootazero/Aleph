@@ -67,7 +67,11 @@ use crate::canvas_engine::layout::compute_target_positions;
 ///
 /// Index convention (matches layout.rs expectations):
 ///   0 = center, 1..=one_hop.len() = one_hop nodes, then two_hop nodes.
-pub fn to_neighborhood(resp: &GraphNeighborsResponse, fetched_at_ms: f64) -> Neighborhood {
+pub fn to_neighborhood(
+    resp: &GraphNeighborsResponse,
+    fetched_at_ms: f64,
+    fold_threshold: usize,
+) -> Neighborhood {
     let center = note_dto_to_canvas(&resp.center, 0);
 
     let mut one_hop: Vec<CanvasNode> = Vec::new();
@@ -122,7 +126,7 @@ pub fn to_neighborhood(resp: &GraphNeighborsResponse, fetched_at_ms: f64) -> Nei
     let mut clusters: Vec<ClusterNode> = Vec::new();
     for (rel, group) in by_relation {
         let (mut unfolded, mut group_clusters) =
-            fold_sector(&group, &rel, &resp.center.id, 12);
+            fold_sector(&group, &rel, &resp.center.id, fold_threshold);
         if unfolded.len() >= 30 {
             let (kept, more_clusters) = fallback_fold(unfolded, &rel, &resp.center.id);
             unfolded = kept;
@@ -135,15 +139,102 @@ pub fn to_neighborhood(resp: &GraphNeighborsResponse, fetched_at_ms: f64) -> Nei
     let target_positions =
         compute_target_positions(&center, &filtered_one_hop, &two_hop, &clusters, &edges);
 
+    // Seed each node's position from its target so the renderer has something
+    // to draw immediately. Without a running force simulation the positions
+    // would otherwise stay at (0,0) and every node would be stacked on the center.
+    let mut center = center;
+    if let Some(t) = target_positions.get(&center.id) {
+        center.position = Vec2::new(t.x as f64, t.y as f64);
+    }
+    let mut filtered_one_hop = filtered_one_hop;
+    for n in filtered_one_hop.iter_mut() {
+        if let Some(t) = target_positions.get(&n.id) {
+            n.position = Vec2::new(t.x as f64, t.y as f64);
+        }
+    }
+    let mut two_hop = two_hop;
+    for n in two_hop.iter_mut() {
+        if let Some(t) = target_positions.get(&n.id) {
+            n.position = Vec2::new(t.x as f64, t.y as f64);
+        }
+    }
+    let mut clusters = clusters;
+    for c in clusters.iter_mut() {
+        if let Some(t) = target_positions.get(&c.id) {
+            c.world_pos = Vec2::new(t.x as f64, t.y as f64);
+        }
+    }
+
     Neighborhood {
         center,
         one_hop: filtered_one_hop,
         two_hop,
+        orphans: Vec::new(),
         clusters,
         edges,
         target_positions,
         fetched_at_ms,
     }
+}
+
+/// Populate `nbhd.orphans` with all nodes from `all_dtos` that are not already
+/// present in the neighborhood (center, one_hop, two_hop, or cluster members).
+///
+/// Orphans are laid out evenly around an outer ring at `ORPHAN_RADIUS`, tagged
+/// with `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`. They are pinned so the
+/// force layout doesn't disturb them, and their world positions are also written
+/// into `target_positions` for tween consistency.
+pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
+    use std::collections::HashSet;
+    use std::f64::consts::TAU;
+
+    let mut in_view: HashSet<&str> = HashSet::new();
+    in_view.insert(nbhd.center.id.as_str());
+    for n in &nbhd.one_hop {
+        in_view.insert(n.id.as_str());
+    }
+    for n in &nbhd.two_hop {
+        in_view.insert(n.id.as_str());
+    }
+    for c in &nbhd.clusters {
+        for id in &c.member_ids {
+            in_view.insert(id.as_str());
+        }
+    }
+
+    let orphan_dtos: Vec<&NoteNodeDto> = all_dtos
+        .iter()
+        .filter(|d| !in_view.contains(d.id.as_str()))
+        .collect();
+
+    let count = orphan_dtos.len();
+    if count == 0 {
+        nbhd.orphans = Vec::new();
+        return;
+    }
+
+    let r = ORPHAN_RADIUS as f64;
+    // Stagger by a quarter turn so the first orphan doesn't sit on the +X axis.
+    let phase = TAU / 8.0;
+
+    let mut orphans = Vec::with_capacity(count);
+    for (i, dto) in orphan_dtos.into_iter().enumerate() {
+        let angle = phase + (i as f64) * TAU / (count as f64);
+        let x = angle.cos() * r;
+        let y = angle.sin() * r;
+
+        let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
+        node.position = Vec2::new(x, y);
+        node.z = ORPHAN_Z;
+        node.pinned = true;
+        // Shrink ghost dots: orphans are visual context, not focus targets.
+        node.radius = 4.5;
+        orphans.push(node);
+
+        nbhd.target_positions
+            .insert(dto.id.clone(), Vec3::new(x as f32, y as f32, ORPHAN_Z));
+    }
+    nbhd.orphans = orphans;
 }
 
 fn note_dto_to_canvas(dto: &NoteNodeDto, hop: u8) -> CanvasNode {
@@ -266,7 +357,7 @@ mod tests {
                 .cloned()
                 .collect(),
         };
-        let nb = to_neighborhood(&resp, 0.0);
+        let nb = to_neighborhood(&resp, 0.0, 12);
         assert_eq!(nb.center.id, "a");
         assert_eq!(nb.center.hop, 0);
         // "b" is hop=1, "c" is hop=2

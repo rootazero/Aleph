@@ -1,4 +1,6 @@
+use crate::api::settings::save_canvas_radial_navigation;
 use crate::canvas_engine::types::ViewMode;
+use crate::context::DashboardState;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -10,7 +12,13 @@ pub fn CanvasToolbar(
     on_search: impl Fn(String) + 'static + Copy,
     fold_threshold: ReadSignal<usize>,
     set_fold_threshold: WriteSignal<usize>,
+    /// Hide the Global/Local toggle in radial mode — radial is always
+    /// center-focused, so "Global" has no meaning there.
+    #[prop(optional)]
+    is_radial: bool,
 ) -> impl IntoView {
+    let state = expect_context::<DashboardState>();
+    let radial_signal = state.canvas_radial_navigation;
     let input_value = RwSignal::new(String::new());
 
     let on_input = move |ev: web_sys::Event| {
@@ -85,33 +93,78 @@ pub fn CanvasToolbar(
                 <span class="w-4 text-center">{move || fold_threshold.get()}</span>
             </div>
 
-            // Local/Global two-button toggle
-            <div class="flex rounded-lg overflow-hidden border border-border">
+            // Radial / Legacy view toggle — moved here from Settings so users
+            // can switch the canvas mode without leaving the memory view.
+            // Persists to localStorage via save_canvas_radial_navigation.
+            <div class="flex rounded-lg overflow-hidden border border-border" title="Switch between radial neighborhood view and legacy global graph">
                 <button
-                    on:click=move |_| { if is_global() { on_toggle_mode(); } }
-                    class=move || {
-                        if is_global() {
-                            "px-3 py-1.5 text-xs font-medium bg-primary/20 text-primary"
-                        } else {
-                            "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                    on:click=move |_| {
+                        if !radial_signal.get() {
+                            radial_signal.set(true);
+                            save_canvas_radial_navigation(true);
                         }
                     }
-                >
-                    "Global"
-                </button>
-                <button
-                    on:click=move |_| { if !is_global() { on_toggle_mode(); } }
                     class=move || {
-                        if !is_global() {
+                        if radial_signal.get() {
                             "px-3 py-1.5 text-xs font-medium bg-accent/20 text-accent"
                         } else {
                             "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
                         }
                     }
                 >
-                    "Local"
+                    "Radial"
+                </button>
+                <button
+                    on:click=move |_| {
+                        if radial_signal.get() {
+                            radial_signal.set(false);
+                            save_canvas_radial_navigation(false);
+                        }
+                    }
+                    class=move || {
+                        if !radial_signal.get() {
+                            "px-3 py-1.5 text-xs font-medium bg-primary/20 text-primary"
+                        } else {
+                            "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                        }
+                    }
+                >
+                    "Legacy"
                 </button>
             </div>
+
+            // Local/Global toggle — only meaningful in legacy mode.
+            // In radial mode the view is always center-focused, so the toggle is hidden.
+            // Click semantics: each button switches TO its mode if not already there.
+            // The parent's `on_toggle_mode` decides how to swap (Local needs a center).
+            {(!is_radial).then(|| view! {
+                <div class="flex rounded-lg overflow-hidden border border-border">
+                    <button
+                        on:click=move |_| { if !is_global() { on_toggle_mode(); } }
+                        class=move || {
+                            if is_global() {
+                                "px-3 py-1.5 text-xs font-medium bg-primary/20 text-primary"
+                            } else {
+                                "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                            }
+                        }
+                    >
+                        "Global"
+                    </button>
+                    <button
+                        on:click=move |_| { if is_global() { on_toggle_mode(); } }
+                        class=move || {
+                            if !is_global() {
+                                "px-3 py-1.5 text-xs font-medium bg-accent/20 text-accent"
+                            } else {
+                                "px-3 py-1.5 text-xs font-medium bg-transparent text-text-secondary hover:text-text-primary"
+                            }
+                        }
+                    >
+                        "Local"
+                    </button>
+                </div>
+            })}
         </div>
     }
 }

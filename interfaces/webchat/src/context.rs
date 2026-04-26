@@ -92,6 +92,10 @@ pub struct DashboardState {
 
     /// Alert subscription ID for cleanup
     alert_subscription_id: StoredValue<Option<usize>>,
+
+    /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
+    /// Initialized from localStorage; mutated by the Settings panel toggle.
+    pub canvas_radial_navigation: RwSignal<bool>,
 }
 
 /// Derive the Gateway WebSocket URL from the current page location.
@@ -134,6 +138,9 @@ impl DashboardState {
             disconnect_tx: StoredValue::new(None),
             alerts: RwSignal::new(HashMap::new()),
             alert_subscription_id: StoredValue::new(None),
+            canvas_radial_navigation: RwSignal::new(
+                crate::api::settings::load_canvas_radial_navigation(),
+            ),
         }
     }
 

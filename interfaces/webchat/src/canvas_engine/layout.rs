@@ -38,8 +38,8 @@ pub fn assign_sectors(relations: &[String]) -> HashMap<String, f32> {
     out
 }
 
-pub const R_1: f32 = 220.0;
-pub const R_2: f32 = 400.0;
+pub const R_1: f32 = 180.0;
+pub const R_2: f32 = 320.0;
 pub const Z_ACTIVE: f32 = 0.0;
 pub const Z_ONE_HOP: f32 = 60.0;
 pub const Z_TWO_HOP: f32 = 140.0;
@@ -72,13 +72,9 @@ pub fn compute_target_positions(
             .push((c.id.clone(), c.aggregated_weight));
     }
 
-    // Adaptive R1 if crowded
-    let n_one = one_hop.len() + clusters.len();
-    let r1 = if n_one >= 16 {
-        R_1 + 12.0 * (n_one as f32 - 16.0)
-    } else {
-        R_1
-    };
+    // Cluster folding handles dense sectors via fold_threshold; keep R_1 fixed
+    // so the 1-hop ring never sprawls past the viewport when nodes get many.
+    let r1 = R_1;
 
     // Assign sector center angles (evenly spaced, hash-ordered)
     let relations: Vec<String> = by_relation.keys().cloned().collect();
@@ -336,7 +332,7 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
         let pos_b = targets.get("b").unwrap();
         let r = (pos_b.x.powi(2) + pos_b.y.powi(2)).sqrt();
-        assert!((r - 220.0).abs() < 1.0, "1-hop should be at radius 220, got {r}");
+        assert!((r - 180.0).abs() < 1.0, "1-hop should be at radius 180, got {r}");
     }
 
     #[test]
@@ -348,7 +344,7 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges);
         let pos_c = targets.get("c").unwrap();
         let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
-        assert!((r - 400.0).abs() < 5.0, "2-hop should be at radius 400, got {r}");
+        assert!((r - 320.0).abs() < 5.0, "2-hop should be at radius 320, got {r}");
     }
 
     #[test]

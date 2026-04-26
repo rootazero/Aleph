@@ -73,6 +73,7 @@ mod tests {
             center: dummy_node("c"),
             one_hop: vec![],
             two_hop: vec![],
+            orphans: vec![],
             clusters: vec![],
             edges: vec![],
             target_positions: HashMap::new(),

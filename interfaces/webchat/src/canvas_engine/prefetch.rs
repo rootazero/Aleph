@@ -39,6 +39,12 @@ impl PrefetchCache {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Drop every cached neighborhood. Used when a layout parameter (e.g. the
+    /// fold threshold) changes so stale neighborhoods don't bleed through.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 /// Hover-debounce timer state. Caller calls `note_hover` on each pointer move.
@@ -100,6 +106,7 @@ mod tests {
             },
             one_hop: vec![],
             two_hop: vec![],
+            orphans: vec![],
             clusters: vec![],
             edges: vec![],
             target_positions: HashMap::new(),

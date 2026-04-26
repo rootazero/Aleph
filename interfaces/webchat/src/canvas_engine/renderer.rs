@@ -262,7 +262,7 @@ mod depth_tests {
 // Z-layered neighborhood renderer (used by T22 wiring)
 // ---------------------------------------------------------------------------
 
-/// Render a full neighborhood back-to-front (2-hop → clusters → 1-hop → active).
+/// Render a full neighborhood back-to-front (orphans → 2-hop → clusters → 1-hop → active).
 pub fn draw_neighborhood(
     ctx: &CanvasRenderingContext2d,
     viewport: &Viewport,
@@ -276,6 +276,11 @@ pub fn draw_neighborhood(
     ctx.save();
     let _ = ctx.translate(viewport.offset.x, viewport.offset.y);
     let _ = ctx.scale(viewport.scale, viewport.scale);
+
+    // 2. Layer 0: Orphans (deepest, behind everything else).
+    //    Ghost-dot ring around R=ORPHAN_RADIUS for nodes outside the current
+    //    connected component. Click to re-center.
+    draw_orphan_ring(ctx, &nbhd.orphans, drag, selected, hovered);
 
     // 2. Layer A: 2-hop (back)
     for n in &nbhd.two_hop {
@@ -307,6 +312,69 @@ fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
     // T14/T15 can add a proper radial gradient once the feature is wired.
     ctx.set_fill_style_str("#080818");
     ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
+}
+
+/// Draw the ghost-dot ring at `R = ORPHAN_RADIUS`. Each orphan is a small dim
+/// dot — no glow, no shadow, no label unless hovered/selected. Hovering brightens
+/// and reveals the label so the user can tell what they're about to recenter on.
+fn draw_orphan_ring(
+    ctx: &CanvasRenderingContext2d,
+    orphans: &[CanvasNode],
+    drag: (f32, f32),
+    selected: Option<&str>,
+    hovered: Option<&str>,
+) {
+    use std::f64::consts::TAU;
+    if orphans.is_empty() {
+        return;
+    }
+
+    // Subtle hint ring so users see there's "more out there" even before pointing
+    // at a dot. Drawn first so dots sit on top of it.
+    ctx.set_stroke_style_str("rgba(167,139,250,0.06)");
+    ctx.set_line_width(1.0);
+    ctx.begin_path();
+    let _ = ctx.arc(0.0, 0.0, ORPHAN_RADIUS as f64, 0.0, TAU);
+    ctx.stroke();
+
+    for n in orphans {
+        let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
+        let cx = n.position.x + off.0 as f64;
+        let cy = n.position.y + off.1 as f64;
+        let r = n.radius;
+
+        let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
+        let is_hovered = hovered.map(|h| h == n.id).unwrap_or(false);
+
+        // Dim by default, brighten on hover/selection.
+        let alpha = if is_selected {
+            0.95
+        } else if is_hovered {
+            0.75
+        } else {
+            0.30
+        };
+        ctx.set_fill_style_str(&n.color.to_css_alpha(alpha));
+        ctx.begin_path();
+        let _ = ctx.arc(cx, cy, r, 0.0, TAU);
+        ctx.fill();
+
+        if is_hovered || is_selected {
+            // Reveal label only when the user is targeting this orphan.
+            let max_chars = 24;
+            let label = if n.name.chars().count() > max_chars {
+                let truncated: String = n.name.chars().take(max_chars - 1).collect();
+                format!("{truncated}\u{2026}")
+            } else {
+                n.name.clone()
+            };
+            ctx.set_fill_style_str("rgba(226,232,240,0.95)");
+            ctx.set_font("11px sans-serif");
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("top");
+            let _ = ctx.fill_text(&label, cx, cy + r + 4.0);
+        }
+    }
 }
 
 fn draw_node(
@@ -398,25 +466,39 @@ fn draw_node(
 
     // 8. Wiki badge — skipped (CanvasNode has no has_wiki field; future enhancement)
 
-    // 9. Label — show when node is large enough
-    if r >= 18.0 {
-        let label = if n.name.chars().count() > 20 {
-            let truncated: String = n.name.chars().take(19).collect();
+    // 9. Label — show by hop layer
+    //    hop=0 (active center): always show, larger font
+    //    hop=1 (one-hop neighbors): always show
+    //    hop=2 (two-hop): only when node is wide enough to read
+    let show_label = n.hop <= 1 || r >= 12.0 || is_selected || is_hovered;
+    if show_label {
+        let max_chars = if is_active { 28 } else { 20 };
+        let label = if n.name.chars().count() > max_chars {
+            let truncated: String = n.name.chars().take(max_chars - 1).collect();
             format!("{truncated}\u{2026}")
         } else {
             n.name.clone()
         };
 
-        let label_alpha = if is_selected || is_hovered {
-            attrs.opacity as f64
+        let label_alpha = if is_selected || is_hovered || is_active {
+            (attrs.opacity as f64).clamp(0.0, 1.0)
         } else {
-            (attrs.opacity as f64 * 0.85).clamp(0.0, 1.0)
+            (attrs.opacity as f64 * 0.9).clamp(0.0, 1.0)
+        };
+        let font_size = if is_active {
+            13.0
+        } else if is_selected || is_hovered {
+            12.0
+        } else if n.hop == 1 {
+            11.0
+        } else {
+            10.0
         };
         ctx.set_fill_style_str(&format!("rgba(226,232,240,{label_alpha:.3})"));
-        ctx.set_font("11px sans-serif");
+        ctx.set_font(&format!("{font_size}px sans-serif"));
         ctx.set_text_align("center");
         ctx.set_text_baseline("top");
-        let _ = ctx.fill_text(&label, cx64, cy64 + r + 4.0);
+        let _ = ctx.fill_text(&label, cx64, cy64 + r + 5.0);
     }
 }
 

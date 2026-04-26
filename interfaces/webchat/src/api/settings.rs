@@ -13,16 +13,52 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPrefs {
     /// Enable the radial (neighborhood) navigation mode in the Canvas view.
-    /// When `false` (default), the existing global graph view is shown.
-    #[serde(default)]
+    /// When `true` (default), the new TheBrain-style radial view is shown;
+    /// when `false`, the legacy global force-directed graph view is shown.
+    #[serde(default = "default_canvas_radial_navigation")]
     pub canvas_radial_navigation: bool,
+}
+
+fn default_canvas_radial_navigation() -> bool {
+    true
 }
 
 impl Default for UserPrefs {
     fn default() -> Self {
         Self {
-            canvas_radial_navigation: false,
+            canvas_radial_navigation: default_canvas_radial_navigation(),
         }
+    }
+}
+
+/// localStorage key for the canvas radial navigation toggle.
+pub const CANVAS_RADIAL_NAVIGATION_KEY: &str = "aleph.canvas_radial_navigation";
+
+/// Read the canvas radial navigation flag from localStorage, falling back to default.
+pub fn load_canvas_radial_navigation() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(stored) = web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|ls| ls.get_item(CANVAS_RADIAL_NAVIGATION_KEY).ok().flatten())
+        {
+            return stored != "false";
+        }
+    }
+    default_canvas_radial_navigation()
+}
+
+/// Persist the canvas radial navigation flag to localStorage.
+pub fn save_canvas_radial_navigation(value: bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+            let _ = storage.set_item(CANVAS_RADIAL_NAVIGATION_KEY, if value { "true" } else { "false" });
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = value;
     }
 }
 
