@@ -1,194 +1,232 @@
-use web_sys::CanvasRenderingContext2d;
+//! Global minimap: deterministic 2D projection of the full graph.
+//!
+//! Nodes are placed by hashing their id (angle + radius). Connected components
+//! are computed via union-find on the edges and used to color-group nodes.
+//! Click hit-testing is exposed via `pick_at`.
 
-pub const MINIMAP_W: f32 = 160.0;
-pub const MINIMAP_H: f32 = 120.0;
-pub const MINIMAP_SAMPLE_LIMIT: usize = 200;
-pub const MINIMAP_TTL_MS: f64 = 5.0 * 60_000.0;
+use crate::canvas_engine::adapter::{NoteLinkDto, NoteNodeDto};
+use crate::canvas_engine::types::{Color, Vec2};
+use std::collections::HashMap;
+use std::f64::consts::TAU;
 
-pub struct MiniMap {
-    pub samples: Vec<MiniNode>,
-    pub bounds: (f32, f32, f32, f32), // (min_x, min_y, max_x, max_y)
-    pub fetched_at_ms: f64,
-}
-
-pub struct MiniNode {
+#[derive(Clone, Debug)]
+pub struct MiniPoint {
     pub id: String,
-    pub x: f32,
-    pub y: f32,
-    pub kind: String,
+    pub pos: Vec2,
+    pub component: u32,
 }
 
-impl MiniMap {
-    pub fn empty() -> Self {
-        Self {
-            samples: vec![],
-            bounds: (0.0, 0.0, 1.0, 1.0),
-            fetched_at_ms: 0.0,
-        }
+pub struct GlobalMiniMap {
+    pub size_px: f32,
+    pub points: Vec<MiniPoint>,
+    pub component_colors: HashMap<u32, Color>,
+}
+
+impl GlobalMiniMap {
+    pub fn empty(size_px: f32) -> Self {
+        Self { size_px, points: Vec::new(), component_colors: HashMap::new() }
     }
 
-    pub fn is_stale(&self, now_ms: f64) -> bool {
-        now_ms - self.fetched_at_ms > MINIMAP_TTL_MS
+    /// Build a deterministic minimap from full-graph DTOs and edges.
+    pub fn build(dtos: &[NoteNodeDto], edges: &[NoteLinkDto], size_px: f32) -> Self {
+        let component_of = compute_components(dtos, edges);
+        let center = (size_px / 2.0) as f64;
+        let max_r = (size_px / 2.0 - 6.0).max(1.0) as f64;
+
+        let mut points = Vec::with_capacity(dtos.len());
+        for dto in dtos {
+            let h1 = hash_to_unit(&dto.id, 0xA5A5_A5A5);
+            let h2 = hash_to_unit(&dto.id, 0x5A5A_5A5A);
+            let angle = h1 * TAU;
+            let radius = h2.sqrt() * max_r;
+            let x = center + radius * angle.cos();
+            let y = center + radius * angle.sin();
+            let component = component_of.get(&dto.id).copied().unwrap_or(0);
+            points.push(MiniPoint {
+                id: dto.id.clone(),
+                pos: Vec2::new(x, y),
+                component,
+            });
+        }
+
+        let component_colors = assign_component_colors(&points);
+        Self { size_px, points, component_colors }
     }
 
-    /// Set samples and recompute bounds.
-    pub fn set_samples(&mut self, samples: Vec<MiniNode>, now_ms: f64) {
-        if samples.is_empty() {
-            self.samples = samples;
-            self.bounds = (0.0, 0.0, 1.0, 1.0);
-            self.fetched_at_ms = now_ms;
-            return;
-        }
-        let mut min_x = f32::MAX;
-        let mut min_y = f32::MAX;
-        let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
-        for s in &samples {
-            min_x = min_x.min(s.x);
-            min_y = min_y.min(s.y);
-            max_x = max_x.max(s.x);
-            max_y = max_y.max(s.y);
-        }
-        if (max_x - min_x).abs() < 1e-3 {
-            max_x = min_x + 1.0;
-        }
-        if (max_y - min_y).abs() < 1e-3 {
-            max_y = min_y + 1.0;
-        }
-        self.samples = samples;
-        self.bounds = (min_x, min_y, max_x, max_y);
-        self.fetched_at_ms = now_ms;
-    }
-
-    pub fn world_to_minimap(&self, wx: f32, wy: f32) -> (f32, f32) {
-        let (min_x, min_y, max_x, max_y) = self.bounds;
-        let nx = (wx - min_x) / (max_x - min_x);
-        let ny = (wy - min_y) / (max_y - min_y);
-        (nx * MINIMAP_W, ny * MINIMAP_H)
-    }
-
-    pub fn minimap_to_world(&self, mx: f32, my: f32) -> (f32, f32) {
-        let (min_x, min_y, max_x, max_y) = self.bounds;
-        let wx = min_x + (mx / MINIMAP_W) * (max_x - min_x);
-        let wy = min_y + (my / MINIMAP_H) * (max_y - min_y);
-        (wx, wy)
-    }
-
-    pub fn pick_node(&self, mx: f32, my: f32) -> Option<&MiniNode> {
-        let mut best: Option<(&MiniNode, f32)> = None;
-        for s in &self.samples {
-            let (sx, sy) = self.world_to_minimap(s.x, s.y);
-            let d2 = (sx - mx).powi(2) + (sy - my).powi(2);
-            if d2 < 36.0 {
-                match best {
-                    Some((_, bd)) if bd <= d2 => {}
-                    _ => best = Some((s, d2)),
-                }
+    /// Return the id of the closest node within `hit_radius` of `(mx, my)`,
+    /// or `None` if no node is close enough.
+    pub fn pick_at(&self, mx: f32, my: f32, hit_radius: f32) -> Option<&str> {
+        let mx = mx as f64;
+        let my = my as f64;
+        let r2 = (hit_radius * hit_radius) as f64;
+        let mut best: Option<(&str, f64)> = None;
+        for p in &self.points {
+            let dx = p.pos.x - mx;
+            let dy = p.pos.y - my;
+            let d2 = dx * dx + dy * dy;
+            if d2 <= r2 && best.map(|(_, b)| d2 < b).unwrap_or(true) {
+                best = Some((p.id.as_str(), d2));
             }
         }
-        best.map(|(n, _)| n)
+        best.map(|(id, _)| id)
+    }
+}
+
+fn hash_to_unit(s: &str, salt: u64) -> f64 {
+    // FNV-1a 64-bit, then map to [0, 1).
+    let mut h: u64 = 0xcbf29ce484222325 ^ salt;
+    for byte in s.as_bytes() {
+        h ^= *byte as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    (h as f64) / (u64::MAX as f64)
+}
+
+fn compute_components(dtos: &[NoteNodeDto], edges: &[NoteLinkDto]) -> HashMap<String, u32> {
+    let mut idx: HashMap<&str, usize> = HashMap::new();
+    for (i, n) in dtos.iter().enumerate() {
+        idx.insert(n.id.as_str(), i);
+    }
+    let mut parent: Vec<usize> = (0..dtos.len()).collect();
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut root = x;
+        while parent[root] != root {
+            root = parent[root];
+        }
+        let mut cur = x;
+        while parent[cur] != root {
+            let next = parent[cur];
+            parent[cur] = root;
+            cur = next;
+        }
+        root
     }
 
-    pub fn draw(
-        &self,
-        ctx: &CanvasRenderingContext2d,
-        x_origin: f32,
-        y_origin: f32,
-        active_id: &str,
-        one_hop_ids: &std::collections::HashSet<String>,
-    ) {
-        // Background panel
-        ctx.set_fill_style_str("rgba(20,20,30,0.7)");
-        ctx.fill_rect(
-            x_origin as f64,
-            y_origin as f64,
-            MINIMAP_W as f64,
-            MINIMAP_H as f64,
-        );
-        ctx.set_stroke_style_str("rgba(255,255,255,0.15)");
-        ctx.set_line_width(1.0);
-        ctx.stroke_rect(
-            x_origin as f64,
-            y_origin as f64,
-            MINIMAP_W as f64,
-            MINIMAP_H as f64,
-        );
-
-        for s in &self.samples {
-            let (mx, my) = self.world_to_minimap(s.x, s.y);
-            let cx = x_origin + mx;
-            let cy = y_origin + my;
-            if s.id == active_id {
-                ctx.set_fill_style_str("#ef4444");
-                ctx.begin_path();
-                let _ = ctx.arc(cx as f64, cy as f64, 4.0, 0.0, std::f64::consts::TAU);
-                ctx.fill();
-                ctx.set_stroke_style_str("#ffffff");
-                ctx.set_line_width(1.0);
-                ctx.stroke();
-            } else if one_hop_ids.contains(&s.id) {
-                ctx.set_fill_style_str("rgba(167,139,250,0.85)");
-                ctx.fill_rect((cx - 1.5) as f64, (cy - 1.5) as f64, 3.0, 3.0);
-            } else {
-                ctx.set_fill_style_str("rgba(140,140,160,0.5)");
-                ctx.fill_rect((cx - 0.5) as f64, (cy - 0.5) as f64, 1.0, 1.0);
-            }
+    for e in edges {
+        let (Some(&a), Some(&b)) = (idx.get(e.from.as_str()), idx.get(e.to.as_str())) else {
+            continue;
+        };
+        let ra = find(&mut parent, a);
+        let rb = find(&mut parent, b);
+        if ra != rb {
+            parent[ra] = rb;
         }
     }
+
+    let mut out = HashMap::with_capacity(dtos.len());
+    let mut roots: HashMap<usize, u32> = HashMap::new();
+    let mut next_id: u32 = 0;
+    for (i, n) in dtos.iter().enumerate() {
+        let root = find(&mut parent, i);
+        let cid = *roots.entry(root).or_insert_with(|| {
+            let id = next_id;
+            next_id += 1;
+            id
+        });
+        out.insert(n.id.clone(), cid);
+    }
+    out
+}
+
+fn assign_component_colors(points: &[MiniPoint]) -> HashMap<u32, Color> {
+    let mut comps: Vec<u32> = points.iter().map(|p| p.component).collect();
+    comps.sort_unstable();
+    comps.dedup();
+    let n = comps.len().max(1);
+    let mut out = HashMap::with_capacity(n);
+    for (i, c) in comps.iter().enumerate() {
+        let hue = (i as f32) * 360.0 / (n as f32);
+        let (r, g, b) = hsl_to_rgb(hue, 0.55, 0.55);
+        out.insert(*c, Color::new(r, g, b));
+    }
+    out
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0).clamp(0.0, 255.0) as u8,
+        ((g1 + m) * 255.0).clamp(0.0, 255.0) as u8,
+        ((b1 + m) * 255.0).clamp(0.0, 255.0) as u8,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn empty_bounds_safe() {
-        let mut m = MiniMap::empty();
-        m.set_samples(vec![], 0.0);
-        let (x, y) = m.world_to_minimap(0.0, 0.0);
-        assert!(x.is_finite() && y.is_finite());
+    fn dto(id: &str) -> NoteNodeDto {
+        NoteNodeDto {
+            id: id.to_string(),
+            name: id.to_string(),
+            path: String::new(),
+            category: "concept".to_string(),
+            tags: vec![],
+            link_count: 0,
+        }
+    }
+
+    fn link(from: &str, to: &str) -> NoteLinkDto {
+        NoteLinkDto { from: from.to_string(), to: to.to_string() }
     }
 
     #[test]
-    fn world_to_minimap_round_trip() {
-        let mut m = MiniMap::empty();
-        m.set_samples(
-            vec![
-                MiniNode {
-                    id: "a".to_string(),
-                    x: -100.0,
-                    y: -100.0,
-                    kind: "concept".to_string(),
-                },
-                MiniNode {
-                    id: "b".to_string(),
-                    x: 100.0,
-                    y: 100.0,
-                    kind: "concept".to_string(),
-                },
-            ],
-            0.0,
-        );
-        let (mx, my) = m.world_to_minimap(0.0, 0.0);
-        let (wx, wy) = m.minimap_to_world(mx, my);
-        assert!((wx).abs() < 1e-3);
-        assert!((wy).abs() < 1e-3);
+    fn deterministic_layout() {
+        let dtos = vec![dto("a"), dto("b"), dto("c")];
+        let edges = vec![link("a", "b")];
+        let m1 = GlobalMiniMap::build(&dtos, &edges, 200.0);
+        let m2 = GlobalMiniMap::build(&dtos, &edges, 200.0);
+        for (p1, p2) in m1.points.iter().zip(m2.points.iter()) {
+            assert!((p1.pos.x - p2.pos.x).abs() < 1e-9);
+            assert!((p1.pos.y - p2.pos.y).abs() < 1e-9);
+        }
     }
 
     #[test]
-    fn pick_node_finds_closest_within_threshold() {
-        let mut m = MiniMap::empty();
-        m.set_samples(
-            vec![MiniNode {
-                id: "a".to_string(),
-                x: 0.0,
-                y: 0.0,
-                kind: "concept".to_string(),
-            }],
-            0.0,
-        );
-        let (mx, my) = m.world_to_minimap(0.0, 0.0);
-        assert!(m.pick_node(mx, my).is_some());
-        assert!(m.pick_node(mx + 100.0, my + 100.0).is_none());
+    fn pick_at_finds_node() {
+        let dtos = vec![dto("a"), dto("b")];
+        let m = GlobalMiniMap::build(&dtos, &[], 200.0);
+        let target = &m.points[0];
+        let hit = m.pick_at(target.pos.x as f32, target.pos.y as f32, 5.0);
+        assert_eq!(hit, Some(target.id.as_str()));
+    }
+
+    #[test]
+    fn pick_at_misses_outside_radius() {
+        let dtos = vec![dto("a")];
+        let m = GlobalMiniMap::build(&dtos, &[], 200.0);
+        let hit = m.pick_at(-100.0, -100.0, 3.0);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn connected_components_share_color() {
+        let dtos = vec![dto("a"), dto("b"), dto("c")];
+        let edges = vec![link("a", "b")];
+        let m = GlobalMiniMap::build(&dtos, &edges, 200.0);
+        let comp_a = m.points.iter().find(|p| p.id == "a").unwrap().component;
+        let comp_b = m.points.iter().find(|p| p.id == "b").unwrap().component;
+        let comp_c = m.points.iter().find(|p| p.id == "c").unwrap().component;
+        assert_eq!(comp_a, comp_b);
+        assert_ne!(comp_a, comp_c);
+    }
+
+    #[test]
+    fn empty_minimap_has_no_points() {
+        let m = GlobalMiniMap::empty(200.0);
+        assert_eq!(m.points.len(), 0);
+        assert!(m.pick_at(100.0, 100.0, 5.0).is_none());
     }
 }

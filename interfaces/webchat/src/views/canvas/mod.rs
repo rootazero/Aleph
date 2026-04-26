@@ -15,7 +15,6 @@ use crate::canvas_engine::adapter::{
     GraphQueryResponse, NoteDetailResponse, NoteNodeDto,
 };
 use crate::canvas_engine::interaction::CanvasEvent;
-use crate::canvas_engine::mini_map::MiniMap;
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::prefetch::PrefetchCache;
 use crate::canvas_engine::types::{BreadcrumbEntry, NavState, ViewMode};
@@ -81,7 +80,6 @@ fn RadialCanvasView() -> impl IntoView {
     // Non-reactive radial navigation state (Rc<RefCell<_>> — WASM single-thread safe)
     let nav = Rc::new(RefCell::new(NavController::new()));
     let prefetch = Rc::new(RefCell::new(PrefetchCache::new()));
-    let _minimap = Rc::new(RefCell::new(MiniMap::empty()));
 
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
