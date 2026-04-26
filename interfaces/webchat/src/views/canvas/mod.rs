@@ -1,7 +1,13 @@
 mod breadcrumb;
 mod detail_panel;
 mod graph_canvas;
+#[cfg(target_arch = "wasm32")]
+mod minimap_view;
 mod toolbar;
+
+use crate::canvas_engine::mini_map::GlobalMiniMap;
+#[cfg(target_arch = "wasm32")]
+use minimap_view::MiniMapOverlay;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -84,17 +90,24 @@ fn RadialCanvasView() -> impl IntoView {
     // Non-reactive 60fps canvas state
     let graph_state = Rc::new(RefCell::new(GraphState::new()));
 
+    // Minimap state — rebuilt once on mount, repainted reactively on focus changes
+    let minimap: Rc<RefCell<GlobalMiniMap>> = Rc::new(RefCell::new(GlobalMiniMap::empty(200.0)));
+    let (focus_id, set_focus_id) = signal(None::<String>);
+    let (focus_neighbors, set_focus_neighbors) = signal(Vec::<String>::new());
+
     // -----------------------------------------------------------------------
     // Effect 1: initial mount — pick entry point and fetch first neighborhood
     // -----------------------------------------------------------------------
     let nav_init = nav.clone();
     let gs_init = graph_state.clone();
+    let minimap_init = minimap.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
             return;
         }
         let nav_inner = nav_init.clone();
         let gs_inner = gs_init.clone();
+        let minimap_inner = minimap_init.clone();
 
         spawn_local(async move {
             let now_ms = now_ms();
@@ -104,6 +117,8 @@ fn RadialCanvasView() -> impl IntoView {
             let query_result = GraphApi::query(&state, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
                 all_dtos.set(r.nodes.clone());
+                let mm = GlobalMiniMap::build(&r.nodes, &r.edges, 200.0);
+                *minimap_inner.borrow_mut() = mm;
             }
 
             // Entry point: localStorage "canvas_entry" → highest-degree node
@@ -128,8 +143,12 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
+                    let neighbor_ids: Vec<String> =
+                        nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
-                    nav_inner.borrow_mut().fulfilled(entry_id, name, nbhd);
+                    nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
+                    set_focus_id.set(Some(entry_id));
+                    set_focus_neighbors.set(neighbor_ids);
                 }
                 Err(e) => {
                     web_sys::console::error_1(
@@ -157,8 +176,12 @@ fn RadialCanvasView() -> impl IntoView {
         let cached = prefetch_req.borrow().get(&id, threshold, now_ms).cloned();
         if let Some(nbhd) = cached {
             let name = nbhd.center.name.clone();
+            let neighbor_ids: Vec<String> =
+                nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
-            nav_req.borrow_mut().fulfilled(id, name, nbhd);
+            nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
+            set_focus_id.set(Some(id));
+            set_focus_neighbors.set(neighbor_ids);
             return;
         }
 
@@ -174,8 +197,12 @@ fn RadialCanvasView() -> impl IntoView {
                     let dtos = all_dtos.get_untracked();
                     populate_orphans(&mut nbhd, &dtos);
                     let name = nbhd.center.name.clone();
+                    let neighbor_ids: Vec<String> =
+                        nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
-                    nav_fetch.borrow_mut().fulfilled(id, name, nbhd);
+                    nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
+                    set_focus_id.set(Some(id));
+                    set_focus_neighbors.set(neighbor_ids);
                 }
                 Err(e) => {
                     nav_fetch.borrow_mut().fail(id.clone(), e.clone());
@@ -405,6 +432,24 @@ fn RadialCanvasView() -> impl IntoView {
                         on_event=Callback::new(on_event)
                         nav=nav.clone()
                     />
+                    {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            view! {
+                                <MiniMapOverlay
+                                    minimap=minimap.clone()
+                                    focus_id=focus_id
+                                    focus_neighbor_ids=focus_neighbors
+                                    on_pick=move |id: String| {
+                                        set_selected_node.set(Some(id.clone()));
+                                        active_request.set(Some(id));
+                                    }
+                                />
+                            }
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        { () }
+                    }
                 </div>
 
                 {move || has_detail().then(|| view! {
