@@ -115,7 +115,10 @@ pub fn to_neighborhood(
             sorted.sort_by(|a, b| {
                 let wa = a.decay_score * a.edge_count as f32;
                 let wb = b.decay_score * b.edge_count as f32;
-                wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+                match wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal) {
+                    std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+                    other => other,
+                }
             });
             let kept: Vec<CanvasNode> = sorted.drain(..fold_threshold).collect();
             let folded = group_by_category_into_clusters(sorted, &resp.center.id);
@@ -383,6 +386,15 @@ mod tests {
                 "n{i} should be kept (top weight)"
             );
         }
+        // Verify n5..n19 ended up in clusters, not in unfolded set
+        let cluster_ids: Vec<&str> = nb.clusters.iter()
+            .flat_map(|c| c.member_ids.iter().map(|s| s.as_str()))
+            .collect();
+        for i in 5..20 {
+            let expected = format!("n{i}");
+            assert!(cluster_ids.contains(&expected.as_str()),
+                    "n{i} should be in clusters (not in top-5)");
+        }
     }
 
     #[test]
@@ -414,6 +426,12 @@ mod tests {
         assert_eq!(nb.clusters.len(), 3, "one cluster per category");
         let total_in_clusters: usize = nb.clusters.iter().map(|c| c.member_ids.len()).sum();
         assert_eq!(total_in_clusters, 14);
+        for cluster in &nb.clusters {
+            assert!(
+                matches!(cluster.kind.as_str(), "concept" | "reference" | "topic"),
+                "cluster kind {} must match a category", cluster.kind
+            );
+        }
     }
 
     #[test]

@@ -101,7 +101,10 @@ pub fn group_by_category_into_clusters(
         group.sort_by(|a, b| {
             let wa = a.decay_score * a.edge_count as f32;
             let wb = b.decay_score * b.edge_count as f32;
-            wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal)
+            match wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Equal => a.id.cmp(&b.id),
+                other => other,
+            }
         });
         let aggregated_weight: f32 =
             group.iter().map(|n| n.decay_score * n.edge_count as f32).sum();
