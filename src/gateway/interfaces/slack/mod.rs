@@ -55,6 +55,8 @@ pub struct SlackChannel {
     bot_user_id: Arc<RwLock<Option<String>>>,
     /// HTTP client for Slack API calls
     client: reqwest::Client,
+    /// Optional custom API base URL for testing (e.g. mock server)
+    api_base: Option<String>,
 }
 
 impl SlackChannel {
@@ -75,7 +77,15 @@ impl SlackChannel {
             shutdown_tx: None,
             bot_user_id: Arc::new(RwLock::new(None)),
             client: reqwest::Client::new(),
+            api_base: None,
         }
+    }
+
+    /// Create a Slack channel configured for testing against a mock API server.
+    pub fn for_test(id: impl Into<String>, config: SlackConfig, api_base: impl Into<String>) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.api_base = Some(api_base.into());
+        channel
     }
 
     /// Get Slack-specific capabilities.
@@ -119,7 +129,8 @@ impl Channel for SlackChannel {
         tracing::info!("Starting Slack channel...");
 
         // Validate bot token via auth.test
-        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token).await {
+        let api_base = self.api_base.as_deref();
+        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token, api_base).await {
             Ok(user_id) => {
                 tracing::info!("Slack bot authenticated (user_id: {user_id})");
                 *self.bot_user_id.write().await = Some(user_id);
@@ -198,8 +209,12 @@ impl Channel for SlackChannel {
             let client = self.client.clone();
             let token = self.config.bot_token.clone();
             let channel = conversation_id.to_string();
+            let api_base = self.api_base.clone();
             tokio::spawn(async move {
-                let _ = SlackMessageOps::post_typing(&client, &token, &channel).await;
+                let _ = SlackMessageOps::post_typing_with_base(
+                    &client, &token, &channel, api_base.as_deref(),
+                )
+                .await;
             });
         }
 
@@ -210,21 +225,23 @@ impl Channel for SlackChannel {
                 .await;
         }
 
-        SlackMessageOps::send_message(
+        SlackMessageOps::send_message_with_base(
             &self.client,
             &self.config.bot_token,
             conversation_id,
             &message.text,
             thread_ts.as_deref(),
+            self.api_base.as_deref(),
         )
         .await
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
-        SlackMessageOps::post_typing(
+        SlackMessageOps::post_typing_with_base(
             &self.client,
             &self.config.bot_token,
             conversation_id.as_str(),
+            self.api_base.as_deref(),
         )
         .await
     }
@@ -235,12 +252,13 @@ impl Channel for SlackChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        SlackMessageOps::add_reaction(
+        SlackMessageOps::add_reaction_with_base(
             &self.client,
             &self.config.bot_token,
             conversation_id.as_str(),
             message_id.as_str(),
             reaction,
+            self.api_base.as_deref(),
         )
         .await
     }
@@ -317,7 +335,7 @@ impl SlackChannel {
             // Get file data based on attachment source
             let upload_result = if let Some(data) = &attachment.data {
                 let filename = attachment.filename.as_deref().unwrap_or("file");
-                SlackMessageOps::upload_file(
+                SlackMessageOps::upload_file_with_base(
                     &self.client,
                     &self.config.bot_token,
                     conversation_id,
@@ -327,6 +345,7 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
+                    self.api_base.as_deref(),
                 )
                 .await
             } else if let Some(path) = &attachment.path {
@@ -334,7 +353,7 @@ impl SlackChannel {
                     ChannelError::SendFailed(format!("Failed to read file {}: {}", path, e))
                 })?;
                 let filename = attachment.filename.as_deref().unwrap_or(path);
-                SlackMessageOps::upload_file(
+                SlackMessageOps::upload_file_with_base(
                     &self.client,
                     &self.config.bot_token,
                     conversation_id,
@@ -344,12 +363,13 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
+                    self.api_base.as_deref(),
                 )
                 .await
             } else if let Some(url) = &attachment.url {
                 let file_data = self.download_url(url).await?;
                 let filename = attachment.filename.as_deref().unwrap_or("file");
-                SlackMessageOps::upload_file(
+                SlackMessageOps::upload_file_with_base(
                     &self.client,
                     &self.config.bot_token,
                     conversation_id,
@@ -359,6 +379,7 @@ impl SlackChannel {
                     Some(attachment.mime_type.as_str()),
                     caption,
                     thread_ts,
+                    self.api_base.as_deref(),
                 )
                 .await
             } else {

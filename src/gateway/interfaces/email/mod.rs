@@ -37,7 +37,8 @@ pub use message_ops::EmailMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
+    SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::{broadcast, watch};
@@ -52,6 +53,8 @@ pub struct EmailChannel {
     channel_state: ChannelState,
     /// Shutdown signal sender
     shutdown_tx: Option<watch::Sender<bool>>,
+    /// Test mode: skip real SMTP/IMAP operations
+    test_mode: bool,
 }
 
 impl EmailChannel {
@@ -70,7 +73,15 @@ impl EmailChannel {
             config,
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
+            test_mode: false,
         }
+    }
+
+    /// Create an Email channel for testing (no real SMTP/IMAP operations).
+    pub fn for_test(id: impl Into<String>, config: EmailConfig) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.test_mode = true;
+        channel
     }
 
     /// Get Email-specific capabilities
@@ -162,6 +173,14 @@ impl Channel for EmailChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        // Test mode: skip real SMTP, return mock success
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("email-{}", chrono::Utc::now().timestamp())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         // conversation_id is the recipient email address
         let to = message.conversation_id.as_str();
 

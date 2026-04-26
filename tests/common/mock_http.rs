@@ -49,6 +49,16 @@ impl SlackApiMock {
             .await;
     }
 
+    pub async fn chat_post_typing(server: &MockServer) {
+        Mock::given(matchers::method("POST"))
+            .and(matchers::path("/api/chat.postTyping"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+            })))
+            .mount(server)
+            .await;
+    }
+
     pub async fn reactions_add(server: &MockServer) {
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/api/reactions.add"))

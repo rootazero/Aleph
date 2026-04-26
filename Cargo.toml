@@ -300,6 +300,34 @@ required-features = ["test-helpers"]
 name = "cucumber"
 harness = false
 
+# Channel instanceless testing framework
+[[test]]
+name = "webhook_contract_test"
+
+[[test]]
+name = "webhook_fixture_test"
+
+[[test]]
+name = "webhook_protocol_test"
+
+[[test]]
+name = "slack_contract_test"
+
+[[test]]
+name = "slack_fixture_test"
+
+[[test]]
+name = "slack_protocol_test"
+
+[[test]]
+name = "email_contract_test"
+
+[[test]]
+name = "email_fixture_test"
+
+[[test]]
+name = "email_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true
