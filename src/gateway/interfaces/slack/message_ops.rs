@@ -146,9 +146,11 @@ impl SlackMessageOps {
     pub async fn validate_bot_token(
         client: &reqwest::Client,
         bot_token: &str,
+        api_base: Option<&str>,
     ) -> Result<String, ChannelError> {
+        let base = api_base.unwrap_or(SLACK_API_BASE);
         let resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/auth.test"))
+            .post(format!("{base}/auth.test"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .send()
             .await
@@ -212,7 +214,18 @@ impl SlackMessageOps {
         text: &str,
         thread_ts: Option<&str>,
     ) -> Result<SendResult, ChannelError> {
-        // Format text for Slack mrkdwn
+        Self::send_message_with_base(client, bot_token, channel, text, thread_ts, None).await
+    }
+
+    pub async fn send_message_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        text: &str,
+        thread_ts: Option<&str>,
+        api_base: Option<&str>,
+    ) -> Result<SendResult, ChannelError> {
+        let base = api_base.unwrap_or(SLACK_API_BASE);
         let formatted = MessageFormatter::format(text, MarkupFormat::SlackMrkdwn);
         let chunks = MessageFormatter::split(&formatted, SLACK_MSG_LIMIT);
 
@@ -229,7 +242,7 @@ impl SlackMessageOps {
             }
 
             let resp: serde_json::Value = client
-                .post(format!("{SLACK_API_BASE}/chat.postMessage"))
+                .post(format!("{base}/chat.postMessage"))
                 .header("Authorization", format!("Bearer {bot_token}"))
                 .json(&body)
                 .send()
@@ -268,12 +281,22 @@ impl SlackMessageOps {
         bot_token: &str,
         channel: &str,
     ) -> ChannelResult<()> {
+        Self::post_typing_with_base(client, bot_token, channel, None).await
+    }
+
+    pub async fn post_typing_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        api_base: Option<&str>,
+    ) -> ChannelResult<()> {
+        let base = api_base.unwrap_or(SLACK_API_BASE);
         let body = serde_json::json!({
             "channel": channel,
         });
 
         let resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/chat.postTyping"))
+            .post(format!("{base}/chat.postTyping"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&body)
             .send()
@@ -313,11 +336,28 @@ impl SlackMessageOps {
         caption: Option<&str>,
         thread_ts: Option<&str>,
     ) -> ChannelResult<String> {
+        Self::upload_file_with_base(client, bot_token, channel, file_data, filename, title, mime_type, caption, thread_ts, None).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_file_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        file_data: &[u8],
+        filename: &str,
+        title: Option<&str>,
+        mime_type: Option<&str>,
+        caption: Option<&str>,
+        thread_ts: Option<&str>,
+        api_base: Option<&str>,
+    ) -> ChannelResult<String> {
         let length = file_data.len() as u64;
+        let base = api_base.unwrap_or(SLACK_API_BASE);
 
         // Step 1: Get presigned upload URL
         let url_resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/files.getUploadURLExternal"))
+            .post(format!("{base}/files.getUploadURLExternal"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&serde_json::json!({
                 "filename": filename,
@@ -387,7 +427,7 @@ impl SlackMessageOps {
         }
 
         let complete_resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/files.completeUploadExternal"))
+            .post(format!("{base}/files.completeUploadExternal"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&complete_body)
             .send()
@@ -507,7 +547,19 @@ impl SlackMessageOps {
         timestamp: &str,
         emoji: &str,
     ) -> ChannelResult<()> {
+        Self::add_reaction_with_base(client, bot_token, channel, timestamp, emoji, None).await
+    }
+
+    pub async fn add_reaction_with_base(
+        client: &reqwest::Client,
+        bot_token: &str,
+        channel: &str,
+        timestamp: &str,
+        emoji: &str,
+        api_base: Option<&str>,
+    ) -> ChannelResult<()> {
         let slack_emoji = Self::normalize_emoji_to_slack(emoji);
+        let base = api_base.unwrap_or(SLACK_API_BASE);
 
         let body = serde_json::json!({
             "channel": channel,
@@ -516,7 +568,7 @@ impl SlackMessageOps {
         });
 
         let resp: serde_json::Value = client
-            .post(format!("{SLACK_API_BASE}/reactions.add"))
+            .post(format!("{base}/reactions.add"))
             .header("Authorization", format!("Bearer {bot_token}"))
             .json(&body)
             .send()

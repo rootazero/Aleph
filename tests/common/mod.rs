@@ -1,8 +1,7 @@
-//! Shared fixtures for Phase 5 orchestrator end-to-end integration tests.
-//!
-//! Wires a real `InProcessActorSessionService` + in-memory SQLite event store
-//! to a scripted `AiProvider` and a minimal no-op `ToolService`. Mirrors
-//! `tests/harness_run_e2e.rs` fixture conventions so the style stays uniform.
+pub mod channel_contract;
+pub mod mock_http;
+pub mod mock_tcp;
+pub mod mock_ws;
 
 use std::collections::HashMap;
 use std::future::Future;

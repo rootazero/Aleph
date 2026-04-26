@@ -79,6 +79,12 @@ impl WebhookChannel {
         }
     }
 
+    pub fn with_client(id: impl Into<String>, config: WebhookChannelConfig, client: reqwest::Client) -> Self {
+        let mut channel = Self::new(id, config);
+        channel.client = client;
+        channel
+    }
+
     /// Get webhook-specific capabilities.
     ///
     /// The generic webhook channel is text-only: no attachments, no reactions,

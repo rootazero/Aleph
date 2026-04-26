@@ -1,0 +1,13 @@
+{
+  "token": "test-token",
+  "team_id": "T123456",
+  "event": {
+    "type": "app_mention",
+    "text": "<@U123456> help me",
+    "user": "U789012",
+    "ts": "1234567890.123456",
+    "channel": "C12345",
+    "event_ts": "1234567890.123456"
+  },
+  "type": "event_callback"
+}

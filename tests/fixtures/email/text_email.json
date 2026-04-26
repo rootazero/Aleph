@@ -1,0 +1,9 @@
+{
+  "subject": "[coder] Fix this bug",
+  "from": "user@example.com",
+  "to": ["aleph@example.com"],
+  "body_text": "Please fix the login bug",
+  "body_html": "<p>Please fix the login bug</p>",
+  "message_id": "<msg123@example.com>",
+  "date": "2024-01-01T00:00:00Z"
+}
