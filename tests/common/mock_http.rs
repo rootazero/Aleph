@@ -65,7 +65,7 @@ pub struct WebhookMock;
 impl WebhookMock {
     pub async fn callback_ok(server: &MockServer) {
         Mock::given(matchers::method("POST"))
-            .and(matchers::header("X-Webhook-Signature", matchers::Regex::new(".*")))
+            .and(matchers::header_exists("X-Webhook-Signature"))
             .respond_with(ResponseTemplate::new(200))
             .mount(server)
             .await;

@@ -22,32 +22,26 @@ impl MockTcpServer {
 }
 
 pub struct MockTcpConnection {
-    reader: BufReader<tokio::net::tcp::ReadHalf>,
-    writer: tokio::net::tcp::WriteHalf,
+    stream: TcpStream,
 }
 
 impl MockTcpConnection {
     fn new(stream: TcpStream) -> Self {
-        let (reader, writer) = stream.split();
-        Self {
-            reader: BufReader::new(reader),
-            writer,
-        }
+        Self { stream }
     }
 
     pub async fn read_line(&mut self) -> Option<String> {
-        let mut line = String::new();
-        match self.reader.read_line(&mut line).await {
-            Ok(0) => None,
-            Ok(_) => Some(line.trim_end().to_string()),
-            Err(_) => None,
+        let mut buf = [0u8; 4096];
+        match self.stream.try_read(&mut buf) {
+            Ok(n) if n > 0 => {
+                let text = String::from_utf8_lossy(&buf[..n]);
+                Some(text.trim_end().to_string())
+            }
+            _ => None,
         }
     }
 
     pub async fn send_line(&mut self, line: &str) {
-        self.writer
-            .write_all(format!("{}\r\n", line).as_bytes())
-            .await
-            .unwrap();
+        let _ = self.stream.write_all(format!("{}\r\n", line).as_bytes()).await;
     }
 }

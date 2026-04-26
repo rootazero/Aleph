@@ -1,3 +1,4 @@
+use futures_util::SinkExt;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -32,7 +33,7 @@ pub struct MockWebSocketConnection {
 impl MockWebSocketConnection {
     pub async fn send_json(&mut self, value: serde_json::Value) {
         self.ws
-            .send(Message::Text(value.to_string()))
+            .send(Message::Text(value.to_string().into()))
             .await
             .unwrap();
     }
