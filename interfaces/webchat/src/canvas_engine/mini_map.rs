@@ -163,6 +163,63 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+mod render {
+    use super::*;
+    use web_sys::CanvasRenderingContext2d;
+
+    impl GlobalMiniMap {
+        /// Repaint the minimap into `ctx`. The caller is responsible for
+        /// clearing the canvas first if needed.
+        ///
+        /// `focus_id` is the currently centered Radial node; it gets a thicker
+        /// outlined dot.
+        /// `focus_neighbor_ids` is the 1-hop set; those points are painted
+        /// slightly larger so the user can see the local neighborhood.
+        pub fn render(
+            &self,
+            ctx: &CanvasRenderingContext2d,
+            focus_id: Option<&str>,
+            focus_neighbor_ids: &[String],
+        ) {
+            let size = self.size_px as f64;
+            let half = size / 2.0;
+
+            // Background circle outline
+            ctx.set_stroke_style_str("rgba(255,255,255,0.08)");
+            ctx.set_line_width(1.0);
+            ctx.begin_path();
+            let _ = ctx.arc(half, half, half - 2.0, 0.0, std::f64::consts::TAU);
+            ctx.stroke();
+
+            // Node points
+            for p in &self.points {
+                let is_focus = focus_id.map_or(false, |f| f == p.id);
+                let is_neighbor = focus_neighbor_ids.iter().any(|n| n == &p.id);
+                let radius = if is_focus { 4.0 } else if is_neighbor { 3.0 } else { 1.6 };
+
+                let color = self
+                    .component_colors
+                    .get(&p.component)
+                    .copied()
+                    .unwrap_or(Color::new(180, 180, 180));
+                ctx.set_fill_style_str(&color.to_css());
+                ctx.begin_path();
+                let _ = ctx.arc(p.pos.x, p.pos.y, radius, 0.0, std::f64::consts::TAU);
+                ctx.fill();
+
+                if is_focus {
+                    ctx.set_stroke_style_str("rgba(255,255,255,0.9)");
+                    ctx.set_line_width(1.5);
+                    ctx.begin_path();
+                    let _ = ctx.arc(p.pos.x, p.pos.y, radius + 1.5, 0.0, std::f64::consts::TAU);
+                    ctx.stroke();
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
