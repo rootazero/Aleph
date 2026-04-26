@@ -51,6 +51,8 @@ pub struct SignalChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// HTTP client for signal-cli API calls
     client: reqwest::Client,
+    /// Override API base URL for testing (replaces config.api_url in send)
+    api_base: Option<String>,
 }
 
 impl SignalChannel {
@@ -70,6 +72,27 @@ impl SignalChannel {
             channel_state: ChannelState::new(100),
             shutdown_tx: None,
             client: reqwest::Client::new(),
+            api_base: None,
+        }
+    }
+
+    /// Create a Signal channel for testing with a mock API base URL.
+    pub fn for_test(id: impl Into<String>, config: SignalConfig, api_base: String) -> Self {
+        let info = ChannelInfo {
+            id: ChannelId::new(id),
+            name: "Signal".to_string(),
+            channel_type: "signal".to_string(),
+            status: ChannelStatus::Disconnected,
+            capabilities: Self::capabilities(),
+        };
+
+        Self {
+            info,
+            config,
+            channel_state: ChannelState::new(100),
+            shutdown_tx: None,
+            client: reqwest::Client::new(),
+            api_base: Some(api_base),
         }
     }
 
@@ -155,9 +178,10 @@ impl Channel for SignalChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        let api_url = self.api_base.as_ref().unwrap_or(&self.config.api_url);
         SignalMessageOps::send_message(
             &self.client,
-            &self.config.api_url,
+            api_url,
             &self.config.phone_number,
             message.conversation_id.as_str(),
             &message.text,

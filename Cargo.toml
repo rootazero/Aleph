@@ -373,6 +373,52 @@ name = "discord_fixture_test"
 [[test]]
 name = "discord_protocol_test"
 
+# Batch 3a: CLI, Signal, XMPP, Nostr, MS Teams
+[[test]]
+name = "cli_contract_test"
+
+[[test]]
+name = "cli_fixture_test"
+
+[[test]]
+name = "cli_protocol_test"
+
+[[test]]
+name = "signal_contract_test"
+
+[[test]]
+name = "signal_fixture_test"
+
+[[test]]
+name = "signal_protocol_test"
+
+[[test]]
+name = "xmpp_contract_test"
+
+[[test]]
+name = "xmpp_fixture_test"
+
+[[test]]
+name = "xmpp_protocol_test"
+
+[[test]]
+name = "nostr_contract_test"
+
+[[test]]
+name = "nostr_fixture_test"
+
+[[test]]
+name = "nostr_protocol_test"
+
+[[test]]
+name = "msteams_contract_test"
+
+[[test]]
+name = "msteams_fixture_test"
+
+[[test]]
+name = "msteams_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true

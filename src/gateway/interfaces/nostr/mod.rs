@@ -55,11 +55,17 @@ pub struct NostrChannel {
     shutdown_tx: Option<watch::Sender<bool>>,
     /// Our own public key (derived from private key)
     own_pubkey: String,
+    /// Test mode: skip WebSocket connection, allow direct event injection
+    test_mode: bool,
 }
 
 impl NostrChannel {
     /// Create a new Nostr channel
     pub fn new(id: impl Into<String>, config: NostrConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: NostrConfig, test_mode: bool) -> Self {
         // Derive public key from private key (best-effort at construction)
         let own_pubkey = message_ops::derive_pubkey(&config.private_key).unwrap_or_default();
 
@@ -78,7 +84,13 @@ impl NostrChannel {
             write_tx: None,
             shutdown_tx: None,
             own_pubkey,
+            test_mode,
         }
+    }
+
+    /// Create a Nostr channel for testing (test mode enabled).
+    pub fn for_test(id: impl Into<String>, config: NostrConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     /// Get Nostr-specific capabilities
@@ -142,6 +154,14 @@ impl Channel for NostrChannel {
         let (write_tx, write_rx) = mpsc::channel(100);
         self.write_tx = Some(write_tx);
 
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("Nostr channel started in test mode");
+            return Ok(());
+        }
+
         // Spawn relay connection loop
         let config = self.config.clone();
         let channel_id = self.info.id.clone();
@@ -185,6 +205,28 @@ impl Channel for NostrChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            let _recipient_pubkey = if message.conversation_id.as_str() != "public" {
+                Some(message.conversation_id.as_str().to_string())
+            } else {
+                None
+            };
+
+            let mut event = if let Some(ref recipient) = _recipient_pubkey {
+                message_ops::build_dm(&message.text, &self.own_pubkey, recipient)
+            } else {
+                message_ops::build_text_note(&message.text, &self.own_pubkey)
+            };
+
+            message_ops::sign_event(&mut event, &self.config.private_key)
+                .map_err(|e| ChannelError::SendFailed(format!("failed to sign event: {e}")))?;
+
+            return Ok(SendResult {
+                message_id: MessageId::new(event.id),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let write_tx = self
             .write_tx
             .as_ref()
@@ -229,22 +271,30 @@ impl Channel for NostrChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            let mut event = message_ops::build_reaction(
+                reaction,
+                message_id.as_str(),
+                "",
+                &self.own_pubkey,
+            );
+            message_ops::sign_event(&mut event, &self.config.private_key)
+                .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
+            return Ok(());
+        }
+
         let write_tx = self
             .write_tx
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
 
-        // Build a kind-7 reaction event
-        // We don't know the original event's author pubkey, use empty string
-        // (relays typically don't validate this for reactions)
         let mut event = message_ops::build_reaction(
             reaction,
             message_id.as_str(),
-            "", // original author pubkey unknown
+            "",
             &self.own_pubkey,
         );
 
-        // Sign the event
         message_ops::sign_event(&mut event, &self.config.private_key)
             .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
 

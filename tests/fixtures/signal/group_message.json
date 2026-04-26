@@ -1,0 +1,14 @@
+{
+  "envelope": {
+    "source": "+9876543210",
+    "sourceName": "Bob",
+    "timestamp": 1700000001000,
+    "dataMessage": {
+      "message": "Group message",
+      "timestamp": 1700000001000,
+      "groupInfo": {
+        "groupId": "abc123group"
+      }
+    }
+  }
+}

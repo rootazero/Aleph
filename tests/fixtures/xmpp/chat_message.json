@@ -1,0 +1,6 @@
+{
+  "from": "user1@example.com",
+  "to": "bot@example.com",
+  "body": "Hello XMPP!",
+  "type": "chat"
+}

@@ -1,0 +1,11 @@
+{
+  "envelope": {
+    "source": "+9876543210",
+    "sourceName": "Alice",
+    "timestamp": 1700000000000,
+    "dataMessage": {
+      "message": "Hello from Signal!",
+      "timestamp": 1700000000000
+    }
+  }
+}

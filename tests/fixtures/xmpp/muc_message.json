@@ -1,0 +1,6 @@
+{
+  "from": "room@conference.example.com/user1",
+  "to": "bot@example.com",
+  "body": "Hello MUC!",
+  "type": "groupchat"
+}
