@@ -38,10 +38,15 @@ pub struct FeishuChannel {
     runtime: Option<FeishuRuntime>,
     message_ops: Option<MessageOps>,
     shutdown_tx: Option<watch::Sender<bool>>,
+    test_mode: bool,
 }
 
 impl FeishuChannel {
     pub fn new(id: impl Into<String>, config: FeishuConfig) -> Result<Self, ChannelError> {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: FeishuConfig, test_mode: bool) -> Result<Self, ChannelError> {
         config.validate()?;
 
         let info = ChannelInfo {
@@ -60,7 +65,12 @@ impl FeishuChannel {
             runtime: None,
             message_ops: None,
             shutdown_tx: None,
+            test_mode,
         })
+    }
+
+    pub fn for_test(id: impl Into<String>, config: FeishuConfig) -> Result<Self, ChannelError> {
+        Self::with_mode(id, config, true)
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -94,6 +104,9 @@ impl Channel for FeishuChannel {
     }
 
     fn status(&self) -> ChannelStatus {
+        if self.test_mode {
+            return self.channel_state.status();
+        }
         match self.runtime.as_ref().map(|r| r.connection_state()) {
             Some(feishu_runtime::RuntimeState::Connected) => ChannelStatus::Connected,
             Some(feishu_runtime::RuntimeState::Connecting) => ChannelStatus::Connecting,
@@ -103,6 +116,14 @@ impl Channel for FeishuChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("Feishu channel started in test mode");
+            return Ok(());
+        }
+
         self.channel_state
             .set_status(ChannelStatus::Connecting)
             .await;
@@ -188,6 +209,13 @@ impl Channel for FeishuChannel {
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("feishu-test-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let api = self
             .api
             .as_ref()
@@ -198,14 +226,18 @@ impl Channel for FeishuChannel {
     async fn react(
         &self,
         _conversation_id: &ConversationId,
-        message_id: &MessageId,
-        reaction: &str,
+        _message_id: &MessageId,
+        _reaction: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let ops = self
             .message_ops
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
-        ops.react(_conversation_id, message_id, reaction).await
+        ops.react(_conversation_id, _message_id, _reaction).await
     }
 
     async fn edit(
@@ -214,6 +246,10 @@ impl Channel for FeishuChannel {
         message_id: &MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let ops = self
             .message_ops
             .as_ref()
@@ -226,6 +262,10 @@ impl Channel for FeishuChannel {
         conversation_id: &ConversationId,
         message_id: &MessageId,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let ops = self
             .message_ops
             .as_ref()

@@ -64,10 +64,15 @@ pub struct WhatsAppChannel {
     pairing_state: Arc<RwLock<PairingState>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     connected: Arc<AtomicBool>,
+    test_mode: bool,
 }
 
 impl WhatsAppChannel {
     pub fn new(id: impl Into<String>, config: WhatsAppConfig) -> Self {
+        Self::with_mode(id, config, false)
+    }
+
+    fn with_mode(id: impl Into<String>, config: WhatsAppConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(id),
             name: "WhatsApp".to_string(),
@@ -84,7 +89,12 @@ impl WhatsAppChannel {
             pairing_state: Arc::new(RwLock::new(PairingState::Idle)),
             shutdown_tx: None,
             connected: Arc::new(AtomicBool::new(false)),
+            test_mode,
         }
+    }
+
+    pub fn for_test(id: impl Into<String>, config: WhatsAppConfig) -> Self {
+        Self::with_mode(id, config, true)
     }
 
     fn capabilities() -> ChannelCapabilities {
@@ -118,6 +128,9 @@ impl Channel for WhatsAppChannel {
     }
 
     fn status(&self) -> ChannelStatus {
+        if self.test_mode {
+            return self.channel_state.status();
+        }
         match self.runtime.as_ref().map(|r| r.connection_state()) {
             Some(ConnectionState::Connected) => ChannelStatus::Connected,
             Some(ConnectionState::Connecting) => ChannelStatus::Connecting,
@@ -137,6 +150,15 @@ impl Channel for WhatsAppChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         self.config.validate().map_err(ChannelError::ConfigError)?;
+
+        if self.test_mode {
+            self.channel_state
+                .set_status(ChannelStatus::Connected)
+                .await;
+            tracing::info!("WhatsApp channel started in test mode");
+            return Ok(());
+        }
+
         *self.pairing_state.write().await = PairingState::Initializing;
 
         let auth = WaAuthManager::new("default");
@@ -227,10 +249,20 @@ impl Channel for WhatsAppChannel {
             runtime.shutdown().await;
         }
         *self.pairing_state.write().await = PairingState::Idle;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+        if self.test_mode {
+            return Ok(SendResult {
+                message_id: MessageId::new(format!("wa-test-{}", chrono::Utc::now().timestamp_millis())),
+                timestamp: chrono::Utc::now(),
+            });
+        }
+
         let runtime = self
             .runtime
             .as_ref()
@@ -246,6 +278,10 @@ impl Channel for WhatsAppChannel {
         &self,
         conversation_id: &crate::gateway::channel::ConversationId,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let runtime = self
             .runtime
             .as_ref()
@@ -254,6 +290,10 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let runtime = self
             .runtime
             .as_ref()
@@ -267,6 +307,10 @@ impl Channel for WhatsAppChannel {
         message_id: &MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
+        if self.test_mode {
+            return Ok(());
+        }
+
         let runtime = self
             .runtime
             .as_ref()

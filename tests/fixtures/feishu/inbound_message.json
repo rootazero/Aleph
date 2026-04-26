@@ -1,0 +1,17 @@
+{
+  "message_id": "om_1234567890",
+  "root_id": "om_0987654321",
+  "sender": {
+    "sender_id": {
+      "open_id": "ou_1234567890"
+    },
+    "sender_type": "user"
+  },
+  "chat_id": "oc_1234567890",
+  "chat_type": "p2p",
+  "msg_type": "text",
+  "body": {
+    "content": "Hello from Feishu!"
+  },
+  "create_time": "1704067200000"
+}

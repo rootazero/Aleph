@@ -419,6 +419,51 @@ name = "msteams_fixture_test"
 [[test]]
 name = "msteams_protocol_test"
 
+[[test]]
+name = "qq_contract_test"
+
+[[test]]
+name = "qq_fixture_test"
+
+[[test]]
+name = "qq_protocol_test"
+
+[[test]]
+name = "feishu_contract_test"
+
+[[test]]
+name = "feishu_fixture_test"
+
+[[test]]
+name = "feishu_protocol_test"
+
+[[test]]
+name = "imessage_contract_test"
+
+[[test]]
+name = "imessage_fixture_test"
+
+[[test]]
+name = "imessage_protocol_test"
+
+[[test]]
+name = "wechat_contract_test"
+
+[[test]]
+name = "wechat_fixture_test"
+
+[[test]]
+name = "wechat_protocol_test"
+
+[[test]]
+name = "whatsapp_contract_test"
+
+[[test]]
+name = "whatsapp_fixture_test"
+
+[[test]]
+name = "whatsapp_protocol_test"
+
 # Release profile
 [profile.release]
 strip = true

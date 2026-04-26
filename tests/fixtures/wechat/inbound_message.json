@@ -1,0 +1,9 @@
+{
+  "msgid": "wechat-msg-123",
+  "openid": "user-openid-456",
+  "msgtype": "text",
+  "text": {
+    "content": "Hello from WeChat!"
+  },
+  "createtime": 1704067200
+}
