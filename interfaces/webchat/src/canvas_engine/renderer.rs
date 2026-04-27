@@ -6,6 +6,7 @@ use web_sys::CanvasRenderingContext2d;
 
 use super::types::*;
 use super::viewport::Viewport;
+use crate::canvas_engine::drag::DragOverlay;
 
 pub struct Renderer;
 
@@ -270,6 +271,7 @@ pub fn draw_neighborhood(
     drag: (f32, f32),
     selected: Option<&str>,
     hovered: Option<&str>,
+    node_drag: Option<&DragOverlay>,
 ) {
     // 1. Clear + bg gradient
     paint_background(ctx, viewport);
@@ -295,10 +297,25 @@ pub fn draw_neighborhood(
         draw_cluster(ctx, c, drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
+        // Skip edges for the dragged node — we'll draw a stretched edge instead.
+        if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
+            continue;
+        }
         draw_edges_for_node(ctx, n, nbhd, drag);
     }
     for n in &nbhd.one_hop {
+        if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
+            continue;
+        }
         draw_node(ctx, n, drag, selected, hovered);
+    }
+
+    // Draw the dragged node last (on top of clusters / other 1-hop nodes)
+    // with a stretched edge from the center and a glow ring when promote-imminent.
+    if let Some(overlay) = node_drag {
+        if let Some(n) = nbhd.one_hop.iter().find(|x| x.id == overlay.node_id) {
+            draw_dragged_node(ctx, n, &nbhd.center, overlay);
+        }
     }
 
     // 4. Layer C: Active (front)
@@ -426,10 +443,7 @@ fn draw_node(
             "rgba({},{},{},{:.3})",
             n.color.r, n.color.g, n.color.b, glow_alpha
         );
-        let glow_color_outer = format!(
-            "rgba({},{},{},0.0)",
-            n.color.r, n.color.g, n.color.b
-        );
+        let glow_color_outer = format!("rgba({},{},{},0.0)", n.color.r, n.color.g, n.color.b);
         if let Ok(grad) = grad {
             let _ = grad.add_color_stop(0.0, &glow_color_inner);
             let _ = grad.add_color_stop(1.0, &glow_color_outer);
@@ -530,7 +544,15 @@ fn draw_cluster(
     ctx.set_fill_style_str(&format!("rgba(0,0,0,{shadow_alpha:.3})"));
     ctx.begin_path();
     let shadow_y = cy + attrs.shadow_offset_y as f64;
-    let _ = ctx.ellipse(cx, shadow_y, w * 0.5, h * 0.25, 0.0, 0.0, std::f64::consts::TAU);
+    let _ = ctx.ellipse(
+        cx,
+        shadow_y,
+        w * 0.5,
+        h * 0.25,
+        0.0,
+        0.0,
+        std::f64::consts::TAU,
+    );
     ctx.fill();
 
     // 2. Body: rounded rect with purple tint
@@ -554,7 +576,14 @@ fn draw_cluster(
         ctx.set_stroke_style_str("rgba(255,255,255,0.7)");
         ctx.set_line_width(1.5);
         ctx.begin_path();
-        rounded_rect(ctx, x - pad, y - pad, w + pad * 2.0, h + pad * 2.0, corner_r + pad);
+        rounded_rect(
+            ctx,
+            x - pad,
+            y - pad,
+            w + pad * 2.0,
+            h + pad * 2.0,
+            corner_r + pad,
+        );
         ctx.stroke();
     }
 
@@ -654,7 +683,11 @@ fn draw_edges_for_node(
             );
         }
 
-        let avg_w = if e.is_active_link { (2.5 + 1.0) * 0.5 } else { (1.5 + 0.8) * 0.5 };
+        let avg_w = if e.is_active_link {
+            (2.5 + 1.0) * 0.5
+        } else {
+            (1.5 + 0.8) * 0.5
+        };
 
         ctx.set_stroke_style_canvas_gradient(&grad);
         ctx.set_line_width(avg_w as f64);
@@ -728,4 +761,42 @@ fn endpoints_world_pos(
         p1.z,
         p2.z,
     ))
+}
+
+fn draw_dragged_node(
+    ctx: &CanvasRenderingContext2d,
+    n: &CanvasNode,
+    center: &CanvasNode,
+    overlay: &DragOverlay,
+) {
+    use std::f64::consts::TAU;
+
+    // overlay.position is in world space (Task 5 contract). The canvas context
+    // already has world transform applied by draw_neighborhood, so draw directly.
+    let cx = overlay.position.x;
+    let cy = overlay.position.y;
+
+    // Stretched edge: center → dragged node
+    ctx.set_stroke_style_str("rgba(167,139,250,0.6)");
+    ctx.set_line_width(1.5);
+    ctx.begin_path();
+    ctx.move_to(center.position.x, center.position.y);
+    ctx.line_to(cx, cy);
+    let _ = ctx.stroke();
+
+    // Node body — solid violet, slight lift over base color
+    let r = n.radius;
+    ctx.set_fill_style_str("#a78bfa");
+    ctx.begin_path();
+    let _ = ctx.arc(cx, cy, r, 0.0, TAU);
+    ctx.fill();
+
+    // Glow ring (only when promote-imminent — alpha grows as overlay nears center)
+    if overlay.glow_alpha > 0.01 {
+        ctx.set_stroke_style_str(&format!("rgba(252,211,77,{:.3})", overlay.glow_alpha));
+        ctx.set_line_width(3.0);
+        ctx.begin_path();
+        let _ = ctx.arc(cx, cy, r + 6.0, 0.0, TAU);
+        let _ = ctx.stroke();
+    }
 }

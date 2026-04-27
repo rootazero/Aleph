@@ -71,11 +71,7 @@ fn now_ms() -> f64 {
 }
 
 /// Draw a simple placeholder when the nav is Idle, Loading, or in Error state.
-fn draw_placeholder(
-    ctx: &web_sys::CanvasRenderingContext2d,
-    viewport: &Viewport,
-    message: &str,
-) {
+fn draw_placeholder(ctx: &web_sys::CanvasRenderingContext2d, viewport: &Viewport, message: &str) {
     ctx.set_fill_style_str("#080818");
     ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
 
@@ -204,6 +200,7 @@ pub fn GraphCanvas(
                             drag,
                             selected.as_deref(),
                             hovered.as_deref(),
+                            None,
                         );
                     }
                     NavState::Animating {
@@ -212,8 +209,11 @@ pub fn GraphCanvas(
                         t,
                         ..
                     } => {
-                        let interp =
-                            build_interpolated_neighborhood(&from_neighborhood, &to_neighborhood, t);
+                        let interp = build_interpolated_neighborhood(
+                            &from_neighborhood,
+                            &to_neighborhood,
+                            t,
+                        );
                         draw_neighborhood(
                             &ctx,
                             &viewport,
@@ -221,6 +221,7 @@ pub fn GraphCanvas(
                             drag,
                             selected.as_deref(),
                             hovered.as_deref(),
+                            None,
                         );
                     }
                     NavState::Loading { .. } => {
