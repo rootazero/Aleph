@@ -225,11 +225,13 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
         }
     };
 
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
     // Fetch the note index entry.
-    let entry = match db
-        .get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
-        .await
-    {
+    let entry = match db.get_note_index(&params.node_id, agent_id).await {
         Ok(Some(e)) => e,
         Ok(None) => {
             return JsonRpcResponse::error(
@@ -244,7 +246,6 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
     };
 
     // Read the markdown file from disk using the full path (includes category subdirectory).
-    let agent_id = crate::routing::DEFAULT_AGENT_ID; // TODO: derive from request when multi-agent is wired
     let md_path = notes_dir()
         .join(agent_id)
         .join(format!("{}.md", entry.path));
@@ -254,7 +255,7 @@ pub async fn handle_node_detail_impl(req: JsonRpcRequest, db: MemoryBackend) -> 
 
     // Fetch backlinks (incoming links).
     let backlinks = db
-        .get_incoming_links(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
+        .get_incoming_links(&params.node_id, agent_id)
         .await
         .unwrap_or_default();
 
@@ -614,5 +615,82 @@ mod tests {
             "default agent's neighbor must appear when agent_id omitted: {neighbor_ids:?}");
         assert!(!neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
             "non-default agent's neighbor must NOT appear: {neighbor_ids:?}");
+    }
+
+    fn node_detail_request(node_id: &str, agent_id: Option<&str>) -> JsonRpcRequest {
+        let mut params = serde_json::json!({ "node_id": node_id });
+        if let Some(id) = agent_id {
+            params["agent_id"] = serde_json::Value::String(id.to_string());
+        }
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "graph.node_detail".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_node_detail_uses_explicit_agent_id() {
+        let db = make_db();
+        // Same id under two agents, different content_hash — proves we got alpha's row.
+        let alpha = KnowledgeNote {
+            content_hash: "alpha_hash".to_string(),
+            ..make_note("Shared", "concept", vec![])
+        };
+        let beta = KnowledgeNote {
+            content_hash: "beta_hash".to_string(),
+            ..make_note("Shared", "concept", vec![])
+        };
+        db.index_note(&alpha, "alpha", "concept").await.unwrap();
+        db.index_note(&beta, "beta", "concept").await.unwrap();
+
+        let req = node_detail_request("concept/Shared", Some("alpha"));
+        let resp = handle_node_detail_impl(req, db).await;
+        // The note exists in alpha — handler must succeed (not return "not found").
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+    }
+
+    #[tokio::test]
+    async fn graph_node_detail_returns_not_found_for_other_agent() {
+        let db = make_db();
+        // Note exists in alpha but we ask for beta → must be 'not found'.
+        let alpha = make_note("AlphaOnly", "concept", vec![]);
+        db.index_note(&alpha, "alpha", "concept").await.unwrap();
+
+        let req = node_detail_request("concept/AlphaOnly", Some("beta"));
+        let resp = handle_node_detail_impl(req, db).await;
+        assert!(resp.error.is_some(), "expected error for cross-agent lookup");
+    }
+
+    #[tokio::test]
+    async fn graph_node_detail_falls_back_to_default_agent_when_omitted() {
+        let db = make_db();
+        // Seed: MainOnly under DEFAULT_AGENT_ID, AlphaOnly under alpha.
+        // With agent_id omitted, MainOnly must be findable AND AlphaOnly must NOT.
+        // This proves the fallback resolves to DEFAULT_AGENT_ID (not "any agent").
+        let main = make_note("MainOnly", "concept", vec![]);
+        let alpha = make_note("AlphaOnly", "concept", vec![]);
+        db.index_note(&main, crate::routing::DEFAULT_AGENT_ID, "concept")
+            .await
+            .unwrap();
+        db.index_note(&alpha, "alpha", "concept").await.unwrap();
+
+        // Default-owned note must be findable when agent_id omitted.
+        let req_main = node_detail_request("concept/MainOnly", None);
+        let resp_main = handle_node_detail_impl(req_main, db.clone()).await;
+        assert!(
+            resp_main.error.is_none(),
+            "default note must be reachable when agent_id omitted: {:?}",
+            resp_main.error
+        );
+
+        // Alpha-owned note must NOT be findable via fallback.
+        let req_alpha = node_detail_request("concept/AlphaOnly", None);
+        let resp_alpha = handle_node_detail_impl(req_alpha, db).await;
+        assert!(
+            resp_alpha.error.is_some(),
+            "alpha-only note must NOT be reachable when agent_id omitted"
+        );
     }
 }
