@@ -82,7 +82,7 @@ pub struct NoteDetailResponse {
     pub backlinks: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResultDto {
     pub id: String,
     pub name: String,
@@ -90,7 +90,7 @@ pub struct SearchResultDto {
     pub match_field: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GraphSearchResponse {
     pub results: Vec<SearchResultDto>,
 }

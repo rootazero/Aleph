@@ -314,12 +314,12 @@ pub async fn handle_search_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonR
         }
     };
 
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
     let entries = match db
-        .search_notes_fts(
-            &params.query,
-            crate::routing::DEFAULT_AGENT_ID,
-            params.limit,
-        )
+        .search_notes_fts(&params.query, agent_id, params.limit)
         .await
     {
         Ok(e) => e,
@@ -692,5 +692,78 @@ mod tests {
             resp_alpha.error.is_some(),
             "alpha-only note must NOT be reachable when agent_id omitted"
         );
+    }
+
+    fn search_request(query: &str, limit: usize, agent_id: Option<&str>) -> JsonRpcRequest {
+        let mut params = serde_json::json!({ "query": query, "limit": limit });
+        if let Some(id) = agent_id {
+            params["agent_id"] = serde_json::Value::String(id.to_string());
+        }
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "graph.search".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    /// Build a note whose facts contain a single token, so FTS5 (unicode61
+    /// tokenizer) can match the query as a whole word. The unicode61 tokenizer
+    /// splits on non-alphanumerics, so multi-word filenames like "AlphaUnique"
+    /// are a single token and won't match a phrase search for "Unique".
+    fn make_note_with_fact(title: &str, fact: &str) -> KnowledgeNote {
+        let mut note = make_note(title, "concept", vec![]);
+        note.facts = vec![fact.to_string()];
+        note
+    }
+
+    #[tokio::test]
+    async fn graph_search_uses_explicit_agent_id() {
+        let db = make_db();
+        // Both agents have the SAME fact word so the FTS query alone cannot
+        // distinguish them. Only an agent_id filter on the handler can. We
+        // distinguish in the assertion by note title.
+        let alpha = make_note_with_fact("AlphaSearchNote", "sharedfactword");
+        let beta = make_note_with_fact("BetaSearchNote", "sharedfactword");
+        db.index_note(&alpha, "alpha", "concept").await.unwrap();
+        db.index_note(&beta, "beta", "concept").await.unwrap();
+
+        let req = search_request("sharedfactword", 20, Some("alpha"));
+        let resp = handle_search_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphSearchResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let names: Vec<&str> = result.results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.contains("AlphaSearchNote")),
+            "alpha hit must appear: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("BetaSearchNote")),
+            "beta hit must NOT appear when querying alpha: {names:?}");
+    }
+
+    #[tokio::test]
+    async fn graph_search_falls_back_to_default_agent_when_omitted() {
+        let db = make_db();
+        // Strengthened: seed both DEFAULT and alpha with a shared query word.
+        // With agent_id omitted, must return ONLY default's hit, proving
+        // fallback resolves to DEFAULT_AGENT_ID and does not leak across agents.
+        let main = make_note_with_fact("MainNote", "sharedsearchword");
+        let alpha = make_note_with_fact("AlphaNote", "sharedsearchword");
+        db.index_note(&main, crate::routing::DEFAULT_AGENT_ID, "concept")
+            .await
+            .unwrap();
+        db.index_note(&alpha, "alpha", "concept").await.unwrap();
+
+        let req = search_request("sharedsearchword", 20, None);
+        let resp = handle_search_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphSearchResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let names: Vec<&str> = result.results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.contains("MainNote")),
+            "default agent's hit must appear when agent_id omitted: {names:?}");
+        assert!(!names.iter().any(|n| n.contains("AlphaNote")),
+            "non-default agent's hit must NOT appear: {names:?}");
     }
 }
