@@ -1,3 +1,4 @@
+mod agent_selector;
 mod breadcrumb;
 mod detail_panel;
 mod graph_canvas;
@@ -34,6 +35,9 @@ use detail_panel::DetailPanel;
 use graph_canvas::{GraphCanvas, GraphState};
 use toolbar::CanvasToolbar;
 
+use crate::api::agents::{AgentSummary, AgentsApi};
+use agent_selector::AgentSelectorBar;
+
 #[component]
 pub fn CanvasView() -> impl IntoView {
     view! { <RadialCanvasView /> }
@@ -49,6 +53,47 @@ pub fn CanvasView() -> impl IntoView {
 #[component]
 fn RadialCanvasView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+
+    // -----------------------------------------------------------------------
+    // Agent selection signals
+    // -----------------------------------------------------------------------
+    // Placeholder is the literal "main" — must match server's DEFAULT_AGENT_ID.
+    // If they ever diverge, the worst case is one extra graph fetch on mount,
+    // because AgentsApi::list().default_id overrides this once it resolves.
+    let agent_id = RwSignal::new("main".to_string());
+    let agents = RwSignal::new(Vec::<AgentSummary>::new());
+    let default_agent_id = RwSignal::new("main".to_string());
+    let agents_loading = RwSignal::new(false);
+    let agents_error = RwSignal::new(None::<String>);
+
+    // Fetch the agent list once on mount, plus a reusable refresh callback.
+    let fetch_agents = move || {
+        agents_loading.set(true);
+        agents_error.set(None);
+        spawn_local(async move {
+            match AgentsApi::list(&state).await {
+                Ok(resp) => {
+                    agents.set(resp.agents);
+                    let new_default = resp.default_id;
+                    default_agent_id.set(new_default.clone());
+                    // Only override agent_id if it would actually change.
+                    if agent_id.get_untracked() != new_default {
+                        agent_id.set(new_default);
+                    }
+                    agents_loading.set(false);
+                }
+                Err(e) => {
+                    agents_error.set(Some(e));
+                    agents_loading.set(false);
+                }
+            }
+        });
+    };
+
+    // Initial fetch
+    Effect::new(move || {
+        fetch_agents();
+    });
 
     // Reactive signals (all Copy — safe to capture in Callback::new closures)
     let (selected_node, set_selected_node) = signal(None::<String>);
@@ -99,6 +144,7 @@ fn RadialCanvasView() -> impl IntoView {
         if !state.is_connected.get() {
             return;
         }
+        let agent = agent_id.get();
         let nav_inner = nav_init.clone();
         let gs_inner = gs_init.clone();
         let minimap_inner = minimap_init.clone();
@@ -109,7 +155,7 @@ fn RadialCanvasView() -> impl IntoView {
 
             // Always fetch the full graph: needed for entry pick fallback AND
             // for the ghost-dot ring (orphans = all nodes - in-view nodes).
-            let query_result = GraphApi::query(&state, 500, vec![]).await.ok();
+            let query_result = GraphApi::query(&state, &agent, 500, vec![]).await.ok();
             if let Some(ref r) = query_result {
                 all_dtos.set(r.nodes.clone());
                 let mm = GlobalMiniMap::build(&r.nodes, &r.edges, 200.0);
@@ -132,7 +178,7 @@ fn RadialCanvasView() -> impl IntoView {
             nav_inner.borrow_mut().enter(entry_id.clone(), now_ms);
 
             let threshold = fold_threshold.get_untracked();
-            match GraphApi::neighbors(&state, &entry_id, 3, 200).await {
+            match GraphApi::neighbors(&state, &agent, &entry_id, 3, 200).await {
                 Ok(resp) => {
                     let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
                     let dtos = all_dtos.get_untracked();
@@ -172,6 +218,7 @@ fn RadialCanvasView() -> impl IntoView {
     Effect::new(move || {
         let Some(id) = active_request.get() else { return };
         let now_ms = now_ms();
+        let agent = agent_id.get();
 
         // Sync prelude — invalidate stale snapshot, enter Loading
         last_response.set(None);
@@ -204,7 +251,7 @@ fn RadialCanvasView() -> impl IntoView {
         let gs_fetch = gs_req.clone();
         let prefetch_fetch = prefetch_req.clone();
         spawn_local(async move {
-            match GraphApi::neighbors(&state, &id, 3, 200).await {
+            match GraphApi::neighbors(&state, &agent, &id, 3, 200).await {
                 Ok(resp) => {
                     let threshold = fold_threshold.get_untracked();
                     let mut nbhd = to_neighborhood(&resp, now_ms, threshold);
@@ -241,8 +288,9 @@ fn RadialCanvasView() -> impl IntoView {
         let node_id = selected_node.get();
         match node_id {
             Some(id) => {
+                let agent = agent_id.get();
                 spawn_local(async move {
-                    match GraphApi::node_detail(&state, &id).await {
+                    match GraphApi::node_detail(&state, &agent, &id).await {
                         Ok(detail) => {
                             set_detail_content
                                 .set(DetailContent::Node { detail: detail.clone() });
@@ -277,10 +325,11 @@ fn RadialCanvasView() -> impl IntoView {
         if prefetch_e4.borrow().has(&id, now) {
             return;
         }
+        let agent = agent_id.get();
 
         let prefetch_inner = prefetch_e4.clone();
         spawn_local(async move {
-            match GraphApi::neighbors(&state, &id, 3, 200).await {
+            match GraphApi::neighbors(&state, &agent, &id, 3, 200).await {
                 Ok(resp) => {
                     prefetch_inner.borrow_mut().put(id, resp, now);
                 }
@@ -368,8 +417,9 @@ fn RadialCanvasView() -> impl IntoView {
         if query.is_empty() {
             return;
         }
+        let agent = agent_id.get();
         spawn_local(async move {
-            match GraphApi::search(&state, &query, 20).await {
+            match GraphApi::search(&state, &agent, &query, 20).await {
                 Ok(response) => {
                     if let Some(first) = response.results.first() {
                         let id = first.id.clone();
@@ -411,6 +461,15 @@ fn RadialCanvasView() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full">
+            <AgentSelectorBar
+                agent_id=agent_id
+                agents=agents
+                default_agent_id=default_agent_id
+                loading=agents_loading
+                error=agents_error
+                on_refresh=fetch_agents
+            />
+
             <CanvasToolbar
                 search_query=search_query
                 on_search=on_search
