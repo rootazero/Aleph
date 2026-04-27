@@ -28,11 +28,7 @@ impl WindowsSandboxDriver {
     /// Generate a profile description from the sandbox policy.
     /// On Windows, the profile contains the serialized policy that
     /// will be applied at runtime via Windows APIs.
-    fn generate_profile(
-        &self,
-        policy: &SandboxPolicy,
-        cwd: &Path,
-    ) -> Result<String, SandboxError> {
+    fn generate_profile(&self, policy: &SandboxPolicy, cwd: &Path) -> Result<String, SandboxError> {
         let mut lines = Vec::new();
 
         lines.push("platform=windows/token".to_string());
@@ -141,7 +137,6 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
         {
             use super::job::SandboxJob;
             use super::token::create_restricted_token;
-            use std::os::windows::process::CommandExt;
             use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
 
             let mut cmd = tokio::process::Command::new(program);
@@ -155,8 +150,9 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .creation_flags(CREATE_NEW_PROCESS_GROUP as u32);
 
             let job = unsafe {
-                SandboxJob::new(if parsed.allow_fork { 32 } else { 1 })
-                    .map_err(|e| SandboxError::ExecutionFailed(format!("job creation failed: {e}")))?
+                SandboxJob::new(if parsed.allow_fork { 32 } else { 1 }).map_err(|e| {
+                    SandboxError::ExecutionFailed(format!("job creation failed: {e}"))
+                })?
             };
 
             let child = cmd.spawn().map_err(|e| {
@@ -218,7 +214,16 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (program, args, env, stdin, cwd, timeout, max_output_bytes, parsed);
+            let _ = (
+                program,
+                args,
+                env,
+                stdin,
+                cwd,
+                timeout,
+                max_output_bytes,
+                parsed,
+            );
             Err(SandboxError::Other(
                 "Windows sandbox driver requires Windows platform".into(),
             ))

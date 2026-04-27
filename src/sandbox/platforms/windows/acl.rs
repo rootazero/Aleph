@@ -1,17 +1,10 @@
 use std::ffi::c_void;
-use std::path::Path;
 
-use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HLOCAL;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Security::AclSizeInformation;
-use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
-use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
-use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
-use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
@@ -24,26 +17,11 @@ use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
-use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
-use windows_sys::Win32::Storage::FileSystem::CreateFileW;
-use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
-use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
-use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
-use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
-use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
-use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
-use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
-use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
 const SE_FILE_OBJECT: u32 = 1;
 const INHERIT_ONLY_ACE: u8 = 0x08;
@@ -147,14 +125,12 @@ pub unsafe fn dacl_allows_access(
 /// # Safety
 /// Caller must ensure path is valid and accessible.
 pub unsafe fn apply_path_restrictions(
-    path: &Path,
-    allowed_reads: &[PathBuf],
-    allowed_writes: &[PathBuf],
+    _path: &std::path::Path,
+    _allowed_reads: &[std::path::PathBuf],
+    _allowed_writes: &[std::path::PathBuf],
 ) -> Result<(), String> {
     // This is a placeholder implementation
     // Full ACL manipulation requires careful handling of inheritance
     // and is deferred to a more complete implementation
     Ok(())
 }
-
-use std::path::PathBuf;

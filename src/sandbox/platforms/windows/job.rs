@@ -32,6 +32,8 @@ pub struct SandboxJob {
     handle: HANDLE,
 }
 
+unsafe impl Send for SandboxJob {}
+
 impl SandboxJob {
     /// Create a new sandbox job with default restrictions.
     ///

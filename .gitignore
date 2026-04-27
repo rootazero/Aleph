@@ -53,9 +53,6 @@ node_modules/
 platforms/macos/Aleph/Frameworks/*.dylib
 platforms/macos/Aleph/Frameworks/*.dylib.*
 
-# Allow sandbox platform implementations (not legacy platforms/)
-!src/sandbox/platforms/
-
 # Claude Code
 **/.claude/
 
@@ -87,6 +84,7 @@ archive/
 bridges/
 clients/
 platforms/
+!src/sandbox/platforms/
 Scripts/
 examples/*
 !examples/plugins/

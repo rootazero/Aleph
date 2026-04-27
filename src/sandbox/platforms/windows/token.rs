@@ -240,10 +240,10 @@ pub unsafe fn create_restricted_token() -> Result<HANDLE, String> {
         DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
         0,
         std::ptr::null(),
-        restrict_sids.len() as u32,
-        restrict_sids.as_ptr() as *const SID_AND_ATTRIBUTES,
         0,
         std::ptr::null(),
+        restrict_sids.len() as u32,
+        restrict_sids.as_ptr() as *const SID_AND_ATTRIBUTES,
         &mut h_restricted,
     );
 

@@ -62,7 +62,7 @@ impl AppContainer {
         name: &str,
         capabilities: Vec<AppContainerCapability>,
     ) -> Result<Self, String> {
-        let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let _name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
 
         // Derive AppContainer SID from name
         // Note: DeriveAppContainerSidFromAppContainerName requires windows-sys 0.61+
@@ -121,7 +121,7 @@ impl AppContainer {
     /// It must not outlive the AppContainer.
     pub unsafe fn security_capabilities(&self) -> Result<SECURITY_CAPABILITIES, String> {
         // Convert capabilities to SID strings
-        let capability_sids: Vec<Vec<u8>> = self
+        let _capability_sids: Vec<Vec<u8>> = self
             .capabilities
             .iter()
             .map(|cap| {
