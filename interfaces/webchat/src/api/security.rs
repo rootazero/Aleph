@@ -6,15 +6,86 @@ use serde_json::Value;
 // Security Config API
 // ============================================================================
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShellSecurityConfig {
+    pub enable_custom_patterns: bool,
+    #[serde(default)]
+    pub custom_blocked: Vec<CustomRiskPattern>,
+    #[serde(default)]
+    pub custom_danger: Vec<CustomRiskPattern>,
+    #[serde(default)]
+    pub custom_safe: Vec<CustomRiskPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomRiskPattern {
+    pub pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomPiiRule {
+    pub name: String,
+    pub pattern: String,
+    #[serde(default = "default_custom_pii_placeholder")]
+    pub placeholder: String,
+    #[serde(default)]
+    pub severity: CustomPiiSeverity,
+    #[serde(default)]
+    pub action: PiiAction,
+}
+
+fn default_custom_pii_placeholder() -> String {
+    "[CUSTOM_PII]".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomPiiSeverity {
+    #[default]
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PiiAction {
+    #[default]
+    Block,
+    Warn,
+    Off,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecretsProtectionConfig {
+    #[serde(default)]
+    pub virtual_keys: Vec<VirtualKeyEntry>,
+    #[serde(default)]
+    pub custom_leak_patterns: Vec<CustomLeakPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualKeyEntry {
+    pub alias: String,
+    pub secret_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomLeakPattern {
+    pub name: String,
+    pub pattern: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     pub require_auth: bool,
     pub enable_pairing: bool,
     pub allow_guest: bool,
-    /// Network access scope: "localhost" or "lan"
     #[serde(default = "default_network_access")]
     pub network_access: String,
-    // SSRF outbound protection
     #[serde(default = "default_true")]
     pub ssrf_enabled: bool,
     #[serde(default)]
@@ -27,6 +98,12 @@ pub struct SecurityConfig {
     pub ssrf_allowed_hosts: Vec<String>,
     #[serde(default)]
     pub ssrf_blocked_hosts: Vec<String>,
+    #[serde(default)]
+    pub shell_security: ShellSecurityConfig,
+    #[serde(default)]
+    pub custom_pii_rules: Vec<CustomPiiRule>,
+    #[serde(default)]
+    pub secrets_protection: SecretsProtectionConfig,
 }
 
 fn default_network_access() -> String {

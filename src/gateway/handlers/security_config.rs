@@ -119,6 +119,206 @@ fn read_ssrf_config_from_toml(
     (true, false, false, 5, Vec::new(), Vec::new())
 }
 
+/// Read shell security settings from [security.shell] section.
+fn read_shell_security_from_toml(patcher: &ConfigPatcher) -> ShellSecurityConfig {
+    let config_path = patcher.config_path();
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(table) = contents.parse::<toml::Table>() {
+            if let Some(security) = table.get("security").and_then(|v| v.as_table()) {
+                if let Some(shell) = security.get("shell").and_then(|v| v.as_table()) {
+                    let enable = shell
+                        .get("enable_custom_patterns")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let blocked = shell
+                        .get("custom_blocked")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| {
+                                    v.as_table().map(|t| CustomRiskPattern {
+                                        pattern: t
+                                            .get("pattern")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        reason: t
+                                            .get("reason")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let danger = shell
+                        .get("custom_danger")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| {
+                                    v.as_table().map(|t| CustomRiskPattern {
+                                        pattern: t
+                                            .get("pattern")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        reason: t
+                                            .get("reason")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let safe = shell
+                        .get("custom_safe")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| {
+                                    v.as_table().map(|t| CustomRiskPattern {
+                                        pattern: t
+                                            .get("pattern")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        reason: t
+                                            .get("reason")
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    return ShellSecurityConfig {
+                        enable_custom_patterns: enable,
+                        custom_blocked: blocked,
+                        custom_danger: danger,
+                        custom_safe: safe,
+                    };
+                }
+            }
+        }
+    }
+    ShellSecurityConfig::default()
+}
+
+/// Read custom PII rules from [[privacy.custom_rules]] entries.
+fn read_custom_pii_rules_from_toml(patcher: &ConfigPatcher) -> Vec<CustomPiiRule> {
+    let config_path = patcher.config_path();
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(table) = contents.parse::<toml::Table>() {
+            if let Some(privacy) = table.get("privacy").and_then(|v| v.as_table()) {
+                if let Some(rules) = privacy.get("custom_rules").and_then(|v| v.as_array()) {
+                    return rules
+                        .iter()
+                        .filter_map(|v| {
+                            v.as_table().map(|t| CustomPiiRule {
+                                name: t
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                pattern: t
+                                    .get("pattern")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                placeholder: t
+                                    .get("placeholder")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("[CUSTOM_PII]")
+                                    .to_string(),
+                                severity: t
+                                    .get("severity")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| match s {
+                                        "low" => CustomPiiSeverity::Low,
+                                        "medium" => CustomPiiSeverity::Medium,
+                                        "high" => CustomPiiSeverity::High,
+                                        "critical" => CustomPiiSeverity::Critical,
+                                        _ => CustomPiiSeverity::Medium,
+                                    })
+                                    .unwrap_or_default(),
+                                action: t
+                                    .get("action")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| match s {
+                                        "block" => PiiAction::Block,
+                                        "warn" => PiiAction::Warn,
+                                        "off" => PiiAction::Off,
+                                        _ => PiiAction::Block,
+                                    })
+                                    .unwrap_or_default(),
+                            })
+                        })
+                        .collect();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Read secret protection from [secrets_config] section.
+fn read_secrets_protection_from_toml(patcher: &ConfigPatcher) -> SecretsProtectionConfig {
+    let config_path = patcher.config_path();
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(table) = contents.parse::<toml::Table>() {
+            if let Some(secrets) = table.get("secrets_config").and_then(|v| v.as_table()) {
+                let virtual_keys = secrets
+                    .get("virtual_keys")
+                    .and_then(|v| v.as_table())
+                    .map(|t| {
+                        t.iter()
+                            .map(|(alias, secret_name)| VirtualKeyEntry {
+                                alias: alias.clone(),
+                                secret_name: secret_name.as_str().unwrap_or("").to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let leak_patterns = secrets
+                    .get("custom_leak_patterns")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| {
+                                v.as_table().map(|t| CustomLeakPattern {
+                                    name: t
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    pattern: t
+                                        .get("pattern")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                return SecretsProtectionConfig {
+                    virtual_keys,
+                    custom_leak_patterns: leak_patterns,
+                };
+            }
+        }
+    }
+    SecretsProtectionConfig::default()
+}
+
 /// Write SSRF settings to [security.ssrf] section in config TOML.
 fn write_ssrf_config_to_toml(
     path: &std::path::Path,
@@ -194,6 +394,233 @@ fn write_ssrf_config_to_toml(
     Ok(())
 }
 
+/// Write shell security settings to [security.shell] section.
+fn write_shell_security_to_toml(
+    path: &std::path::Path,
+    shell_security: &ShellSecurityConfig,
+) -> Result<(), String> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+
+    let security = doc
+        .entry("security".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    if let toml::Value::Table(sec_table) = security {
+        let shell = sec_table
+            .entry("shell".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+        if let toml::Value::Table(shell_table) = shell {
+            shell_table.insert(
+                "enable_custom_patterns".to_string(),
+                toml::Value::Boolean(shell_security.enable_custom_patterns),
+            );
+
+            let blocked: Vec<toml::Value> = shell_security
+                .custom_blocked
+                .iter()
+                .map(|p| {
+                    let mut table = toml::Table::new();
+                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    if let Some(ref reason) = p.reason {
+                        table.insert("reason".to_string(), toml::Value::String(reason.clone()));
+                    }
+                    toml::Value::Table(table)
+                })
+                .collect();
+            if !blocked.is_empty() {
+                shell_table.insert("custom_blocked".to_string(), toml::Value::Array(blocked));
+            } else {
+                shell_table.remove("custom_blocked");
+            }
+
+            let danger: Vec<toml::Value> = shell_security
+                .custom_danger
+                .iter()
+                .map(|p| {
+                    let mut table = toml::Table::new();
+                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    if let Some(ref reason) = p.reason {
+                        table.insert("reason".to_string(), toml::Value::String(reason.clone()));
+                    }
+                    toml::Value::Table(table)
+                })
+                .collect();
+            if !danger.is_empty() {
+                shell_table.insert("custom_danger".to_string(), toml::Value::Array(danger));
+            } else {
+                shell_table.remove("custom_danger");
+            }
+
+            let safe: Vec<toml::Value> = shell_security
+                .custom_safe
+                .iter()
+                .map(|p| {
+                    let mut table = toml::Table::new();
+                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    if let Some(ref reason) = p.reason {
+                        table.insert("reason".to_string(), toml::Value::String(reason.clone()));
+                    }
+                    toml::Value::Table(table)
+                })
+                .collect();
+            if !safe.is_empty() {
+                shell_table.insert("custom_safe".to_string(), toml::Value::Array(safe));
+            } else {
+                shell_table.remove("custom_safe");
+            }
+        }
+    }
+
+    let new_contents =
+        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    let temp_path = path.with_extension("shell_tmp");
+    std::fs::write(&temp_path, &new_contents)
+        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename: {e}")
+    })?;
+
+    Ok(())
+}
+
+/// Write custom PII rules to [[privacy.custom_rules]] section.
+fn write_custom_pii_rules_to_toml(
+    path: &std::path::Path,
+    rules: &[CustomPiiRule],
+) -> Result<(), String> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+
+    let privacy = doc
+        .entry("privacy".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    if let toml::Value::Table(priv_table) = privacy {
+        let rules_arr: Vec<toml::Value> = rules
+            .iter()
+            .map(|r| {
+                let mut table = toml::Table::new();
+                table.insert("name".to_string(), toml::Value::String(r.name.clone()));
+                table.insert("pattern".to_string(), toml::Value::String(r.pattern.clone()));
+                table.insert(
+                    "placeholder".to_string(),
+                    toml::Value::String(r.placeholder.clone()),
+                );
+                table.insert(
+                    "severity".to_string(),
+                    toml::Value::String(match r.severity {
+                        CustomPiiSeverity::Low => "low",
+                        CustomPiiSeverity::Medium => "medium",
+                        CustomPiiSeverity::High => "high",
+                        CustomPiiSeverity::Critical => "critical",
+                    }
+                    .to_string()),
+                );
+                table.insert(
+                    "action".to_string(),
+                    toml::Value::String(match r.action {
+                        PiiAction::Block => "block",
+                        PiiAction::Warn => "warn",
+                        PiiAction::Off => "off",
+                    }
+                    .to_string()),
+                );
+                toml::Value::Table(table)
+            })
+            .collect();
+
+        if !rules_arr.is_empty() {
+            priv_table.insert("custom_rules".to_string(), toml::Value::Array(rules_arr));
+        } else {
+            priv_table.remove("custom_rules");
+        }
+    }
+
+    let new_contents =
+        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    let temp_path = path.with_extension("pii_tmp");
+    std::fs::write(&temp_path, &new_contents)
+        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename: {e}")
+    })?;
+
+    Ok(())
+}
+
+/// Write secret protection to [secrets_config] section.
+fn write_secrets_protection_to_toml(
+    path: &std::path::Path,
+    secrets: &SecretsProtectionConfig,
+) -> Result<(), String> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
+
+    let secrets_config = doc
+        .entry("secrets_config".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    if let toml::Value::Table(sec_table) = secrets_config {
+        let mut vkeys = toml::Table::new();
+        for entry in &secrets.virtual_keys {
+            vkeys.insert(
+                entry.alias.clone(),
+                toml::Value::String(entry.secret_name.clone()),
+            );
+        }
+        if !vkeys.is_empty() {
+            sec_table.insert("virtual_keys".to_string(), toml::Value::Table(vkeys));
+        } else {
+            sec_table.remove("virtual_keys");
+        }
+
+        let patterns: Vec<toml::Value> = secrets
+            .custom_leak_patterns
+            .iter()
+            .map(|p| {
+                let mut table = toml::Table::new();
+                table.insert("name".to_string(), toml::Value::String(p.name.clone()));
+                table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                toml::Value::Table(table)
+            })
+            .collect();
+
+        if !patterns.is_empty() {
+            sec_table.insert(
+                "custom_leak_patterns".to_string(),
+                toml::Value::Array(patterns),
+            );
+        } else {
+            sec_table.remove("custom_leak_patterns");
+        }
+    }
+
+    let new_contents =
+        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    let temp_path = path.with_extension("secrets_tmp");
+    std::fs::write(&temp_path, &new_contents)
+        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename: {e}")
+    })?;
+
+    Ok(())
+}
+
 /// Network access scope for gateway binding
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -221,6 +648,83 @@ impl NetworkAccess {
     }
 }
 
+// Shell Security Configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShellSecurityConfig {
+    #[serde(default)]
+    pub enable_custom_patterns: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_blocked: Vec<CustomRiskPattern>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_danger: Vec<CustomRiskPattern>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_safe: Vec<CustomRiskPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomRiskPattern {
+    pub pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+// Custom PII Rule
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomPiiRule {
+    pub name: String,
+    pub pattern: String,
+    #[serde(default = "default_custom_pii_placeholder")]
+    pub placeholder: String,
+    #[serde(default)]
+    pub severity: CustomPiiSeverity,
+    #[serde(default)]
+    pub action: PiiAction,
+}
+
+fn default_custom_pii_placeholder() -> String {
+    "[CUSTOM_PII]".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomPiiSeverity {
+    #[default]
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PiiAction {
+    #[default]
+    Block,
+    Warn,
+    Off,
+}
+
+// Secret Protection
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecretsProtectionConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub virtual_keys: Vec<VirtualKeyEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_leak_patterns: Vec<CustomLeakPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualKeyEntry {
+    pub alias: String,
+    pub secret_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomLeakPattern {
+    pub name: String,
+    pub pattern: String,
+}
+
 /// Security configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
@@ -246,6 +750,15 @@ pub struct SecurityConfig {
     pub ssrf_allowed_hosts: Vec<String>,
     #[serde(default)]
     pub ssrf_blocked_hosts: Vec<String>,
+    // Shell Security
+    #[serde(default)]
+    pub shell_security: ShellSecurityConfig,
+    // Custom PII Rules
+    #[serde(default)]
+    pub custom_pii_rules: Vec<CustomPiiRule>,
+    // Secret Protection
+    #[serde(default)]
+    pub secrets_protection: SecretsProtectionConfig,
 }
 
 fn default_network_access() -> NetworkAccess {
@@ -286,6 +799,10 @@ pub async fn handle_get(
         ssrf_blocked,
     ) = read_ssrf_config_from_toml(&config_patcher);
 
+    let shell_security = read_shell_security_from_toml(&config_patcher);
+    let custom_pii_rules = read_custom_pii_rules_from_toml(&config_patcher);
+    let secrets_protection = read_secrets_protection_from_toml(&config_patcher);
+
     let security_config = SecurityConfig {
         require_auth: false,
         enable_pairing: true,
@@ -297,6 +814,9 @@ pub async fn handle_get(
         ssrf_max_redirects,
         ssrf_allowed_hosts: ssrf_allowed,
         ssrf_blocked_hosts: ssrf_blocked,
+        shell_security,
+        custom_pii_rules,
+        secrets_protection,
     };
 
     let result = serde_json::to_value(&security_config).unwrap_or_else(|_| serde_json::json!({}));
@@ -353,6 +873,39 @@ pub async fn handle_update(
             request.id,
             INTERNAL_ERROR,
             format!("Failed to save SSRF config: {}", e),
+        );
+    }
+
+    // Write shell security config
+    if let Err(e) =
+        write_shell_security_to_toml(&config_path, &security_config.shell_security)
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to save shell security config: {}", e),
+        );
+    }
+
+    // Write custom PII rules
+    if let Err(e) =
+        write_custom_pii_rules_to_toml(&config_path, &security_config.custom_pii_rules)
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to save custom PII rules: {}", e),
+        );
+    }
+
+    // Write secret protection
+    if let Err(e) =
+        write_secrets_protection_to_toml(&config_path, &security_config.secrets_protection)
+    {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to save secret protection config: {}", e),
         );
     }
 
