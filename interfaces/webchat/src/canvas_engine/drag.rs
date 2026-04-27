@@ -174,7 +174,7 @@ impl DragState {
                     node_id,
                     target_node_id: target_neighbor_id.to_string(),
                     spring: Spring2D::new(displacement, *initial_velocity, Vec2::zero()),
-                    start_time_ms: now_ms,
+                    start_time_ms: 0.0, // tick() repurposes this as elapsed-ms accumulator
                 };
             }
             _ => {}
@@ -231,6 +231,39 @@ impl DragState {
     /// Cancel any active drag — used for `pointercancel` events. Snaps to Idle, no animation.
     pub fn cancel(&mut self) {
         *self = DragState::Idle;
+    }
+
+    /// Advance any active animation by `dt_s` seconds. Returns `Some(target_node_id)`
+    /// exactly once when a Promoting state completes — the caller should then emit
+    /// `CanvasIntent::PromoteNode(id)` to drive navigation.
+    pub fn tick(&mut self, dt_s: f64) -> Option<String> {
+        match self {
+            DragState::SpringBack { spring, .. } => {
+                spring.tick(dt_s);
+                if spring.settled() {
+                    *self = DragState::Idle;
+                }
+                None
+            }
+            DragState::Promoting {
+                spring,
+                target_node_id,
+                start_time_ms,
+                ..
+            } => {
+                spring.tick(dt_s);
+                // `start_time_ms` is repurposed here as an elapsed-ms accumulator
+                // (zeroed on entry by `release`).
+                *start_time_ms += dt_s * 1000.0;
+                if spring.settled() || *start_time_ms > PROMOTE_TWEEN_MAX_MS {
+                    let id = std::mem::take(target_node_id);
+                    *self = DragState::Idle;
+                    return Some(id);
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -398,5 +431,74 @@ mod tests {
         d.push_back((Vec2::new(30.0, 0.0), 1020.0));
         let v = average_recent_velocity(&d, 3);
         assert!((v.x - 1500.0).abs() < 1.0, "got vx={}", v.x);
+    }
+
+    #[test]
+    fn springback_settles_to_idle_within_two_seconds() {
+        let mut s = DragState::SpringBack {
+            node_id: "n1".into(),
+            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
+            start_time_ms: 0.0,
+        };
+        let mut steps = 0;
+        for _ in 0..200 {
+            s.tick(0.016);
+            steps += 1;
+            if matches!(s, DragState::Idle) {
+                break;
+            }
+        }
+        assert!(
+            matches!(s, DragState::Idle),
+            "should reach Idle, took {steps} steps"
+        );
+        assert!(
+            steps < 130,
+            "should settle within ~2s of frames; took {steps}"
+        );
+    }
+
+    #[test]
+    fn promoting_emits_intent_on_completion() {
+        let mut s = DragState::Promoting {
+            node_id: "n1".into(),
+            target_node_id: "target_id_42".into(),
+            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
+            start_time_ms: 0.0,
+        };
+        let mut emitted = None;
+        for _ in 0..200 {
+            if let Some(id) = s.tick(0.016) {
+                emitted = Some(id);
+                break;
+            }
+        }
+        assert_eq!(emitted.as_deref(), Some("target_id_42"));
+        assert!(matches!(s, DragState::Idle));
+    }
+
+    #[test]
+    fn promoting_caps_at_max_tween_duration() {
+        let mut s = DragState::Promoting {
+            node_id: "n1".into(),
+            target_node_id: "t".into(),
+            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
+            start_time_ms: 0.0,
+        };
+        let result = s.tick((PROMOTE_TWEEN_MAX_MS + 10.0) / 1000.0);
+        assert_eq!(
+            result.as_deref(),
+            Some("t"),
+            "should emit intent when tween-max exceeded"
+        );
+        assert!(matches!(s, DragState::Idle));
+    }
+
+    #[test]
+    fn idle_tick_is_noop() {
+        let mut s = DragState::new();
+        let r = s.tick(0.016);
+        assert!(r.is_none());
+        assert!(matches!(s, DragState::Idle));
     }
 }
