@@ -11,7 +11,7 @@ const SPRING_MAX_STEP_DT: f64 = 0.016; // sub-step cap (one 60fps frame)
 /// and promote tween-into-center (target=screen center).
 ///
 /// Numerically stable: `tick(dt)` sub-steps if dt > 16ms.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Spring2D {
     pos: Vec2,
     vel: Vec2,
@@ -30,7 +30,12 @@ impl Spring2D {
 
     /// Advance the spring by `dt` seconds. Returns the new position.
     pub fn tick(&mut self, dt: f64) -> Vec2 {
-        let mut remaining = dt;
+        if !dt.is_finite() || dt <= 0.0 {
+            return self.pos;
+        }
+        // Cap runaway dt (e.g., a paused-then-resumed browser tab) at 1 second
+        // so the spring continues to animate but never spins on a huge delta.
+        let mut remaining = dt.min(1.0);
         while remaining > 0.0 {
             let step = remaining.min(SPRING_MAX_STEP_DT);
             self.step(step);
@@ -328,5 +333,27 @@ mod tests {
             p.x.is_finite() && p.x.abs() < 100.0,
             "100ms tick should sub-step internally and remain stable; pos={p:?}"
         );
+    }
+
+    #[test]
+    fn spring_tick_rejects_non_finite_and_non_positive_dt() {
+        let mut s = Spring2D::new(Vec2::new(10.0, 0.0), Vec2::zero(), Vec2::zero());
+        let p_before = s.position();
+        s.tick(f64::NAN);
+        s.tick(f64::INFINITY);
+        s.tick(-1.0);
+        s.tick(0.0);
+        assert_eq!(
+            s.position(),
+            p_before,
+            "non-finite/non-positive dt must be a no-op"
+        );
+    }
+
+    #[test]
+    fn critical_damping_constant_matches_formula() {
+        // SPRING_C must equal 2*sqrt(SPRING_K) for critical damping (no overshoot).
+        // If this fails, update SPRING_C after changing SPRING_K.
+        assert!((SPRING_C - 2.0 * SPRING_K.sqrt()).abs() < 1e-12);
     }
 }
