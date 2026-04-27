@@ -69,7 +69,7 @@ pub struct NoteLinkDto {
     pub to: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GraphQueryResponse {
     pub nodes: Vec<NoteNodeDto>,
     pub edges: Vec<NoteLinkDto>,

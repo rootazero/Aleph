@@ -98,10 +98,11 @@ pub async fn handle_query_impl(req: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         }
     };
 
-    let (entries, links) = match db
-        .get_graph_data(crate::routing::DEFAULT_AGENT_ID, params.limit)
-        .await
-    {
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+    let (entries, links) = match db.get_graph_data(agent_id, params.limit).await {
         Ok(data) => data,
         Err(e) => {
             return JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("NoteStore error: {e}"))
@@ -481,5 +482,71 @@ mod tests {
         assert_eq!(compute_hop_depth("B", "A", &edges), 1); // reverse edge
         assert_eq!(compute_hop_depth("A", "C", &edges), 2); // not connected
         assert_eq!(compute_hop_depth("A", "A", &edges), 0); // self
+    }
+
+    /// Seed `db` with one note per agent. Returns (alpha_path, beta_path).
+    async fn seed_two_agents(db: &MemoryBackend) -> (String, String) {
+        let alpha_note = make_note("AlphaOnly", "concept", vec![]);
+        let beta_note = make_note("BetaOnly", "concept", vec![]);
+        db.index_note(&alpha_note, "alpha", "concept").await.unwrap();
+        db.index_note(&beta_note, "beta", "concept").await.unwrap();
+        ("concept/AlphaOnly".to_string(), "concept/BetaOnly".to_string())
+    }
+
+    fn query_request(limit: usize, agent_id: Option<&str>) -> JsonRpcRequest {
+        let params = match agent_id {
+            Some(id) => serde_json::json!({ "limit": limit, "agent_id": id }),
+            None => serde_json::json!({ "limit": limit }),
+        };
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "graph.query".to_string(),
+            params: Some(params),
+            id: Some(serde_json::json!(1)),
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_query_uses_explicit_agent_id() {
+        let db = make_db();
+        let (alpha_path, _beta_path) = seed_two_agents(&db).await;
+
+        let req = query_request(50, Some("alpha"));
+        let resp = handle_query_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphQueryResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&alpha_path.as_str()), "alpha note must appear: {ids:?}");
+        assert!(!ids.iter().any(|id| id.contains("BetaOnly")),
+            "beta note must NOT appear when querying alpha: {ids:?}");
+    }
+
+    #[tokio::test]
+    async fn graph_query_falls_back_to_default_agent_when_omitted() {
+        let db = make_db();
+        // Seed both default agent and a non-default agent. When agent_id is
+        // omitted, the handler must return ONLY the default agent's notes —
+        // proving (a) it falls back to DEFAULT_AGENT_ID, not (b) returns all
+        // agents' notes.
+        let main_note = make_note("MainNote", "concept", vec![]);
+        db.index_note(&main_note, crate::routing::DEFAULT_AGENT_ID, "concept")
+            .await
+            .unwrap();
+        let alpha_note = make_note("AlphaOnly", "concept", vec![]);
+        db.index_note(&alpha_note, "alpha", "concept").await.unwrap();
+
+        let req = query_request(50, None);
+        let resp = handle_query_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphQueryResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.iter().any(|id| id.contains("MainNote")),
+            "default agent's note must appear when agent_id omitted: {ids:?}");
+        assert!(!ids.iter().any(|id| id.contains("AlphaOnly")),
+            "non-default agent's note must NOT appear when agent_id omitted: {ids:?}");
     }
 }
