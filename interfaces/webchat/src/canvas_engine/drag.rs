@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 pub const CLICK_THRESHOLD_PX: f64 = 5.0;
 pub const CLICK_TIME_MS: f64 = 200.0;
 pub const HOT_ZONE_RADIUS_FACTOR: f64 = 2.5; // multiplied by center node radius
+pub const GLOW_RADIUS_FACTOR: f64 = 4.0; // multiplied by center node radius
 pub const FLICK_THRESHOLD_PX_PER_S: f64 = 600.0;
 pub const MIN_FLICK_SPEED_PX_PER_S: f64 = 400.0;
 pub const PROMOTE_TWEEN_MAX_MS: f64 = 280.0;
@@ -252,7 +253,7 @@ impl DragState {
     /// Read-only snapshot of "what to draw on top of base canvas" this frame.
     /// Returns `None` when there's nothing to render (Idle / pre-threshold Pressed).
     pub fn overlay_snapshot(&self, center_pos: Vec2, center_radius_px: f64) -> Option<DragOverlay> {
-        let glow_radius = center_radius_px * 4.0;
+        let glow_radius = center_radius_px * GLOW_RADIUS_FACTOR;
         match self {
             DragState::Idle | DragState::Pressed { .. } => None,
             DragState::Dragging {
