@@ -57,10 +57,17 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
     ]
 });
 
+/// Compiled custom leak pattern for runtime use.
+struct CompiledCustomPattern {
+    name: String,
+    regex: Regex,
+}
+
 /// Bidirectional leak detector for secret values.
 pub struct LeakDetector {
     injected_hashes: std::collections::HashSet<u64>,
     injected_values: Vec<String>,
+    custom_patterns: Vec<CompiledCustomPattern>,
 }
 
 impl LeakDetector {
@@ -68,7 +75,35 @@ impl LeakDetector {
         Self {
             injected_hashes: std::collections::HashSet::new(),
             injected_values: Vec::new(),
+            custom_patterns: Vec::new(),
         }
+    }
+
+    /// Create a leak detector with custom patterns from config.
+    ///
+    /// Built-in patterns are always active. Custom patterns are additive.
+    /// Invalid regex patterns are logged and skipped.
+    pub fn with_custom_patterns(
+        custom: &[crate::config::types::CustomLeakPattern],
+    ) -> Self {
+        let mut detector = Self::new();
+        for pattern in custom {
+            match Regex::new(&pattern.pattern) {
+                Ok(regex) => detector.custom_patterns.push(CompiledCustomPattern {
+                    name: pattern.name.clone(),
+                    regex,
+                }),
+                Err(e) => {
+                    tracing::warn!(
+                        name = %pattern.name,
+                        pattern = %pattern.pattern,
+                        error = %e,
+                        "Skipping invalid custom leak pattern"
+                    );
+                }
+            }
+        }
+        detector
     }
 
     /// Register secrets that were injected in the current request.
@@ -88,10 +123,22 @@ impl LeakDetector {
         let mut redacted = content.to_string();
         let mut found_labels = Vec::new();
 
+        // Check built-in patterns first
         for (label, pattern) in LEAK_PATTERNS.iter() {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
                 redacted = pattern
+                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .to_string();
+            }
+        }
+
+        // Check custom patterns (additive)
+        for pattern in &self.custom_patterns {
+            if pattern.regex.is_match(&redacted) {
+                found_labels.push(&pattern.name);
+                redacted = pattern
+                    .regex
                     .replace_all(&redacted, "***LEAKED_REDACTED***")
                     .to_string();
             }
@@ -109,7 +156,7 @@ impl LeakDetector {
 
     /// Scan inbound content for echoed secret values.
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
-        // Check known patterns first (redact ALL matching patterns)
+        // Check built-in patterns first (redact ALL matching patterns)
         let mut redacted = content.to_string();
         let mut found_labels = Vec::new();
 
@@ -117,6 +164,17 @@ impl LeakDetector {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
                 redacted = pattern
+                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .to_string();
+            }
+        }
+
+        // Check custom patterns (additive)
+        for pattern in &self.custom_patterns {
+            if pattern.regex.is_match(&redacted) {
+                found_labels.push(&pattern.name);
+                redacted = pattern
+                    .regex
                     .replace_all(&redacted, "***LEAKED_REDACTED***")
                     .to_string();
             }
@@ -280,5 +338,60 @@ mod tests {
         let mut detector = LeakDetector::new();
         detector.register_injected(&[], &["short"]);
         assert!(detector.injected_values.is_empty());
+    }
+
+    #[test]
+    fn test_custom_pattern_blocks_outbound() {
+        use crate::config::types::CustomLeakPattern;
+
+        let custom = vec![CustomLeakPattern {
+            name: "Internal Token".to_string(),
+            pattern: r"internal-[a-z0-9]{8}".to_string(),
+        }];
+        let detector = LeakDetector::with_custom_patterns(&custom);
+
+        let decision = detector.scan_outbound("Token: internal-abc12345");
+        assert!(decision.is_blocked());
+        if let LeakDecision::Block { reason, .. } = decision {
+            assert!(reason.contains("Internal Token"));
+        }
+    }
+
+    #[test]
+    fn test_custom_pattern_blocks_inbound() {
+        use crate::config::types::CustomLeakPattern;
+
+        let custom = vec![CustomLeakPattern {
+            name: "Service Key".to_string(),
+            pattern: r"svc-[A-Z]{6}".to_string(),
+        }];
+        let detector = LeakDetector::with_custom_patterns(&custom);
+
+        let decision = detector.scan_inbound("Key: svc-ABCDEF");
+        assert!(decision.is_blocked());
+    }
+
+    #[test]
+    fn test_custom_pattern_invalid_regex_skipped() {
+        use crate::config::types::CustomLeakPattern;
+
+        let custom = vec![
+            CustomLeakPattern {
+                name: "Invalid".to_string(),
+                pattern: "[invalid".to_string(),
+            },
+            CustomLeakPattern {
+                name: "Valid".to_string(),
+                pattern: r"test-\d{4}".to_string(),
+            },
+        ];
+        let detector = LeakDetector::with_custom_patterns(&custom);
+
+        // Invalid pattern is skipped, but valid one works
+        let decision = detector.scan_outbound("Code: test-1234");
+        assert!(decision.is_blocked());
+        if let LeakDecision::Block { reason, .. } = decision {
+            assert!(reason.contains("Valid"));
+        }
     }
 }

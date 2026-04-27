@@ -30,6 +30,8 @@ pub struct SecurityGuardConfig {
     pub secret_injection: bool,
     pub default_action_on_leak: LeakAction,
     pub audit_enabled: bool,
+    /// Custom leak detection patterns (additive to built-ins)
+    pub custom_leak_patterns: Vec<crate::config::types::CustomLeakPattern>,
 }
 
 impl Default for SecurityGuardConfig {
@@ -41,6 +43,7 @@ impl Default for SecurityGuardConfig {
             secret_injection: true,
             default_action_on_leak: LeakAction::Block,
             audit_enabled: true,
+            custom_leak_patterns: Vec::new(),
         }
     }
 }
@@ -102,7 +105,9 @@ impl RuntimeSecurityGuard {
         config: SecurityGuardConfig,
     ) -> (Self, tokio::sync::mpsc::Receiver<AuditEntry>) {
         let exec_leak_detector = Arc::new(Mutex::new(ExecLeakDetector::default_patterns()));
-        let secret_leak_detector = Arc::new(Mutex::new(SecretLeakDetector::new()));
+        let secret_leak_detector = Arc::new(Mutex::new(
+            SecretLeakDetector::with_custom_patterns(&config.custom_leak_patterns),
+        ));
         let pii_engine = if config.pii_filtering {
             PiiEngine::global().or_else(|| {
                 Some(Arc::new(RwLock::new(PiiEngine::new(
@@ -401,6 +406,43 @@ impl RuntimeSecurityGuard {
                 text: text.to_string(),
                 warnings: vec!["Inbound leak detector warning".to_string()],
             });
+        }
+
+        // Inbound PII filtering: scrub sensitive data echoed back by LLM
+        if self.config.pii_filtering {
+            if let Some(engine) = &self.pii_engine {
+                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+                let result = engine_guard.filter(text);
+                if result.blocked_count > 0 {
+                    self.log_audit(
+                        &context,
+                        AuditEventType::PiiDetected,
+                        AuditSeverity::Critical,
+                        format!("inbound PII redacted; {} blocks", result.blocked_count),
+                    );
+                    return Ok(GuardResult::Redacted {
+                        text: result.text,
+                        reasons: vec![format!(
+                            "Inbound PII detected and redacted ({} blocks)",
+                            result.blocked_count
+                        )],
+                    });
+                } else if result.warned_count > 0 {
+                    self.log_audit(
+                        &context,
+                        AuditEventType::PiiDetected,
+                        AuditSeverity::Warn,
+                        format!("inbound PII warning; {} warnings", result.warned_count),
+                    );
+                    return Ok(GuardResult::Warned {
+                        text: result.text,
+                        warnings: vec![format!(
+                            "Inbound PII detected ({} warnings)",
+                            result.warned_count
+                        )],
+                    });
+                }
+            }
         }
 
         Ok(GuardResult::Clean {

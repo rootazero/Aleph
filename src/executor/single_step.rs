@@ -375,8 +375,8 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                                         crate::executor::PreExecDecision::Allow {
                                             use_sandbox: _,
                                         } => {
-                                            // TODO: route through OsSandboxDriver when use_sandbox=true
-                                            // Currently executes directly — sandbox integration pending
+                                            // Sandbox routing is handled at the tool level.
+                                            // CodeExecTool/BashExecTool route through WorkspaceSandbox.
                                         }
                                     }
                                 }
@@ -819,7 +819,7 @@ mod tests {
 
         let tool_registry = Arc::new(crate::executor::BuiltinToolRegistry::new().await);
         let approval_manager = Arc::new(ExecApprovalManager::new());
-        let gate = Arc::new(ExecSecurityGate::new(approval_manager, None));
+        let gate = Arc::new(ExecSecurityGate::new(approval_manager, None, None));
 
         let executor = SingleStepExecutor::new(tool_registry).with_exec_security_gate(gate);
 

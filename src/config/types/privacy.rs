@@ -50,6 +50,71 @@ pub struct PlatformPiiPolicy {
 }
 
 // =============================================================================
+// CustomPiiRule
+// =============================================================================
+
+/// A user-defined PII detection rule.
+///
+/// Custom rules are evaluated alongside built-in rules. They use regex
+/// patterns and can be configured with any severity and action level.
+///
+/// # Example (aleph.toml)
+///
+/// ```toml
+/// [[privacy.custom_rules]]
+/// name = "internal_token"
+/// pattern = "IT-[A-Z0-9]{16}"
+/// placeholder = "[INTERNAL_TOKEN]"
+/// severity = "high"
+/// action = "block"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CustomPiiRule {
+    /// Unique rule identifier (used in config and logs)
+    pub name: String,
+    /// Regex pattern for detection
+    pub pattern: String,
+    /// Placeholder text for replacement when blocked
+    #[serde(default = "default_placeholder")]
+    pub placeholder: String,
+    /// Severity level (low, medium, high, critical)
+    #[serde(default = "default_medium")]
+    pub severity: CustomPiiSeverity,
+    /// Default action for this rule (can be overridden per-platform)
+    #[serde(default)]
+    pub action: PiiAction,
+}
+
+/// Severity level for custom PII rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomPiiSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<CustomPiiSeverity> for crate::pii::engine::PiiSeverity {
+    fn from(sev: CustomPiiSeverity) -> Self {
+        match sev {
+            CustomPiiSeverity::Low => crate::pii::engine::PiiSeverity::Low,
+            CustomPiiSeverity::Medium => crate::pii::engine::PiiSeverity::Medium,
+            CustomPiiSeverity::High => crate::pii::engine::PiiSeverity::High,
+            CustomPiiSeverity::Critical => crate::pii::engine::PiiSeverity::Critical,
+        }
+    }
+}
+
+fn default_placeholder() -> String {
+    "[CUSTOM_PII]".to_string()
+}
+
+fn default_medium() -> CustomPiiSeverity {
+    CustomPiiSeverity::Medium
+}
+
+// =============================================================================
 // PrivacyConfig
 // =============================================================================
 
@@ -115,6 +180,9 @@ pub struct PrivacyConfig {
     /// Per-platform PII policy overrides.
     #[serde(default)]
     pub platform_policies: HashMap<String, PlatformPiiPolicy>,
+    /// Custom PII detection rules (user-defined regex patterns)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_rules: Vec<CustomPiiRule>,
 }
 
 // =============================================================================
@@ -154,6 +222,7 @@ impl Default for PrivacyConfig {
             ip_address: default_off(),
             exclude_providers: Vec::new(),
             platform_policies: HashMap::new(),
+            custom_rules: Vec::new(),
         }
     }
 }
@@ -257,5 +326,56 @@ mod tests {
             telegram.exclude_providers,
             Some(vec!["local-llm".to_string()])
         );
+    }
+
+    #[test]
+    fn test_custom_rule_deserialization() {
+        let toml_str = r#"
+            [[custom_rules]]
+            name = "internal_token"
+            pattern = "IT-[A-Z0-9]{16}"
+            placeholder = "[INTERNAL_TOKEN]"
+            severity = "high"
+            action = "block"
+
+            [[custom_rules]]
+            name = "employee_id"
+            pattern = "EMP-[0-9]{6}"
+        "#;
+        let config: PrivacyConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.custom_rules.len(), 2);
+        assert_eq!(config.custom_rules[0].name, "internal_token");
+        assert_eq!(config.custom_rules[0].pattern, "IT-[A-Z0-9]{16}");
+        assert_eq!(
+            config.custom_rules[0].placeholder,
+            "[INTERNAL_TOKEN]"
+        );
+        assert_eq!(
+            config.custom_rules[0].severity,
+            CustomPiiSeverity::High
+        );
+        assert_eq!(config.custom_rules[0].action, PiiAction::Block);
+
+        assert_eq!(config.custom_rules[1].name, "employee_id");
+        assert_eq!(config.custom_rules[1].placeholder, "[CUSTOM_PII]");
+        assert_eq!(
+            config.custom_rules[1].severity,
+            CustomPiiSeverity::Medium
+        );
+        assert_eq!(config.custom_rules[1].action, PiiAction::Block);
+    }
+
+    #[test]
+    fn test_custom_rule_default_values() {
+        let rule = CustomPiiRule {
+            name: "test".to_string(),
+            pattern: r"\d+".to_string(),
+            placeholder: default_placeholder(),
+            severity: default_medium(),
+            action: PiiAction::default(),
+        };
+        assert_eq!(rule.placeholder, "[CUSTOM_PII]");
+        assert_eq!(rule.severity, CustomPiiSeverity::Medium);
+        assert_eq!(rule.action, PiiAction::Block);
     }
 }

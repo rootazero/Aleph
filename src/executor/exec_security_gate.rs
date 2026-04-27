@@ -49,9 +49,13 @@ impl ExecSecurityGate {
     pub fn new(
         approval_manager: Arc<ExecApprovalManager>,
         sandbox_manager: Option<Arc<dyn OsSandboxDriverTrait>>,
+        security_config: Option<&crate::config::types::ShellSecurityConfig>,
     ) -> Self {
+        let security_kernel = security_config
+            .and_then(|c| SecurityKernel::from_config(c).ok())
+            .unwrap_or_default();
         Self {
-            security_kernel: SecurityKernel::default(),
+            security_kernel,
             approval_manager,
             sandbox_manager,
             masker: SecretMasker::new(),
@@ -66,10 +70,14 @@ impl ExecSecurityGate {
         approval_manager: Arc<ExecApprovalManager>,
         sandbox_manager: Option<Arc<dyn OsSandboxDriverTrait>>,
         channel_registry: Arc<ChannelRegistry>,
+        security_config: Option<&crate::config::types::ShellSecurityConfig>,
     ) -> Self {
         let channel_bridge = Arc::new(ChannelApprovalBridge::new(channel_registry.clone()));
+        let security_kernel = security_config
+            .and_then(|c| SecurityKernel::from_config(c).ok())
+            .unwrap_or_default();
         Self {
-            security_kernel: SecurityKernel::default(),
+            security_kernel,
             approval_manager,
             sandbox_manager,
             masker: SecretMasker::new(),
@@ -185,9 +193,8 @@ impl ExecSecurityGate {
                     .map(|s| s.is_supported())
                     .unwrap_or(false);
                 info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
-                // Note: use_sandbox is passed to the caller but actual sandbox routing
-                // is a TODO — the executor currently ignores this flag.
-                // See: docs/plans/2026-02-23-exec-security-integration-design.md (Future Work)
+                // Sandbox execution is handled by CodeExecTool/BashExecTool which route
+                // through WorkspaceSandbox. The flag is informational for audit.
                 PreExecDecision::Allow { use_sandbox }
             }
         }
@@ -439,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_execute_blocked_command() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let identity = make_identity();
         let args = json!({"cmd": "rm -rf /"});
@@ -458,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_execute_safe_command_allowed() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let identity = make_identity();
         let args = json!({"cmd": "ls -la"});
@@ -470,7 +477,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_execute_caution_command_allowed() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let identity = make_identity();
         let args = json!({"cmd": "npm install"});
@@ -482,7 +489,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_execute_no_command_allows() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let identity = make_identity();
         let args = json!({"language": "python", "code": "print('hello')"});
@@ -495,7 +502,7 @@ mod tests {
     async fn test_pre_execute_danger_denied_on_timeout() {
         // With a zero-timeout, no approval is received, so Danger should block
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
         let identity = make_identity();
         // rm -rf ./old_backups is a Danger-tier command (matches ^rm\s+)
         let args = serde_json::json!({"cmd": "rm -rf ./old_backups"});
@@ -515,7 +522,7 @@ mod tests {
     async fn test_pre_execute_danger_approved_allow_once() {
         // Simulate a human approving the request
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager.clone(), None);
+        let gate = ExecSecurityGate::new(manager.clone(), None, None);
         let identity = make_identity();
         let args = json!({"cmd": "rm -rf ./old_backups"});
 
@@ -544,7 +551,7 @@ mod tests {
     #[test]
     fn test_post_execute_masks_api_key_in_stdout() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let raw_output = serde_json::json!({
             "success": true,
@@ -587,7 +594,7 @@ mod tests {
     #[test]
     fn test_post_execute_passthrough_on_tool_error() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let result = crate::executor::action_types::ActionResult::ToolResults {
             results: vec![crate::executor::action_types::ToolCallResult {
@@ -614,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn test_invisible_chars_escalate_risk() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
         let identity = make_identity();
         // "ls -la" with ZWSP appended at end: still matches ^ls\s+ Safe pattern,
         // then escalated Safe→Caution by invisible char detection. Caution is auto-allowed.
@@ -628,7 +635,7 @@ mod tests {
     #[tokio::test]
     async fn test_invisible_chars_escalate_caution_to_danger_timeout() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
         let identity = make_identity();
         // "npm install" is Caution, invisible chars should escalate to Danger
         // With 0ms timeout, Danger → Block
@@ -646,7 +653,7 @@ mod tests {
     #[test]
     fn test_post_execute_clean_output_unchanged() {
         let manager = Arc::new(ExecApprovalManager::new());
-        let gate = ExecSecurityGate::new(manager, None);
+        let gate = ExecSecurityGate::new(manager, None, None);
 
         let raw_output = serde_json::json!({
             "success": true,

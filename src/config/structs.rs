@@ -131,6 +131,9 @@ pub struct Config {
     /// Privacy and PII filtering configuration
     #[serde(default)]
     pub privacy: PrivacyConfig,
+    /// Shell security configuration (custom risk patterns)
+    #[serde(default)]
+    pub security: ShellSecurityConfig,
     /// Workspace profiles configuration (Anti-Gravity Architecture)
     /// Profiles define the "Physics" of workspaces: model binding, tool whitelist, system prompt
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -353,6 +356,7 @@ impl Default for Config {
             evolution: EvolutionConfig::default(),
             media: MediaConfig::default(),
             privacy: PrivacyConfig::default(),
+            security: ShellSecurityConfig::default(),
             profiles: HashMap::new(),
             secret_providers: HashMap::new(),
             secrets: HashMap::new(),

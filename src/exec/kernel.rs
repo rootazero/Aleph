@@ -4,6 +4,7 @@
 //! Does NOT rely on LLM for security judgments.
 
 use super::risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
+use crate::config::types::ShellSecurityConfig;
 use regex::Regex;
 
 /// Security kernel for command risk assessment.
@@ -37,6 +38,28 @@ impl SecurityKernel {
     /// Create a new security kernel with default patterns.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a security kernel from configuration.
+    ///
+    /// Loads custom patterns from config if enabled. Built-in patterns
+    /// are always active regardless of config.
+    pub fn from_config(config: &ShellSecurityConfig) -> Result<Self, regex::Error> {
+        let mut kernel = Self::default();
+
+        if config.enable_custom_patterns {
+            for pattern in &config.custom_blocked {
+                kernel.custom_blocked.push(Regex::new(&pattern.pattern)?);
+            }
+            for pattern in &config.custom_danger {
+                kernel.custom_danger.push(Regex::new(&pattern.pattern)?);
+            }
+            for pattern in &config.custom_safe {
+                kernel.custom_safe.push(Regex::new(&pattern.pattern)?);
+            }
+        }
+
+        Ok(kernel)
     }
 
     /// Add a custom blocked pattern.

@@ -6,12 +6,14 @@
 
 mod api_key;
 mod bank_card;
+mod custom;
 mod email;
 mod id_card;
 mod ip_address;
 mod phone;
 mod ssh_key;
 
+use crate::config::types::CustomPiiRule;
 use crate::pii::engine::{PiiMatch, PiiSeverity};
 
 /// Trait for PII detection rules
@@ -29,9 +31,13 @@ pub trait PiiRule: Send + Sync {
     fn detect(&self, text: &str) -> Vec<PiiMatch>;
 }
 
-/// Build all rules ordered by severity (Critical first)
-pub(crate) fn build_rules() -> Vec<Box<dyn PiiRule>> {
-    vec![
+/// Build all rules ordered by severity (Critical first).
+///
+/// Built-in rules are always included. Custom rules from config are
+/// appended after built-ins. Invalid custom regex patterns are logged
+/// and skipped.
+pub(crate) fn build_rules(custom_configs: &[CustomPiiRule]) -> Vec<Box<dyn PiiRule>> {
+    let mut rules: Vec<Box<dyn PiiRule>> = vec![
         Box::new(api_key::ApiKeyRule::new()),
         Box::new(ssh_key::SshKeyRule::new()),
         Box::new(id_card::IdCardRule::new()),
@@ -39,5 +45,21 @@ pub(crate) fn build_rules() -> Vec<Box<dyn PiiRule>> {
         Box::new(bank_card::BankCardRule::new()),
         Box::new(email::EmailRule::new()),
         Box::new(ip_address::IpAddressRule::new()),
-    ]
+    ];
+
+    for config in custom_configs {
+        match custom::CustomRegexRule::new(config.clone()) {
+            Ok(rule) => rules.push(Box::new(rule)),
+            Err(e) => {
+                tracing::warn!(
+                    rule_name = %config.name,
+                    pattern = %config.pattern,
+                    error = %e,
+                    "Skipping invalid custom PII rule regex"
+                );
+            }
+        }
+    }
+
+    rules
 }

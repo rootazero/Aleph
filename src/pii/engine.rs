@@ -78,7 +78,7 @@ pub struct PiiEngine {
 impl PiiEngine {
     /// Create a new PII engine with the given configuration
     pub fn new(config: PrivacyConfig) -> Self {
-        let rules = crate::pii::rules::build_rules();
+        let rules = crate::pii::rules::build_rules(&config.custom_rules);
         let allowlist = PiiAllowlist::default();
         Self {
             rules,
@@ -143,7 +143,15 @@ impl PiiEngine {
             "ip_address" => &config.ip_address,
             "api_key" => &config.api_key,
             "ssh_key" => &config.ssh_key,
-            _ => &PiiAction::Block,
+            _ => {
+                // Look up custom rule action by name
+                config
+                    .custom_rules
+                    .iter()
+                    .find(|r| r.name == rule_name)
+                    .map(|r| &r.action)
+                    .unwrap_or(&PiiAction::Block)
+            }
         }
     }
 
