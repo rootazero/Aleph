@@ -57,6 +57,20 @@ pub enum ReleaseOutcome {
     Promote { initial_velocity: Vec2 },
 }
 
+/// Read-only snapshot for the renderer.
+///
+/// `position` is in the same coordinate frame as the input pointer events
+/// (canvas-local screen pixels). For SpringBack/Promoting it is the offset
+/// **from the node's anchor slot** (renderer adds it to the layout position).
+/// For Dragging it is the current pointer-relative position.
+#[derive(Debug, Clone)]
+pub struct DragOverlay {
+    pub node_id: String,
+    pub position: Vec2,
+    /// 0.0..=1.0; non-zero when promote-imminent.
+    pub glow_alpha: f64,
+}
+
 impl DragState {
     pub fn new() -> Self {
         DragState::Idle
@@ -233,6 +247,54 @@ impl DragState {
     /// Cancel any active drag — used for `pointercancel` events. Snaps to Idle, no animation.
     pub fn cancel(&mut self) {
         *self = DragState::Idle;
+    }
+
+    /// Read-only snapshot of "what to draw on top of base canvas" this frame.
+    /// Returns `None` when there's nothing to render (Idle / pre-threshold Pressed).
+    pub fn overlay_snapshot(&self, center_pos: Vec2, center_radius_px: f64) -> Option<DragOverlay> {
+        let glow_radius = center_radius_px * 4.0;
+        match self {
+            DragState::Idle | DragState::Pressed { .. } => None,
+            DragState::Dragging {
+                node_id,
+                anchor_pos,
+                offset,
+                ..
+            } => {
+                let absolute_pos = *anchor_pos + *offset;
+                let dist_to_center = absolute_pos.distance_to(&center_pos);
+                let glow_alpha = if dist_to_center < glow_radius {
+                    1.0 - (dist_to_center / glow_radius).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                Some(DragOverlay {
+                    node_id: node_id.clone(),
+                    position: absolute_pos,
+                    glow_alpha,
+                })
+            }
+            DragState::SpringBack {
+                node_id, spring, ..
+            } => Some(DragOverlay {
+                node_id: node_id.clone(),
+                position: spring.position(),
+                glow_alpha: 0.0,
+            }),
+            DragState::Promoting {
+                node_id, spring, ..
+            } => {
+                // Promote tween position is offset from center; renderer adds center.
+                let abs_pos = center_pos + spring.position();
+                let dist_to_center = spring.position().length();
+                let glow_alpha = 1.0 - (dist_to_center / glow_radius).clamp(0.0, 1.0);
+                Some(DragOverlay {
+                    node_id: node_id.clone(),
+                    position: abs_pos,
+                    glow_alpha,
+                })
+            }
+        }
     }
 
     /// Advance any active animation by `dt_s` seconds. Returns `Some(target_node_id)`
@@ -502,5 +564,48 @@ mod tests {
         let r = s.tick(0.016);
         assert!(r.is_none());
         assert!(matches!(s, DragState::Idle));
+    }
+
+    #[test]
+    fn idle_overlay_snapshot_is_none() {
+        let s = DragState::new();
+        assert!(s.overlay_snapshot(Vec2::zero(), 30.0).is_none());
+    }
+
+    #[test]
+    fn dragging_overlay_returns_node_pos_and_glow() {
+        let mut s = DragState::new();
+        s.press("n1".into(), Vec2::new(100.0, 0.0), 1000.0);
+        s.pointer_move(Vec2::new(60.0, 0.0), 1010.0); // moved 40px toward (0,0)
+        let snap = s.overlay_snapshot(Vec2::new(0.0, 0.0), 30.0).unwrap();
+        assert_eq!(snap.node_id, "n1");
+        assert_eq!(snap.position.x, 60.0);
+        // 60px from center, GLOW_RADIUS = 30 * 4 = 120, so glow_alpha > 0
+        assert!(
+            snap.glow_alpha > 0.0 && snap.glow_alpha <= 1.0,
+            "glow should be partial; got {}",
+            snap.glow_alpha
+        );
+    }
+
+    #[test]
+    fn dragging_far_outside_glow_radius_has_zero_glow() {
+        let mut s = DragState::new();
+        s.press("n1".into(), Vec2::new(500.0, 0.0), 1000.0);
+        s.pointer_move(Vec2::new(490.0, 0.0), 1010.0); // ~490 from center, far outside glow
+        let snap = s.overlay_snapshot(Vec2::new(0.0, 0.0), 30.0).unwrap();
+        assert_eq!(snap.glow_alpha, 0.0);
+    }
+
+    #[test]
+    fn springback_overlay_returns_current_spring_position() {
+        let s = DragState::SpringBack {
+            node_id: "n1".into(),
+            spring: Spring2D::new(Vec2::new(50.0, 0.0), Vec2::zero(), Vec2::zero()),
+            start_time_ms: 0.0,
+        };
+        let snap = s.overlay_snapshot(Vec2::zero(), 30.0).unwrap();
+        assert_eq!(snap.node_id, "n1");
+        assert_eq!(snap.position.x, 50.0); // spring still at initial displacement
     }
 }
