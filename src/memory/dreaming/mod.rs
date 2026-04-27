@@ -21,6 +21,7 @@ use crate::memory::notes::NoteIndexer;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::{DreamStore, MemoryBackend};
 use crate::providers::AiProvider;
+use crate::routing::DEFAULT_AGENT_ID;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
@@ -624,7 +625,7 @@ impl DreamDaemon {
         // --- Phase 6: Solidify (event log) ---
         let memory_dir = crate::utils::paths::get_note_memory_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from(".aleph/data/memory"));
-        let agent_dir = memory_dir.join("default"); // TODO: use actual agent_id when available
+        let agent_dir = memory_dir.join(DEFAULT_AGENT_ID);
         let event_log = EventLog::new(&agent_dir);
         let cycle = event_log.next_cycle().await.unwrap_or(1);
 
