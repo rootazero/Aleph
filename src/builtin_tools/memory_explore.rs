@@ -16,6 +16,7 @@ use crate::memory::notes::store::NoteStore;
 use crate::memory::ripple::{RippleConfig, RippleTask};
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
+use crate::routing::DEFAULT_AGENT_ID;
 use crate::tools::AlephTool;
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -86,7 +87,7 @@ impl MemoryExploreTool {
         Self {
             database,
             embedder,
-            agent_id: "default".to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
         }
     }
 
