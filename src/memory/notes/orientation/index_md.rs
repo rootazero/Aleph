@@ -141,12 +141,13 @@ fn sanitise_summary(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::memory::notes::store::NoteIndexEntry;
+    use crate::routing::DEFAULT_AGENT_ID;
 
     fn entry(category: &str, filename: &str, updated: i64) -> NoteIndexEntry {
         NoteIndexEntry {
             path: format!("{category}/{filename}"),
             filename: filename.into(),
-            agent_id: "default".into(),
+            agent_id: DEFAULT_AGENT_ID.into(),
             category: category.into(),
             tags: vec![],
             link_count: 0,
@@ -277,7 +278,7 @@ mod tests {
                 .map(|(i, (cat, name, ts))| NoteIndexEntry {
                     path: format!("{cat}/{name}-{i}"),
                     filename: format!("{name}-{i}"),
-                    agent_id: "default".into(),
+                    agent_id: DEFAULT_AGENT_ID.into(),
                     category: cat.clone(),
                     tags: vec![],
                     link_count: 0,
