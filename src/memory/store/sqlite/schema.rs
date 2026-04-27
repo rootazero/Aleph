@@ -357,6 +357,47 @@ pub fn drop_obsolete_facts_tables(conn: &Connection) -> Result<(), AlephError> {
     Ok(())
 }
 
+/// Unify legacy `default`-agent notes rows into `main`, and purge
+/// `test-memory-validation` residue. Idempotent: re-running has no effect
+/// once `default`/`test-memory-validation` rows are gone.
+///
+/// Conflict policy: when a `default` row shares its primary key with an
+/// existing `main` row, the `main` row wins (INSERT OR IGNORE). The
+/// `default` row's content is dropped, since `main` is the canonical,
+/// canvas-visible source of truth.
+pub(crate) fn migrate_unify_default_to_main_agent(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO notes_index
+            (path, filename, agent_id, category, tags_json,
+             created_at, updated_at, last_accessed_at, content_hash)
+         SELECT path, filename, 'main', category, tags_json,
+                created_at, updated_at, last_accessed_at, content_hash
+         FROM notes_index WHERE agent_id = 'default';
+
+         INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note)
+         SELECT 'main', from_note, to_note
+         FROM notes_links WHERE agent_id = 'default';
+
+         INSERT INTO notes_fts (path, filename, content, agent_id)
+         SELECT path, filename, content, 'main'
+         FROM notes_fts AS f
+         WHERE f.agent_id = 'default'
+           AND NOT EXISTS (
+             SELECT 1 FROM notes_fts WHERE path = f.path AND agent_id = 'main'
+           );
+
+         DELETE FROM notes_index WHERE agent_id = 'default';
+         DELETE FROM notes_links WHERE agent_id = 'default';
+         DELETE FROM notes_fts   WHERE agent_id = 'default';
+
+         DELETE FROM notes_index WHERE agent_id = 'test-memory-validation';
+         DELETE FROM notes_links WHERE agent_id = 'test-memory-validation';
+         DELETE FROM notes_fts   WHERE agent_id = 'test-memory-validation';",
+    )
+    .map_err(|e| AlephError::config(format!("Failed to migrate default agent rows to main: {e}")))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -423,6 +464,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
+
+    // Spec 2026-04-27: unify legacy `default`-agent notes rows into `main`,
+    // and purge `test-memory-validation` residue. Idempotent.
+    migrate_unify_default_to_main_agent(conn)?;
 
     conn.execute_batch(ASSEMBLY_LOGS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create assembly_logs table: {e}")))?;
@@ -686,5 +731,129 @@ mod tests {
         assert!(!cols.contains(&"facts_promoted".to_string()));
         assert!(cols.contains(&"pipeline_type".to_string()));
         assert!(cols.contains(&"synthesis_count".to_string()));
+    }
+
+    fn seed_default_agent_row(conn: &Connection, path: &str, content: &str) {
+        let now: i64 = 1_700_000_000_000;
+        conn.execute(
+            "INSERT INTO notes_index (path, filename, agent_id, category, tags_json,
+                 created_at, updated_at, last_accessed_at, content_hash)
+             VALUES (?1, ?2, 'default', 'misc', '[]', ?3, ?3, ?3, ?4)",
+            rusqlite::params![path, path.rsplit('/').next().unwrap_or(path), now, content],
+        )
+        .expect("seed default notes_index");
+        conn.execute(
+            "INSERT INTO notes_fts (path, filename, content, agent_id)
+             VALUES (?1, ?2, ?3, 'default')",
+            rusqlite::params![path, path.rsplit('/').next().unwrap_or(path), content],
+        )
+        .expect("seed default notes_fts");
+    }
+
+    fn seed_main_agent_row(conn: &Connection, path: &str, content: &str) {
+        let now: i64 = 1_700_000_000_000;
+        conn.execute(
+            "INSERT INTO notes_index (path, filename, agent_id, category, tags_json,
+                 created_at, updated_at, last_accessed_at, content_hash)
+             VALUES (?1, ?2, 'main', 'misc', '[]', ?3, ?3, ?3, ?4)",
+            rusqlite::params![path, path.rsplit('/').next().unwrap_or(path), now, content],
+        )
+        .expect("seed main notes_index");
+        conn.execute(
+            "INSERT INTO notes_fts (path, filename, content, agent_id)
+             VALUES (?1, ?2, ?3, 'main')",
+            rusqlite::params![path, path.rsplit('/').next().unwrap_or(path), content],
+        )
+        .expect("seed main notes_fts");
+    }
+
+    fn count(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get::<_, i64>(0))
+            .expect("count query")
+    }
+
+    #[test]
+    fn migration_moves_default_rows_to_main() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        seed_default_agent_row(&conn, "personal/foo.md", "F");
+        migrate_unify_default_to_main_agent(&conn).expect("migration");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main' AND path='personal/foo.md'"),
+            1, "row should be at main"
+        );
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"),
+            0, "no default rows should remain"
+        );
+    }
+
+    #[test]
+    fn migration_preserves_existing_main_on_collision() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        seed_main_agent_row(&conn, "personal/foo.md", "M");
+        seed_default_agent_row(&conn, "personal/foo.md", "D");
+        migrate_unify_default_to_main_agent(&conn).expect("migration");
+        let surviving_hash: String = conn.query_row(
+            "SELECT content_hash FROM notes_index WHERE agent_id='main' AND path='personal/foo.md'",
+            [], |r| r.get(0),
+        ).expect("query surviving row");
+        assert_eq!(surviving_hash, "M", "main row content_hash should win on collision");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"),
+            0, "default row should be deleted even on collision"
+        );
+    }
+
+    #[test]
+    fn migration_purges_test_memory_validation_rows() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        let now: i64 = 1_700_000_000_000;
+        conn.execute(
+            "INSERT INTO notes_index (path, filename, agent_id, category, tags_json,
+                 created_at, updated_at, last_accessed_at, content_hash)
+             VALUES ('residue.md', 'residue.md', 'test-memory-validation', 'misc', '[]', ?1, ?1, ?1, 'h')",
+            rusqlite::params![now],
+        ).expect("seed residue row");
+        migrate_unify_default_to_main_agent(&conn).expect("migration");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='test-memory-validation'"),
+            0, "test-memory-validation rows should be purged"
+        );
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        seed_default_agent_row(&conn, "personal/bar.md", "B");
+        migrate_unify_default_to_main_agent(&conn).expect("first run");
+        let snapshot1 = count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'");
+        migrate_unify_default_to_main_agent(&conn).expect("second run");
+        let snapshot2 = count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'");
+        assert_eq!(snapshot1, snapshot2, "second run must be a no-op");
+    }
+
+    #[test]
+    fn migration_preserves_link_topology() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("init_schema");
+        seed_default_agent_row(&conn, "A.md", "a");
+        seed_default_agent_row(&conn, "B.md", "b");
+        conn.execute(
+            "INSERT INTO notes_links (agent_id, from_note, to_note) VALUES ('default', 'A.md', 'B.md')",
+            [],
+        ).expect("seed default link");
+        migrate_unify_default_to_main_agent(&conn).expect("migration");
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_links WHERE agent_id='main' AND from_note='A.md' AND to_note='B.md'"),
+            1, "link must survive under main"
+        );
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM notes_links WHERE agent_id='default'"),
+            0, "default links should be deleted"
+        );
     }
 }
