@@ -182,13 +182,14 @@ impl AlephTool for MemoryBrowseTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::DEFAULT_AGENT_ID;
     use tempfile::tempdir;
 
     async fn setup() -> (MemoryBrowseTool, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let agent = dir.path().join("default");
+        let agent = dir.path().join(DEFAULT_AGENT_ID);
         tokio::fs::create_dir_all(&agent).await.unwrap();
-        let tool = MemoryBrowseTool::new(dir.path().to_path_buf(), "default".into());
+        let tool = MemoryBrowseTool::new(dir.path().to_path_buf(), DEFAULT_AGENT_ID.into());
         (tool, dir)
     }
 
@@ -202,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn list_top_level_returns_categories_only() {
         let (tool, dir) = setup().await;
-        let agent_dir = dir.path().join("default");
+        let agent_dir = dir.path().join(DEFAULT_AGENT_ID);
         tokio::fs::create_dir_all(agent_dir.join("reference"))
             .await
             .unwrap();
@@ -224,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn list_category_returns_markdown_filenames() {
         let (tool, dir) = setup().await;
-        let wiki = dir.path().join("default/wiki");
+        let wiki = dir.path().join(format!("{DEFAULT_AGENT_ID}/wiki"));
         tokio::fs::create_dir_all(&wiki).await.unwrap();
         tokio::fs::write(wiki.join("rust.md"), "content")
             .await
@@ -244,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn read_returns_markdown_content() {
         let (tool, dir) = setup().await;
-        let wiki = dir.path().join("default/wiki");
+        let wiki = dir.path().join(format!("{DEFAULT_AGENT_ID}/wiki"));
         tokio::fs::create_dir_all(&wiki).await.unwrap();
         tokio::fs::write(wiki.join("rust.md"), "# Rust\n\nSystems language")
             .await
