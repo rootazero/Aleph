@@ -43,6 +43,8 @@ pub enum DragState {
         node_id: String,
         target_node_id: String,
         spring: Spring2D,
+        /// Repurposed as elapsed-ms accumulator (zeroed on Promoting entry by
+        /// `release`, advanced by `tick`). Not a wall-clock timestamp.
         start_time_ms: f64,
     },
 }
