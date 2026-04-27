@@ -130,6 +130,14 @@ pub fn ChatSidebar() -> impl IntoView {
     // Ask the Gateway to push stream.session_updated events to this client.
     let dash_for_topic = dashboard;
     leptos::task::spawn_local(async move {
+        // Wait until connected before subscribing to avoid "Not connected" errors.
+        for _ in 0..50 {
+            if dash_for_topic.is_connected.get_untracked() {
+                break;
+            }
+            gloo_timers::future::TimeoutFuture::new(100).await;
+        }
+
         if let Err(e) = dash_for_topic
             .subscribe_topic("stream.session_updated")
             .await

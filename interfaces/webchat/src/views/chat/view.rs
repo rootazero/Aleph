@@ -453,6 +453,14 @@ fn InputArea() -> impl IntoView {
         }
         let dash = dashboard;
         spawn_local(async move {
+            // Wait until connected before fetching to avoid "Not connected" errors.
+            for _ in 0..50 {
+                if dash.is_connected.get_untracked() {
+                    break;
+                }
+                gloo_timers::future::TimeoutFuture::new(100).await;
+            }
+
             match dash.rpc_call("commands.list", serde_json::json!({})).await {
                 Ok(result) => {
                     let mut cmds = Vec::new();

@@ -70,21 +70,44 @@ fn RadialCanvasView() -> impl IntoView {
     let fetch_agents = move || {
         agents_loading.set(true);
         agents_error.set(None);
+        let state = state;
         spawn_local(async move {
-            match AgentsApi::list(&state).await {
-                Ok(resp) => {
-                    agents.set(resp.agents);
-                    let new_default = resp.default_id;
-                    default_agent_id.set(new_default.clone());
-                    // Only override agent_id if it would actually change.
-                    if agent_id.get_untracked() != new_default {
-                        agent_id.set(new_default);
+            // Retry up to 3 times with 500ms delay to handle transient "Not connected"
+            // errors that occur when the WebSocket is still initializing.
+            let mut retries = 0;
+            const MAX_RETRIES: u32 = 3;
+            const RETRY_DELAY_MS: u32 = 500;
+
+            loop {
+                match AgentsApi::list(&state).await {
+                    Ok(resp) => {
+                        agents.set(resp.agents);
+                        let new_default = resp.default_id;
+                        default_agent_id.set(new_default.clone());
+                        // Only override agent_id if it would actually change.
+                        if agent_id.get_untracked() != new_default {
+                            agent_id.set(new_default);
+                        }
+                        agents_loading.set(false);
+                        break;
                     }
-                    agents_loading.set(false);
-                }
-                Err(e) => {
-                    agents_error.set(Some(e));
-                    agents_loading.set(false);
+                    Err(e) => {
+                        if e.contains("Not connected") && retries < MAX_RETRIES {
+                            retries += 1;
+                            web_sys::console::log_1(
+                                &format!(
+                                    "Agents list not connected, retrying {}/{} in {}ms...",
+                                    retries, MAX_RETRIES, RETRY_DELAY_MS
+                                )
+                                .into(),
+                            );
+                            gloo_timers::future::TimeoutFuture::new(RETRY_DELAY_MS).await;
+                            continue;
+                        }
+                        agents_error.set(Some(e));
+                        agents_loading.set(false);
+                        break;
+                    }
                 }
             }
         });
