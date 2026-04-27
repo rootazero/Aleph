@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct GraphQueryParams {
     #[serde(default = "default_limit")]
     pub limit: usize,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 fn default_limit() -> usize {
     100
@@ -18,6 +20,8 @@ pub struct GraphNeighborsParams {
     pub depth: u8,
     #[serde(default = "default_neighbor_limit")]
     pub limit: usize,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 fn default_depth() -> u8 {
     2
@@ -30,6 +34,8 @@ fn default_neighbor_limit() -> usize {
 #[derive(Debug, Deserialize)]
 pub struct GraphNodeDetailParams {
     pub node_id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 // === graph.search ===
@@ -38,6 +44,8 @@ pub struct GraphSearchParams {
     pub query: String,
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 fn default_search_limit() -> usize {
     20
