@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -8,6 +8,7 @@ use wasm_bindgen::JsCast;
 
 use leptos::callback::Callback;
 
+use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::layout::ForceLayout;
 use crate::canvas_engine::navigation::NavController;
@@ -96,6 +97,21 @@ pub fn GraphCanvas(
     let raf_handle: Rc<RefCell<Option<i32>>> = Rc::new(RefCell::new(None));
     let raf_closure: RafClosure = Rc::new(RefCell::new(None));
 
+    // Drag controller (Task 7): owns the elastic node-drag state machine.
+    // Pointer events feed it; the rAF loop ticks it; the renderer reads its overlay.
+    let drag_state: Rc<RefCell<DragState>> = Rc::new(RefCell::new(DragState::new()));
+    let last_frame_ms: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
+
+    // Clone handles once for each event closure that needs them, since `nav`,
+    // `drag_state`, and `last_frame_ms` are all moved into the rAF Effect closure
+    // below. (Effect::new takes `move ||`, which consumes its captures.)
+    let nav_for_md = nav.clone();
+    let nav_for_mu = nav.clone();
+    let drag_state_for_md = drag_state.clone();
+    let drag_state_for_mm = drag_state.clone();
+    let drag_state_for_mu = drag_state.clone();
+    let drag_state_for_leave = drag_state.clone();
+
     // Start render loop after mount
     let gs = graph_state.clone();
     let raf_h = raf_handle.clone();
@@ -145,6 +161,9 @@ pub fn GraphCanvas(
         let nav_render = nav.clone();
         let raf_h_inner = raf_h.clone();
         let raf_c_inner = raf_c.clone();
+        let drag_state_inner = drag_state.clone();
+        let last_frame_ms_inner = last_frame_ms.clone();
+        let on_event_for_promote = on_event;
 
         let canvas_for_resize = canvas.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
@@ -182,6 +201,22 @@ pub fn GraphCanvas(
                 // Advance animation state
                 nav_rc.borrow_mut().tick(now);
 
+                // Tick the drag controller. Compute frame dt with a cap to protect
+                // against background-tab resume spikes (3 frames at 60fps = 0.05s).
+                let prev_frame = last_frame_ms_inner.get();
+                let dt_s: f64 = if prev_frame > 0.0 {
+                    ((now - prev_frame) / 1000.0).min(0.05)
+                } else {
+                    0.016
+                };
+                last_frame_ms_inner.set(now);
+                if let Some(promote_target) = drag_state_inner.borrow_mut().tick(dt_s) {
+                    // Route promote completion through the existing SelectNode path —
+                    // mod.rs already maps SelectNode → active_request.set(Some(id)),
+                    // which drives the radial neighborhood re-fetch + animation.
+                    on_event_for_promote.run(CanvasEvent::SelectNode(promote_target));
+                }
+
                 // Snapshot NavState to avoid holding borrow during draw
                 let nav_state = nav_rc.borrow().state.clone();
                 let drag = state.drag_offset;
@@ -193,6 +228,10 @@ pub fn GraphCanvas(
 
                 match nav_state {
                     NavState::Active { neighborhood, .. } => {
+                        let center_radius = note_radius(neighborhood.center.edge_count);
+                        let overlay = drag_state_inner
+                            .borrow()
+                            .overlay_snapshot(Vec2::zero(), center_radius);
                         draw_neighborhood(
                             &ctx,
                             &viewport,
@@ -200,7 +239,7 @@ pub fn GraphCanvas(
                             drag,
                             selected.as_deref(),
                             hovered.as_deref(),
-                            None,
+                            overlay.as_ref(),
                         );
                     }
                     NavState::Animating {
@@ -209,11 +248,15 @@ pub fn GraphCanvas(
                         t,
                         ..
                     } => {
+                        let center_radius = note_radius(to_neighborhood.center.edge_count);
                         let interp = build_interpolated_neighborhood(
                             &from_neighborhood,
                             &to_neighborhood,
                             t,
                         );
+                        let overlay = drag_state_inner
+                            .borrow()
+                            .overlay_snapshot(Vec2::zero(), center_radius);
                         draw_neighborhood(
                             &ctx,
                             &viewport,
@@ -221,7 +264,7 @@ pub fn GraphCanvas(
                             drag,
                             selected.as_deref(),
                             hovered.as_deref(),
-                            None,
+                            overlay.as_ref(),
                         );
                     }
                     NavState::Loading { .. } => {
@@ -354,6 +397,33 @@ pub fn GraphCanvas(
     let on_mousedown = move |ev: web_sys::MouseEvent| {
         let mut state = gs_down.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
+
+        // Elastic-drag gating (Task 7): if the press lands on a 1-hop neighbor of
+        // the current radial center, route through DragState instead of pan/legacy
+        // node-drag. World-space contract: convert pointer screen → world before
+        // calling DragState::press so overlay positions land in world coordinates.
+        if let Some(ref nav_rc) = nav_for_md {
+            let one_hop_owned: Vec<CanvasNode> = {
+                let n = nav_rc.borrow();
+                match &n.state {
+                    NavState::Active { neighborhood, .. } => neighborhood.one_hop.clone(),
+                    NavState::Animating {
+                        to_neighborhood, ..
+                    } => to_neighborhood.one_hop.clone(),
+                    _ => Vec::new(),
+                }
+            };
+            if let Some(hit_idx) = state.viewport.hit_test(screen, &one_hop_owned) {
+                let world = state.viewport.screen_to_world(screen);
+                let node_id = one_hop_owned[hit_idx].id.clone();
+                drop(state);
+                drag_state_for_md
+                    .borrow_mut()
+                    .press(node_id, world, now_ms());
+                return;
+            }
+        }
+
         state.interaction.mouse_down_screen = screen;
         state.interaction.last_mouse_screen = screen;
         state.interaction.mouse_down_time = js_sys::Date::now();
@@ -371,6 +441,16 @@ pub fn GraphCanvas(
     let on_mousemove = move |ev: web_sys::MouseEvent| {
         let mut state = gs_move.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
+
+        // Elastic drag in flight: forward world-space pointer to DragState and
+        // skip pan/hover. World-space contract: convert before handing off.
+        if drag_state_for_mm.borrow().is_active() {
+            let world = state.viewport.screen_to_world(screen);
+            drop(state);
+            drag_state_for_mm.borrow_mut().pointer_move(world, now_ms());
+            return;
+        }
+
         let dx = screen.x - state.interaction.last_mouse_screen.x;
         let dy = screen.y - state.interaction.last_mouse_screen.y;
         state.interaction.last_mouse_screen = screen;
@@ -402,6 +482,47 @@ pub fn GraphCanvas(
 
     let gs_up = graph_state.clone();
     let on_mouseup = move |ev: web_sys::MouseEvent| {
+        // Elastic-drag release: process through DragState if a drag is active.
+        // Click  → SelectNode (re-uses existing intent path for breadcrumb/fetch).
+        // Promote→ deferred until tick() emits target on tween completion.
+        // SpringBack → tick() animates; nothing to do here.
+        let active_node = drag_state_for_mu
+            .borrow()
+            .active_node_id()
+            .map(|s| s.to_string());
+        if let Some(node_id) = active_node {
+            let center_radius = if let Some(ref nav_rc) = nav_for_mu {
+                let n = nav_rc.borrow();
+                match &n.state {
+                    NavState::Active { neighborhood, .. } => {
+                        note_radius(neighborhood.center.edge_count)
+                    }
+                    NavState::Animating {
+                        to_neighborhood, ..
+                    } => note_radius(to_neighborhood.center.edge_count),
+                    _ => 24.0_f64,
+                }
+            } else {
+                24.0_f64
+            };
+            let outcome = drag_state_for_mu.borrow_mut().release(
+                Vec2::zero(),
+                center_radius,
+                &node_id,
+                now_ms(),
+            );
+            match outcome {
+                ReleaseOutcome::Click => {
+                    on_event.run(CanvasEvent::SelectNode(node_id));
+                }
+                ReleaseOutcome::SpringBack | ReleaseOutcome::Promote { .. } => {
+                    // tick() drives the rest; promote target emits via on_event in rAF.
+                }
+            }
+            let _ = ev;
+            return;
+        }
+
         let mut state = gs_up.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
         let now = js_sys::Date::now();
@@ -475,6 +596,11 @@ pub fn GraphCanvas(
     // Explicit cleanup is not needed because Leptos on_cleanup requires Send
     // which Rc<RefCell<_>> does not satisfy on multi-threaded targets.
 
+    let on_mouseleave = move |_ev: web_sys::MouseEvent| {
+        // Hard-cancel any in-flight drag without spring-back animation (spec §6.3).
+        drag_state_for_leave.borrow_mut().cancel();
+    };
+
     view! {
         <canvas
             node_ref=canvas_ref
@@ -483,6 +609,7 @@ pub fn GraphCanvas(
             on:mousedown=on_mousedown
             on:mousemove=on_mousemove
             on:mouseup=on_mouseup
+            on:mouseleave=on_mouseleave
             on:wheel=on_wheel
         />
     }
