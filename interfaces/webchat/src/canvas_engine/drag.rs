@@ -60,10 +60,12 @@ pub enum ReleaseOutcome {
 
 /// Read-only snapshot for the renderer.
 ///
-/// `position` is in the same coordinate frame as the input pointer events
-/// (canvas-local screen pixels). For SpringBack/Promoting it is the offset
-/// **from the node's anchor slot** (renderer adds it to the layout position).
-/// For Dragging it is the current pointer-relative position.
+/// `position` is in **world-space coordinates** (the same frame as
+/// `CanvasNode::position`). The renderer draws it directly inside the
+/// already-transformed canvas context — no `world_to_screen` conversion.
+/// Callers feeding pointer events into `DragState` are responsible for
+/// converting screen-space pointer coordinates to world-space (via
+/// `viewport.screen_to_world`) before calling `press`/`pointer_move`.
 #[derive(Debug, Clone)]
 pub struct DragOverlay {
     pub node_id: String,
