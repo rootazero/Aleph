@@ -90,8 +90,13 @@ fn RadialCanvasView() -> impl IntoView {
         });
     };
 
-    // Initial fetch
+    // Initial fetch — gated on WebSocket connection so AgentsApi::list
+    // doesn't fire before the panel is connected. Re-runs when is_connected
+    // flips to true (Leptos subscribes via state.is_connected.get()).
     Effect::new(move || {
+        if !state.is_connected.get() {
+            return;
+        }
         fetch_agents();
     });
 
