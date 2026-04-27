@@ -114,10 +114,20 @@ impl NavController {
     /// - `Loading` / `Idle` / `Error` → `Active(to)`, no animation (defensive: in
     ///   normal flow Effect-refold guards on `last_response.is_some()` which only
     ///   becomes true after a successful fetch, so these arms are unreachable)
+    /// True while a `retarget` tween is animating between two neighborhoods.
+    /// Used by the canvas view to gate user input that would conflict with the
+    /// tween (e.g. starting a node-drag while the focus is mid-flight).
+    pub fn is_animating(&self) -> bool {
+        matches!(self.state, NavState::Animating { .. })
+    }
+
     pub fn retarget(&mut self, to_neighborhood: Neighborhood, now_ms: f64, duration_ms: u32) {
         let prev = std::mem::replace(&mut self.state, NavState::Idle);
         self.state = match prev {
-            NavState::Active { node_id, neighborhood: from } => NavState::Animating {
+            NavState::Active {
+                node_id,
+                neighborhood: from,
+            } => NavState::Animating {
                 from_id: node_id.clone(),
                 to_id: node_id,
                 from_neighborhood: from,
@@ -286,7 +296,14 @@ mod tests {
         nav.retarget(nbhd("a"), 100.0, 150);
 
         match &nav.state {
-            NavState::Animating { from_id, to_id, t, duration_ms, started_at_ms, .. } => {
+            NavState::Animating {
+                from_id,
+                to_id,
+                t,
+                duration_ms,
+                started_at_ms,
+                ..
+            } => {
                 assert_eq!(from_id, "a");
                 assert_eq!(to_id, "a");
                 assert!((*t - 0.0).abs() < 1e-6);
@@ -313,7 +330,12 @@ mod tests {
         nav.retarget(new_to, 500.0, 150);
 
         match &nav.state {
-            NavState::Animating { from_neighborhood, to_neighborhood, t, .. } => {
+            NavState::Animating {
+                from_neighborhood,
+                to_neighborhood,
+                t,
+                ..
+            } => {
                 // The new `from` is the snapshot of the previous animation at t=0.5.
                 // ease_in_out(0.5) == 0.5 (smoothstep midpoint) so the interpolated x is 50.0.
                 let p = from_neighborhood
@@ -351,5 +373,30 @@ mod tests {
             NavState::Active { node_id, .. } => assert_eq!(node_id, "a"),
             other => panic!("expected Active, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn is_animating_reflects_state() {
+        let mut nav = NavController::new();
+        // Freshly fulfilled Active state: not animating.
+        nav.fulfilled("a".to_string(), "Alpha".to_string(), nbhd("a"));
+        assert!(
+            !nav.is_animating(),
+            "freshly fulfilled Active state should not be animating"
+        );
+
+        // Trigger a retarget — Active → Animating.
+        nav.retarget(nbhd("b"), 1000.0, 300);
+        assert!(
+            nav.is_animating(),
+            "after retarget, state should be Animating"
+        );
+
+        // Tick past the animation duration — should fall out of Animating.
+        nav.tick(1000.0 + 300.0 + 1.0);
+        assert!(
+            !nav.is_animating(),
+            "after animation duration, should no longer be animating"
+        );
     }
 }

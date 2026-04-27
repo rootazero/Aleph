@@ -403,6 +403,11 @@ pub fn GraphCanvas(
         // node-drag. World-space contract: convert pointer screen → world before
         // calling DragState::press so overlay positions land in world coordinates.
         if let Some(ref nav_rc) = nav_for_md {
+            // Block drag while a retarget tween is in flight: starting a new
+            // drag mid-tween would race the in-progress neighborhood swap.
+            if nav_rc.borrow().is_animating() {
+                return;
+            }
             let one_hop_owned: Vec<CanvasNode> = {
                 let n = nav_rc.borrow();
                 match &n.state {
