@@ -19,8 +19,9 @@ pub const PROMOTE_TWEEN_MAX_MS: f64 = 280.0;
 pub const VELOCITY_HISTORY_LEN: usize = 8;
 pub const VELOCITY_AVG_LAST_N: usize = 3;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum DragState {
+    #[default]
     Idle,
     Pressed {
         node_id: String,
@@ -52,12 +53,6 @@ pub enum ReleaseOutcome {
     Click,
     SpringBack,
     Promote { initial_velocity: Vec2 },
-}
-
-impl Default for DragState {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl DragState {
@@ -93,15 +88,12 @@ impl DragState {
     pub fn pointer_move(&mut self, screen_pos: Vec2, now_ms: f64) {
         match self {
             DragState::Pressed {
-                node_id,
-                start_pos,
-                start_time_ms,
+                node_id, start_pos, ..
             } => {
                 let displacement = screen_pos - *start_pos;
                 if displacement.length() > CLICK_THRESHOLD_PX {
                     let mut history = VecDeque::with_capacity(VELOCITY_HISTORY_LEN);
                     history.push_back((displacement, now_ms));
-                    let _ = start_time_ms;
                     *self = DragState::Dragging {
                         node_id: std::mem::take(node_id),
                         anchor_pos: *start_pos,
@@ -141,11 +133,30 @@ impl DragState {
         let prev = std::mem::replace(self, DragState::Idle);
         match (&outcome, prev) {
             (ReleaseOutcome::Click, _) => {}
-            (ReleaseOutcome::SpringBack, DragState::Pressed { node_id, .. })
-            | (ReleaseOutcome::SpringBack, DragState::Dragging { node_id, .. }) => {
+            (ReleaseOutcome::SpringBack, DragState::Pressed { node_id, .. }) => {
+                // Long press without movement — no offset to spring back from.
                 *self = DragState::SpringBack {
                     node_id,
                     spring: Spring2D::new(Vec2::zero(), Vec2::zero(), Vec2::zero()),
+                    start_time_ms: now_ms,
+                };
+            }
+            (
+                ReleaseOutcome::SpringBack,
+                DragState::Dragging {
+                    node_id,
+                    offset,
+                    velocity_history,
+                    ..
+                },
+            ) => {
+                // Spring back to the anchor (target = zero offset). Seed with
+                // current displacement and the release velocity so the renderer
+                // sees an animated return rather than an instant snap.
+                let release_vel = average_recent_velocity(&velocity_history, VELOCITY_AVG_LAST_N);
+                *self = DragState::SpringBack {
+                    node_id,
+                    spring: Spring2D::new(offset, release_vel, Vec2::zero()),
                     start_time_ms: now_ms,
                 };
             }
@@ -356,6 +367,27 @@ mod tests {
                 );
             }
             other => panic!("expected Promoting state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn springback_carries_release_offset_and_velocity() {
+        let mut s = DragState::new();
+        s.press("n1".into(), Vec2::new(200.0, 0.0), 1000.0);
+        s.pointer_move(Vec2::new(210.0, 0.0), 1100.0);
+        s.pointer_move(Vec2::new(220.0, 0.0), 1200.0);
+        let _ = s.release(Vec2::new(0.0, 0.0), 30.0, "n1", 1500.0);
+        match s {
+            DragState::SpringBack { spring, .. } => {
+                // pos must be the release offset (not zero) so renderer animates back.
+                assert!(
+                    spring.position().length() > 0.0,
+                    "got pos {:?}",
+                    spring.position()
+                );
+                assert_eq!(spring.target(), Vec2::zero(), "target must be the anchor");
+            }
+            other => panic!("expected SpringBack, got {other:?}"),
         }
     }
 
