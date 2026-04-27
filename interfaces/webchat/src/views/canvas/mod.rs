@@ -134,6 +134,62 @@ fn RadialCanvasView() -> impl IntoView {
     let (visible_counts, set_visible_counts) = signal((0usize, 0usize));
 
     // -----------------------------------------------------------------------
+    // Agent-switch reset Effect.
+    // Subscribes to `agent_id`; on a real change (prev != current), wipes all
+    // canvas view state so the new agent's graph renders from a clean slate.
+    // The four graph-fetch Effects also subscribe to `agent_id` and re-fire
+    // automatically — this Effect's only job is the reset.
+    //
+    // The closure returns the current `agent_id`, so the next invocation sees
+    // it as `prev`. On first mount `prev == None` and the reset body is skipped
+    // (avoids clearing empty state before Effect 1's initial fetch).
+    // -----------------------------------------------------------------------
+    let nav_reset = nav.clone();
+    let gs_reset = graph_state.clone();
+    let prefetch_reset = prefetch.clone();
+    Effect::new(move |prev: Option<String>| {
+        let current = agent_id.get();
+        if let Some(p) = prev.as_ref() {
+            if *p != current {
+                // Reset reactive signals
+                set_selected_node.set(None);
+                set_node_detail.set(None);
+                set_detail_content.set(DetailContent::Closed);
+                set_breadcrumb.set(Vec::new());
+                search_query.set(String::new());
+                set_fold_threshold.set(12);
+                set_focus_id.set(None);
+                set_focus_neighbors.set(Vec::new());
+                set_visible_counts.set((0, 0));
+                last_response.set(None);
+                prefetch_request.set(None);
+                all_dtos.set(Vec::new());
+
+                // Reset non-reactive state
+                *nav_reset.borrow_mut() = NavController::new();
+                *prefetch_reset.borrow_mut() = PrefetchCache::new();
+                {
+                    let mut gs = gs_reset.borrow_mut();
+                    gs.nodes.clear();
+                    gs.edges.clear();
+                    gs.selected_node = None;
+                    gs.viewport.offset.x = gs.viewport.width / 2.0;
+                    gs.viewport.offset.y = gs.viewport.height / 2.0;
+                    gs.viewport.scale = 1.0;
+                    gs.drag_offset = (0.0, 0.0);
+                }
+
+                // Defensive clear: Effect-fetch (which subscribes to active_request)
+                // would otherwise re-fire with the old agent's center id. Effect 1
+                // re-runs automatically (it subscribes to agent_id) and will set
+                // active_request to the new entry node.
+                active_request.set(None);
+            }
+        }
+        current
+    });
+
+    // -----------------------------------------------------------------------
     // Effect 1: initial mount — pick entry point and fetch first neighborhood
     // -----------------------------------------------------------------------
     let nav_init = nav.clone();
