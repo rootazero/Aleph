@@ -189,11 +189,12 @@ async fn execute_cron_job(
         }
         Err(e) => {
             error!(job_id = %snapshot.id, error = %e, "cron job failed");
-            
+
             let error_msg = format!("❌ 定时任务执行失败\n\n任务: {}\n错误: {}", snapshot.id, e);
-            if let (Some(ref ch_id), Some(ref conv_id)) =
-                (&snapshot.source_channel_id, &snapshot.source_conversation_id)
-            {
+            if let (Some(ref ch_id), Some(ref conv_id)) = (
+                &snapshot.source_channel_id,
+                &snapshot.source_conversation_id,
+            ) {
                 let _ = deliver_to_channel(
                     &channel_registry_cell,
                     ch_id,
@@ -203,7 +204,7 @@ async fn execute_cron_job(
                 )
                 .await;
             }
-            
+
             make_error_result(
                 started_at,
                 e.to_string(),

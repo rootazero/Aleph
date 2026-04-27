@@ -26,7 +26,10 @@ fn test_mattermost_properties() {
     assert!(channel.capabilities().editing);
     assert!(channel.capabilities().deletion);
     assert_eq!(channel.capabilities().max_message_length, 16383);
-    assert_eq!(channel.capabilities().max_attachment_size, 100 * 1024 * 1024);
+    assert_eq!(
+        channel.capabilities().max_attachment_size,
+        100 * 1024 * 1024
+    );
 }
 
 #[test]
@@ -36,7 +39,10 @@ fn test_mattermost_for_test_constructor() {
 
     assert_eq!(channel.info().id.as_str(), "test-mm");
     assert_eq!(channel.channel_type(), "mattermost");
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Disconnected);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Disconnected
+    );
 }
 
 #[tokio::test]
@@ -51,8 +57,15 @@ async fn test_mattermost_start_with_mock_server() {
     let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
 
     let result = channel.start().await;
-    assert!(result.is_ok(), "start() should succeed with mock server: {:?}", result.err());
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Connected);
+    assert!(
+        result.is_ok(),
+        "start() should succeed with mock server: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Connected
+    );
 
     let _ = channel.stop().await;
 }
@@ -70,5 +83,8 @@ async fn test_mattermost_start_auth_failure() {
 
     let result = channel.start().await;
     assert!(result.is_err(), "start() should fail with 401");
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Error);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Error
+    );
 }

@@ -54,13 +54,8 @@ fn test_convert_posted_event_from_fixture() {
         ..Default::default()
     };
 
-    let msg = MattermostMessageOps::convert_posted_event(
-        &event,
-        &channel_id,
-        "bot-123",
-        &config,
-    )
-    .unwrap();
+    let msg = MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+        .unwrap();
 
     assert_eq!(msg.channel_id.as_str(), "mattermost");
     assert_eq!(msg.conversation_id.as_str(), "ch-789");
@@ -80,18 +75,12 @@ fn test_convert_skips_own_message_from_fixture() {
     let post_str = event["data"]["post"].as_str().unwrap();
     let mut post: serde_json::Value = serde_json::from_str(post_str).unwrap();
     post["user_id"] = serde_json::Value::String("bot-123".to_string());
-    event["data"]["post"] =
-        serde_json::Value::String(serde_json::to_string(&post).unwrap());
+    event["data"]["post"] = serde_json::Value::String(serde_json::to_string(&post).unwrap());
 
     let channel_id = ChannelId::new("mattermost");
     let config = MattermostConfig::default();
 
-    let msg = MattermostMessageOps::convert_posted_event(
-        &event,
-        &channel_id,
-        "bot-123",
-        &config,
-    );
+    let msg = MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
     assert!(msg.is_none());
 }
 
@@ -106,12 +95,7 @@ fn test_convert_skips_filtered_channel_from_fixture() {
         ..Default::default()
     };
 
-    let msg = MattermostMessageOps::convert_posted_event(
-        &event,
-        &channel_id,
-        "bot-123",
-        &config,
-    );
+    let msg = MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
     assert!(msg.is_none());
 }
 
@@ -124,13 +108,8 @@ fn test_convert_dm_channel_type_from_fixture() {
     let channel_id = ChannelId::new("mattermost");
     let config = MattermostConfig::default();
 
-    let msg = MattermostMessageOps::convert_posted_event(
-        &event,
-        &channel_id,
-        "bot-123",
-        &config,
-    )
-    .unwrap();
+    let msg = MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+        .unwrap();
 
     assert!(!msg.is_group);
 }
@@ -143,22 +122,13 @@ fn test_convert_threaded_reply_from_fixture() {
     let post_str = event["data"]["post"].as_str().unwrap();
     let mut post: serde_json::Value = serde_json::from_str(post_str).unwrap();
     post["root_id"] = serde_json::Value::String("post-root-456".to_string());
-    event["data"]["post"] =
-        serde_json::Value::String(serde_json::to_string(&post).unwrap());
+    event["data"]["post"] = serde_json::Value::String(serde_json::to_string(&post).unwrap());
 
     let channel_id = ChannelId::new("mattermost");
     let config = MattermostConfig::default();
 
-    let msg = MattermostMessageOps::convert_posted_event(
-        &event,
-        &channel_id,
-        "bot-123",
-        &config,
-    )
-    .unwrap();
+    let msg = MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+        .unwrap();
 
-    assert_eq!(
-        msg.reply_to.as_ref().unwrap().as_str(),
-        "post-root-456"
-    );
+    assert_eq!(msg.reply_to.as_ref().unwrap().as_str(), "post-root-456");
 }

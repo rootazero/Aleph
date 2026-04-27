@@ -191,7 +191,10 @@ impl Channel for IrcChannel {
             // In test mode, verify the channel exists but don't actually send
             let _ = write_tx;
             return Ok(SendResult {
-                message_id: MessageId::new(format!("irc-sent-{}", chrono::Utc::now().timestamp_millis())),
+                message_id: MessageId::new(format!(
+                    "irc-sent-{}",
+                    chrono::Utc::now().timestamp_millis()
+                )),
                 timestamp: chrono::Utc::now(),
             });
         }

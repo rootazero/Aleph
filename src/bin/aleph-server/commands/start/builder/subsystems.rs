@@ -362,9 +362,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     session_store: Option<Arc<dyn alephcore::gateway::session_store::SessionStore>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
-    generation_registry: Option<
-        Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>,
-    >,
+    generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
     daemon: bool,
 ) {

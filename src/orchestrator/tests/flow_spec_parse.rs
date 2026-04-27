@@ -78,7 +78,10 @@ fn rejects_unknown_fields() {
         kind = "fresh"
     "#;
     let err = toml::from_str::<FlowSpec>(toml_src).unwrap_err();
-    assert!(err.to_string().to_lowercase().contains("unknown"), "got {err}");
+    assert!(
+        err.to_string().to_lowercase().contains("unknown"),
+        "got {err}"
+    );
 }
 
 #[test]
@@ -87,7 +90,9 @@ fn roundtrips_preferred_brain() {
         id: "x".into(),
         description: "x".into(),
         agent: "x".into(),
-        brain: BrainRef::Preferred { provider: "chatgpt".into() },
+        brain: BrainRef::Preferred {
+            provider: "chatgpt".into(),
+        },
         sandbox_kind: SandboxKind::Workspace,
         session_strategy: SessionStrategy::Fresh,
         overrides: FlowOverrides::default(),

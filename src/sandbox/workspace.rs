@@ -19,10 +19,10 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
-use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::driver::OsSandboxDriverTrait;
+use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
@@ -228,10 +228,10 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use crate::sandbox::exec_approval::gate::ApprovalRequester;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::capabilities::NetworkPolicy;
     use crate::sandbox::driver::OsSandboxProfile;
+    use crate::sandbox::exec_approval::gate::ApprovalRequester;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
 
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
     struct FakeDriver {

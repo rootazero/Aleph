@@ -76,8 +76,7 @@ async fn test_nostr_send_without_start() {
 
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
-            "public",
-            "Hello",
+            "public", "Hello",
         ))
         .await;
 

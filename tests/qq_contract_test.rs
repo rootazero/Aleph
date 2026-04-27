@@ -6,16 +6,18 @@ use common::channel_contract::test_channel_properties;
 
 fn test_qq_config() -> QQConfig {
     QQConfig {
-        accounts: vec![alephcore::gateway::interfaces::qq::config::QQAccountConfig {
-            id: "test".to_string(),
-            app_id: "test-app".to_string(),
-            client_secret: "test-secret".to_string(),
-            enabled: true,
-            allowed_users: vec![],
-            allowed_groups: vec![],
-            dm_policy: alephcore::gateway::interfaces::qq::QQDmPolicy::Open,
-            group_policy: alephcore::gateway::interfaces::qq::QQGroupPolicy::Open,
-        }],
+        accounts: vec![
+            alephcore::gateway::interfaces::qq::config::QQAccountConfig {
+                id: "test".to_string(),
+                app_id: "test-app".to_string(),
+                client_secret: "test-secret".to_string(),
+                enabled: true,
+                allowed_users: vec![],
+                allowed_groups: vec![],
+                dm_policy: alephcore::gateway::interfaces::qq::QQDmPolicy::Open,
+                group_policy: alephcore::gateway::interfaces::qq::QQGroupPolicy::Open,
+            },
+        ],
     }
 }
 
@@ -50,8 +52,7 @@ async fn test_qq_test_mode_send() {
 
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
-            "user-123",
-            "Hello QQ",
+            "user-123", "Hello QQ",
         ))
         .await;
 
@@ -65,8 +66,7 @@ async fn test_qq_send_without_start() {
 
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
-            "user-123",
-            "Hello",
+            "user-123", "Hello",
         ))
         .await;
 

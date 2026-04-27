@@ -34,7 +34,10 @@ fn test_discord_for_test_constructor() {
 
     assert_eq!(channel.info().id.as_str(), "test-discord");
     assert_eq!(channel.channel_type(), "discord");
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Disconnected);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Disconnected
+    );
 }
 
 #[tokio::test]

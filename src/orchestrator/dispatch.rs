@@ -58,7 +58,10 @@ pub enum FlowStreamEvent {
     /// Stop-hook blocked the turn; harness has forced another model turn.
     StopHookBlock { reason: String },
     /// Model fallback (primary provider unavailable, switched to backup).
-    ModelFallback { reason: String, fallback_model: String },
+    ModelFallback {
+        reason: String,
+        fallback_model: String,
+    },
     /// Terminal event — carries the complete `FlowOutcome`. Always last.
     Complete(FlowOutcome),
 }
@@ -111,8 +114,14 @@ impl std::fmt::Debug for FlowRequest {
             .field("session_hint", &self.session_hint)
             .field("parent_session", &self.parent_session)
             .field("depth", &self.depth)
-            .field("tool_service", &self.tool_service.as_ref().map(|_| "<dyn ToolService>"))
-            .field("trace_sink", &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"))
+            .field(
+                "tool_service",
+                &self.tool_service.as_ref().map(|_| "<dyn ToolService>"),
+            )
+            .field(
+                "trace_sink",
+                &self.trace_sink.as_ref().map(|_| "<dyn TraceSink>"),
+            )
             .finish()
     }
 }

@@ -140,10 +140,17 @@ mod tests {
 
     #[test]
     fn click_params_roundtrip_and_lowercase_button() {
-        let p = ClickParams { x: 10.0, y: 20.0, button: MouseButton::Left };
+        let p = ClickParams {
+            x: 10.0,
+            y: 20.0,
+            button: MouseButton::Left,
+        };
         let j = serde_json::to_string(&p).unwrap();
         // Verify "left" (not "Left") in the JSON
-        assert!(j.contains("\"button\":\"left\""), "expected lowercase button, got: {j}");
+        assert!(
+            j.contains("\"button\":\"left\""),
+            "expected lowercase button, got: {j}"
+        );
         let back: ClickParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.button, MouseButton::Left);
         assert_eq!(back.x, 10.0);
@@ -171,7 +178,10 @@ mod tests {
             action: PressAction::Press,
         };
         let j = serde_json::to_string(&p).unwrap();
-        assert!(j.contains("\"action\":\"press\""), "expected lowercase action, got: {j}");
+        assert!(
+            j.contains("\"action\":\"press\""),
+            "expected lowercase action, got: {j}"
+        );
         let back: MouseButtonParams = serde_json::from_str(&j).unwrap();
         assert_eq!(back.button, MouseButton::Right);
         assert_eq!(back.action, PressAction::Press);

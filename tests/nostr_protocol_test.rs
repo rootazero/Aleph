@@ -16,7 +16,9 @@ async fn test_nostr_protocol_send_text_note() {
     let mut channel = NostrChannel::for_test("nostr-test", test_config());
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("public", "Hello Nostr")).await;
+    let result = channel
+        .send(OutboundMessage::text("public", "Hello Nostr"))
+        .await;
 
     assert!(result.is_ok());
     let send_result = result.unwrap();

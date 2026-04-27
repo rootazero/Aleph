@@ -200,7 +200,10 @@ impl Channel for XmppChannel {
 
         if self.test_mode {
             return Ok(SendResult {
-                message_id: MessageId::new(format!("xmpp-test-{}", chrono::Utc::now().timestamp_millis())),
+                message_id: MessageId::new(format!(
+                    "xmpp-test-{}",
+                    chrono::Utc::now().timestamp_millis()
+                )),
                 timestamp: chrono::Utc::now(),
             });
         }

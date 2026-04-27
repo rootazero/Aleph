@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::manager::{ExecApprovalManager, DEFAULT_APPROVAL_TIMEOUT_MS};
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
 
 /// Adapts `ChannelApprovalBridge` + `ExecApprovalManager` to the
 /// `ApprovalRequester` trait.

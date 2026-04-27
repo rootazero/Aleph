@@ -520,8 +520,11 @@ pub async fn handle_patch_config(
 
     if let Some(channel_id) = path.strip_prefix("channels.") {
         if let serde_json::Value::Object(ref mut _map) = patch_request.patch {
-            let stripped_count =
-                super::channel::store_and_strip_channel_secrets(channel_id, &mut patch_request.patch, &vault);
+            let stripped_count = super::channel::store_and_strip_channel_secrets(
+                channel_id,
+                &mut patch_request.patch,
+                &vault,
+            );
             if stripped_count > 0 {
                 tracing::info!(
                     channel = %channel_id,

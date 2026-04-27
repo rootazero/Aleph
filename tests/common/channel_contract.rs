@@ -30,10 +30,7 @@ pub async fn test_channel_contract<C: Channel>(mut channel: C) {
         HealthStatus::Healthy,
         "Channel 初始 health 必须是 Healthy"
     );
-    assert_eq!(
-        health.failure_count, 0,
-        "Channel 初始失败计数必须是 0"
-    );
+    assert_eq!(health.failure_count, 0, "Channel 初始失败计数必须是 0");
 
     // 3. start() 状态转换
     let start_result = channel.start().await;
@@ -61,17 +58,13 @@ pub async fn test_channel_contract<C: Channel>(mut channel: C) {
 
     // typing_indicator
     if caps.typing_indicator {
-        let result = channel
-            .send_typing(&ConversationId::new("test"))
-            .await;
+        let result = channel.send_typing(&ConversationId::new("test")).await;
         assert!(
             !matches!(result, Err(ChannelError::UnsupportedFeature(_))),
             "capabilities 声明支持 typing_indicator，但调用返回 UnsupportedFeature"
         );
     } else {
-        let result = channel
-            .send_typing(&ConversationId::new("test"))
-            .await;
+        let result = channel.send_typing(&ConversationId::new("test")).await;
         assert!(
             matches!(result, Err(ChannelError::UnsupportedFeature(_))),
             "capabilities 声明不支持 typing_indicator，但调用未返回 UnsupportedFeature"
@@ -80,17 +73,13 @@ pub async fn test_channel_contract<C: Channel>(mut channel: C) {
 
     // read_receipts
     if caps.read_receipts {
-        let result = channel
-            .mark_read(&MessageId::new("test"))
-            .await;
+        let result = channel.mark_read(&MessageId::new("test")).await;
         assert!(
             !matches!(result, Err(ChannelError::UnsupportedFeature(_))),
             "capabilities 声明支持 read_receipts，但调用返回 UnsupportedFeature"
         );
     } else {
-        let result = channel
-            .mark_read(&MessageId::new("test"))
-            .await;
+        let result = channel.mark_read(&MessageId::new("test")).await;
         assert!(
             matches!(result, Err(ChannelError::UnsupportedFeature(_))),
             "capabilities 声明不支持 read_receipts，但调用未返回 UnsupportedFeature"
@@ -100,11 +89,7 @@ pub async fn test_channel_contract<C: Channel>(mut channel: C) {
     // reactions
     if caps.reactions {
         let result = channel
-            .react(
-                &ConversationId::new("test"),
-                &MessageId::new("test"),
-                "👍",
-            )
+            .react(&ConversationId::new("test"), &MessageId::new("test"), "👍")
             .await;
         assert!(
             !matches!(result, Err(ChannelError::UnsupportedFeature(_))),
@@ -112,11 +97,7 @@ pub async fn test_channel_contract<C: Channel>(mut channel: C) {
         );
     } else {
         let result = channel
-            .react(
-                &ConversationId::new("test"),
-                &MessageId::new("test"),
-                "👍",
-            )
+            .react(&ConversationId::new("test"), &MessageId::new("test"), "👍")
             .await;
         assert!(
             matches!(result, Err(ChannelError::UnsupportedFeature(_))),

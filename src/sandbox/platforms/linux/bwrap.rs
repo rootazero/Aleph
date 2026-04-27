@@ -9,10 +9,8 @@ use tracing::{debug, warn};
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
 use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
+use crate::sandbox::platforms::common::{is_wsl, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS};
 use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
-use crate::sandbox::platforms::common::{
-    is_wsl, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
-};
 
 const BWRAP_CANDIDATES: [&str; 2] = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
 
@@ -83,7 +81,9 @@ impl BubblewrapDriver {
                     debug!("WSL2 detected. Bubblewrap sandbox should work correctly.");
                 }
                 _ => {
-                    warn!("WSL detected but version unknown. Sandbox behavior may be unpredictable.");
+                    warn!(
+                        "WSL detected but version unknown. Sandbox behavior may be unpredictable."
+                    );
                 }
             }
         }
@@ -179,9 +179,7 @@ impl BubblewrapDriver {
                 }
 
                 let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
+                    SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
                 })?;
                 args.push("--bind".into());
                 args.push(cwd_str.into());
@@ -189,9 +187,7 @@ impl BubblewrapDriver {
             }
             FsPolicy::ReadPaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
+                    SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
                 })?;
                 args.push("--bind".into());
                 args.push(cwd_str.into());
@@ -211,9 +207,7 @@ impl BubblewrapDriver {
             }
             FsPolicy::WritePaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
-                    SandboxError::ProfileGeneration(
-                        "workspace path contains invalid UTF-8".into(),
-                    )
+                    SandboxError::ProfileGeneration("workspace path contains invalid UTF-8".into())
                 })?;
                 args.push("--bind".into());
                 args.push(cwd_str.into());
@@ -311,20 +305,13 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
         timeout: Duration,
         max_output_bytes: usize,
     ) -> Result<SandboxOutput, SandboxError> {
-        let bwrap_path = self.find_bwrap().ok_or_else(|| {
-            SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into())
-        })?;
+        let bwrap_path = self
+            .find_bwrap()
+            .ok_or_else(|| SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into()))?;
 
-        let bwrap_args: Vec<String> = profile
-            .contents
-            .lines()
-            .map(|s| s.to_string())
-            .collect();
+        let bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
 
-        debug!(
-            "running bubblewrap with {} arguments",
-            bwrap_args.len()
-        );
+        debug!("running bubblewrap with {} arguments", bwrap_args.len());
 
         let mut cmd = Command::new(bwrap_path);
         cmd.args(&bwrap_args)
@@ -339,9 +326,9 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
 
         self.apply_no_new_privs(&mut cmd);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}"))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| SandboxError::ExecutionFailed(format!("failed to spawn bwrap: {e}")))?;
 
         if let Some(stdin_data) = stdin {
             if let Some(mut child_stdin) = child.stdin.take() {

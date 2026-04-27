@@ -1,6 +1,8 @@
 use alephcore::gateway::channel::ChannelId;
+use alephcore::gateway::interfaces::irc::message_ops::{
+    convert_privmsg, nick_from_prefix, parse_irc_line,
+};
 use alephcore::gateway::interfaces::irc::IrcConfig;
-use alephcore::gateway::interfaces::irc::message_ops::{parse_irc_line, nick_from_prefix, convert_privmsg};
 
 fn test_irc_config() -> IrcConfig {
     IrcConfig {

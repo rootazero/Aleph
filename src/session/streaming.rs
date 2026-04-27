@@ -21,11 +21,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::providers::delta::ProviderDelta;
 use crate::tools::execution_context::CascadePolicy;
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
 use crate::tools::runtime::LoopToolRegistry;
-use crate::providers::delta::ProviderDelta;
 
 // =============================================================================
 // ReadyToolCall
@@ -331,10 +331,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
     use crate::session::ingress_safety::SafetyGuard;
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
 
     /// A permissive pipeline for tests — allows everything, no hooks.
     fn permissive_pipeline() -> Arc<ToolPipeline> {

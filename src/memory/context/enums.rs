@@ -472,6 +472,9 @@ mod tests {
 
     #[test]
     fn reference_default_category() {
-        assert_eq!(NoteType::Reference.default_category(), MemoryCategory::Patterns);
+        assert_eq!(
+            NoteType::Reference.default_category(),
+            MemoryCategory::Patterns
+        );
     }
 }

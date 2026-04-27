@@ -480,7 +480,10 @@ mod tests {
                 .map(|f| f == target)
                 .unwrap_or(false)
         });
-        assert_eq!(found.map(|n| n.path.as_str()), Some("reference/rust-ownership"));
+        assert_eq!(
+            found.map(|n| n.path.as_str()),
+            Some("reference/rust-ownership")
+        );
     }
 
     #[test]

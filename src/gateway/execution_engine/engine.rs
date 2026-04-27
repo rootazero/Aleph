@@ -60,8 +60,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Optional resilience database for task/trace persistence.
     pub(super) state_database: Option<Arc<StateDatabase>>,
     /// Teammate manager for named sub-agent team creation/registration.
-    pub(super) teammate_manager:
-        Option<Arc<crate::agents::teammates::TeammateManager>>,
+    pub(super) teammate_manager: Option<Arc<crate::agents::teammates::TeammateManager>>,
     /// Message router for sub-agent send_message actions.
     pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
     /// Inbox for sub-agent read_inbox actions.

@@ -21,16 +21,16 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::context::budget::LoopDirective;
+use crate::harness::callback::{HarnessCallback, NoopHarnessCallback};
 use crate::harness::deps::HarnessDeps;
-use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 use crate::harness::trait_def::{Harness, HarnessError, TurnState};
 use crate::providers::adapter::{NativeToolCall, RequestPayload};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::tools::service::ToolError;
+use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopHookHandler};
 
 pub struct AgentHarness {
     deps: HarnessDeps,
@@ -97,9 +97,7 @@ impl AgentHarness {
                     error: format!("Skipped: {}", prior_err),
                     at: now_ms(),
                 };
-                if let Err(emit_err) =
-                    self.deps.session.emit_event(session_id, skip_event).await
-                {
+                if let Err(emit_err) = self.deps.session.emit_event(session_id, skip_event).await {
                     tracing::warn!(
                         ?session_id,
                         call_id = %call.id,
@@ -357,12 +355,12 @@ impl Harness for AgentHarness {
                 strict: false,
             })
             .collect();
-        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> =
-            if dispatcher_tools.is_empty() {
-                None
-            } else {
-                Some(&dispatcher_tools)
-            };
+        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
+        {
+            None
+        } else {
+            Some(&dispatcher_tools)
+        };
 
         let payload = match self.deps.system_prompt.as_deref() {
             Some(sp) => RequestPayload::new(&messages)
@@ -585,9 +583,7 @@ fn build_prompt(events: &[SessionEventRecord], tail_start: usize) -> Vec<Unified
                     false,
                 ));
             }
-            SessionEvent::ToolError {
-                call_id, error, ..
-            } => {
+            SessionEvent::ToolError { call_id, error, .. } => {
                 let tool_result_idx = tail_start + offset;
                 let tool_name =
                     resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
@@ -700,10 +696,7 @@ mod tests {
             &self,
             name: &str,
             _input: serde_json::Value,
-        ) -> Result<
-            crate::session::events::ToolOutput,
-            crate::tools::service::ToolError,
-        > {
+        ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
             Err(crate::tools::service::ToolError::NotFound {
                 name: name.to_string(),
             })
@@ -713,10 +706,7 @@ mod tests {
             Vec::new()
         }
 
-        async fn describe(
-            &self,
-            _name: &str,
-        ) -> Option<crate::tools::service::ToolDefinition> {
+        async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
             None
         }
     }
@@ -737,8 +727,7 @@ mod tests {
         let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(EmptyTools);
         // NoopSandbox never fires in this test — the provider returns
         // text-only, so no tool call → no sandbox dispatch.
-        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
-            Arc::new(crate::sandbox::NoopSandbox);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
         let sid = SessionKey::ephemeral("test-syspr");
         session.attach(sid.clone()).await.unwrap();
@@ -883,10 +872,7 @@ mod tests {
             &self,
             _name: &str,
             _input: serde_json::Value,
-        ) -> Result<
-            crate::session::events::ToolOutput,
-            crate::tools::service::ToolError,
-        > {
+        ) -> Result<crate::session::events::ToolOutput, crate::tools::service::ToolError> {
             Ok(crate::session::events::ToolOutput {
                 value: serde_json::json!({}),
                 metadata: crate::session::events::ToolOutputMetadata::default(),
@@ -897,10 +883,7 @@ mod tests {
             Vec::new()
         }
 
-        async fn describe(
-            &self,
-            _name: &str,
-        ) -> Option<crate::tools::service::ToolDefinition> {
+        async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
             None
         }
     }
@@ -959,8 +942,7 @@ mod tests {
 
         let (session, sid) = fresh_session("test-cap").await;
         let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
-        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
-            Arc::new(crate::sandbox::NoopSandbox);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
         let deps = HarnessDeps {
             session,
@@ -1009,8 +991,7 @@ mod tests {
 
         let (session, sid) = fresh_session("test-unbounded").await;
         let tools: Arc<dyn crate::tools::service::ToolService> = Arc::new(AlwaysOkTools);
-        let sandbox: Arc<dyn crate::sandbox::Sandbox> =
-            Arc::new(crate::sandbox::NoopSandbox);
+        let sandbox: Arc<dyn crate::sandbox::Sandbox> = Arc::new(crate::sandbox::NoopSandbox);
 
         let deps = HarnessDeps {
             session,
@@ -1038,7 +1019,10 @@ mod tests {
         .expect("harness.run exceeded 2s timeout")
         .expect("harness.run returned an error");
 
-        assert!(!harness.hit_limit(), "hit_limit must be false for unbounded run");
+        assert!(
+            !harness.hit_limit(),
+            "hit_limit must be false for unbounded run"
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             5,

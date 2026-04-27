@@ -954,7 +954,10 @@ mod tests {
         assert_eq!(config.workspace, PathBuf::from("/tmp/test-workspace"));
         assert_eq!(config.model, "claude-opus-4-6");
         // soul_md takes priority over agents_md
-        assert_eq!(config.system_prompt.as_deref(), Some("You are a coding expert."));
+        assert_eq!(
+            config.system_prompt.as_deref(),
+            Some("You are a coding expert.")
+        );
         assert_eq!(config.tool_whitelist, vec!["git_*", "fs_*"]);
         assert!(config.tool_blacklist.is_empty());
         assert_eq!(config.max_loops, 100);

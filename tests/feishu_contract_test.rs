@@ -58,8 +58,7 @@ async fn test_feishu_send_without_start() {
 
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
-            "ou_123",
-            "Hello",
+            "ou_123", "Hello",
         ))
         .await;
 

@@ -30,7 +30,9 @@ async fn hit_limit_with_empty_text_emits_i18n_message() {
             };
             let _ = ctx
                 .events
-                .send(alephcore::orchestrator::FlowStreamEvent::Complete(outcome.clone()));
+                .send(alephcore::orchestrator::FlowStreamEvent::Complete(
+                    outcome.clone(),
+                ));
             Ok(outcome)
         })
     }));
@@ -80,7 +82,9 @@ async fn hit_limit_with_text_uses_text() {
             };
             let _ = ctx
                 .events
-                .send(alephcore::orchestrator::FlowStreamEvent::Complete(outcome.clone()));
+                .send(alephcore::orchestrator::FlowStreamEvent::Complete(
+                    outcome.clone(),
+                ));
             Ok(outcome)
         })
     }));

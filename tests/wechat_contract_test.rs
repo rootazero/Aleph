@@ -59,8 +59,7 @@ async fn test_wechat_send_without_start() {
 
     let result = channel
         .send(alephcore::gateway::channel::OutboundMessage::text(
-            "user-123",
-            "Hello",
+            "user-123", "Hello",
         ))
         .await;
 

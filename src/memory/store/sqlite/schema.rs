@@ -394,7 +394,9 @@ pub(crate) fn migrate_unify_default_to_main_agent(conn: &Connection) -> Result<(
          DELETE FROM notes_links WHERE agent_id = 'test-memory-validation';
          DELETE FROM notes_fts   WHERE agent_id = 'test-memory-validation';",
     )
-    .map_err(|e| AlephError::config(format!("Failed to migrate default agent rows to main: {e}")))?;
+    .map_err(|e| {
+        AlephError::config(format!("Failed to migrate default agent rows to main: {e}"))
+    })?;
     Ok(())
 }
 
@@ -779,12 +781,20 @@ mod tests {
         seed_default_agent_row(&conn, "personal/foo.md", "F");
         migrate_unify_default_to_main_agent(&conn).expect("migration");
         assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main' AND path='personal/foo.md'"),
-            1, "row should be at main"
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM notes_index WHERE agent_id='main' AND path='personal/foo.md'"
+            ),
+            1,
+            "row should be at main"
         );
         assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"),
-            0, "no default rows should remain"
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"
+            ),
+            0,
+            "no default rows should remain"
         );
     }
 
@@ -799,10 +809,17 @@ mod tests {
             "SELECT content_hash FROM notes_index WHERE agent_id='main' AND path='personal/foo.md'",
             [], |r| r.get(0),
         ).expect("query surviving row");
-        assert_eq!(surviving_hash, "M", "main row content_hash should win on collision");
         assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"),
-            0, "default row should be deleted even on collision"
+            surviving_hash, "M",
+            "main row content_hash should win on collision"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM notes_index WHERE agent_id='default'"
+            ),
+            0,
+            "default row should be deleted even on collision"
         );
     }
 
@@ -819,8 +836,12 @@ mod tests {
         ).expect("seed residue row");
         migrate_unify_default_to_main_agent(&conn).expect("migration");
         assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='test-memory-validation'"),
-            0, "test-memory-validation rows should be purged"
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM notes_index WHERE agent_id='test-memory-validation'"
+            ),
+            0,
+            "test-memory-validation rows should be purged"
         );
     }
 
@@ -830,9 +851,15 @@ mod tests {
         init_schema(&conn).expect("init_schema");
         seed_default_agent_row(&conn, "personal/bar.md", "B");
         migrate_unify_default_to_main_agent(&conn).expect("first run");
-        let snapshot1 = count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'");
+        let snapshot1 = count(
+            &conn,
+            "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'",
+        );
         migrate_unify_default_to_main_agent(&conn).expect("second run");
-        let snapshot2 = count(&conn, "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'");
+        let snapshot2 = count(
+            &conn,
+            "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'",
+        );
         assert_eq!(snapshot1, snapshot2, "second run must be a no-op");
     }
 
@@ -852,8 +879,12 @@ mod tests {
             1, "link must survive under main"
         );
         assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM notes_links WHERE agent_id='default'"),
-            0, "default links should be deleted"
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM notes_links WHERE agent_id='default'"
+            ),
+            0,
+            "default links should be deleted"
         );
     }
 }

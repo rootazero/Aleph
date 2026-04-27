@@ -41,9 +41,11 @@ async fn test_signal_send_with_mock_api() {
 
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v2/send"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "timestamp": 1700000000000_i64
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "timestamp": 1700000000000_i64
+            })),
+        )
         .mount(&mock_server)
         .await;
 

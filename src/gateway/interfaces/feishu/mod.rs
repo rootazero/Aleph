@@ -46,7 +46,11 @@ impl FeishuChannel {
         Self::with_mode(id, config, false)
     }
 
-    fn with_mode(id: impl Into<String>, config: FeishuConfig, test_mode: bool) -> Result<Self, ChannelError> {
+    fn with_mode(
+        id: impl Into<String>,
+        config: FeishuConfig,
+        test_mode: bool,
+    ) -> Result<Self, ChannelError> {
         config.validate()?;
 
         let info = ChannelInfo {
@@ -211,7 +215,10 @@ impl Channel for FeishuChannel {
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         if self.test_mode {
             return Ok(SendResult {
-                message_id: MessageId::new(format!("feishu-test-{}", chrono::Utc::now().timestamp_millis())),
+                message_id: MessageId::new(format!(
+                    "feishu-test-{}",
+                    chrono::Utc::now().timestamp_millis()
+                )),
                 timestamp: chrono::Utc::now(),
             });
         }

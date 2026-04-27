@@ -164,7 +164,10 @@ impl HotkeyListener {
             let bridge = Arc::clone(&self.bridge);
             let tx = self.tx.clone();
             handle.spawn(async move {
-                for kind in [PermissionKind::InputMonitoring, PermissionKind::Accessibility] {
+                for kind in [
+                    PermissionKind::InputMonitoring,
+                    PermissionKind::Accessibility,
+                ] {
                     let params = CheckParams { kind };
                     let result: Result<
                         aleph_protocol::desktop_bridge::methods::perm::PermissionStatus,
@@ -174,10 +177,8 @@ impl HotkeyListener {
                     match result {
                         Ok(status) if !status.granted => {
                             // Fetch the guide for actionable user-facing info.
-                            let guide: Option<PermissionGuide> = bridge
-                                .call(METHOD_GUIDE, &GuideParams { kind })
-                                .await
-                                .ok();
+                            let guide: Option<PermissionGuide> =
+                                bridge.call(METHOD_GUIDE, &GuideParams { kind }).await.ok();
                             let deep_link = guide
                                 .as_ref()
                                 .map(|g| g.deep_link.as_str())

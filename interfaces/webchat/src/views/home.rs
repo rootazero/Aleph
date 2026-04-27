@@ -157,9 +157,14 @@ pub fn Home() -> impl IntoView {
         let state = state;
         leptos::task::spawn_local(async move {
             web_sys::console::log_1(&"Restarting gateway...".into());
-            match state.rpc_call("daemon.shutdown", serde_json::Value::Null).await {
+            match state
+                .rpc_call("daemon.shutdown", serde_json::Value::Null)
+                .await
+            {
                 Ok(_) => {
-                    web_sys::console::log_1(&"Shutdown command sent, triggering reconnect...".into());
+                    web_sys::console::log_1(
+                        &"Shutdown command sent, triggering reconnect...".into(),
+                    );
                     leptos::task::spawn_local(async move {
                         let _ = state.reconnect().await;
                     });
@@ -192,7 +197,10 @@ pub fn Home() -> impl IntoView {
             web_sys::console::log_1(&"Exporting memory...".into());
             match MemoryApi::list_facts(&state, Some(1000)).await {
                 Ok(facts) => {
-                    let iso_str = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+                    let iso_str = js_sys::Date::new_0()
+                        .to_iso_string()
+                        .as_string()
+                        .unwrap_or_default();
                     let export_data = serde_json::json!({
                         "export_type": "memory_facts",
                         "exported_at": iso_str,
@@ -202,7 +210,9 @@ pub fn Home() -> impl IntoView {
                     let json_str = match serde_json::to_string_pretty(&export_data) {
                         Ok(s) => s,
                         Err(e) => {
-                            web_sys::console::error_1(&format!("Failed to serialize memory: {}", e).into());
+                            web_sys::console::error_1(
+                                &format!("Failed to serialize memory: {}", e).into(),
+                            );
                             return;
                         }
                     };
@@ -214,8 +224,9 @@ pub fn Home() -> impl IntoView {
                         Some(d) => d,
                         None => return,
                     };
-                    let blob = match web_sys::Blob::new_with_str_sequence(
-                        &js_sys::Array::of1(&json_str.into())) {
+                    let blob = match web_sys::Blob::new_with_str_sequence(&js_sys::Array::of1(
+                        &json_str.into(),
+                    )) {
                         Ok(b) => b,
                         Err(_) => return,
                     };
@@ -227,7 +238,9 @@ pub fn Home() -> impl IntoView {
                         },
                         Err(_) => return,
                     };
-                    let timestamp = js_sys::Date::new_0().to_iso_string().as_string()
+                    let timestamp = js_sys::Date::new_0()
+                        .to_iso_string()
+                        .as_string()
                         .unwrap_or_default()
                         .replace(":", "-");
                     link.set_href(&url);
@@ -272,16 +285,18 @@ pub fn Home() -> impl IntoView {
                         "total_facts": facts.len(),
                         "facts": facts,
                     });
-                    
+
                     // Convert to JSON string
                     let json_str = match serde_json::to_string_pretty(&export_data) {
                         Ok(s) => s,
                         Err(e) => {
-                            web_sys::console::error_1(&format!("Failed to serialize memory: {}", e).into());
+                            web_sys::console::error_1(
+                                &format!("Failed to serialize memory: {}", e).into(),
+                            );
                             return;
                         }
                     };
-                    
+
                     // Create a blob and download link
                     let window = match web_sys::window() {
                         Some(w) => w,
@@ -291,8 +306,9 @@ pub fn Home() -> impl IntoView {
                         Some(d) => d,
                         None => return,
                     };
-                    let blob = match web_sys::Blob::new_with_str_sequence(
-                        &js_sys::Array::of1(&json_str.into())) {
+                    let blob = match web_sys::Blob::new_with_str_sequence(&js_sys::Array::of1(
+                        &json_str.into(),
+                    )) {
                         Ok(b) => b,
                         Err(_) => return,
                     };
@@ -304,8 +320,10 @@ pub fn Home() -> impl IntoView {
                         },
                         Err(_) => return,
                     };
-                    
-                    let timestamp = js_sys::Date::new_0().to_iso_string().as_string()
+
+                    let timestamp = js_sys::Date::new_0()
+                        .to_iso_string()
+                        .as_string()
                         .unwrap_or_default()
                         .replace(":", "-");
                     link.set_href(&url);
@@ -314,7 +332,7 @@ pub fn Home() -> impl IntoView {
                     link.click();
                     let _ = document.body().map(|body| body.remove_child(&link));
                     let _ = web_sys::Url::revoke_object_url(&url);
-                    
+
                     web_sys::console::log_1(&"Memory exported successfully".into());
                 }
                 Err(e) => {

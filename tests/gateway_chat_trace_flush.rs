@@ -51,9 +51,7 @@ async fn trace_sink_flush_called_after_run() {
                 total_tokens: 0,
                 hit_limit: false,
             };
-            let _ = ctx
-                .events
-                .send(FlowStreamEvent::Complete(outcome.clone()));
+            let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)
         })
     }));

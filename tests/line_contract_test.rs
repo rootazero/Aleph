@@ -35,7 +35,10 @@ fn test_line_for_test_constructor() {
 
     assert_eq!(channel.info().id.as_str(), "test-line");
     assert_eq!(channel.channel_type(), "line");
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Disconnected);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Disconnected
+    );
 }
 
 #[tokio::test]

@@ -84,12 +84,8 @@ fn test_slack_event_filters_bot_messages() {
     let channel_id = ChannelId::new("slack");
     let config = test_slack_config();
 
-    let inbound = SlackMessageOps::convert_event_to_inbound(
-        &event,
-        &channel_id,
-        "B999999",
-        &config,
-    );
+    let inbound =
+        SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B999999", &config);
 
     assert!(inbound.is_none(), "Bot messages should be filtered out");
 }

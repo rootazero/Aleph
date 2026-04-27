@@ -14,7 +14,9 @@ async fn test_wechat_protocol_send_text() {
     let mut channel = WeChatChannel::for_test("wechat-test", test_config());
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("user-123", "Hello WeChat")).await;
+    let result = channel
+        .send(OutboundMessage::text("user-123", "Hello WeChat"))
+        .await;
 
     assert!(result.is_ok());
     let send_result = result.unwrap();
@@ -27,7 +29,9 @@ async fn test_wechat_protocol_send_text() {
 async fn test_wechat_protocol_send_not_started() {
     let channel = WeChatChannel::new("wechat-test", test_config());
 
-    let result = channel.send(OutboundMessage::text("user-123", "Hello")).await;
+    let result = channel
+        .send(OutboundMessage::text("user-123", "Hello"))
+        .await;
     assert!(result.is_err());
 }
 
@@ -36,8 +40,11 @@ async fn test_wechat_protocol_send_typing() {
     let mut channel = WeChatChannel::for_test("wechat-test", test_config());
     channel.start().await.unwrap();
 
-    let result = channel.send_typing(&alephcore::gateway::channel::ConversationId::new("user-123"),
-    ).await;
+    let result = channel
+        .send_typing(&alephcore::gateway::channel::ConversationId::new(
+            "user-123",
+        ))
+        .await;
 
     assert!(result.is_ok());
     channel.stop().await.unwrap();

@@ -6,10 +6,10 @@
 use alephcore::exec::approval::audit::AuditQuery;
 use alephcore::exec::approval::binding::check_binding_compliance;
 use alephcore::exec::approval::escalation::check_path_escalation;
+use alephcore::exec::approval::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
 use alephcore::exec::approval::storage::ApprovalAuditStorage;
 use alephcore::exec::approval::types::{CapabilityApprovalRequest, EscalationReason, TrustStage};
-use alephcore::sandbox::capabilities::{SandboxCapabilities, NetworkPolicy};
-use alephcore::exec::approval::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
+use alephcore::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;

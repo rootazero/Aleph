@@ -75,7 +75,10 @@ impl SwiftBridge {
             inflight: InflightTable::default(),
             id_seq: AtomicU64::new(1),
             backoff: Arc::new(Mutex::new(Backoff::default())),
-            restart_window: Arc::new(Mutex::new(RestartWindow::new(5, std::time::Duration::from_secs(600)))),
+            restart_window: Arc::new(Mutex::new(RestartWindow::new(
+                5,
+                std::time::Duration::from_secs(600),
+            ))),
             disabled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -105,10 +108,7 @@ impl SwiftBridge {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            DesktopError::BridgeFailed(format!(
-                "spawn {}: {e}",
-                self.binary_path.display()
-            ))
+            DesktopError::BridgeFailed(format!("spawn {}: {e}", self.binary_path.display()))
         })?;
 
         let stdin = child
@@ -223,11 +223,7 @@ impl SwiftBridge {
             }
             Err(e) => {
                 // Record a restart event (process failed to start counts as a crash).
-                let should_disable = self
-                    .restart_window
-                    .lock()
-                    .await
-                    .record_and_should_disable();
+                let should_disable = self.restart_window.lock().await.record_and_should_disable();
                 if should_disable {
                     self.disabled.store(true, Ordering::SeqCst);
                     tracing::error!(
@@ -306,9 +302,9 @@ impl SwiftBridge {
 
             {
                 let mut guard = self.state.lock().await;
-                let proc = guard
-                    .as_mut()
-                    .ok_or_else(|| DesktopError::BridgeFailed("bridge not running after retry".into()))?;
+                let proc = guard.as_mut().ok_or_else(|| {
+                    DesktopError::BridgeFailed("bridge not running after retry".into())
+                })?;
                 proc.stdin
                     .write_all(line.as_bytes())
                     .await
@@ -340,9 +336,7 @@ impl SwiftBridge {
         &self,
         rust_version: &str,
     ) -> Result<aleph_protocol::desktop_bridge::methods::bridge::HandshakeResult> {
-        use aleph_protocol::desktop_bridge::methods::bridge::{
-            HandshakeParams, METHOD_HANDSHAKE,
-        };
+        use aleph_protocol::desktop_bridge::methods::bridge::{HandshakeParams, METHOD_HANDSHAKE};
         self.call(
             METHOD_HANDSHAKE,
             HandshakeParams {
@@ -427,10 +421,8 @@ done
         for _ in 0..8 {
             let b = Arc::clone(&bridge);
             handles.push(tokio::spawn(async move {
-                let v: serde_json::Value = b
-                    .call("bridge.ping", serde_json::json!({}))
-                    .await
-                    .unwrap();
+                let v: serde_json::Value =
+                    b.call("bridge.ping", serde_json::json!({})).await.unwrap();
                 assert_eq!(v["pong"], true);
             }));
         }

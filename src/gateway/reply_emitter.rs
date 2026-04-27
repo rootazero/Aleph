@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::Mutex;
 use async_trait::async_trait;
 use regex::Regex;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 

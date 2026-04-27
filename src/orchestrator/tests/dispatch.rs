@@ -323,7 +323,10 @@ async fn dispatch_releases_session_lock_after_completion() {
 
     // The session lock must now be released — a second dispatch with the
     // SAME session_hint must succeed, not return SessionConflict.
-    let second = orch.dispatch(mk_req()).await.expect("second ok after release");
+    let second = orch
+        .dispatch(mk_req())
+        .await
+        .expect("second ok after release");
     let _ = second.completion.await.unwrap();
 
     assert_eq!(
@@ -355,10 +358,14 @@ impl crate::orchestrator::dispatch::HarnessRunner for CapturingHarness {
         tool_service_override: Option<std::sync::Arc<dyn crate::tools::service::ToolService>>,
         trace_sink: Option<std::sync::Arc<dyn crate::harness::TraceSink>>,
     ) -> Result<crate::orchestrator::dispatch::FlowOutcome, FlowError> {
-        *self.received_tool_service.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(tool_service_override.is_some());
-        *self.received_trace_sink.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(trace_sink.is_some());
+        *self
+            .received_tool_service
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(tool_service_override.is_some());
+        *self
+            .received_trace_sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(trace_sink.is_some());
         let outcome = crate::orchestrator::dispatch::FlowOutcome {
             final_text: "captured".into(),
             iterations: 1,

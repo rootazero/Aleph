@@ -12,7 +12,8 @@ use uuid::Uuid;
 ///
 /// This allows the `request.state` handler to access the registry
 /// without requiring it to be passed through the HandlerRegistry.
-static STATE_REGISTRY: std::sync::OnceLock<RwLock<Option<Arc<RequestStateRegistry>>>> = std::sync::OnceLock::new();
+static STATE_REGISTRY: std::sync::OnceLock<RwLock<Option<Arc<RequestStateRegistry>>>> =
+    std::sync::OnceLock::new();
 
 fn state_registry() -> &'static RwLock<Option<Arc<RequestStateRegistry>>> {
     STATE_REGISTRY.get_or_init(|| RwLock::new(None))
@@ -32,7 +33,9 @@ pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
 ///
 /// Returns None if not yet initialized.
 pub fn get_global_registry() -> Option<Arc<RequestStateRegistry>> {
-    let guard = state_registry().read().expect("STATE_REGISTRY lock poisoned");
+    let guard = state_registry()
+        .read()
+        .expect("STATE_REGISTRY lock poisoned");
     guard.clone()
 }
 

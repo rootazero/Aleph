@@ -107,9 +107,7 @@ pub(crate) async fn emit_flow_event(
             let tool_result = if let Some(err) = error {
                 crate::gateway::event_emitter::ToolResult::error(err)
             } else {
-                let output = result
-                    .map(|v| v.to_string())
-                    .unwrap_or_default();
+                let output = result.map(|v| v.to_string()).unwrap_or_default();
                 crate::gateway::event_emitter::ToolResult::success(output)
             };
             let seq = emitter.next_seq();
@@ -154,7 +152,11 @@ pub(crate) async fn emit_flow_event(
         FlowStreamEvent::StopHookBlock { reason } => {
             // Stop-hook blocks are informational; trace-log and continue.
             // TODO(task-4c): surface as a dedicated StreamEvent if UI needs it.
-            trace!(run_id, reason, "stop_hook_block: harness will force another turn");
+            trace!(
+                run_id,
+                reason,
+                "stop_hook_block: harness will force another turn"
+            );
         }
 
         FlowStreamEvent::ModelFallback {
@@ -324,7 +326,9 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         match &events[0] {
-            StreamEvent::RunError { error_code, error, .. } => {
+            StreamEvent::RunError {
+                error_code, error, ..
+            } => {
                 assert_eq!(error_code.as_deref(), Some("safety_block"));
                 assert_eq!(error, "blocked");
             }
@@ -345,15 +349,22 @@ mod tests {
             hit_limit: false,
         };
 
-        emit_flow_event(FlowStreamEvent::Complete(outcome), &emitter, "run-4", &state)
-            .await
-            .expect("complete ok");
+        emit_flow_event(
+            FlowStreamEvent::Complete(outcome),
+            &emitter,
+            "run-4",
+            &state,
+        )
+        .await
+        .expect("complete ok");
 
         let events = inner.events().await;
 
         assert_eq!(events.len(), 1);
         match &events[0] {
-            StreamEvent::RunComplete { summary, run_id, .. } => {
+            StreamEvent::RunComplete {
+                summary, run_id, ..
+            } => {
                 assert_eq!(run_id, "run-4");
                 assert_eq!(summary.loops, 3);
                 assert_eq!(summary.tool_calls, 2);

@@ -22,7 +22,9 @@ pub fn MiniMapOverlay(
     Effect::new(move |_| {
         let _ = focus_id.get();
         let _ = focus_neighbor_ids.get();
-        let Some(canvas_el) = canvas_ref.get() else { return };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let Some(ctx) = canvas
             .get_context("2d")
@@ -42,7 +44,9 @@ pub fn MiniMapOverlay(
 
     let mm_click = minimap.clone();
     let on_click = move |ev: MouseEvent| {
-        let Some(canvas_el) = canvas_ref.get() else { return };
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
         let canvas: HtmlCanvasElement = canvas_el.into();
         let rect = canvas.get_bounding_client_rect();
         let mx = ev.client_x() as f32 - rect.left() as f32;

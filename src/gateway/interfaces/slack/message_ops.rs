@@ -336,7 +336,11 @@ impl SlackMessageOps {
         caption: Option<&str>,
         thread_ts: Option<&str>,
     ) -> ChannelResult<String> {
-        Self::upload_file_with_base(client, bot_token, channel, file_data, filename, title, mime_type, caption, thread_ts, None).await
+        Self::upload_file_with_base(
+            client, bot_token, channel, file_data, filename, title, mime_type, caption, thread_ts,
+            None,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]

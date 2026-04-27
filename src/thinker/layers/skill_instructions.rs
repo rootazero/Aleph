@@ -89,9 +89,9 @@ impl PromptLayer for SkillInstructionsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::info::ToolInfo;
     use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
     use crate::thinker::prompt_builder::PromptConfig;
+    use crate::tools::info::ToolInfo;
 
     fn make_skill(name: &str, scope: PromptScope) -> SkillManifest {
         let mut m = SkillManifest::new(

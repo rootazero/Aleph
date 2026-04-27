@@ -43,8 +43,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     >,
     /// Generation provider registry for TTS voice output
-    pub generation_registry:
-        Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
+    pub generation_registry: Option<Arc<RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     /// Builtin tool registry (for heartbeat probe executor)
     pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
     /// Team store for panel RPC handlers
@@ -60,9 +59,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
     /// engine's own field rather than an external argument.
     pub orchestrator_cell: Option<
-        std::sync::Arc<
-            std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>,
-        >,
+        std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
 }
 
@@ -111,9 +108,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     > = None;
     let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
     let mut orch_cell_out: Option<
-        std::sync::Arc<
-            std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>,
-        >,
+        std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     > = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).

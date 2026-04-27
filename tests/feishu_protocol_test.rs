@@ -14,7 +14,9 @@ async fn test_feishu_protocol_send_text() {
     let mut channel = FeishuChannel::for_test("feishu-test", test_config()).unwrap();
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("ou_123", "Hello Feishu")).await;
+    let result = channel
+        .send(OutboundMessage::text("ou_123", "Hello Feishu"))
+        .await;
 
     assert!(result.is_ok());
     let send_result = result.unwrap();

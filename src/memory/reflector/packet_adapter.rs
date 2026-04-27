@@ -148,14 +148,25 @@ mod tests {
         let envelope = make_envelope("ownership?", items);
         let ctx = envelope_to_synthesis_context(&envelope);
 
-        assert!(ctx.user_prompt.contains("[path=reference/rust score=0.910]"));
+        assert!(ctx
+            .user_prompt
+            .contains("[path=reference/rust score=0.910]"));
         assert!(ctx
             .user_prompt
             .contains("[path=reference/ownership score=0.730]"));
         assert_eq!(ctx.note_lookup.len(), 2);
-        assert_eq!(ctx.note_lookup.get("reference/rust").unwrap().title, "Rust Lang");
+        assert_eq!(
+            ctx.note_lookup.get("reference/rust").unwrap().title,
+            "Rust Lang"
+        );
         assert!(
-            (ctx.note_lookup.get("reference/ownership").unwrap().relevance - 0.73).abs() < 1e-6,
+            (ctx.note_lookup
+                .get("reference/ownership")
+                .unwrap()
+                .relevance
+                - 0.73)
+                .abs()
+                < 1e-6,
             "relevance mismatch"
         );
     }

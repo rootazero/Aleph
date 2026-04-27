@@ -41,10 +41,7 @@ pub trait PermissionCapability: Send + Sync {
     ///
     /// Returns a `ProtocolPermissionStatus` (from `aleph_protocol`) which
     /// carries `granted`, `can_request_programmatically`, and `restricted`.
-    async fn check_permission(
-        &self,
-        kind: PermissionKind,
-    ) -> Result<ProtocolPermissionStatus> {
+    async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus> {
         let _ = kind;
         Err(crate::error::DesktopError::NotImplemented(
             "check_permission".into(),
@@ -53,10 +50,7 @@ pub trait PermissionCapability: Send + Sync {
 
     /// Retrieve a full `PermissionGuide` (deep link + steps + rationale) via
     /// the Swift bridge.
-    async fn guide_permission(
-        &self,
-        kind: PermissionKind,
-    ) -> Result<PermissionGuide> {
+    async fn guide_permission(&self, kind: PermissionKind) -> Result<PermissionGuide> {
         let _ = kind;
         Err(crate::error::DesktopError::NotImplemented(
             "guide_permission".into(),

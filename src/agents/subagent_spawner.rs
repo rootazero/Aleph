@@ -91,10 +91,7 @@ pub struct SpawnRequest<'a> {
 ///     elapsed before `AgentHarness::run` returned.
 ///   * `"sub-agent panicked: …"` — the harness task panicked.
 ///   * `"sub-agent failed: …"` — any other harness / session / tool error.
-pub async fn spawn(
-    base: &SpawnerBase,
-    req: SpawnRequest<'_>,
-) -> Result<LoopRunResult, String> {
+pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunResult, String> {
     // 1. Derive a child chain; fail early if the recursion cap is hit so
     //    callers see the same "depth exceeded" signal the legacy path used.
     let child_chain = base
@@ -150,10 +147,9 @@ pub async fn spawn(
     // 4. Build the agent-scoped system prompt. `PromptBuilder::with_agent`
     //    pulls in the AgentRoleLayer; `build_system_prompt(&[])` is fine —
     //    tool schemas are delivered via native tool_use, not the prompt.
-    let system_prompt =
-        PromptBuilder::new(PromptConfig::default())
-            .with_agent(req.agent_def.clone())
-            .build_system_prompt(&[]);
+    let system_prompt = PromptBuilder::new(PromptConfig::default())
+        .with_agent(req.agent_def.clone())
+        .build_system_prompt(&[]);
 
     // 5. Resolve the model override: explicit > model_hint > native.
     let resolved_model: Option<String> = req
@@ -232,13 +228,7 @@ pub async fn spawn(
     //    `Arc<AgentHarness>` we just read the flag.
     let hit_limit = harness.hit_limit();
 
-    extract_run_result(
-        base.session.as_ref(),
-        &child_id,
-        &child_chain,
-        hit_limit,
-    )
-    .await
+    extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit).await
 }
 
 /// Walk the child session event log and synthesize a `LoopRunResult`.
@@ -381,9 +371,7 @@ mod tests {
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, StopReason};
     use crate::session::events::{ToolOutput, ToolOutputMetadata};
     use crate::session::in_process::InProcessActorSessionService;
-    use crate::session::store::{
-        migrate_add_session_events, SessionEventStore, SqliteEventStore,
-    };
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use crate::tools::service::{ToolDefinition, ToolError, ToolService, ToolSource};
     use serde_json::json;
 
@@ -572,8 +560,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).unwrap();
         let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        let session: Arc<dyn SessionService> =
-            Arc::new(InProcessActorSessionService::new(store));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
 
         SpawnerBase {
             session,
@@ -782,17 +769,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).unwrap();
         let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        let session: Arc<dyn SessionService> =
-            Arc::new(InProcessActorSessionService::new(store));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
         let child_id = ephemeral_for("edge");
 
         // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
-        seed_session_with_assistant_texts(
-            &session,
-            &child_id,
-            &[Some("thinking..."), None],
-        )
-        .await;
+        seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None]).await;
 
         let chain = ChainContext::new();
         let result = extract_run_result(session.as_ref(), &child_id, &chain, true)
@@ -816,17 +797,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate_add_session_events(&conn).unwrap();
         let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
-        let session: Arc<dyn SessionService> =
-            Arc::new(InProcessActorSessionService::new(store));
+        let session: Arc<dyn SessionService> = Arc::new(InProcessActorSessionService::new(store));
         let child_id = ephemeral_for("happy");
 
         // Turn 1: pure tool_use (empty). Turn 2: terminal text.
-        seed_session_with_assistant_texts(
-            &session,
-            &child_id,
-            &[None, Some("final answer")],
-        )
-        .await;
+        seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")]).await;
 
         let chain = ChainContext::new();
         let result = extract_run_result(session.as_ref(), &child_id, &chain, false)

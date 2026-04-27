@@ -300,8 +300,9 @@ impl Channel for CliChannel {
         // In test mode, skip stdout I/O
         if !self.test_mode {
             let mut stdout = io::stdout().lock();
-            writeln!(stdout, "\n{}", message.text)
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {}", e)))?;
+            writeln!(stdout, "\n{}", message.text).map_err(|e| {
+                ChannelError::SendFailed(format!("Failed to write to stdout: {}", e))
+            })?;
             stdout
                 .flush()
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {}", e)))?;

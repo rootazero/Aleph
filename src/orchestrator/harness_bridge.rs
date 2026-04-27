@@ -21,13 +21,11 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentRegistry;
-use crate::harness::agent::AgentHarness;
-use crate::harness::callback::HarnessCallback;
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
+use crate::harness::agent::AgentHarness;
+use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
-use crate::skill::prefetch::SkillPrefetcher;
-use crate::verification::stop_hooks::StopHookHandler;
 use crate::harness::trait_def::Harness;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
@@ -37,7 +35,9 @@ use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
 use crate::session::events::{now_ms, MessageContent, SessionEvent, TurnTrigger};
 use crate::session::service::{SessionId, SessionService};
+use crate::skill::prefetch::SkillPrefetcher;
 use crate::tools::service::ToolService;
+use crate::verification::stop_hooks::StopHookHandler;
 
 /// Concrete [`HarnessRunner`] that dispatches to the Phase 4 `AgentHarness`.
 pub struct AgentHarnessRunner {
@@ -118,13 +118,23 @@ impl HarnessRunner for AgentHarnessRunner {
         // inhibit idle sleep for the duration of each Think→Act turn.
         let power: Option<std::sync::Arc<dyn aleph_desktop::traits::PowerCapability>> = {
             #[cfg(target_os = "macos")]
-            { Some(std::sync::Arc::new(aleph_desktop_macos::MacosPower::new())) }
+            {
+                Some(std::sync::Arc::new(aleph_desktop_macos::MacosPower::new()))
+            }
             #[cfg(target_os = "linux")]
-            { Some(std::sync::Arc::new(aleph_desktop_linux::LinuxPower::new())) }
+            {
+                Some(std::sync::Arc::new(aleph_desktop_linux::LinuxPower::new()))
+            }
             #[cfg(target_os = "windows")]
-            { Some(std::sync::Arc::new(aleph_desktop_windows::WindowsPower::new())) }
+            {
+                Some(std::sync::Arc::new(
+                    aleph_desktop_windows::WindowsPower::new(),
+                ))
+            }
             #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            { None }
+            {
+                None
+            }
         };
         let deps = HarnessDeps {
             session: self.session_service.clone(),
@@ -546,30 +556,28 @@ mod tests {
 
     #[test]
     fn classify_harness_error_network_is_transient() {
-        let err = crate::harness::trait_def::HarnessError::Llm(
-            crate::error::AlephError::network("connection reset mid-stream"),
-        );
+        let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::network(
+            "connection reset mid-stream",
+        ));
         let out = classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Transient { .. }));
     }
 
     #[test]
     fn classify_harness_error_http_500_is_transient() {
-        let err = crate::harness::trait_def::HarnessError::Llm(
-            crate::error::AlephError::network("upstream returned 500"),
-        );
+        let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::network(
+            "upstream returned 500",
+        ));
         let out = classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Transient { .. }));
     }
 
     #[test]
     fn classify_harness_error_generic_is_internal() {
-        let err = crate::harness::trait_def::HarnessError::Llm(
-            crate::error::AlephError::Other {
-                message: "opaque failure".into(),
-                suggestion: None,
-            },
-        );
+        let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::Other {
+            message: "opaque failure".into(),
+            suggestion: None,
+        });
         let out = classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Internal(_)));
     }
@@ -577,12 +585,10 @@ mod tests {
     #[test]
     fn classify_harness_error_4500_is_not_server_transient() {
         // Word-boundary check: "4500" contains "500" substring but is not status 500.
-        let err = crate::harness::trait_def::HarnessError::Llm(
-            crate::error::AlephError::Other {
-                message: "processed 4500 items then gave up".into(),
-                suggestion: None,
-            },
-        );
+        let err = crate::harness::trait_def::HarnessError::Llm(crate::error::AlephError::Other {
+            message: "processed 4500 items then gave up".into(),
+            suggestion: None,
+        });
         let out = classify_harness_error(err, "anthropic");
         assert!(matches!(out, FlowError::Internal(_)));
     }

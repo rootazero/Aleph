@@ -13,8 +13,7 @@ use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::SandboxKind;
 use crate::sandbox::{Sandbox, SandboxCommand, SandboxError, SandboxOutput};
 
-pub type WorkspaceBuilder =
-    Arc<dyn Fn(&str) -> Result<Arc<dyn Sandbox>, String> + Send + Sync>;
+pub type WorkspaceBuilder = Arc<dyn Fn(&str) -> Result<Arc<dyn Sandbox>, String> + Send + Sync>;
 
 pub type SandboxFactory =
     Arc<dyn Fn(SandboxKind, &str) -> Result<Arc<dyn Sandbox>, FlowError> + Send + Sync>;
@@ -22,9 +21,7 @@ pub type SandboxFactory =
 pub fn build_sandbox_factory(workspace: WorkspaceBuilder) -> SandboxFactory {
     Arc::new(move |kind, session_key| match kind {
         SandboxKind::None => Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>),
-        SandboxKind::Workspace => {
-            workspace(session_key).map_err(FlowError::SandboxProvisionFailed)
-        }
+        SandboxKind::Workspace => workspace(session_key).map_err(FlowError::SandboxProvisionFailed),
     })
 }
 

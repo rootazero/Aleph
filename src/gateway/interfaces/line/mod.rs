@@ -54,7 +54,11 @@ impl LineChannel {
     }
 
     /// Create a LINE channel configured for testing against a mock API server.
-    pub fn for_test(id: impl Into<String>, config: LineConfig, api_base: impl Into<String>) -> Self {
+    pub fn for_test(
+        id: impl Into<String>,
+        config: LineConfig,
+        api_base: impl Into<String>,
+    ) -> Self {
         let mut channel = Self::new(id, config);
         channel.api_base = Some(api_base.into());
         channel

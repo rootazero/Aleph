@@ -218,7 +218,10 @@ mod tests {
         db.index_note(&note_c, AGENT, "reference").await.unwrap();
 
         // Outgoing from Rust (from_note = "reference/Rust", to_note = raw link targets)
-        let out = db.get_outgoing_links("reference/Rust", AGENT).await.unwrap();
+        let out = db
+            .get_outgoing_links("reference/Rust", AGENT)
+            .await
+            .unwrap();
         assert_eq!(out.len(), 2);
         assert!(out.contains(&"Cargo".to_string()));
         assert!(out.contains(&"Clippy".to_string()));

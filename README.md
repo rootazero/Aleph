@@ -45,22 +45,37 @@ Aleph's memory system goes beyond simple RAG:
 - **Session Service** — Append-only event log with in-process actor for authoritative state
 - **Tool Service** — Unified façade over built-in tools, MCP servers, and extensions with layered middleware (audit → permission → context rules → timeout)
 
-### Architecture
+### Architecture Redlines
+
+| Rule | Description |
+|------|-------------|
+| **R1** | Core never calls platform APIs (AppKit, Vision, CoreGraphics). Core defines trait contracts; platform impl via IPC |
+| **R2** | Complex business UI in Leptos/WASM only. Native shells = window container + animations |
+| **R3** | Core minimalism — no heavy deps for non-core features; implement as Skill/MCP |
+| **R4** | Interface layers (App/Bot/CLI) are pure I/O — no business logic |
+| **R5** | Menu bar first, window on demand — lightweight entry + expand when needed |
+| **R6** | AI comes to you — minimize context switching; Halo, notifications, inline |
+| **R7** | One core, many shells — Rust Core is the only brain |
+| **R8** | LLM handles intent/routing. Regex only for machine formats (JSON, URLs) |
+| **R9** | All configurability exposed as tools — natural language drives everything |
+| **R10** | Intelligence lives in the prompt — zero middleware tax |
+
+### System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        INTERFACE LAYER (I/O)                        │
-│  macOS Native | Tauri | CLI | Panel (WASM) | Telegram |           │  │
-│  Discord | Slack | WhatsApp | IRC | Matrix | Signal | ...          │
+│  macOS Native App | WASM Panel | CLI | TUI | Telegram | Discord |   │
+│  Slack | WhatsApp | IRC | Matrix | Signal | Email | ...            │
 ├─────────────────────────────┬───────────────────────────────────────┤
 │                       GATEWAY LAYER                                 │
-│  Router | Session Manager | Event Bus | Channel Registry | Reload  │
+│  Router | Session Manager | Event Bus | Channel Registry | Security │
 ├─────────────────────────────┼───────────────────────────────────────┤
 │                        AGENT LAYER                                  │
-│  Agent Loop | Thinker | Dispatcher | Task Planner | Compressor     │
+│  Orchestrator | Harness | Thinker | Dispatcher | Compressor        │
 ├─────────────────────────────┼───────────────────────────────────────┤
 │                      EXECUTION LAYER                                │
-│  Providers | Engine | Tool Server | MCP | Extensions | Exec        │
+│  Providers | Engine | Tool Server | MCP | Extensions | Sandbox     │
 ├─────────────────────────────┼───────────────────────────────────────┤
 │                       STORAGE LAYER                                 │
 │  Memory (SQLite+vec0) | State (SQLite) | Config (~/.aleph/)        │
@@ -80,16 +95,16 @@ See [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) for the ful
 - **Self-Learning** — Automatic skill generation from note patterns
 - MCP protocol support for external tool integration
 - **Decoupled Agent Loop** — Orchestrator + Harness + Sandbox + Session + Tool Service architecture
-- Desktop Bridge for native OS control (OCR, screenshots, input automation)
+- Desktop Bridge for native OS control (OCR, screenshots, input automation, camera, audio)
 
 ### Developer Experience
 
-- Hot reload for configuration changes
+- Hot reload for configuration and protocol changes
 - Plugin system (WASM + Node.js)
 - `just` build pipeline with one-command workflows
 - 58+ Gateway JSON-RPC handlers
 - JSON Schema auto-generation via schemars
-- Proptest and Loom concurrency test suites
+- Proptest, Loom concurrency, and Cucumber BDD test suites
 
 ## Installation
 
@@ -118,10 +133,10 @@ aleph
 If you prefer to build from source:
 
 ```bash
-# Prerequisites: Rust 1.92+, just (cargo install just)
+# Prerequisites: Rust 1.92+, just (cargo install just), npm, wasm-bindgen, Swift (macOS)
 git clone https://github.com/rootazero/Aleph.git
 cd Aleph
-cargo run --bin aleph
+just dev          # Run server in debug mode (rebuilds WASM)
 ```
 
 ### Configuration
@@ -133,7 +148,9 @@ Aleph stores configuration and data at `~/.aleph/`:
 ├── aleph.toml       # Main configuration
 ├── logs/            # Server logs
 ├── skills/          # User-installed skills
-└── plugins/         # Extensions
+├── plugins/         # Extensions
+├── protocols/       # Custom protocol definitions (YAML, hot-reload)
+└── workspaces/      # Per-session sandbox workspaces
 ```
 
 Channel configuration example in `aleph.toml`:
@@ -146,26 +163,50 @@ token = "your-bot-token"
 
 ## Building
 
-| Command               | Description                                |
-|-----------------------|--------------------------------------------|
-| `just dev`            | Run server in debug mode (rebuilds WASM)   |
-| `just build`          | Build server in release mode               |
-| `just wasm`           | Build WASM Panel UI only                   |
-| `just macos`          | Build macOS native app (release)           |
-| `just test`           | Run core tests                             |
-| `just test-all`       | Run all tests (core + desktop + proptest)  |
-| `just clippy`         | Lint core with clippy                      |
-| `just check`          | Quick compilation check                    |
-| `just deps`           | Verify build dependencies are installed    |
-| `just clean`          | Clean all build artifacts                  |
+| Command | Description |
+|---------|-------------|
+| `just dev` | Run server in debug mode (rebuilds WASM) |
+| `just build` | Full release build (WASM → Swift Bridge → Server) |
+| `just build-debug` | Debug build (faster compile, no Swift bridge) |
+| `just wasm` | Build WASM Panel UI only |
+| `just swift-bridge` | Build Swift helper process (macOS only) |
+| `just test` | Run core tests |
+| `just test-desktop` | Run desktop crate tests |
+| `just test-desktop-macos` | Run macOS desktop tests |
+| `just test-desktop-all` | Run all desktop-related tests |
+| `just test-proptest` | Run proptest with high coverage |
+| `just test-loom` | Run Loom concurrency tests |
+| `just test-all` | Run all tests (core + desktop + proptest) |
+| `just clippy` | Lint core with clippy |
+| `just clippy-desktop` | Lint desktop crate |
+| `just clippy-all` | Lint everything |
+| `just check` | Quick compilation check |
+| `just check-desktop` | Quick check desktop crate |
+| `just deps` | Verify build dependencies are installed |
+| `just clean` | Clean all build artifacts |
 
-No feature flags are needed for production builds.
+### Feature Flags
+
+Production features are always compiled. Optional flags control experimental or test functionality:
+
+```toml
+[features]
+default = []
+control-plane = []         # Control plane UI (Leptos/WASM dashboard)
+loom = ["dep:loom"]        # Concurrency testing with Loom
+test-helpers = []          # Integration test utilities
+disabled-tests = []        # Disabled test modules awaiting rewrite
+telegram-draft-api = []    # Experimental Telegram Draft API support
+```
 
 ## Project Structure
 
 ```
 Aleph/
 ├── src/                         # Rust Core (alephcore crate)
+│   ├── bin/aleph-server/        # Server binary entry point
+│   │   ├── commands/            # CLI commands (start, daemon)
+│   │   └── main.rs              # Binary entry
 │   ├── gateway/                 # WebSocket control plane
 │   │   ├── handlers/            # 58+ RPC method handlers
 │   │   ├── interfaces/          # 15+ channel interfaces
@@ -173,28 +214,29 @@ Aleph/
 │   │   └── ...                  # Router, session, events, voice, webhooks
 │   ├── orchestrator/            # AgentDef resolution + Harness dispatch
 │   ├── harness/                 # Think→Act loop, stop-hooks, context budget
-│   ├── thinker/                 # LLM interaction layer
+│   ├── thinker/                 # LLM interaction layer (prompt builder, 29 layers)
 │   ├── dispatcher/              # Task orchestration (DAG scheduling)
 │   ├── engine/                  # Tool execution engine
 │   ├── builtin_tools/           # 30+ built-in tools
-│   ├── memory/                  # SQLite+sqlite-vec storage (vectors + FTS)
+│   ├── memory/                  # SQLite+sqlite-vec storage (vectors + FTS + wikilink graph)
 │   ├── resilience/              # State management (SQLite)
 │   ├── extension/               # WASM + Node.js plugin system
-│   ├── providers/               # AI provider integrations
+│   ├── providers/               # AI provider integrations (multi-protocol)
 │   ├── domain/                  # DDD domain model
 │   ├── mcp/                     # MCP protocol client
-│   ├── sandbox/                 # Sandbox trait + WorkspaceSandbox
+│   ├── sandbox/                 # Sandbox trait + WorkspaceSandbox + OsSandboxDriver
 │   ├── exec/                    # Shell execution + security
-│   ├── agents/                  # Agent runtime, subagent spawning
+│   ├── agents/                  # Agent runtime, subagent spawning, team coordination
 │   ├── a2a/                     # A2A protocol adapter
 │   ├── acp/                     # ACP protocol
 │   ├── approval/                # Approval system
 │   ├── arena/                   # Arena functionality
 │   ├── browser/                 # Browser automation
-│   ├── capability/              # Capability system
 │   ├── clawhub/                 # ClawHub integration
 │   ├── components/              # Shared components
 │   ├── compressor/              # Context compression
+│   ├── config/                  # Configuration management
+│   ├── context/                 # Context management
 │   ├── core/                    # Core types and primitives
 │   ├── daemon/                  # Background daemon
 │   ├── discovery/               # Service discovery
@@ -206,8 +248,8 @@ Aleph/
 │   ├── markdown/                # Markdown processing
 │   ├── media/                   # Media processing
 │   ├── metrics/                 # Metrics collection
-│   ├── permission/              # Permission system
 │   ├── pii/                     # PII detection/handling
+│   ├── process_supervisor/      # Process supervision
 │   ├── prompt/                  # Prompt management
 │   ├── routing/                 # Session key resolution
 │   ├── runtimes/                # Capability ledger
@@ -215,29 +257,42 @@ Aleph/
 │   ├── search/                  # Search providers
 │   ├── secrets/                 # Secret management
 │   ├── security/                # Security utilities
-│   ├── session/                 # Session service
+│   ├── session/                 # Session service (append-only event log)
 │   ├── skill/                   # Skill system
 │   ├── supervisor/              # Execution supervision
+│   ├── task_resilience/         # Task resilience
 │   ├── tasks/                   # Task management
 │   ├── teams/                   # Team coordination
 │   ├── tool_output/             # Tool output handling
 │   ├── utils/                   # Utilities
+│   ├── verification/            # Verification system
 │   ├── vision/                  # Vision processing
 │   └── wizard/                  # Wizard flows
 ├── desktop/
-│   ├── shared/                  # DesktopCapability trait + IPC
-│   ├── macos/                   # macOS native implementation
+│   ├── shared/                  # DesktopCapability trait + IPC protocol
+│   ├── macos/                   # macOS native implementation (AppKit, Vision)
+│   │   └── bridge/              # Swift helper process (JSON-RPC over stdio)
 │   ├── linux/                   # Linux native implementation
 │   └── windows/                 # Windows native implementation
 ├── shared/
-│   ├── protocol/                # Shared protocol types
+│   ├── protocol/                # Shared protocol types (JSON-RPC schemas)
 │   ├── logging/                 # Logging infrastructure
 │   ├── client/                  # Shared client utilities
 │   └── ui_logic/                # Shared UI logic
 ├── interfaces/
 │   ├── cli/                     # CLI client
 │   ├── tui/                     # TUI client
-│   └── webchat/                 # Web chat interface
+│   └── webchat/                 # Web chat / WASM Panel UI
+├── plugins/                     # Plugin crates
+│   ├── diagnostics/             # Diagnostics plugin
+│   ├── diff-viewer/             # Diff viewer plugin
+│   ├── llm-task/                # LLM task plugin
+│   ├── media-office/            # Media office plugin
+│   ├── memory-analytics/        # Memory analytics plugin
+│   ├── phone-control/           # Phone control plugin
+│   └── voice-call/              # Voice call plugin
+├── apps/
+│   └── webchat/                 # Web chat application assets
 ├── docs/
 │   ├── reference/               # Architecture & system docs
 │   └── superpowers/             # Design specs & run reports
@@ -256,11 +311,17 @@ Aleph/
 | Memory System | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
 | Extension System | [EXTENSION_SYSTEM.md](docs/reference/EXTENSION_SYSTEM.md) |
 | Security | [SECURITY.md](docs/reference/SECURITY.md) |
+| Sandbox | [SANDBOX.md](docs/reference/SANDBOX.md) |
 | Design Patterns | [DESIGN_PATTERNS.md](docs/reference/DESIGN_PATTERNS.md) |
 | Code Organization | [CODE_ORGANIZATION.md](docs/reference/CODE_ORGANIZATION.md) |
 | Domain Modeling | [DOMAIN_MODELING.md](docs/reference/DOMAIN_MODELING.md) |
 | Agent Design Philosophy | [AGENT_DESIGN_PHILOSOPHY.md](docs/reference/AGENT_DESIGN_PHILOSOPHY.md) |
 | Server Development | [SERVER_DEVELOPMENT.md](docs/reference/SERVER_DEVELOPMENT.md) |
+| Session Service | [SESSION_SERVICE.md](docs/reference/SESSION_SERVICE.md) |
+| Multi-Agent System | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
+| State Layer | [STATE_LAYER.md](docs/reference/STATE_LAYER.md) |
+| Desktop Bridge | [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
+| Glossary | [GLOSSARY.md](docs/reference/GLOSSARY.md) |
 
 ## Contributing
 
@@ -268,9 +329,14 @@ Single-branch development on `main`. Commit format: `<scope>: <description>` (En
 
 Example: `gateway: add WebSocket server foundation`
 
+Before restarting Aleph in development:
+```bash
+pkill -f "target/release/aleph-server" 2>/dev/null
+pkill -f "target/debug/aleph-server" 2>/dev/null
+sleep 2
+```
+Multiple processes → HMAC failure → **vault data loss**.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-
-

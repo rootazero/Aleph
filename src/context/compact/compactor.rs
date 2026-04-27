@@ -5,8 +5,8 @@
 
 use std::time::Duration;
 
-use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use super::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
+use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;

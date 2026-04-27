@@ -13,9 +13,9 @@ pub mod preflight;
 pub mod pressure;
 
 use crate::context::compact::PressureLevel;
-use crate::tools::runtime::ToolDefinition;
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
+use crate::tools::runtime::ToolDefinition;
 
 // =============================================================================
 // ContextPressure

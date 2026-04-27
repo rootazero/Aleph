@@ -419,7 +419,10 @@ impl ProtocolAdapter for OpenAiProtocol {
                         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                     let line = line.trim_end();
 
-                    if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                    if let Some(data) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    {
                         if data != "[DONE]" {
                             parse_chat_sse_event(
                                 data,
@@ -448,7 +451,10 @@ impl ProtocolAdapter for OpenAiProtocol {
                             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                         let remaining = remaining.trim();
                         if !remaining.is_empty() {
-                            if let Some(data) = remaining.strip_prefix("data: ").or_else(|| remaining.strip_prefix("data:")) {
+                            if let Some(data) = remaining
+                                .strip_prefix("data: ")
+                                .or_else(|| remaining.strip_prefix("data:"))
+                            {
                                 if data != "[DONE]" {
                                     parse_chat_sse_event(
                                         data,

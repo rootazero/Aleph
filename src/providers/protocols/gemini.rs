@@ -388,7 +388,10 @@ impl ProtocolAdapter for GeminiProtocol {
                         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                     let line = line.trim_end();
 
-                    if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                    if let Some(data) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    {
                         if data != "[DONE]" {
                             parse_gemini_sse_chunk(data, &mut state.fc_counter, &mut state.pending);
                             // If Done was queued, stop after draining pending
@@ -412,7 +415,10 @@ impl ProtocolAdapter for GeminiProtocol {
                             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                         let remaining = remaining.trim();
                         if !remaining.is_empty() {
-                            if let Some(data) = remaining.strip_prefix("data: ").or_else(|| remaining.strip_prefix("data:")) {
+                            if let Some(data) = remaining
+                                .strip_prefix("data: ")
+                                .or_else(|| remaining.strip_prefix("data:"))
+                            {
                                 if data != "[DONE]" {
                                     parse_gemini_sse_chunk(
                                         data,

@@ -8,15 +8,13 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::sync_primitives::{
-    Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering,
-};
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 
 use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
-use crate::gateway::media::{PendingMedia};
+use crate::gateway::media::PendingMedia;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -420,10 +418,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 default_working_dir.clone(),
             ));
 
-            let allowed_names: std::collections::BTreeSet<String> = allowed_tools
-                .iter()
-                .map(|t| t.name.clone())
-                .collect();
+            let allowed_names: std::collections::BTreeSet<String> =
+                allowed_tools.iter().map(|t| t.name.clone()).collect();
 
             let tool_refresh: Option<Arc<dyn crate::tools::refresh::ToolRefreshSource>> =
                 extension_manager.as_ref().map(|ext_manager| {
@@ -486,7 +482,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 "Orchestrator not wired when constructing SubagentTool"
                             );
                             return Err(ExecutionError::Orchestrator(
-                                "orchestrator not yet initialised — boot ordering error".to_string(),
+                                "orchestrator not yet initialised — boot ordering error"
+                                    .to_string(),
                             ));
                         }
                     };
@@ -533,10 +530,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             //    messages currently degrade to text via History (attachments
             //    are handled through the media pipeline + session events;
             //    harness does not yet accept UnifiedMessage directly).
-            let flow_input = super::helpers::history_to_flow_input(
-                history.clone(),
-                request.input.clone(),
-            );
+            let flow_input =
+                super::helpers::history_to_flow_input(history.clone(), request.input.clone());
 
             let req = crate::orchestrator::FlowRequest {
                 flow_id: None,
@@ -605,9 +600,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     }
                     return Err(ExecutionError::Cancelled);
                 }
-                Err(super::helpers::DispatchFailure::Transient { provider: prov_name, message })
-                    if attempt < MAX_FALLBACK_ATTEMPTS =>
-                {
+                Err(super::helpers::DispatchFailure::Transient {
+                    provider: prov_name,
+                    message,
+                }) if attempt < MAX_FALLBACK_ATTEMPTS => {
                     // Mark the provider degraded and try again. The outer
                     // `loop` re-resolves on the next iteration.
                     self.provider_registry.report_outcome(
@@ -625,7 +621,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     );
                     continue;
                 }
-                Err(super::helpers::DispatchFailure::Transient { provider: prov_name, message }) => {
+                Err(super::helpers::DispatchFailure::Transient {
+                    provider: prov_name,
+                    message,
+                }) => {
                     self.provider_registry.report_outcome(
                         &resolved.provider_name,
                         Err(crate::providers::health::ProviderError::Transient(

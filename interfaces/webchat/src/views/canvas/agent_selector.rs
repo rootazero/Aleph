@@ -10,7 +10,11 @@ use wasm_bindgen::JsCast;
 /// - no leading emoji when emoji is missing
 /// - default agent gets a trailing " ★"
 pub fn format_agent_option(agent: &AgentSummary, is_default: bool) -> String {
-    let name = agent.name.as_deref().filter(|s| !s.is_empty()).unwrap_or(&agent.id);
+    let name = agent
+        .name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&agent.id);
     let star = if is_default { " ★" } else { "" };
     match agent.emoji.as_deref().filter(|s| !s.is_empty()) {
         Some(emoji) => format!("{emoji} {name} ({}){star}", agent.id),

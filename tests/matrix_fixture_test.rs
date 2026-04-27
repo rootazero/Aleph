@@ -8,7 +8,10 @@ fn test_room_message_fixture() {
     assert_eq!(data["type"].as_str().unwrap(), "m.room.message");
     assert_eq!(data["sender"].as_str().unwrap(), "@user:example.com");
     assert_eq!(data["content"]["msgtype"].as_str().unwrap(), "m.text");
-    assert_eq!(data["content"]["body"].as_str().unwrap(), "Hello from Matrix!");
+    assert_eq!(
+        data["content"]["body"].as_str().unwrap(),
+        "Hello from Matrix!"
+    );
     assert_eq!(data["event_id"].as_str().unwrap(), "$event-123");
     assert_eq!(data["room_id"].as_str().unwrap(), "!room:example.com");
 }

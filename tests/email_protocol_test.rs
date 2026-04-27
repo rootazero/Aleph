@@ -51,9 +51,14 @@ async fn test_email_send_with_subject_metadata() {
 async fn test_email_send_typing_returns_unsupported() {
     let channel = EmailChannel::for_test("test-email", test_email_config());
 
-    let result = channel.send_typing(&ConversationId::new("user@example.com")).await;
+    let result = channel
+        .send_typing(&ConversationId::new("user@example.com"))
+        .await;
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
         "Email should not support typing indicators"
     );
 }
@@ -70,7 +75,10 @@ async fn test_email_react_returns_unsupported() {
         )
         .await;
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
         "Email should not support reactions"
     );
 }

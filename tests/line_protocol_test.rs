@@ -52,7 +52,11 @@ async fn test_line_delete_message() {
         )
         .await;
 
-    assert!(result.is_ok(), "delete() should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "delete() should succeed: {:?}",
+        result.err()
+    );
 
     let _ = channel.stop().await;
 }
@@ -71,7 +75,10 @@ async fn test_line_react_unsupported() {
         .await;
 
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
         "LINE should not support reactions"
     );
 
@@ -92,7 +99,10 @@ async fn test_line_edit_unsupported() {
         .await;
 
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
         "LINE should not support editing"
     );
 
@@ -103,9 +113,7 @@ async fn test_line_edit_unsupported() {
 async fn test_line_send_not_started_fails() {
     let channel = LineChannel::for_test("test-line", test_line_config(), "https://mock.local");
 
-    let result = channel
-        .send(OutboundMessage::text("U123", "Hello"))
-        .await;
+    let result = channel.send(OutboundMessage::text("U123", "Hello")).await;
 
     assert!(result.is_err(), "send() should fail when not started");
 }
@@ -115,9 +123,7 @@ async fn test_line_send_typing_noop() {
     let mut channel = LineChannel::for_test("test-line", test_line_config(), "https://mock.local");
     channel.start().await.unwrap();
 
-    let result = channel
-        .send_typing(&ConversationId::new("U123"))
-        .await;
+    let result = channel.send_typing(&ConversationId::new("U123")).await;
 
     assert!(result.is_ok(), "send_typing() should return Ok for LINE");
 

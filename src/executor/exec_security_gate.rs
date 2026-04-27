@@ -15,13 +15,13 @@ use tracing::{debug, info, warn};
 use crate::exec::approval::channel_bridge::ChannelApprovalBridge;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
-use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::socket::ApprovalDecisionType;
 use crate::exec::{
     analyze_shell_command, decide_exec_approval, ApprovalDecision, ExecApprovalManager,
     ExecContext, RiskLevel, SecretMasker, SecurityKernel,
 };
+use crate::sandbox::driver::OsSandboxDriverTrait;
 
 /// Decision from pre-execution gate
 #[derive(Debug)]

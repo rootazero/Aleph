@@ -192,8 +192,7 @@ impl SessionScheduler {
                 reply_config.max_message_length = caps.max_message_length;
             }
         }
-        let pending_media: crate::gateway::media::PendingMedia =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending_media: crate::gateway::media::PendingMedia = Arc::new(Mutex::new(Vec::new()));
         let reply_emitter: Arc<dyn EventEmitter + Send + Sync> =
             Arc::new(ReplyEmitter::with_config(
                 self.channel_registry.clone(),
@@ -430,8 +429,7 @@ async fn execute_next(
             reply_config.max_message_length = caps.max_message_length;
         }
     }
-    let pending_media: crate::gateway::media::PendingMedia =
-        Arc::new(Mutex::new(Vec::new()));
+    let pending_media: crate::gateway::media::PendingMedia = Arc::new(Mutex::new(Vec::new()));
     let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
         channel_registry.clone(),
         enriched.merged.primary_context.reply_route.clone(),

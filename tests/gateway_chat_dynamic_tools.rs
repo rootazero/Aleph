@@ -10,7 +10,6 @@ mod common;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use alephcore::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
 use alephcore::gateway::execution_engine::helpers::run_dispatch_and_drain;
 use alephcore::gateway::i18n::Locale;
@@ -19,6 +18,7 @@ use alephcore::session::events::ToolOutput;
 use alephcore::tools::service::{
     ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
 };
+use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use common::{basic_request, orchestrator_with_stub, StubHarnessRunner};
@@ -91,9 +91,7 @@ async fn per_request_tool_service_reaches_harness_runner() {
                 total_tokens: 0,
                 hit_limit: false,
             };
-            let _ = ctx
-                .events
-                .send(FlowStreamEvent::Complete(outcome.clone()));
+            let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)
         })
     }));

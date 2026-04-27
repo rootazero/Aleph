@@ -200,7 +200,10 @@ impl MediaCapability for MacOSPlatform {
             SnapParams, SnapResult, METHOD_CAMERA_SNAP,
         };
         let config = config.clamped();
-        debug!(quality = config.quality, "Proxying camera snap to Swift helper");
+        debug!(
+            quality = config.quality,
+            "Proxying camera snap to Swift helper"
+        );
         let rpc: SnapResult = self
             .bridge
             .call(

@@ -82,7 +82,11 @@ impl SlackChannel {
     }
 
     /// Create a Slack channel configured for testing against a mock API server.
-    pub fn for_test(id: impl Into<String>, config: SlackConfig, api_base: impl Into<String>) -> Self {
+    pub fn for_test(
+        id: impl Into<String>,
+        config: SlackConfig,
+        api_base: impl Into<String>,
+    ) -> Self {
         let mut channel = Self::new(id, config);
         channel.api_base = Some(api_base.into());
         channel
@@ -130,7 +134,9 @@ impl Channel for SlackChannel {
 
         // Validate bot token via auth.test
         let api_base = self.api_base.as_deref();
-        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token, api_base).await {
+        match SlackMessageOps::validate_bot_token(&self.client, &self.config.bot_token, api_base)
+            .await
+        {
             Ok(user_id) => {
                 tracing::info!("Slack bot authenticated (user_id: {user_id})");
                 *self.bot_user_id.write().await = Some(user_id);
@@ -212,7 +218,10 @@ impl Channel for SlackChannel {
             let api_base = self.api_base.clone();
             tokio::spawn(async move {
                 let _ = SlackMessageOps::post_typing_with_base(
-                    &client, &token, &channel, api_base.as_deref(),
+                    &client,
+                    &token,
+                    &channel,
+                    api_base.as_deref(),
                 )
                 .await;
             });

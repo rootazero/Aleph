@@ -42,6 +42,9 @@ impl MockTcpConnection {
     }
 
     pub async fn send_line(&mut self, line: &str) {
-        let _ = self.stream.write_all(format!("{}\r\n", line).as_bytes()).await;
+        let _ = self
+            .stream
+            .write_all(format!("{}\r\n", line).as_bytes())
+            .await;
     }
 }

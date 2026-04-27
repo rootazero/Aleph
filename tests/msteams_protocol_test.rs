@@ -1,8 +1,8 @@
-use alephcore::gateway::channel::{Channel, OutboundMessage, ChannelResult, InboundMessage};
+use alephcore::gateway::channel::{Channel, ChannelResult, InboundMessage, OutboundMessage};
 use alephcore::gateway::interfaces::msteams::{MsTeamsChannel, MsTeamsConfig};
 use alephcore::gateway::WebhookHandler;
-use axum::http::HeaderMap;
 use axum::body::Bytes;
+use axum::http::HeaderMap;
 
 fn test_config() -> MsTeamsConfig {
     MsTeamsConfig {
@@ -17,7 +17,10 @@ async fn test_teams_protocol_test_mode_start() {
     let mut channel = MsTeamsChannel::for_test("teams-test", test_config());
     let result = channel.start().await;
     assert!(result.is_ok());
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Connected);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Connected
+    );
 }
 
 #[tokio::test]

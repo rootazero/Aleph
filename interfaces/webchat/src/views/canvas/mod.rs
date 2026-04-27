@@ -247,12 +247,20 @@ fn RadialCanvasView() -> impl IntoView {
                     let name = nbhd.center.name.clone();
                     let one_hop_len = nbhd.one_hop.len();
                     let total_len = one_hop_len
-                        + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
+                        + nbhd
+                            .clusters
+                            .iter()
+                            .map(|c| c.member_ids.len())
+                            .sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_inner, &nbhd, Some(entry_id.clone()));
-                    nav_inner.borrow_mut().fulfilled(entry_id.clone(), name, nbhd);
-                    prefetch_inner.borrow_mut().put(entry_id.clone(), resp.clone(), now_ms);
+                    nav_inner
+                        .borrow_mut()
+                        .fulfilled(entry_id.clone(), name, nbhd);
+                    prefetch_inner
+                        .borrow_mut()
+                        .put(entry_id.clone(), resp.clone(), now_ms);
                     last_response.set(Some((entry_id.clone(), resp)));
                     active_request.set(Some(entry_id.clone()));
                     set_focus_id.set(Some(entry_id));
@@ -277,7 +285,9 @@ fn RadialCanvasView() -> impl IntoView {
     let prefetch_req = prefetch.clone();
     let gs_req = graph_state.clone();
     Effect::new(move || {
-        let Some(id) = active_request.get() else { return };
+        let Some(id) = active_request.get() else {
+            return;
+        };
         let now_ms = now_ms();
         let agent = agent_id.get();
 
@@ -295,9 +305,12 @@ fn RadialCanvasView() -> impl IntoView {
             let name = nbhd.center.name.clone();
             let one_hop_len = nbhd.one_hop.len();
             let total_len = one_hop_len
-                + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
-            let neighbor_ids: Vec<String> =
-                nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
+                + nbhd
+                    .clusters
+                    .iter()
+                    .map(|c| c.member_ids.len())
+                    .sum::<usize>();
+            let neighbor_ids: Vec<String> = nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
             seed_graph_state(&gs_req, &nbhd, Some(id.clone()));
             nav_req.borrow_mut().fulfilled(id.clone(), name, nbhd);
             last_response.set(Some((id.clone(), raw)));
@@ -321,12 +334,18 @@ fn RadialCanvasView() -> impl IntoView {
                     let name = nbhd.center.name.clone();
                     let one_hop_len = nbhd.one_hop.len();
                     let total_len = one_hop_len
-                        + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
+                        + nbhd
+                            .clusters
+                            .iter()
+                            .map(|c| c.member_ids.len())
+                            .sum::<usize>();
                     let neighbor_ids: Vec<String> =
                         nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
                     seed_graph_state(&gs_fetch, &nbhd, Some(id.clone()));
                     nav_fetch.borrow_mut().fulfilled(id.clone(), name, nbhd);
-                    prefetch_fetch.borrow_mut().put(id.clone(), resp.clone(), now_ms);
+                    prefetch_fetch
+                        .borrow_mut()
+                        .put(id.clone(), resp.clone(), now_ms);
                     last_response.set(Some((id.clone(), resp)));
                     set_focus_id.set(Some(id));
                     set_focus_neighbors.set(neighbor_ids);
@@ -353,8 +372,9 @@ fn RadialCanvasView() -> impl IntoView {
                 spawn_local(async move {
                     match GraphApi::node_detail(&state, &agent, &id).await {
                         Ok(detail) => {
-                            set_detail_content
-                                .set(DetailContent::Node { detail: detail.clone() });
+                            set_detail_content.set(DetailContent::Node {
+                                detail: detail.clone(),
+                            });
                             set_node_detail.set(Some(detail));
                         }
                         Err(e) => {
@@ -379,7 +399,9 @@ fn RadialCanvasView() -> impl IntoView {
     // -----------------------------------------------------------------------
     let prefetch_e4 = prefetch.clone();
     Effect::new(move || {
-        let Some(id) = prefetch_request.get() else { return };
+        let Some(id) = prefetch_request.get() else {
+            return;
+        };
 
         let now = now_ms();
         // Skip if already cached and not stale
@@ -412,7 +434,9 @@ fn RadialCanvasView() -> impl IntoView {
         let threshold = fold_threshold.get().clamp(1, 1000);
 
         // Snapshot last_response and active id without subscribing to them.
-        let Some((cached_id, raw)) = last_response.get_untracked() else { return };
+        let Some((cached_id, raw)) = last_response.get_untracked() else {
+            return;
+        };
         if active_request.get_untracked().as_ref() != Some(&cached_id) {
             return; // race: slider fired during a center transition
         }
@@ -423,8 +447,12 @@ fn RadialCanvasView() -> impl IntoView {
         populate_orphans(&mut nbhd, &dtos);
 
         let one_hop_len = nbhd.one_hop.len();
-        let total_len =
-            one_hop_len + nbhd.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
+        let total_len = one_hop_len
+            + nbhd
+                .clusters
+                .iter()
+                .map(|c| c.member_ids.len())
+                .sum::<usize>();
         let neighbor_ids: Vec<String> = nbhd.one_hop.iter().map(|n| n.id.clone()).collect();
 
         update_graph_state_nodes_only(&gs_refold, &nbhd);
@@ -665,4 +693,3 @@ fn update_graph_state_nodes_only(
     // Intentionally NOT modified: viewport.{offset,scale}, drag_offset,
     // selected_node, layout (no wake — radial uses target_positions, not physics).
 }
-

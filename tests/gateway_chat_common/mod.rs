@@ -13,12 +13,12 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use alephcore::agents::AgentRegistry;
+use alephcore::orchestrator::FlowError;
 use alephcore::orchestrator::{
     build_sandbox_factory, AgentHarnessRunner, BrainRef, DenyAllSandbox, FlowInput, FlowOutcome,
     FlowOverrides, FlowRegistry, FlowRequest, FlowSet, FlowSpec, FlowStreamEvent, HarnessRunner,
     Orchestrator, RoutingOverrides, SandboxKind, SessionStrategy,
 };
-use alephcore::orchestrator::FlowError;
 use alephcore::providers::adapter::{ProviderResponse, RequestPayload};
 use alephcore::providers::AiProvider;
 use alephcore::sandbox::Sandbox;
@@ -90,7 +90,9 @@ impl AiProvider for NeverProvider {
 // -- Stub HarnessRunner -----------------------------------------------------
 
 pub type StubRunFn = Arc<
-    dyn Fn(StubContext) -> std::pin::Pin<
+    dyn Fn(
+            StubContext,
+        ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<FlowOutcome, FlowError>> + Send>,
         > + Send
         + Sync,

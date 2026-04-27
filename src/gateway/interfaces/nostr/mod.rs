@@ -272,12 +272,8 @@ impl Channel for NostrChannel {
         reaction: &str,
     ) -> ChannelResult<()> {
         if self.test_mode {
-            let mut event = message_ops::build_reaction(
-                reaction,
-                message_id.as_str(),
-                "",
-                &self.own_pubkey,
-            );
+            let mut event =
+                message_ops::build_reaction(reaction, message_id.as_str(), "", &self.own_pubkey);
             message_ops::sign_event(&mut event, &self.config.private_key)
                 .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;
             return Ok(());
@@ -288,12 +284,8 @@ impl Channel for NostrChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Nostr channel not started".to_string()))?;
 
-        let mut event = message_ops::build_reaction(
-            reaction,
-            message_id.as_str(),
-            "",
-            &self.own_pubkey,
-        );
+        let mut event =
+            message_ops::build_reaction(reaction, message_id.as_str(), "", &self.own_pubkey);
 
         message_ops::sign_event(&mut event, &self.config.private_key)
             .map_err(|e| ChannelError::SendFailed(format!("failed to sign reaction: {e}")))?;

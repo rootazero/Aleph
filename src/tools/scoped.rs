@@ -10,12 +10,14 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::tools::runtime::{LoopTool, LoopToolRegistry};
-use crate::tools::refresh::ToolRefreshSource;
 use crate::agents::subagent_tool::SubagentTool;
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
-use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource};
+use crate::tools::refresh::ToolRefreshSource;
+use crate::tools::runtime::{LoopTool, LoopToolRegistry};
+use crate::tools::service::{
+    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolService, ToolSource,
+};
 
 // =============================================================================
 // ToolHookDecorator trait
@@ -125,8 +127,8 @@ impl ScopedToolService {
         name: &str,
         result: crate::tools::runtime::ToolResult,
     ) -> Result<ToolOutput, ToolError> {
-        use crate::tools::runtime::ToolResult;
         use crate::session::events::ToolOutputMetadata;
+        use crate::tools::runtime::ToolResult;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
                 Ok(ToolOutput {
@@ -212,7 +214,11 @@ impl ToolService for ScopedToolService {
         }
 
         // Route to subagent tool if name matches.
-        let result = if self.subagent_tool.as_ref().is_some_and(|st| st.name() == name) {
+        let result = if self
+            .subagent_tool
+            .as_ref()
+            .is_some_and(|st| st.name() == name)
+        {
             let st = self.subagent_tool.as_ref().unwrap();
             let raw = st.execute(input).await;
             Self::tool_result_to_output(name, raw)
@@ -241,8 +247,8 @@ impl ToolService for ScopedToolService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
     use crate::tools::refresh::ToolRefreshSource;
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult as LoopToolResult};
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
@@ -256,11 +262,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolService for NoopParentTools {
-        async fn execute(
-            &self,
-            _name: &str,
-            _input: Value,
-        ) -> Result<ToolOutput, ToolError> {
+        async fn execute(&self, _name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
             Err(ToolError::NotFound {
                 name: "test".into(),
             })
@@ -373,21 +375,29 @@ mod tests {
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn list_includes_subagent_tool_when_set() {
-        use crate::harness::chain_context::ChainContext;
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
-        use crate::providers::AiProvider;
+        use crate::harness::chain_context::ChainContext;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
+        use crate::providers::AiProvider;
         use std::future::Future;
         use std::pin::Pin;
 
         struct MockProvider;
         impl AiProvider for MockProvider {
-            fn process<'a>(&'a self, _p: RequestPayload<'a>) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+            fn process<'a>(
+                &'a self,
+                _p: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
                 Box::pin(async { Ok(ProviderResponse::text_only("ok".into())) })
             }
-            fn name(&self) -> &str { "mock" }
-            fn color(&self) -> &str { "#000" }
+            fn name(&self) -> &str {
+                "mock"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
@@ -409,7 +419,11 @@ mod tests {
 
         let defs = svc.list().await;
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"subagent"), "subagent must be in list; got: {:?}", names);
+        assert!(
+            names.contains(&"subagent"),
+            "subagent must be in list; got: {:?}",
+            names
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -421,11 +435,13 @@ mod tests {
         let refresh = Arc::new(StubRefresh::new(true, StdArc::clone(&fetched)));
 
         let registry = make_registry(&["tool_a"]);
-        let svc = ScopedToolService::new(registry, BTreeSet::new())
-            .with_refresh(refresh);
+        let svc = ScopedToolService::new(registry, BTreeSet::new()).with_refresh(refresh);
 
         svc.list().await;
-        assert!(fetched.load(Ordering::Acquire), "fetch_tools must be called when poll_changes returns true");
+        assert!(
+            fetched.load(Ordering::Acquire),
+            "fetch_tools must be called when poll_changes returns true"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -433,21 +449,29 @@ mod tests {
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn execute_routes_to_subagent_tool_by_name() {
-        use crate::harness::chain_context::ChainContext;
         use crate::agents::background_tracker::BackgroundAgentTracker;
         use crate::agents::AgentRegistry;
-        use crate::providers::AiProvider;
+        use crate::harness::chain_context::ChainContext;
         use crate::providers::adapter::{ProviderResponse, RequestPayload};
+        use crate::providers::AiProvider;
         use std::future::Future;
         use std::pin::Pin;
 
         struct MockProvider;
         impl AiProvider for MockProvider {
-            fn process<'a>(&'a self, _p: RequestPayload<'a>) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+            fn process<'a>(
+                &'a self,
+                _p: RequestPayload<'a>,
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
                 Box::pin(async { Ok(ProviderResponse::text_only("subagent result".into())) })
             }
-            fn name(&self) -> &str { "mock" }
-            fn color(&self) -> &str { "#000" }
+            fn name(&self) -> &str {
+                "mock"
+            }
+            fn color(&self) -> &str {
+                "#000"
+            }
         }
 
         let provider: Arc<dyn AiProvider> = Arc::new(MockProvider);
@@ -469,8 +493,14 @@ mod tests {
         let svc = ScopedToolService::new(registry, BTreeSet::new()).with_subagent_tool(st);
 
         // A valid subagent call; the mock provider returns "subagent result"
-        let result = svc.execute("subagent", json!({ "task": "do something" })).await;
-        assert!(result.is_ok(), "subagent execute should succeed; got: {:?}", result.err());
+        let result = svc
+            .execute("subagent", json!({ "task": "do something" }))
+            .await;
+        assert!(
+            result.is_ok(),
+            "subagent execute should succeed; got: {:?}",
+            result.err()
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -486,13 +516,20 @@ mod tests {
         });
 
         let registry = make_registry(&["read_file"]);
-        let svc = ScopedToolService::new(registry, BTreeSet::new())
-            .with_hook_decorator(hook);
+        let svc = ScopedToolService::new(registry, BTreeSet::new()).with_hook_decorator(hook);
 
         let _ = svc.execute("read_file", json!({})).await;
 
-        assert_eq!(before.load(Ordering::Relaxed), 1, "before_execute must fire once");
-        assert_eq!(after.load(Ordering::Relaxed), 1, "after_execute must fire once");
+        assert_eq!(
+            before.load(Ordering::Relaxed),
+            1,
+            "before_execute must fire once"
+        );
+        assert_eq!(
+            after.load(Ordering::Relaxed),
+            1,
+            "after_execute must fire once"
+        );
     }
 
     // -------------------------------------------------------------------------

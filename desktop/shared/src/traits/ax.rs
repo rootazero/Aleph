@@ -6,9 +6,7 @@
 
 use async_trait::async_trait;
 
-use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, QueryByRoleParams, QueryTreeParams,
-};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryByRoleParams, QueryTreeParams};
 
 use crate::error::Result;
 

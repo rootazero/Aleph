@@ -1,6 +1,6 @@
+use alephcore::gateway::channel::ChannelId;
 use alephcore::gateway::interfaces::signal::message_ops::SignalMessageOps;
 use alephcore::gateway::interfaces::signal::SignalConfig;
-use alephcore::gateway::channel::ChannelId;
 
 #[test]
 fn test_signal_fixture_inbound_message() {
@@ -8,7 +8,10 @@ fn test_signal_fixture_inbound_message() {
     let data: serde_json::Value = serde_json::from_str(json_str).unwrap();
 
     assert_eq!(data["envelope"]["source"], "+9876543210");
-    assert_eq!(data["envelope"]["dataMessage"]["message"], "Hello from Signal!");
+    assert_eq!(
+        data["envelope"]["dataMessage"]["message"],
+        "Hello from Signal!"
+    );
 }
 
 #[test]
@@ -16,7 +19,10 @@ fn test_signal_fixture_group_message() {
     let json_str = include_str!("fixtures/signal/group_message.json");
     let data: serde_json::Value = serde_json::from_str(json_str).unwrap();
 
-    assert_eq!(data["envelope"]["dataMessage"]["groupInfo"]["groupId"], "abc123group");
+    assert_eq!(
+        data["envelope"]["dataMessage"]["groupInfo"]["groupId"],
+        "abc123group"
+    );
 }
 
 #[test]
@@ -30,13 +36,8 @@ fn test_signal_convert_message_from_fixture() {
         ..Default::default()
     };
 
-    let inbound = SignalMessageOps::convert_message(
-        &data,
-        &channel_id,
-        "+1234567890",
-        &config,
-    )
-    .unwrap();
+    let inbound =
+        SignalMessageOps::convert_message(&data, &channel_id, "+1234567890", &config).unwrap();
 
     assert_eq!(inbound.sender_id.as_str(), "+9876543210");
     assert_eq!(inbound.text, "Hello from Signal!");
@@ -54,13 +55,8 @@ fn test_signal_convert_group_from_fixture() {
         ..Default::default()
     };
 
-    let inbound = SignalMessageOps::convert_message(
-        &data,
-        &channel_id,
-        "+1234567890",
-        &config,
-    )
-    .unwrap();
+    let inbound =
+        SignalMessageOps::convert_message(&data, &channel_id, "+1234567890", &config).unwrap();
 
     assert!(inbound.is_group);
     assert_eq!(inbound.conversation_id.as_str(), "abc123group");

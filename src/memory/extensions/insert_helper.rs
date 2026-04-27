@@ -37,8 +37,8 @@ mod tests {
     use crate::memory::extensions::traits::MemoryExtension;
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::raw_memory::RawMemorySource;
-    use async_trait::async_trait;
     use crate::sync_primitives::Mutex;
+    use async_trait::async_trait;
 
     struct FakeStore(Mutex<Vec<RawMemory>>);
     #[async_trait]

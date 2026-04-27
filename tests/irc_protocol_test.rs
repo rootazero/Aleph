@@ -47,9 +47,7 @@ async fn test_irc_send_message_long_text_splits() {
 async fn test_irc_send_message_not_started_fails() {
     let channel = IrcChannel::for_test("test-irc", test_irc_config());
 
-    let result = channel
-        .send(OutboundMessage::text("#test", "Hello"))
-        .await;
+    let result = channel.send(OutboundMessage::text("#test", "Hello")).await;
 
     assert!(result.is_err(), "send() should fail when not started");
 }
@@ -71,12 +69,13 @@ async fn test_irc_send_typing_unsupported() {
     let mut channel = IrcChannel::for_test("test-irc", test_irc_config());
     channel.start().await.unwrap();
 
-    let result = channel
-        .send_typing(&ConversationId::new("#test"))
-        .await;
+    let result = channel.send_typing(&ConversationId::new("#test")).await;
 
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::UnsupportedFeature(_))
+        ),
         "IRC should not support typing indicators"
     );
 }

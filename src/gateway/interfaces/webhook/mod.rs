@@ -79,7 +79,11 @@ impl WebhookChannel {
         }
     }
 
-    pub fn with_client(id: impl Into<String>, config: WebhookChannelConfig, client: reqwest::Client) -> Self {
+    pub fn with_client(
+        id: impl Into<String>,
+        config: WebhookChannelConfig,
+        client: reqwest::Client,
+    ) -> Self {
         let mut channel = Self::new(id, config);
         channel.client = client;
         channel

@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::sandbox::exec_approval::gate::ApprovalGate;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::driver::OsSandboxDriverTrait;
+use crate::sandbox::exec_approval::gate::ApprovalGate;
 use crate::sandbox::workspace::WorkspaceSandbox;
 use crate::sandbox::Sandbox;
 
@@ -59,9 +59,9 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::sandbox::exec_approval::types::ApprovalConfig;
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::driver::OsSandboxProfile;
+    use crate::sandbox::exec_approval::types::ApprovalConfig;
 
     /// Minimal driver used for factory tests — never invoked because the
     /// factory tests do not call `execute`.

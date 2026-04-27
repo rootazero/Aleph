@@ -49,8 +49,9 @@ impl ScreenCapability for MacOSScreen {
         };
 
         // Parse dimensions for coordinate conversion.
-        let (img_width, img_height) = png_dimensions(&png_bytes)
-            .ok_or_else(|| DesktopError::OcrFailed("invalid PNG: cannot read image dimensions".to_string()))?;
+        let (img_width, img_height) = png_dimensions(&png_bytes).ok_or_else(|| {
+            DesktopError::OcrFailed("invalid PNG: cannot read image dimensions".to_string())
+        })?;
 
         // Encode PNG as base64 for the RPC call.
         let image_base64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);

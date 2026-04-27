@@ -26,7 +26,10 @@ fn test_matrix_properties() {
     assert!(channel.capabilities().deletion);
     assert!(channel.capabilities().read_receipts);
     assert_eq!(channel.capabilities().max_message_length, 65535);
-    assert_eq!(channel.capabilities().max_attachment_size, 100 * 1024 * 1024);
+    assert_eq!(
+        channel.capabilities().max_attachment_size,
+        100 * 1024 * 1024
+    );
 }
 
 #[test]
@@ -36,7 +39,10 @@ fn test_matrix_for_test_constructor() {
 
     assert_eq!(channel.info().id.as_str(), "test-matrix");
     assert_eq!(channel.channel_type(), "matrix");
-    assert_eq!(channel.status(), alephcore::gateway::channel::ChannelStatus::Disconnected);
+    assert_eq!(
+        channel.status(),
+        alephcore::gateway::channel::ChannelStatus::Disconnected
+    );
 }
 
 #[tokio::test]

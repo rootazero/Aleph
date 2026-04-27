@@ -11,8 +11,7 @@ use alephcore::orchestrator::{FlowInput, FlowRequest};
 
 #[tokio::test]
 async fn default_agent_roundtrip() {
-    let fx =
-        common::OrchestratorFixture::new_with_scripted_response("The answer is 42.").await;
+    let fx = common::OrchestratorFixture::new_with_scripted_response("The answer is 42.").await;
 
     let handle = fx
         .orchestrator

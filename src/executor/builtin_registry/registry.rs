@@ -507,9 +507,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .call_json(arguments)
                     .await
             }),
-            "desktop_ax_query_tree" => Box::pin(async move {
-                self.desktop_ax_query_tree_tool.call_json(arguments).await
-            }),
+            "desktop_ax_query_tree" => {
+                Box::pin(async move { self.desktop_ax_query_tree_tool.call_json(arguments).await })
+            }
             "desktop_ax_query_by_role" => Box::pin(async move {
                 self.desktop_ax_query_by_role_tool
                     .call_json(arguments)

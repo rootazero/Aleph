@@ -67,17 +67,12 @@ async fn record_one_second_produces_file() {
     let result: RecordAudioResult = bridge
         .call(
             METHOD_AUDIO_RECORD,
-            RecordAudioParams {
-                duration_secs: 1.0,
-            },
+            RecordAudioParams { duration_secs: 1.0 },
         )
         .await
         .expect("media.audio.record RPC failed");
 
-    assert!(
-        !result.file_path.is_empty(),
-        "file_path was empty"
-    );
+    assert!(!result.file_path.is_empty(), "file_path was empty");
     assert!(
         std::path::Path::new(&result.file_path).exists(),
         "audio file missing: {}",

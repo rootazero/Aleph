@@ -45,7 +45,8 @@ fn unknown_agent_returns_error() {
 #[test]
 fn exact_channel_override_wins() {
     let mut ov = no_overrides();
-    ov.exact.insert(("main".into(), "telegram".into()), "main-lite".into());
+    ov.exact
+        .insert(("main".into(), "telegram".into()), "main-lite".into());
     ov.wildcard.insert("main".into(), "default-agent".into());
     let got = resolve_flow_id("main", Some("telegram"), &ov, &default_table()).unwrap();
     assert_eq!(got, "main-lite");
@@ -54,7 +55,8 @@ fn exact_channel_override_wins() {
 #[test]
 fn wildcard_override_used_for_non_matching_channel() {
     let mut ov = no_overrides();
-    ov.exact.insert(("main".into(), "telegram".into()), "main-lite".into());
+    ov.exact
+        .insert(("main".into(), "telegram".into()), "main-lite".into());
     ov.wildcard.insert("main".into(), "main-overridden".into());
     let got = resolve_flow_id("main", Some("slack"), &ov, &default_table()).unwrap();
     assert_eq!(got, "main-overridden");
@@ -78,7 +80,9 @@ fn no_channel_uses_wildcard_then_default() {
 use crate::orchestrator::flow_spec::SessionStrategy;
 use crate::orchestrator::resolver::{resolve_session, SessionResolveInput};
 
-fn fixed_key() -> String { "fresh-abc".into() }
+fn fixed_key() -> String {
+    "fresh-abc".into()
+}
 
 #[test]
 fn reuse_strategy_uses_hint() {
@@ -123,7 +127,9 @@ fn fresh_strategy_mints_new_key() {
 #[test]
 fn child_strategy_uses_parent_from_request() {
     let input = SessionResolveInput {
-        strategy: SessionStrategy::Child { parent_session_key: None },
+        strategy: SessionStrategy::Child {
+            parent_session_key: None,
+        },
         session_hint: None,
         parent_session: Some("parent-xyz".into()),
         fresh_key_fn: fixed_key,
@@ -151,7 +157,9 @@ fn child_strategy_spec_override_beats_request() {
 #[test]
 fn child_strategy_without_parent_errors() {
     let input = SessionResolveInput {
-        strategy: SessionStrategy::Child { parent_session_key: None },
+        strategy: SessionStrategy::Child {
+            parent_session_key: None,
+        },
         session_hint: None,
         parent_session: None,
         fresh_key_fn: fixed_key,

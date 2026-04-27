@@ -28,7 +28,6 @@ use crate::gateway::openai_api::types::{
 };
 use crate::gateway::router::SessionKey;
 
-
 // =============================================================================
 // SseEventEmitter — translates StreamEvent → OpenAI SSE frames
 // =============================================================================

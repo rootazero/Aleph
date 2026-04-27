@@ -91,7 +91,10 @@ async fn test_matrix_send_not_started_fails() {
         .await;
 
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::NotConnected(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::NotConnected(_))
+        ),
         "send() should fail with NotConnected when not started"
     );
 }

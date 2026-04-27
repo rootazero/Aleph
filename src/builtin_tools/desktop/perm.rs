@@ -109,9 +109,7 @@ impl AlephTool for DesktopCheckPermissions {
             }
         };
 
-        let kinds: Vec<PermissionKind> = args
-            .kinds
-            .unwrap_or_else(|| DEFAULT_KINDS.to_vec());
+        let kinds: Vec<PermissionKind> = args.kinds.unwrap_or_else(|| DEFAULT_KINDS.to_vec());
 
         let mut statuses: Vec<ProtocolPermissionStatus> = Vec::with_capacity(kinds.len());
         for kind in &kinds {
@@ -122,9 +120,7 @@ impl AlephTool for DesktopCheckPermissions {
                     return Ok(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(format!(
-                            "Permission check for {kind:?} failed: {e}"
-                        )),
+                        message: Some(format!("Permission check for {kind:?} failed: {e}")),
                     });
                 }
             }

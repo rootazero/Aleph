@@ -652,9 +652,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // SQLite log lives in a separate DB from the main SessionStore; there
     // is no reason to couple them. (Prior code gated the build behind
     // `sqlite_sm`, which left `file` deployments without an Orchestrator.)
-    let session_service_for_orchestrator = build_sqlite_session_service(
-        &alephcore::gateway::SessionManagerConfig::default().db_path,
-    );
+    let session_service_for_orchestrator =
+        build_sqlite_session_service(&alephcore::gateway::SessionManagerConfig::default().db_path);
     let session_store: Arc<dyn SessionStore> = if let Some(sm) = sqlite_sm {
         let mut sm = sm
             .with_raw_memory_writer(
@@ -1039,9 +1038,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
     } else if !args.daemon {
-        tracing::info!(
-            "Orchestrator: skipped (no default provider or session service available)"
-        );
+        tracing::info!("Orchestrator: skipped (no default provider or session service available)");
     }
 
     // P1 fix: close the open-auth gap on `/v1/*`. Snapshot the current
@@ -1050,10 +1047,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // per-agent busy-lock or upstream LLM. Token rotation requires a
     // server restart — acceptable trade-off for single-user self-hosted
     // deployments.
-    server.openai_api_token = auth_bundle
-        .auth_ctx
-        .shared_token_mgr
-        .get_current_token();
+    server.openai_api_token = auth_bundle.auth_ctx.shared_token_mgr.get_current_token();
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();

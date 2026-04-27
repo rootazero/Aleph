@@ -12,9 +12,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::tools::runtime::LoopToolRegistry;
-use crate::tools::refresh::ToolRefreshSource;
 use crate::agents::subagent_tool::SubagentTool;
+use crate::tools::refresh::ToolRefreshSource;
+use crate::tools::runtime::LoopToolRegistry;
 use crate::tools::scoped::ScopedToolService;
 use crate::tools::service::ToolService;
 
@@ -62,9 +62,7 @@ mod tests {
             json!({ "type": "object" })
         }
         async fn execute(&self, _input: Value) -> ToolResult {
-            ToolResult::Success {
-                output: json!({}),
-            }
+            ToolResult::Success { output: json!({}) }
         }
     }
 

@@ -9,9 +9,7 @@ mod common;
 
 use std::sync::Arc;
 
-use alephcore::gateway::event_emitter::{
-    CollectingEventEmitter, EventEmitter, StreamEvent,
-};
+use alephcore::gateway::event_emitter::{CollectingEventEmitter, EventEmitter, StreamEvent};
 use alephcore::gateway::execution_engine::helpers::run_dispatch_and_drain;
 use alephcore::gateway::i18n::Locale;
 use alephcore::orchestrator::{FlowOutcome, FlowStreamEvent};
@@ -49,9 +47,7 @@ async fn tool_events_preserve_order() {
                 total_tokens: 0,
                 hit_limit: false,
             };
-            let _ = ctx
-                .events
-                .send(FlowStreamEvent::Complete(outcome.clone()));
+            let _ = ctx.events.send(FlowStreamEvent::Complete(outcome.clone()));
             Ok(outcome)
         })
     }));

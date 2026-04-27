@@ -6,7 +6,9 @@ async fn test_cli_protocol_send_text() {
     let mut channel = CliChannel::for_test("test-cli");
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("cli:main", "Hello CLI")).await;
+    let result = channel
+        .send(OutboundMessage::text("cli:main", "Hello CLI"))
+        .await;
     assert!(result.is_ok());
 
     let send_result = result.unwrap();
@@ -35,6 +37,8 @@ async fn test_cli_protocol_inject_message() {
 async fn test_cli_protocol_not_connected_fails() {
     let channel = CliChannel::for_test("test-cli");
 
-    let result = channel.send(OutboundMessage::text("cli:main", "Hello")).await;
+    let result = channel
+        .send(OutboundMessage::text("cli:main", "Hello"))
+        .await;
     assert!(result.is_err());
 }

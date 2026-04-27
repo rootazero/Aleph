@@ -27,7 +27,9 @@ pub use context::current_session;
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
-pub use policy::{EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy};
+pub use policy::{
+    EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
+};
 
 #[async_trait]
 pub trait Sandbox: Send + Sync + 'static {

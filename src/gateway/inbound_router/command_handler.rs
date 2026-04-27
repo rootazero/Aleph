@@ -134,9 +134,7 @@ impl InboundMessageRouter {
 
         let locale = self.resolve_locale().await;
         let reply_text = crate::gateway::i18n::t(
-            crate::gateway::i18n::Msg::NewSessionStarted {
-                topic_suffix: "",
-            },
+            crate::gateway::i18n::Msg::NewSessionStarted { topic_suffix: "" },
             locale,
         );
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);

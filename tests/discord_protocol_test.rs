@@ -27,9 +27,7 @@ async fn test_discord_send_typing_in_test_mode() {
     let mut channel = DiscordChannel::for_test("test-discord", test_discord_config());
     channel.start().await.unwrap();
 
-    let result = channel
-        .send_typing(&ConversationId::new("123456"))
-        .await;
+    let result = channel.send_typing(&ConversationId::new("123456")).await;
 
     assert!(result.is_ok(), "send_typing() should succeed in test mode");
 }
@@ -85,12 +83,13 @@ async fn test_discord_react_in_test_mode() {
 async fn test_discord_send_not_started_fails() {
     let channel = DiscordChannel::for_test("test-discord", test_discord_config());
 
-    let result = channel
-        .send(OutboundMessage::text("123456", "Hello"))
-        .await;
+    let result = channel.send(OutboundMessage::text("123456", "Hello")).await;
 
     assert!(
-        matches!(result, Err(alephcore::gateway::channel::ChannelError::NotConnected(_))),
+        matches!(
+            result,
+            Err(alephcore::gateway::channel::ChannelError::NotConnected(_))
+        ),
         "send() should fail with NotConnected when not started"
     );
 }

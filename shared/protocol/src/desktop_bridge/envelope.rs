@@ -51,7 +51,6 @@ pub enum Message {
     Notification(Notification),
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

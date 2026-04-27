@@ -88,11 +88,11 @@ pub mod wizard;
 
 pub mod daemon;
 pub mod resilience;
-pub mod task_resilience;
 pub mod scheduler;
 pub mod secrets;
 pub mod security;
 pub mod sync_primitives;
+pub mod task_resilience;
 
 /// Unified initialization module (re-export for backward compatibility)
 pub mod initialization {

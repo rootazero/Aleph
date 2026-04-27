@@ -53,7 +53,10 @@ pub fn save_canvas_radial_navigation(value: bool) {
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-            let _ = storage.set_item(CANVAS_RADIAL_NAVIGATION_KEY, if value { "true" } else { "false" });
+            let _ = storage.set_item(
+                CANVAS_RADIAL_NAVIGATION_KEY,
+                if value { "true" } else { "false" },
+            );
         }
     }
     #[cfg(not(target_arch = "wasm32"))]

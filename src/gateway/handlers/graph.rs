@@ -499,9 +499,14 @@ mod tests {
     async fn seed_two_agents(db: &MemoryBackend) -> (String, String) {
         let alpha_note = make_note("AlphaOnly", "concept", vec![]);
         let beta_note = make_note("BetaOnly", "concept", vec![]);
-        db.index_note(&alpha_note, "alpha", "concept").await.unwrap();
+        db.index_note(&alpha_note, "alpha", "concept")
+            .await
+            .unwrap();
         db.index_note(&beta_note, "beta", "concept").await.unwrap();
-        ("concept/AlphaOnly".to_string(), "concept/BetaOnly".to_string())
+        (
+            "concept/AlphaOnly".to_string(),
+            "concept/BetaOnly".to_string(),
+        )
     }
 
     fn query_request(limit: usize, agent_id: Option<&str>) -> JsonRpcRequest {
@@ -529,9 +534,14 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(ids.contains(&alpha_path.as_str()), "alpha note must appear: {ids:?}");
-        assert!(!ids.iter().any(|id| id.contains("BetaOnly")),
-            "beta note must NOT appear when querying alpha: {ids:?}");
+        assert!(
+            ids.contains(&alpha_path.as_str()),
+            "alpha note must appear: {ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|id| id.contains("BetaOnly")),
+            "beta note must NOT appear when querying alpha: {ids:?}"
+        );
     }
 
     #[tokio::test]
@@ -546,7 +556,9 @@ mod tests {
             .await
             .unwrap();
         let alpha_note = make_note("AlphaOnly", "concept", vec![]);
-        db.index_note(&alpha_note, "alpha", "concept").await.unwrap();
+        db.index_note(&alpha_note, "alpha", "concept")
+            .await
+            .unwrap();
 
         let req = query_request(50, None);
         let resp = handle_query_impl(req, db).await;
@@ -555,10 +567,14 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(ids.iter().any(|id| id.contains("MainNote")),
-            "default agent's note must appear when agent_id omitted: {ids:?}");
-        assert!(!ids.iter().any(|id| id.contains("AlphaOnly")),
-            "non-default agent's note must NOT appear when agent_id omitted: {ids:?}");
+        assert!(
+            ids.iter().any(|id| id.contains("MainNote")),
+            "default agent's note must appear when agent_id omitted: {ids:?}"
+        );
+        assert!(
+            !ids.iter().any(|id| id.contains("AlphaOnly")),
+            "non-default agent's note must NOT appear when agent_id omitted: {ids:?}"
+        );
     }
 
     #[tokio::test]
@@ -569,9 +585,15 @@ mod tests {
         let alpha_peer = make_note("AlphaPeer", "concept", vec![]);
         let beta_center = make_note("Hub", "concept", vec!["concept/BetaPeer"]);
         let beta_peer = make_note("BetaPeer", "concept", vec![]);
-        db.index_note(&alpha_center, "alpha", "concept").await.unwrap();
-        db.index_note(&alpha_peer, "alpha", "concept").await.unwrap();
-        db.index_note(&beta_center, "beta", "concept").await.unwrap();
+        db.index_note(&alpha_center, "alpha", "concept")
+            .await
+            .unwrap();
+        db.index_note(&alpha_peer, "alpha", "concept")
+            .await
+            .unwrap();
+        db.index_note(&beta_center, "beta", "concept")
+            .await
+            .unwrap();
         db.index_note(&beta_peer, "beta", "concept").await.unwrap();
 
         let req = neighbors_request_with_agent("concept/Hub", 2, 50, Some("alpha"));
@@ -581,10 +603,14 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let neighbor_ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
-            "alpha neighbor must appear: {neighbor_ids:?}");
-        assert!(!neighbor_ids.iter().any(|id| id.contains("BetaPeer")),
-            "beta neighbor must NOT appear: {neighbor_ids:?}");
+        assert!(
+            neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
+            "alpha neighbor must appear: {neighbor_ids:?}"
+        );
+        assert!(
+            !neighbor_ids.iter().any(|id| id.contains("BetaPeer")),
+            "beta neighbor must NOT appear: {neighbor_ids:?}"
+        );
     }
 
     #[tokio::test]
@@ -601,8 +627,12 @@ mod tests {
         let agent = crate::routing::DEFAULT_AGENT_ID;
         db.index_note(&main_center, agent, "concept").await.unwrap();
         db.index_note(&main_peer, agent, "concept").await.unwrap();
-        db.index_note(&alpha_center, "alpha", "concept").await.unwrap();
-        db.index_note(&alpha_peer, "alpha", "concept").await.unwrap();
+        db.index_note(&alpha_center, "alpha", "concept")
+            .await
+            .unwrap();
+        db.index_note(&alpha_peer, "alpha", "concept")
+            .await
+            .unwrap();
 
         let req = neighbors_request("concept/Hub", 2, 50); // no agent_id
         let resp = handle_neighbors_impl(req, db).await;
@@ -611,10 +641,14 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let neighbor_ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert!(neighbor_ids.iter().any(|id| id.contains("MainPeer")),
-            "default agent's neighbor must appear when agent_id omitted: {neighbor_ids:?}");
-        assert!(!neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
-            "non-default agent's neighbor must NOT appear: {neighbor_ids:?}");
+        assert!(
+            neighbor_ids.iter().any(|id| id.contains("MainPeer")),
+            "default agent's neighbor must appear when agent_id omitted: {neighbor_ids:?}"
+        );
+        assert!(
+            !neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
+            "non-default agent's neighbor must NOT appear: {neighbor_ids:?}"
+        );
     }
 
     fn node_detail_request(node_id: &str, agent_id: Option<&str>) -> JsonRpcRequest {
@@ -660,7 +694,10 @@ mod tests {
 
         let req = node_detail_request("concept/AlphaOnly", Some("beta"));
         let resp = handle_node_detail_impl(req, db).await;
-        assert!(resp.error.is_some(), "expected error for cross-agent lookup");
+        assert!(
+            resp.error.is_some(),
+            "expected error for cross-agent lookup"
+        );
     }
 
     #[tokio::test]
@@ -735,10 +772,14 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let names: Vec<&str> = result.results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("AlphaSearchNote")),
-            "alpha hit must appear: {names:?}");
-        assert!(!names.iter().any(|n| n.contains("BetaSearchNote")),
-            "beta hit must NOT appear when querying alpha: {names:?}");
+        assert!(
+            names.iter().any(|n| n.contains("AlphaSearchNote")),
+            "alpha hit must appear: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("BetaSearchNote")),
+            "beta hit must NOT appear when querying alpha: {names:?}"
+        );
     }
 
     #[tokio::test]
@@ -761,9 +802,13 @@ mod tests {
             serde_json::from_value(resp.result.expect("result")).expect("deserialize");
 
         let names: Vec<&str> = result.results.iter().map(|r| r.name.as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("MainNote")),
-            "default agent's hit must appear when agent_id omitted: {names:?}");
-        assert!(!names.iter().any(|n| n.contains("AlphaNote")),
-            "non-default agent's hit must NOT appear: {names:?}");
+        assert!(
+            names.iter().any(|n| n.contains("MainNote")),
+            "default agent's hit must appear when agent_id omitted: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("AlphaNote")),
+            "non-default agent's hit must NOT appear: {names:?}"
+        );
     }
 }

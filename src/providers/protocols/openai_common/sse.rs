@@ -12,7 +12,8 @@ use futures::TryStreamExt;
 /// Uses a byte buffer to handle UTF-8 multi-byte characters that may be
 /// split across HTTP chunk boundaries (e.g., Chinese characters).
 pub fn sse_line_stream(response: reqwest::Response) -> BoxStream<'static, Result<String>> {
-    let buf = crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::<u8>::new()));
+    let buf =
+        crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::<u8>::new()));
 
     let stream = response
         .bytes_stream()
@@ -39,7 +40,10 @@ pub fn sse_line_stream(response: reqwest::Response) -> BoxStream<'static, Result
                         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
                     let line = line.trim_end();
 
-                    if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                    if let Some(data) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    {
                         if data != "[DONE]" {
                             lines.push(data.to_string());
                         }

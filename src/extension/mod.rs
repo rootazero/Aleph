@@ -82,11 +82,11 @@ pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::RwLock as StdRwLock;
 use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::RwLock as StdRwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
@@ -181,7 +181,9 @@ pub struct ExtensionManager {
     /// lifecycle wiring is deferred to Task 10 (AppContext wiring) per the
     /// Phase 2 plan — this field + setter ship now so the registration helper
     /// has a stable injection point.
-    tool_registry: crate::sync_primitives::RwLock<Option<crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>>>
+    tool_registry: crate::sync_primitives::RwLock<
+        Option<crate::sync_primitives::Arc<crate::tools::registry::ToolRegistry>>,
+    >,
 }
 
 impl ExtensionManager {
@@ -265,8 +267,6 @@ impl ExtensionManager {
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(registry);
     }
-
-
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 

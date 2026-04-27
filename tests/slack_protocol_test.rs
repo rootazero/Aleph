@@ -37,7 +37,11 @@ async fn test_slack_send_message_mock_api() {
         .send(OutboundMessage::text("C12345", "Hello Slack"))
         .await;
 
-    assert!(result.is_ok(), "send() should succeed with mock API: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "send() should succeed with mock API: {:?}",
+        result.err()
+    );
     let send_result = result.unwrap();
     assert_eq!(send_result.message_id.as_str(), "1234567890.123456");
 }
@@ -53,9 +57,7 @@ async fn test_slack_send_typing_mock_api() {
         format!("{}/api", mock_server.uri()),
     );
 
-    let result = channel
-        .send_typing(&ConversationId::new("C12345"))
-        .await;
+    let result = channel.send_typing(&ConversationId::new("C12345")).await;
 
     assert!(result.is_ok());
 }
@@ -79,7 +81,11 @@ async fn test_slack_react_mock_api() {
         )
         .await;
 
-    assert!(result.is_ok(), "react() should succeed with mock API: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "react() should succeed with mock API: {:?}",
+        result.err()
+    );
 }
 
 #[tokio::test]
@@ -93,9 +99,7 @@ async fn test_slack_send_message_rate_limit() {
         format!("{}/api", mock_server.uri()),
     );
 
-    let result = channel
-        .send(OutboundMessage::text("C12345", "Hello"))
-        .await;
+    let result = channel.send(OutboundMessage::text("C12345", "Hello")).await;
 
     assert!(result.is_err(), "send() should fail on rate limit");
 }
@@ -112,6 +116,10 @@ async fn test_slack_validate_bot_token_mock_api() {
     )
     .await;
 
-    assert!(result.is_ok(), "validate_bot_token should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "validate_bot_token should succeed: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap(), "U123456");
 }

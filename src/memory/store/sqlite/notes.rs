@@ -832,14 +832,17 @@ mod tests {
 
         let reference = make_note("rust", "reference");
         let pref = make_note("editor", "preference");
-        backend.index_note(&reference, "default", "reference").await.unwrap();
+        backend
+            .index_note(&reference, "default", "reference")
+            .await
+            .unwrap();
         backend
             .index_note(&pref, "default", "preference")
             .await
             .unwrap();
 
-let references = backend
-        .get_notes_by_category("default", "reference", 10)
+        let references = backend
+            .get_notes_by_category("default", "reference", 10)
             .await
             .unwrap();
         assert_eq!(references.len(), 1);

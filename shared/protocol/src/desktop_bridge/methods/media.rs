@@ -218,9 +218,7 @@ mod tests {
 
     #[test]
     fn record_audio_params_roundtrip() {
-        let p = RecordAudioParams {
-            duration_secs: 5.0,
-        };
+        let p = RecordAudioParams { duration_secs: 5.0 };
         let j = serde_json::to_string(&p).unwrap();
         let back: RecordAudioParams = serde_json::from_str(&j).unwrap();
         assert!((back.duration_secs - 5.0).abs() < 1e-6);
@@ -270,6 +268,9 @@ mod tests {
         assert_eq!(METHOD_CAMERA_CLIP, "media.camera.clip");
         assert_eq!(METHOD_AUDIO_LIST_DEVICES, "media.audio.list_devices");
         assert_eq!(METHOD_AUDIO_RECORD, "media.audio.record");
-        assert_eq!(METHOD_SPEECH_TRANSCRIBE_FILE, "media.speech.transcribe_file");
+        assert_eq!(
+            METHOD_SPEECH_TRANSCRIBE_FILE,
+            "media.speech.transcribe_file"
+        );
     }
 }

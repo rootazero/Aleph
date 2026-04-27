@@ -1,7 +1,7 @@
-use alephcore::gateway::interfaces::nostr::NostrConfig;
 use alephcore::gateway::interfaces::nostr::message_ops::{
-    build_text_note, build_dm, derive_pubkey, sign_event,
+    build_dm, build_text_note, derive_pubkey, sign_event,
 };
+use alephcore::gateway::interfaces::nostr::NostrConfig;
 
 const TEST_PRIVKEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

@@ -23,15 +23,15 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::compact::file_content_tracker::FileContentTracker;
 use crate::context::budget::pressure::estimate_tokens_smart;
-use crate::tools::runtime::{LoopToolRegistry, ToolResult};
-use crate::tools::orchestrator::ToolOutcome;
-use crate::tools::result_store::ToolResultStore;
+use crate::context::compact::file_content_tracker::FileContentTracker;
 use crate::extension::hooks::{HookContext, HookExecutor, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::session::ingress_safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use crate::tool_output::compressor::compress_tool_output;
+use crate::tools::orchestrator::ToolOutcome;
+use crate::tools::result_store::ToolResultStore;
+use crate::tools::runtime::{LoopToolRegistry, ToolResult};
 
 /// Maximum tool result size in estimated tokens. Results exceeding this are truncated
 /// to prevent a single tool call from consuming a disproportionate share of the context window.
@@ -757,11 +757,11 @@ fn truncate_tool_result(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::{
         HookAction, HookConfig, HookEvent, HookKind, HookPriority, PermissionAction,
     };
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry, ToolResult};
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::HashMap;

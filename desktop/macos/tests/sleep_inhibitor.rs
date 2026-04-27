@@ -6,8 +6,8 @@
 //! To run manually:
 //!   cargo test -p aleph-desktop-macos --test sleep_inhibitor -- --ignored --nocapture
 
-use aleph_desktop_macos::MacosPower;
 use aleph_desktop::traits::PowerCapability;
+use aleph_desktop_macos::MacosPower;
 
 /// Count the number of active `PreventUserIdleSystemSleep` assertions via pmset.
 fn count_assertions() -> usize {

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::sync_primitives::Mutex as StdMutex;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::gateway::interfaces::feishu::api::FeishuApi;
@@ -36,7 +36,9 @@ impl UserProfileCache {
         }
     }
 
-    fn evict_if_needed(guard: &mut crate::sync_primitives::MutexGuard<'_, HashMap<String, CacheEntry>>) {
+    fn evict_if_needed(
+        guard: &mut crate::sync_primitives::MutexGuard<'_, HashMap<String, CacheEntry>>,
+    ) {
         if guard.len() < MAX_CAPACITY {
             return;
         }

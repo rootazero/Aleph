@@ -217,7 +217,11 @@ impl SessionManager {
                     } else {
                         title.to_string()
                     };
-                    if title.is_empty() { None } else { Some(title) }
+                    if title.is_empty() {
+                        None
+                    } else {
+                        Some(title)
+                    }
                 })
             } else {
                 None

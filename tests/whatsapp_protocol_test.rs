@@ -12,7 +12,12 @@ async fn test_whatsapp_protocol_send_text() {
     let mut channel = WhatsAppChannel::for_test("wa-test", test_config());
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("1234567890@s.whatsapp.net", "Hello WA")).await;
+    let result = channel
+        .send(OutboundMessage::text(
+            "1234567890@s.whatsapp.net",
+            "Hello WA",
+        ))
+        .await;
 
     assert!(result.is_ok());
     let send_result = result.unwrap();
@@ -25,7 +30,9 @@ async fn test_whatsapp_protocol_send_text() {
 async fn test_whatsapp_protocol_send_not_started() {
     let channel = WhatsAppChannel::new("wa-test", test_config());
 
-    let result = channel.send(OutboundMessage::text("1234567890@s.whatsapp.net", "Hello")).await;
+    let result = channel
+        .send(OutboundMessage::text("1234567890@s.whatsapp.net", "Hello"))
+        .await;
     assert!(result.is_err());
 }
 

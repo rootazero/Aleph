@@ -115,7 +115,10 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
     let url = validate_url_common(url_str, policy)?;
     let host = url.host_str().ok_or(SsrfError::NoHost)?;
 
-    if matches!(url.host(), Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_))) {
+    if matches!(
+        url.host(),
+        Some(url::Host::Ipv4(_)) | Some(url::Host::Ipv6(_))
+    ) {
         return Ok(url);
     }
 

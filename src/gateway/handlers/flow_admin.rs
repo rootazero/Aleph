@@ -39,7 +39,9 @@ pub async fn handle_flow_reload(
         .reload_flows(merged)
         .await
         .map_err(|e| format!("reload: {e}"))?;
-    Ok(ReloadReport { loaded_count: count })
+    Ok(ReloadReport {
+        loaded_count: count,
+    })
 }
 
 /// Register the `gateway.flow.reload` method with the given registry.
@@ -59,11 +61,7 @@ pub fn register_flow_admin_handlers(
             match handle_flow_reload(orchestrator, &flow_dir).await {
                 Ok(report) => match serde_json::to_value(&report) {
                     Ok(v) => JsonRpcResponse::success(req.id, v),
-                    Err(e) => JsonRpcResponse::error(
-                        req.id,
-                        -32603,
-                        format!("serialization: {e}"),
-                    ),
+                    Err(e) => JsonRpcResponse::error(req.id, -32603, format!("serialization: {e}")),
                 },
                 Err(e) => JsonRpcResponse::error(req.id, -32603, e),
             }
@@ -139,9 +137,7 @@ mod tests {
                 _sp: Arc<crate::orchestrator::flow_spec::FlowSpec>,
                 _i: crate::orchestrator::flow_spec::FlowInput,
                 _sb: Arc<dyn Sandbox>,
-                _ev: tokio::sync::broadcast::Sender<
-                    crate::orchestrator::dispatch::FlowStreamEvent,
-                >,
+                _ev: tokio::sync::broadcast::Sender<crate::orchestrator::dispatch::FlowStreamEvent>,
                 _c: tokio_util::sync::CancellationToken,
                 _tool_service_override: Option<
                     std::sync::Arc<dyn crate::tools::service::ToolService>,

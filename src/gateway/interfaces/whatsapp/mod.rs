@@ -258,7 +258,10 @@ impl Channel for WhatsAppChannel {
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         if self.test_mode {
             return Ok(SendResult {
-                message_id: MessageId::new(format!("wa-test-{}", chrono::Utc::now().timestamp_millis())),
+                message_id: MessageId::new(format!(
+                    "wa-test-{}",
+                    chrono::Utc::now().timestamp_millis()
+                )),
                 timestamp: chrono::Utc::now(),
             });
         }

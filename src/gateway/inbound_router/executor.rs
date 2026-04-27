@@ -109,8 +109,7 @@ impl InboundMessageRouter {
             }
         }
 
-        let pending_media: crate::gateway::media::PendingMedia =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending_media: crate::gateway::media::PendingMedia = Arc::new(Mutex::new(Vec::new()));
 
         // Detect feishu/telegram channels and optionally construct custom emitters
         let (is_feishu, is_telegram) = {

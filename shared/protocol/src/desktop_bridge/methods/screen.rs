@@ -87,7 +87,12 @@ mod tests {
             full_text: "hello".into(),
             blocks: vec![OcrBlock {
                 text: "hello".into(),
-                bbox: Region { x: 0.0, y: 0.0, width: 100.0, height: 20.0 },
+                bbox: Region {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 20.0,
+                },
                 confidence: 0.99,
             }],
         };
@@ -102,7 +107,12 @@ mod tests {
     fn display_info_roundtrip() {
         let d = DisplayInfo {
             id: 1,
-            bounds: Region { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 },
+            bounds: Region {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
             scale: 2.0,
             primary: true,
         };

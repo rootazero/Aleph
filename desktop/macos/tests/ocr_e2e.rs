@@ -10,9 +10,7 @@
 use std::path::PathBuf;
 
 use aleph_desktop::bridge::client::SwiftBridge;
-use aleph_protocol::desktop_bridge::methods::screen::{
-    METHOD_OCR, OcrParams, OcrResult,
-};
+use aleph_protocol::desktop_bridge::methods::screen::{OcrParams, OcrResult, METHOD_OCR};
 
 fn helper_path() -> PathBuf {
     // CARGO_MANIFEST_DIR for this crate is `desktop/macos`.
@@ -47,8 +45,8 @@ fn tiny_white_png() -> Vec<u8> {
         0x49, 0x48, 0x44, 0x52, // "IHDR"
         0x00, 0x00, 0x00, 0x01, // width = 1
         0x00, 0x00, 0x00, 0x01, // height = 1
-        0x08, 0x02,             // bit depth = 8, color type = 2 (RGB)
-        0x00, 0x00, 0x00,       // compression, filter, interlace
+        0x08, 0x02, // bit depth = 8, color type = 2 (RGB)
+        0x00, 0x00, 0x00, // compression, filter, interlace
         0x90, 0x77, 0x53, 0xde, // CRC
         0x00, 0x00, 0x00, 0x0c, // IDAT length = 12
         0x49, 0x44, 0x41, 0x54, // "IDAT"

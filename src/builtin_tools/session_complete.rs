@@ -186,8 +186,8 @@ pub(crate) fn build_content(args: &SessionCompleteArgs) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AlephError;
     use crate::sync_primitives::Mutex;
+    use crate::AlephError;
 
     // Minimal fake that records every insert call.
     #[derive(Default)]

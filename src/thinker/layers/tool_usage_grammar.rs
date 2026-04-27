@@ -65,9 +65,9 @@ impl PromptLayer for ToolUsageGrammarLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::info::{ToolInfo, ToolUsageHint};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerInput;
+    use crate::tools::info::{ToolInfo, ToolUsageHint};
 
     #[test]
     fn skips_when_no_hints() {

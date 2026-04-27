@@ -147,10 +147,7 @@ pub async fn run_dispatch_and_drain_classified(
     locale: Locale,
 ) -> Result<String, DispatchFailure> {
     // 1. Dispatch.
-    let handle = orchestrator
-        .dispatch(req)
-        .await
-        .map_err(map_flow_error)?;
+    let handle = orchestrator.dispatch(req).await.map_err(map_flow_error)?;
 
     // Wire the caller's cancel token to the orchestrator's handle token so
     // `cancel_token.cancel()` propagates into the harness run.

@@ -173,10 +173,7 @@ impl SeatbeltDriver {
                             path.display()
                         ))
                     })?;
-                    profile.push_str(&format!(
-                        "(allow file-read* (subpath \"{}\"))\n",
-                        path_str
-                    ));
+                    profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", path_str));
                 }
             }
             FsPolicy::WritePaths(paths) => {
@@ -208,16 +205,11 @@ impl SeatbeltDriver {
                             path.display()
                         ))
                     })?;
-                    profile.push_str(&format!(
-                        "(deny file-read* (subpath \"{}\"))\n",
-                        path_str
-                    ));
+                    profile.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", path_str));
                 }
             }
             FsPolicy::FullWrite { exclude } => {
-                profile.push_str(
-                    "; full read/write access\n(allow file-read* file-write*)\n",
-                );
+                profile.push_str("; full read/write access\n(allow file-read* file-write*)\n");
                 for path in exclude {
                     let path_str = path.to_str().ok_or_else(|| {
                         SandboxError::ProfileGeneration(format!(
@@ -282,9 +274,8 @@ impl SeatbeltDriver {
                 );
             }
             EnvPolicy::Minimal => {
-                profile.push_str(
-                    "; minimal environment\n(allow process-exec (with environment))\n",
-                );
+                profile
+                    .push_str("; minimal environment\n(allow process-exec (with environment))\n");
             }
         }
     }
@@ -332,9 +323,8 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
         let profile_file = tempfile::NamedTempFile::new().map_err(|e| {
             SandboxError::Io(format!("failed to create temp file for profile: {e}"))
         })?;
-        std::fs::write(profile_file.path(), &profile.contents).map_err(|e| {
-            SandboxError::Io(format!("failed to write profile: {e}"))
-        })?;
+        std::fs::write(profile_file.path(), &profile.contents)
+            .map_err(|e| SandboxError::Io(format!("failed to write profile: {e}")))?;
 
         debug!(
             "running sandbox-exec with profile ({} bytes)",
@@ -472,7 +462,10 @@ mod tests {
     fn generate_profile_with_network() {
         let driver = SeatbeltDriver::new();
         let policy = SandboxPolicy {
-            network: NetworkPolicy::AllowHosts(vec!["example.com".into(), "api.example.com".into()]),
+            network: NetworkPolicy::AllowHosts(vec![
+                "example.com".into(),
+                "api.example.com".into(),
+            ]),
             ..Default::default()
         };
         let cwd = Path::new("/tmp/ws");

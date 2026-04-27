@@ -1,8 +1,8 @@
 //! PressureSensor — token estimation with API usage anchoring.
 
 use super::ContextPressure;
-use crate::tools::runtime::ToolDefinition;
 use crate::providers::message::UnifiedMessage;
+use crate::tools::runtime::ToolDefinition;
 
 // =============================================================================
 // Content-aware ratio detection

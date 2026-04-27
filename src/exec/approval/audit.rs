@@ -1,6 +1,6 @@
 use crate::exec::approval::storage::ApprovalAuditStorage;
 use crate::exec::approval::types::EscalationReason;
-use crate::sandbox::capabilities::{SandboxCapabilities, NetworkPolicy};
+use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use rusqlite::Result as SqliteResult;
 use std::collections::HashMap;
 use tracing::warn;

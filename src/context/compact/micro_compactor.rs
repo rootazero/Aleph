@@ -10,8 +10,8 @@ use std::pin::Pin;
 use super::types::{
     CompactionContext, CompactionResult, CompactionStrategy, PressureLevel, TokenEstimate,
 };
-use crate::tools::result_store::extract_persisted_ref;
 use crate::memory::session_compactor::context_window::estimate_tokens;
+use crate::tools::result_store::extract_persisted_ref;
 
 // =============================================================================
 // Importance

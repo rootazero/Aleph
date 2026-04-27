@@ -40,10 +40,7 @@ async fn snap_returns_dimensions() {
 
     assert!(result.width > 0, "width was {}", result.width);
     assert!(result.height > 0, "height was {}", result.height);
-    assert!(
-        !result.image_base64.is_empty(),
-        "image_base64 was empty"
-    );
+    assert!(!result.image_base64.is_empty(), "image_base64 was empty");
 }
 
 /// Records a short clip and verifies the returned MOV exists. Gated behind a

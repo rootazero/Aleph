@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 use aleph_desktop::bridge::client::SwiftBridge;
 use aleph_protocol::desktop_bridge::methods::media::{
-    METHOD_AUDIO_RECORD, METHOD_SPEECH_TRANSCRIBE_FILE, RecordAudioParams, RecordAudioResult,
-    TranscribeFileParams, TranscribeFileResult,
+    RecordAudioParams, RecordAudioResult, TranscribeFileParams, TranscribeFileResult,
+    METHOD_AUDIO_RECORD, METHOD_SPEECH_TRANSCRIBE_FILE,
 };
 
 fn helper_path() -> PathBuf {
@@ -45,9 +45,7 @@ async fn transcribe_known_audio_file_returns_text() {
     let record: RecordAudioResult = bridge
         .call(
             METHOD_AUDIO_RECORD,
-            RecordAudioParams {
-                duration_secs: 2.0,
-            },
+            RecordAudioParams { duration_secs: 2.0 },
         )
         .await
         .expect("media.audio.record RPC failed");

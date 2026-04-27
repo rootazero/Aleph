@@ -9,8 +9,8 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use alephcore::gateway::execution_engine::helpers::run_dispatch_and_drain;
 use alephcore::gateway::event_emitter::{CollectingEventEmitter, EventEmitter};
+use alephcore::gateway::execution_engine::helpers::run_dispatch_and_drain;
 use alephcore::gateway::i18n::Locale;
 use alephcore::orchestrator::FlowOutcome;
 use tokio_util::sync::CancellationToken;
@@ -36,7 +36,9 @@ async fn dispatch_invokes_harness_runner_once() {
             // Terminal event on the stream so the drain loop exits cleanly.
             let _ = ctx
                 .events
-                .send(alephcore::orchestrator::FlowStreamEvent::Complete(outcome.clone()));
+                .send(alephcore::orchestrator::FlowStreamEvent::Complete(
+                    outcome.clone(),
+                ));
             Ok(outcome)
         })
     }));

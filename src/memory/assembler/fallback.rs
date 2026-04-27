@@ -125,7 +125,12 @@ mod tests {
         let mut skel = FallbackSkeleton::default();
         skel.relevant_notes_tokens = 0;
         let now = 1_700_000_000;
-        let c = [cand("note://reference/a", SlotKind::RelevantNotes, 0.9, now)];
+        let c = [cand(
+            "note://reference/a",
+            SlotKind::RelevantNotes,
+            0.9,
+            now,
+        )];
         let slots = skeleton_pack(&c, &skel, now);
         assert!(slots.iter().all(|s| s.kind != SlotKind::RelevantNotes));
     }

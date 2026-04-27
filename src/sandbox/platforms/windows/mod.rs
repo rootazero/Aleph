@@ -18,5 +18,5 @@ mod job;
 mod token;
 mod wfp;
 
-pub use driver::WindowsSandboxDriver;
 pub use appcontainer::{AppContainer, AppContainerCapability};
+pub use driver::WindowsSandboxDriver;

@@ -26,7 +26,10 @@ fn test_webhook_event_fixture() {
     assert_eq!(event["source"]["userId"].as_str().unwrap(), "U123456");
     assert_eq!(event["message"]["id"].as_str().unwrap(), "line-msg-456");
     assert_eq!(event["message"]["type"].as_str().unwrap(), "text");
-    assert_eq!(event["message"]["text"].as_str().unwrap(), "Hello from LINE!");
+    assert_eq!(
+        event["message"]["text"].as_str().unwrap(),
+        "Hello from LINE!"
+    );
 }
 
 #[test]

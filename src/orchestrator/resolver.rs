@@ -41,10 +41,7 @@ pub fn resolve_flow_id(
     defaults: &HashMap<AgentId, FlowId>,
 ) -> Result<FlowId, FlowError> {
     if let Some(ch) = channel {
-        if let Some(id) = overrides
-            .exact
-            .get(&(agent_id.to_string(), ch.to_string()))
-        {
+        if let Some(id) = overrides.exact.get(&(agent_id.to_string(), ch.to_string())) {
             return Ok(id.clone());
         }
     }

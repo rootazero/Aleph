@@ -42,9 +42,7 @@ pub mod sub_agents;
 pub mod swarm;
 
 pub use registry::{builtin_agents, AgentRegistry};
-pub use runtime::{
-    AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome,
-};
+pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
 pub use types::{AgentDef, AgentMode, ContextMode};
 
 // Re-export rig module types for convenience

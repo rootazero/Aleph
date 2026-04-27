@@ -26,7 +26,10 @@ pub fn Breadcrumb(
                 (Some(head.node_id.clone()), head.node_name.clone(), false),
                 (None, "…".to_string(), true),
             ];
-            out.extend(tail.iter().map(|e| (Some(e.node_id.clone()), e.node_name.clone(), false)));
+            out.extend(
+                tail.iter()
+                    .map(|e| (Some(e.node_id.clone()), e.node_name.clone(), false)),
+            );
             out
         } else {
             items

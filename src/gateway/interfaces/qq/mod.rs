@@ -204,7 +204,10 @@ impl Channel for QQChannel {
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         if self.test_mode {
             return Ok(SendResult {
-                message_id: MessageId::new(format!("qq-test-{}", chrono::Utc::now().timestamp_millis())),
+                message_id: MessageId::new(format!(
+                    "qq-test-{}",
+                    chrono::Utc::now().timestamp_millis()
+                )),
                 timestamp: chrono::Utc::now(),
             });
         }

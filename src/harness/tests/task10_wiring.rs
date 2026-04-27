@@ -17,10 +17,9 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex as AsyncMutex};
 use tokio_util::sync::CancellationToken;
 
-use crate::error::Result as AlephResult;
 use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
-use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
+use crate::error::Result as AlephResult;
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
@@ -31,6 +30,7 @@ use crate::session::events::{
 };
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
+use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
 
 // -- Minimal mocks (kept local; the think/act suites have larger copies) -----
 

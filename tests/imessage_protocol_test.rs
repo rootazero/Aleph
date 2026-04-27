@@ -13,7 +13,9 @@ async fn test_imessage_protocol_send_text() {
     let mut channel = IMessageChannel::for_test(test_config());
     channel.start().await.unwrap();
 
-    let result = channel.send(OutboundMessage::text("+1234567890", "Hello iMessage")).await;
+    let result = channel
+        .send(OutboundMessage::text("+1234567890", "Hello iMessage"))
+        .await;
 
     assert!(result.is_ok());
     let send_result = result.unwrap();
@@ -26,6 +28,8 @@ async fn test_imessage_protocol_send_text() {
 async fn test_imessage_protocol_send_not_started() {
     let channel = IMessageChannel::new(test_config());
 
-    let result = channel.send(OutboundMessage::text("+1234567890", "Hello")).await;
+    let result = channel
+        .send(OutboundMessage::text("+1234567890", "Hello"))
+        .await;
     assert!(result.is_err());
 }

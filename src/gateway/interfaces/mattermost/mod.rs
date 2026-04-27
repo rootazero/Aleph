@@ -80,7 +80,11 @@ impl MattermostChannel {
     }
 
     /// Create a Mattermost channel configured for testing against a mock API server.
-    pub fn for_test(id: impl Into<String>, config: MattermostConfig, api_base: impl Into<String>) -> Self {
+    pub fn for_test(
+        id: impl Into<String>,
+        config: MattermostConfig,
+        api_base: impl Into<String>,
+    ) -> Self {
         let mut channel = Self::new(id, config);
         channel.api_base = Some(api_base.into());
         channel
@@ -132,7 +136,14 @@ impl Channel for MattermostChannel {
         // Validate bot token via /api/v4/users/me
         let server = self.config.server_url_trimmed().to_string();
         let api_base = self.api_base.as_deref();
-        match MattermostMessageOps::get_me_with_base(&self.client, &server, &self.config.bot_token, api_base).await {
+        match MattermostMessageOps::get_me_with_base(
+            &self.client,
+            &server,
+            &self.config.bot_token,
+            api_base,
+        )
+        .await
+        {
             Ok((user_id, username)) => {
                 tracing::info!("Mattermost bot authenticated as {username} (user_id: {user_id})");
                 *self.bot_user_id.write().await = Some(user_id);

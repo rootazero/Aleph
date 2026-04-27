@@ -361,32 +361,18 @@ impl PermissionCapability for MacOSPermission {
     // Bridge-backed methods (Stage 4) — route to Swift helper via JSON-RPC.
     // -----------------------------------------------------------------------
 
-    async fn check_permission(
-        &self,
-        kind: PermissionKind,
-    ) -> Result<ProtocolPermissionStatus> {
+    async fn check_permission(&self, kind: PermissionKind) -> Result<ProtocolPermissionStatus> {
         self.bridge
             .call(METHOD_CHECK, CheckParams { kind })
             .await
-            .map_err(|e| {
-                aleph_desktop::DesktopError::BridgeFailed(format!(
-                    "perm.check RPC: {e}"
-                ))
-            })
+            .map_err(|e| aleph_desktop::DesktopError::BridgeFailed(format!("perm.check RPC: {e}")))
     }
 
-    async fn guide_permission(
-        &self,
-        kind: PermissionKind,
-    ) -> Result<PermissionGuide> {
+    async fn guide_permission(&self, kind: PermissionKind) -> Result<PermissionGuide> {
         self.bridge
             .call(METHOD_GUIDE, GuideParams { kind })
             .await
-            .map_err(|e| {
-                aleph_desktop::DesktopError::BridgeFailed(format!(
-                    "perm.guide RPC: {e}"
-                ))
-            })
+            .map_err(|e| aleph_desktop::DesktopError::BridgeFailed(format!("perm.guide RPC: {e}")))
     }
 
     async fn open_settings(&self, kind: PermissionKind) -> Result<bool> {
@@ -395,9 +381,7 @@ impl PermissionCapability for MacOSPermission {
             .call(METHOD_OPEN_SETTINGS, OpenSettingsParams { kind })
             .await
             .map_err(|e| {
-                aleph_desktop::DesktopError::BridgeFailed(format!(
-                    "perm.open_settings RPC: {e}"
-                ))
+                aleph_desktop::DesktopError::BridgeFailed(format!("perm.open_settings RPC: {e}"))
             })?;
         Ok(r.ok)
     }
@@ -445,9 +429,7 @@ mod tests {
             .build()
             .unwrap();
         // Bridge not used by the legacy check_all path; any path is fine.
-        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from(
-            "/dev/null",
-        )));
+        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
         let perm = MacOSPermission::new(bridge);
         let results = rt.block_on(async { perm.check_all().await.unwrap() });
         assert_eq!(results.len(), 6, "expected 6 permission results");

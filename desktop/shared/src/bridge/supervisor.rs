@@ -109,6 +109,9 @@ mod tests {
             assert!(!w.record_and_should_disable());
         }
         std::thread::sleep(Duration::from_millis(80));
-        assert!(!w.record_and_should_disable(), "aged events should have been evicted");
+        assert!(
+            !w.record_and_should_disable(),
+            "aged events should have been evicted"
+        );
     }
 }

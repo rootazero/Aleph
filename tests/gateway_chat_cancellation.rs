@@ -42,14 +42,7 @@ async fn cancel_mid_dispatch_exits_cleanly() {
 
     let result = tokio::time::timeout(
         Duration::from_secs(2),
-        run_dispatch_and_drain(
-            orch,
-            basic_request(),
-            emitter,
-            "run-5",
-            cancel,
-            Locale::En,
-        ),
+        run_dispatch_and_drain(orch, basic_request(), emitter, "run-5", cancel, Locale::En),
     )
     .await;
 
@@ -59,5 +52,8 @@ async fn cancel_mid_dispatch_exits_cleanly() {
     // Accept either Err(ExecutionError) or Ok with any text — what matters is
     // the drain exited cleanly. We assert it was an error path since cancel
     // produces FlowError::Cancelled.
-    assert!(outer.is_err(), "cancel mid-dispatch must surface as error; got: {outer:?}");
+    assert!(
+        outer.is_err(),
+        "cancel mid-dispatch must surface as error; got: {outer:?}"
+    );
 }

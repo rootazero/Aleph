@@ -203,11 +203,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use super::*;
     use super::super::types::{
         CompactionContext, CompactionResult, CompactionStrategy, PostCompactCleanup, PressureLevel,
         TokenEstimate,
     };
+    use super::*;
     use crate::context::budget::ContextPressure;
 
     // -------------------------------------------------------------------------

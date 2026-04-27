@@ -14,13 +14,13 @@ use crate::sync_primitives::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::runtime::LoopToolRegistry;
-use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
-use crate::harness::LoopCallback;
 use crate::harness::trace::{LoopTraceEvent, ToolCallEndEvent, ToolCallStartEvent};
-use crate::tools::runtime::ToolResult;
+use crate::harness::LoopCallback;
 use crate::providers::adapter::NativeToolCall;
 use crate::session::ingress_safety::ToolCall as SafetyToolCall;
+use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
+use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::runtime::ToolResult;
 use serde_json::Value;
 
 // =============================================================================
@@ -257,11 +257,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::harness::NoopCallback;
-    use crate::tools::runtime::{LoopTool, LoopToolRegistry};
     use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
+    use crate::harness::NoopCallback;
     use crate::session::ingress_safety::SafetyGuard;
+    use crate::tools::runtime::{LoopTool, LoopToolRegistry};
 
     fn permissive_pipeline() -> ToolPipeline {
         ToolPipeline::new(

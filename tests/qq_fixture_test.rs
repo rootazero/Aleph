@@ -10,16 +10,18 @@ fn test_qq_fixture_inbound_message() {
 #[test]
 fn test_qq_config_roundtrip() {
     let config = alephcore::gateway::interfaces::qq::QQConfig {
-        accounts: vec![alephcore::gateway::interfaces::qq::config::QQAccountConfig {
-            id: "test".to_string(),
-            app_id: "test-app".to_string(),
-            client_secret: "test-secret".to_string(),
-            enabled: true,
-            allowed_users: vec![],
-            allowed_groups: vec![],
-            dm_policy: alephcore::gateway::interfaces::qq::QQDmPolicy::Open,
-            group_policy: alephcore::gateway::interfaces::qq::QQGroupPolicy::Open,
-        }],
+        accounts: vec![
+            alephcore::gateway::interfaces::qq::config::QQAccountConfig {
+                id: "test".to_string(),
+                app_id: "test-app".to_string(),
+                client_secret: "test-secret".to_string(),
+                enabled: true,
+                allowed_users: vec![],
+                allowed_groups: vec![],
+                dm_policy: alephcore::gateway::interfaces::qq::QQDmPolicy::Open,
+                group_policy: alephcore::gateway::interfaces::qq::QQGroupPolicy::Open,
+            },
+        ],
     };
     let json = serde_json::to_value(&config).unwrap();
     let decoded: alephcore::gateway::interfaces::qq::QQConfig =

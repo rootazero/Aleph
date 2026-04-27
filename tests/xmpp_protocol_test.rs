@@ -24,16 +24,22 @@ async fn test_xmpp_protocol_send_chat() {
 
 #[tokio::test]
 async fn test_xmpp_protocol_send_groupchat() {
-    let mut channel = XmppChannel::for_test("xmpp-test", XmppConfig {
-        jid: "bot@example.com".to_string(),
-        password: "secret".to_string(),
-        muc_rooms: vec!["room@conference.example.com".to_string()],
-        ..Default::default()
-    });
+    let mut channel = XmppChannel::for_test(
+        "xmpp-test",
+        XmppConfig {
+            jid: "bot@example.com".to_string(),
+            password: "secret".to_string(),
+            muc_rooms: vec!["room@conference.example.com".to_string()],
+            ..Default::default()
+        },
+    );
     channel.start().await.unwrap();
 
     let result = channel
-        .send(OutboundMessage::text("room@conference.example.com", "Hello MUC"))
+        .send(OutboundMessage::text(
+            "room@conference.example.com",
+            "Hello MUC",
+        ))
         .await;
 
     assert!(result.is_ok());
@@ -44,7 +50,9 @@ async fn test_xmpp_protocol_send_groupchat() {
 async fn test_xmpp_protocol_send_not_started() {
     let channel = XmppChannel::for_test("xmpp-test", test_config());
 
-    let result = channel.send(OutboundMessage::text("user@example.com", "Hello")).await;
+    let result = channel
+        .send(OutboundMessage::text("user@example.com", "Hello"))
+        .await;
     assert!(result.is_err());
 }
 
@@ -54,8 +62,9 @@ async fn test_xmpp_protocol_typing() {
     channel.start().await.unwrap();
 
     let result = channel
-        .send_typing(&alephcore::gateway::channel::ConversationId::new("user@example.com"),
-        )
+        .send_typing(&alephcore::gateway::channel::ConversationId::new(
+            "user@example.com",
+        ))
         .await;
 
     assert!(result.is_ok());

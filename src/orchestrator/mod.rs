@@ -16,7 +16,6 @@ pub mod sandbox_factory;
 pub use dispatch::{
     FlowHandle, FlowOutcome, FlowRequest, FlowStreamEvent, HarnessRunner, Orchestrator,
 };
-pub use harness_bridge::AgentHarnessRunner;
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_run_tool::{FlowRunContext, FlowRunDescriptor, FlowRunInput, FlowRunTool};
@@ -24,8 +23,11 @@ pub use flow_spec::{
     AgentId, BrainRef, FlowHistoryTurn, FlowId, FlowInput, FlowOverrides, FlowSpec, ProviderId,
     SandboxKind, SessionStrategy,
 };
+pub use harness_bridge::AgentHarnessRunner;
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
-pub use sandbox_factory::{build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder};
+pub use sandbox_factory::{
+    build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,
+};
 
 #[cfg(test)]
 mod tests;

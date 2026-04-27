@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 
+use crate::providers::adapter::ProviderResponse;
 use crate::sandbox::exec_approval::parser::parse_approval;
 use crate::sandbox::exec_approval::types::{ApprovalAction, ApprovalConfig, ApprovalDecision};
-use crate::providers::adapter::ProviderResponse;
 
 #[async_trait]
 pub trait ApprovalRequester: Send + Sync {

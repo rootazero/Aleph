@@ -160,7 +160,8 @@ impl AlephTool for MemoryBrowseTool {
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
             "memory_browse(action='list')  // list all categories".to_string(),
-            "memory_browse(action='list', path='reference')  // list notes in reference category".to_string(),
+            "memory_browse(action='list', path='reference')  // list notes in reference category"
+                .to_string(),
             "memory_browse(action='read', path='wiki/rust-ownership')  // read one note"
                 .to_string(),
         ])
@@ -219,7 +220,10 @@ mod tests {
 
         let result = tool.handle_list(None).await.unwrap();
         let entries = result.entries.unwrap();
-        assert_eq!(entries, vec!["preference".to_string(), "reference".to_string()]);
+        assert_eq!(
+            entries,
+            vec!["preference".to_string(), "reference".to_string()]
+        );
     }
 
     #[tokio::test]

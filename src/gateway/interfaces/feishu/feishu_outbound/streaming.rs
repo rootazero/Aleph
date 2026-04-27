@@ -1,6 +1,4 @@
-use crate::sync_primitives::{
-    AtomicBool, AtomicU32, AtomicU64, Mutex as StdMutex, Ordering,
-};
+use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex as StdMutex, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;

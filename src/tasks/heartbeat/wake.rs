@@ -5,8 +5,8 @@
 //! with the highest priority, preventing redundant executions while
 //! preserving the most urgent intent.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Mutex;
+use std::collections::HashMap;
 
 use tokio::sync::Notify;
 

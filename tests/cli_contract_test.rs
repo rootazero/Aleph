@@ -70,5 +70,8 @@ async fn test_cli_send_without_start() {
     let channel = CliChannel::for_test("test-cli");
     let msg = alephcore::gateway::channel::OutboundMessage::text("cli:main", "Hello");
     let result = channel.send(msg).await;
-    assert!(matches!(result, Err(alephcore::gateway::channel::ChannelError::NotConnected(_))));
+    assert!(matches!(
+        result,
+        Err(alephcore::gateway::channel::ChannelError::NotConnected(_))
+    ));
 }

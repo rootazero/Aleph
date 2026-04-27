@@ -17,22 +17,31 @@ pub struct InhibitorGuard {
 
 impl InhibitorGuard {
     pub fn new<F: FnOnce() + Send + 'static>(release: F) -> Self {
-        Self { release: Some(Box::new(release)) }
+        Self {
+            release: Some(Box::new(release)),
+        }
     }
 
-    pub fn noop() -> Self { Self { release: None } }
+    pub fn noop() -> Self {
+        Self { release: None }
+    }
 }
 
 impl Drop for InhibitorGuard {
     fn drop(&mut self) {
-        if let Some(f) = self.release.take() { f(); }
+        if let Some(f) = self.release.take() {
+            f();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     #[test]
     fn guard_drop_calls_release() {

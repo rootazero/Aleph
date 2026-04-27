@@ -54,7 +54,11 @@ async fn test_mattermost_send_threaded_reply() {
 
     let result = channel.send(msg).await;
 
-    assert!(result.is_ok(), "send() with reply_to should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "send() with reply_to should succeed: {:?}",
+        result.err()
+    );
     let send_result = result.unwrap();
     assert_eq!(send_result.message_id.as_str(), "post-reply-789");
 
@@ -107,7 +111,11 @@ async fn test_mattermost_delete_message() {
         )
         .await;
 
-    assert!(result.is_ok(), "delete() should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "delete() should succeed: {:?}",
+        result.err()
+    );
 
     let _ = channel.stop().await;
 }
@@ -152,11 +160,13 @@ async fn test_mattermost_send_typing() {
     let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
     channel.start().await.unwrap();
 
-    let result = channel
-        .send_typing(&ConversationId::new("ch-789"))
-        .await;
+    let result = channel.send_typing(&ConversationId::new("ch-789")).await;
 
-    assert!(result.is_ok(), "send_typing() should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "send_typing() should succeed: {:?}",
+        result.err()
+    );
 
     let _ = channel.stop().await;
 }
@@ -166,9 +176,7 @@ async fn test_mattermost_send_not_started_fails() {
     let config = test_mattermost_config();
     let channel = MattermostChannel::for_test("test-mm", config, "https://mock.local");
 
-    let result = channel
-        .send(OutboundMessage::text("ch-789", "Hello"))
-        .await;
+    let result = channel.send(OutboundMessage::text("ch-789", "Hello")).await;
 
     assert!(result.is_err(), "send() should fail when not started");
 }
