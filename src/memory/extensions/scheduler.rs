@@ -7,6 +7,7 @@ use crate::memory::extensions::registry::MemoryExtensionRegistry;
 use crate::memory::extensions::types::{CaptureCtx, ProduceCtx};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::raw_memory::RawMemoryStore;
+use crate::routing::DEFAULT_AGENT_ID;
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -14,7 +15,6 @@ use tokio::time::interval;
 use tracing::{debug, warn};
 
 pub const DEFAULT_TICK_SECONDS: u64 = 10;
-pub const DEFAULT_AGENT_ID_FOR_PRODUCERS: &str = "default";
 
 pub struct MemoryProducerScheduler {
     registry: Arc<MemoryExtensionRegistry>,
@@ -58,7 +58,7 @@ impl MemoryProducerScheduler {
     pub async fn run_once(&self) -> Result<(), crate::error::AlephError> {
         let tick = self.tick_counter.fetch_add(1, Ordering::Relaxed);
         let produce_ctx = ProduceCtx {
-            agent_id: DEFAULT_AGENT_ID_FOR_PRODUCERS.to_string(),
+            agent_id: DEFAULT_AGENT_ID.to_string(),
             namespace: NamespaceScope::Owner,
             tick,
         };
@@ -215,5 +215,18 @@ mod tests {
         scheduler.run_once().await.unwrap();
         scheduler.run_once().await.unwrap();
         assert_eq!(scheduler.tick_counter.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[cfg(test)]
+mod agent_id_unification_tests {
+    use super::*;
+
+    #[test]
+    fn scheduler_uses_routing_default_agent_id() {
+        // Compile-time witness: scheduler imports the unified constant.
+        // Value witness: the unified constant resolves to "main".
+        assert_eq!(DEFAULT_AGENT_ID, crate::routing::DEFAULT_AGENT_ID);
+        assert_eq!(DEFAULT_AGENT_ID, "main");
     }
 }
