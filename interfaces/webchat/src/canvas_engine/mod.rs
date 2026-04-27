@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod cluster;
+pub mod drag;
 pub mod interaction;
 pub mod layout;
 pub mod mini_map;
