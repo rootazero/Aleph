@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.04.27]
+
+### Added
+- **Canvas Agent Selector** — `AgentSelectorBar` component in the Memory (Canvas) panel, letting users switch between agents. Graph API handlers (`graph.query`, `graph.neighbors`, `graph.node_detail`, `graph.search`) now accept an optional `agent_id` parameter to filter results per agent.
+- **Elastic Node Drag** — Full press-move-release-cancel interaction on the knowledge graph with spring-physics animation (`Spring2D` critically-damped primitive), drag overlay rendering (stretched edge + glow), and idle/settle transitions.
+- **Gateway Instanceless Channel Tests** — Contract-level tests for 17 channels without requiring live credentials: Slack, Email, Webhook, IRC, Mattermost, Matrix, Discord, LINE, CLI, Signal, XMPP, Nostr, MS Teams, QQ, Feishu, iMessage, WeChat, WhatsApp.
+
+### Changed
+- **Memory `agent_id` Unification** — Replaced local hardcoded `"default"` constants across six modules (`memory_explore`, `memory_browse`, `memory/events`, `memory/dreaming`, `memory/notes`, `memory/scheduler`) with `routing::DEFAULT_AGENT_ID`. Legacy default-agent notes are auto-migrated into the `main` agent directory on startup.
+- **Canvas Detail Slider** — Re-fold behavior now uses `Effect`-refold + `NavController::retarget` tween for smoother animation. Deferred item loading fixed.
+- **Canvas Navigation** — `NavController::retarget` added for slider re-fold tweens. Pre-fetch cache keys simplified to raw id-only for deduplication.
+- **Canvas View Lifecycle** — View state fully resets when `agent_id` changes. Initial agent fetch is gated on WebSocket connection readiness.
+
+### Fixed
+- **Config Secrets Vault Routing** — `config.patch` now intercepts `channels.*` patches and routes secrets (`bot_token`, `api_key`, etc.) into the vault before persisting config, preventing plaintext leakage in `config.toml`.
+- **Config Handler Registration** — Removed duplicate `config.get` registration in server builder that caused a boot-time handler collision.
+
 ## [2026.04.23]
 
 ### Changed
