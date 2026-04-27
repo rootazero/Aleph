@@ -15,6 +15,7 @@ use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::MemoryBackend;
 use crate::resilience::database::StateDatabase;
+use crate::routing::DEFAULT_AGENT_ID;
 
 use super::commands::*;
 
@@ -93,7 +94,7 @@ impl MemoryCommandHandler {
                 // We don't know the agent or category at delete time without re-reading the
                 // first event. Search the index by filename as a best-effort cleanup.
                 // This is intentionally fire-and-forget (errors are logged, not propagated).
-                let agents_to_try = ["default", "owner"]; // common agent IDs
+                let agents_to_try = [DEFAULT_AGENT_ID, "owner"]; // common agent IDs (owner is legacy; audit separately)
                 for agent_id in &agents_to_try {
                     for cat in crate::memory::notes::CATEGORY_DIRS {
                         let file = indexer
