@@ -24,7 +24,11 @@ pub struct GlobalMiniMap {
 
 impl GlobalMiniMap {
     pub fn empty(size_px: f32) -> Self {
-        Self { size_px, points: Vec::new(), component_colors: HashMap::new() }
+        Self {
+            size_px,
+            points: Vec::new(),
+            component_colors: HashMap::new(),
+        }
     }
 
     /// Build a deterministic minimap from full-graph DTOs and edges.
@@ -50,7 +54,11 @@ impl GlobalMiniMap {
         }
 
         let component_colors = assign_component_colors(&points);
-        Self { size_px, points, component_colors }
+        Self {
+            size_px,
+            points,
+            component_colors,
+        }
     }
 
     /// Return the id of the closest node within `hit_radius` of `(mx, my)`,
@@ -196,7 +204,13 @@ mod render {
             for p in &self.points {
                 let is_focus = focus_id.map_or(false, |f| f == p.id);
                 let is_neighbor = focus_neighbor_ids.iter().any(|n| n == &p.id);
-                let radius = if is_focus { 4.0 } else if is_neighbor { 3.0 } else { 1.6 };
+                let radius = if is_focus {
+                    4.0
+                } else if is_neighbor {
+                    3.0
+                } else {
+                    1.6
+                };
 
                 let color = self
                     .component_colors
@@ -236,7 +250,10 @@ mod tests {
     }
 
     fn link(from: &str, to: &str) -> NoteLinkDto {
-        NoteLinkDto { from: from.to_string(), to: to.to_string() }
+        NoteLinkDto {
+            from: from.to_string(),
+            to: to.to_string(),
+        }
     }
 
     #[test]

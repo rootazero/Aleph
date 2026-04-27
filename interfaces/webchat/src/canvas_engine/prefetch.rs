@@ -58,7 +58,10 @@ pub struct HoverDebouncer {
 
 impl HoverDebouncer {
     pub fn new() -> Self {
-        Self { current_id: None, started_at_ms: 0.0 }
+        Self {
+            current_id: None,
+            started_at_ms: 0.0,
+        }
     }
 
     /// Returns Some(id) if hover threshold reached, else None.

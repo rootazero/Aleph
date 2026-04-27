@@ -60,8 +60,7 @@ pub fn compute_target_positions(
     let mut by_relation: HashMap<String, Vec<(String, f32)>> = HashMap::new();
     for (i, n) in one_hop.iter().enumerate() {
         let neighbor_idx = i + 1;
-        let rel = relation_to_active(neighbor_idx, edges)
-            .unwrap_or_else(|| "_default".to_string());
+        let rel = relation_to_active(neighbor_idx, edges).unwrap_or_else(|| "_default".to_string());
         let w = n.decay_score * n.edge_count.max(1) as f32;
         by_relation.entry(rel).or_default().push((n.id.clone(), w));
     }
@@ -94,13 +93,11 @@ pub fn compute_target_positions(
     for (rel, members) in &by_relation {
         let center_angle = sector_centers.get(rel).copied().unwrap_or(0.0);
         let n_in_sector = members.len() as f32;
-        let sector_width =
-            (std::f32::consts::TAU * (n_in_sector / total_n)).max(0.15);
+        let sector_width = (std::f32::consts::TAU * (n_in_sector / total_n)).max(0.15);
         let delta = sector_width / (n_in_sector + 1.0);
         for (i, (id, _w)) in members.iter().enumerate() {
             // Alternate offsets: 0, +1, -1, +2, -2, …
-            let offset_steps = ((i + 1) / 2) as f32
-                * if i % 2 == 0 { 1.0 } else { -1.0 };
+            let offset_steps = ((i + 1) / 2) as f32 * if i % 2 == 0 { 1.0 } else { -1.0 };
             let theta = center_angle + offset_steps * delta;
             let x = r1 * theta.cos();
             let y = r1 * theta.sin();
@@ -119,8 +116,7 @@ pub fn compute_target_positions(
             None => (R_1, 0.0),
         };
         let parent_angle = py.atan2(px);
-        let jitter =
-            (fnv1a_32(n.id.as_bytes()) as f32 / u32::MAX as f32 - 0.5) * 0.6;
+        let jitter = (fnv1a_32(n.id.as_bytes()) as f32 / u32::MAX as f32 - 0.5) * 0.6;
         let theta = parent_angle + jitter;
         let x = R_2 * theta.cos();
         let y = R_2 * theta.sin();
@@ -332,7 +328,10 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
         let pos_b = targets.get("b").unwrap();
         let r = (pos_b.x.powi(2) + pos_b.y.powi(2)).sqrt();
-        assert!((r - 180.0).abs() < 1.0, "1-hop should be at radius 180, got {r}");
+        assert!(
+            (r - 180.0).abs() < 1.0,
+            "1-hop should be at radius 180, got {r}"
+        );
     }
 
     #[test]
@@ -344,7 +343,10 @@ mod radial_tests {
         let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges);
         let pos_c = targets.get("c").unwrap();
         let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
-        assert!((r - 320.0).abs() < 5.0, "2-hop should be at radius 320, got {r}");
+        assert!(
+            (r - 320.0).abs() < 5.0,
+            "2-hop should be at radius 320, got {r}"
+        );
     }
 
     #[test]
@@ -356,7 +358,14 @@ mod radial_tests {
 
     #[test]
     fn sector_hash_in_range() {
-        for r in &["uses", "part_of", "references", "is_a", "depends_on", "owned_by"] {
+        for r in &[
+            "uses",
+            "part_of",
+            "references",
+            "is_a",
+            "depends_on",
+            "owned_by",
+        ] {
             let a = sector_center_angle(r);
             assert!(a >= 0.0 && a < std::f32::consts::TAU, "{r} -> {a}");
         }
@@ -364,25 +373,37 @@ mod radial_tests {
 
     #[test]
     fn assign_sectors_preserves_relative_hash_order() {
-        let relations = vec!["uses".to_string(), "part_of".to_string(), "references".to_string()];
+        let relations = vec![
+            "uses".to_string(),
+            "part_of".to_string(),
+            "references".to_string(),
+        ];
         let assigned = assign_sectors(&relations);
 
         let mut hash_sorted: Vec<_> = relations.iter().cloned().collect();
         hash_sorted.sort_by(|a, b| {
-            sector_center_angle(a).partial_cmp(&sector_center_angle(b)).unwrap()
+            sector_center_angle(a)
+                .partial_cmp(&sector_center_angle(b))
+                .unwrap()
         });
 
         // After assignment, the relative order in the result should match hash order
         let mut assigned_order: Vec<_> = assigned.iter().collect();
         assigned_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        let final_relations: Vec<String> = assigned_order.into_iter().map(|(r, _)| r.clone()).collect();
+        let final_relations: Vec<String> =
+            assigned_order.into_iter().map(|(r, _)| r.clone()).collect();
 
         assert_eq!(final_relations, hash_sorted);
     }
 
     #[test]
     fn assign_sectors_uniform_distribution() {
-        let relations = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let relations = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
         let assigned = assign_sectors(&relations);
         let mut angles: Vec<_> = assigned.values().copied().collect();
         angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -424,8 +445,11 @@ mod radial_tests {
         for _ in 0..60 {
             layout.step(0.016);
         }
-        assert!(layout.kinetic_energy() < 1.0,
-            "expected KE < 1.0 after 60 iters, got {}", layout.kinetic_energy());
+        assert!(
+            layout.kinetic_energy() < 1.0,
+            "expected KE < 1.0 after 60 iters, got {}",
+            layout.kinetic_energy()
+        );
     }
 }
 
@@ -459,8 +483,17 @@ pub struct RadialForceLayout {
 impl RadialForceLayout {
     pub fn new(targets: HashMap<String, Vec3>, config: ForceConfig) -> Self {
         let positions = targets.clone();
-        let velocities = targets.keys().map(|k| (k.clone(), (0.0_f32, 0.0_f32))).collect();
-        Self { positions, velocities, targets, config, active_id: None }
+        let velocities = targets
+            .keys()
+            .map(|k| (k.clone(), (0.0_f32, 0.0_f32)))
+            .collect();
+        Self {
+            positions,
+            velocities,
+            targets,
+            config,
+            active_id: None,
+        }
     }
 
     pub fn pin_active(&mut self, id: String) {
@@ -470,7 +503,8 @@ impl RadialForceLayout {
     pub fn step(&mut self, dt: f32) {
         let cfg = self.config;
         let ids: Vec<String> = self.positions.keys().cloned().collect();
-        let mut forces: HashMap<String, (f32, f32)> = ids.iter().map(|i| (i.clone(), (0.0, 0.0))).collect();
+        let mut forces: HashMap<String, (f32, f32)> =
+            ids.iter().map(|i| (i.clone(), (0.0, 0.0))).collect();
 
         // Spring force toward target
         for id in &ids {
@@ -535,6 +569,10 @@ impl RadialForceLayout {
     }
 
     pub fn kinetic_energy(&self) -> f32 {
-        self.velocities.values().map(|(vx, vy)| vx * vx + vy * vy).sum::<f32>() * 0.5
+        self.velocities
+            .values()
+            .map(|(vx, vy)| vx * vx + vy * vy)
+            .sum::<f32>()
+            * 0.5
     }
 }

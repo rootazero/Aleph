@@ -248,12 +248,7 @@ fn note_dto_to_canvas(dto: &NoteNodeDto, hop: u8) -> CanvasNode {
     }
 }
 
-fn resolve_idx(
-    id: &str,
-    center_id: &str,
-    one_hop: &[CanvasNode],
-    two_hop: &[CanvasNode],
-) -> usize {
+fn resolve_idx(id: &str, center_id: &str, one_hop: &[CanvasNode], two_hop: &[CanvasNode]) -> usize {
     if id == center_id {
         return 0;
     }
@@ -285,7 +280,7 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
                 velocity: Vec2::zero(),
                 pinned: false,
                 z: 0.0,
-                hop: 2, // populated by `to_neighborhood` per `hop_depth`
+                hop: 2,           // populated by `to_neighborhood` per `hop_depth`
                 decay_score: 1.0, // no decay data in global-graph response; populated in radial mode
                 edge_count: dto.link_count,
             }
@@ -387,13 +382,17 @@ mod tests {
             );
         }
         // Verify n5..n19 ended up in clusters, not in unfolded set
-        let cluster_ids: Vec<&str> = nb.clusters.iter()
+        let cluster_ids: Vec<&str> = nb
+            .clusters
+            .iter()
             .flat_map(|c| c.member_ids.iter().map(|s| s.as_str()))
             .collect();
         for i in 5..20 {
             let expected = format!("n{i}");
-            assert!(cluster_ids.contains(&expected.as_str()),
-                    "n{i} should be in clusters (not in top-5)");
+            assert!(
+                cluster_ids.contains(&expected.as_str()),
+                "n{i} should be in clusters (not in top-5)"
+            );
         }
     }
 
@@ -429,7 +428,8 @@ mod tests {
         for cluster in &nb.clusters {
             assert!(
                 matches!(cluster.kind.as_str(), "concept" | "reference" | "topic"),
-                "cluster kind {} must match a category", cluster.kind
+                "cluster kind {} must match a category",
+                cluster.kind
             );
         }
     }
@@ -440,8 +440,14 @@ mod tests {
             center: dto("a", "concept"),
             nodes: vec![dto("b", "person"), dto("c", "tool")],
             edges: vec![
-                NoteLinkDto { from: "a".to_string(), to: "b".to_string() },
-                NoteLinkDto { from: "a".to_string(), to: "c".to_string() },
+                NoteLinkDto {
+                    from: "a".to_string(),
+                    to: "b".to_string(),
+                },
+                NoteLinkDto {
+                    from: "a".to_string(),
+                    to: "c".to_string(),
+                },
             ],
             hop_depth: [("b".to_string(), 1u8), ("c".to_string(), 2u8)]
                 .iter()
@@ -455,7 +461,10 @@ mod tests {
         // Neither group hits threshold=12, so no clusters.
         assert_eq!(nb.clusters.len(), 0);
         let one_hop_total = nb.one_hop.len()
-            + nb.clusters.iter().map(|c| c.member_ids.len()).sum::<usize>();
+            + nb.clusters
+                .iter()
+                .map(|c| c.member_ids.len())
+                .sum::<usize>();
         assert_eq!(one_hop_total, 1, "only 'b' is 1-hop");
         assert_eq!(nb.two_hop.len(), 1, "only 'c' is 2-hop");
         assert_eq!(nb.two_hop[0].id, "c");

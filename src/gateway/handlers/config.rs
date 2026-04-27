@@ -499,11 +499,12 @@ pub async fn handle_patch_config(
     req: JsonRpcRequest,
     patcher: Arc<ConfigPatcher>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<crate::gateway::security::SharedTokenManager>,
 ) -> JsonRpcResponse {
     debug!("Handling config.patch");
 
     // Parse params into PatchRequest
-    let patch_request: PatchRequest = match parse_params(&req) {
+    let mut patch_request: PatchRequest = match parse_params(&req) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -516,6 +517,20 @@ pub async fn handle_patch_config(
     }
 
     let path = patch_request.path.clone();
+
+    if let Some(channel_id) = path.strip_prefix("channels.") {
+        if let serde_json::Value::Object(ref mut _map) = patch_request.patch {
+            let stripped_count =
+                super::channel::store_and_strip_channel_secrets(channel_id, &mut patch_request.patch, &vault);
+            if stripped_count > 0 {
+                tracing::info!(
+                    channel = %channel_id,
+                    count = stripped_count,
+                    "Routed channel secrets to vault before config patch"
+                );
+            }
+        }
+    }
 
     // Delegate to ConfigPatcher (full pipeline: validate, backup, save)
     let result = match patcher.apply(patch_request).await {
@@ -874,9 +889,15 @@ model = "claude-opus-4-5"
     #[tokio::test]
     async fn test_handle_patch_config() {
         use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::security::{SecurityStore, SharedTokenManager};
 
         let (patcher, _temp_dir) = create_test_patcher();
         let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            _temp_dir.path().join("test.vault"),
+        ));
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -888,7 +909,7 @@ model = "claude-opus-4-5"
             id: Some(json!(1)),
         };
 
-        let response = handle_patch_config(req, patcher, event_bus).await;
+        let response = handle_patch_config(req, patcher, event_bus, vault).await;
 
         assert!(response.error.is_none(), "error: {:?}", response.error);
         assert!(response.result.is_some());
@@ -899,9 +920,15 @@ model = "claude-opus-4-5"
     #[tokio::test]
     async fn test_patch_rejects_empty() {
         use crate::gateway::event_bus::GatewayEventBus;
+        use crate::gateway::security::{SecurityStore, SharedTokenManager};
 
         let (patcher, _temp_dir) = create_test_patcher();
         let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            _temp_dir.path().join("test.vault"),
+        ));
 
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -913,7 +940,7 @@ model = "claude-opus-4-5"
             id: Some(json!(1)),
         };
 
-        let response = handle_patch_config(req, patcher, event_bus).await;
+        let response = handle_patch_config(req, patcher, event_bus, vault).await;
 
         assert!(response.error.is_some());
         let error = response.error.unwrap();

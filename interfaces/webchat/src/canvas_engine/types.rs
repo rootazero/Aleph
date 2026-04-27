@@ -102,7 +102,7 @@ pub struct CanvasNode {
     pub pinned: bool,
     // Radial navigation fields
     pub z: f32,
-    pub hop: u8,         // 0 = active centre, 1 = one-hop, 2 = two-hop
+    pub hop: u8, // 0 = active centre, 1 = one-hop, 2 = two-hop
     pub decay_score: f32,
     pub edge_count: usize,
 }
@@ -197,8 +197,14 @@ pub const ORPHAN_Z: f32 = 200.0;
 #[derive(Debug, Clone)]
 pub enum NavState {
     Idle,
-    Loading { target: String, since_ms: f64 },
-    Active { node_id: String, neighborhood: Neighborhood },
+    Loading {
+        target: String,
+        since_ms: f64,
+    },
+    Active {
+        node_id: String,
+        neighborhood: Neighborhood,
+    },
     Animating {
         from_id: String,
         to_id: String,
@@ -208,7 +214,10 @@ pub enum NavState {
         duration_ms: u32,
         started_at_ms: f64,
     },
-    Error { target: String, reason: String },
+    Error {
+        target: String,
+        reason: String,
+    },
 }
 
 #[cfg(test)]

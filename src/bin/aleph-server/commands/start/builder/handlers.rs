@@ -473,7 +473,6 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                     watcher
                 );
             }
-            register_handler!(server, "config.get", config_handlers::handle_get, watcher);
             register_handler!(
                 server,
                 "config.validate",
@@ -1004,7 +1003,8 @@ pub(in crate::commands::start) fn register_config_handlers(
         "config.patch",
         handle_patch_config,
         config_patcher,
-        event_bus
+        event_bus,
+        shared_token_mgr
     );
 
     // Global tool permissions

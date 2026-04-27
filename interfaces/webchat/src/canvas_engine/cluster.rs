@@ -25,8 +25,10 @@ pub fn group_by_category_into_clusters(
                 other => other,
             }
         });
-        let aggregated_weight: f32 =
-            group.iter().map(|n| n.decay_score * n.edge_count as f32).sum();
+        let aggregated_weight: f32 = group
+            .iter()
+            .map(|n| n.decay_score * n.edge_count as f32)
+            .sum();
         let representative_names: Vec<String> =
             group.iter().take(3).map(|n| n.name.clone()).collect();
         let member_ids: Vec<String> = group.iter().map(|n| n.id.clone()).collect();
@@ -57,8 +59,6 @@ pub fn cluster_radius(n: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-
 
     #[test]
     fn cluster_radius_log_scaling() {
@@ -94,7 +94,10 @@ mod tests {
             .collect();
         let clusters = group_by_category_into_clusters(nodes, "center");
         assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0].representative_names, vec!["name-0", "name-1", "name-2"]);
+        assert_eq!(
+            clusters[0].representative_names,
+            vec!["name-0", "name-1", "name-2"]
+        );
     }
 
     // Helper used by the new tests
@@ -114,5 +117,4 @@ mod tests {
             edge_count: 1,
         }
     }
-
 }
