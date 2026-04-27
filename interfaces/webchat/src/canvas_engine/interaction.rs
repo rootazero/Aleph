@@ -60,6 +60,9 @@ use crate::canvas_engine::prefetch::HoverDebouncer;
 pub enum CanvasIntent {
     None,
     SetActive(String),
+    /// Emitted when a drag-promote-on-drag gesture completes; the view layer
+    /// should navigate to this node (currently routed identically to SetActive).
+    PromoteNode(String),
     PrefetchNeighbor(String),
     ExpandCluster(String),
     BreadcrumbBack,
@@ -83,12 +86,17 @@ pub struct CanvasInteractionState {
 
 impl CanvasInteractionState {
     pub fn new() -> Self {
-        Self { debounce: HoverDebouncer::new(), hovered: None }
+        Self {
+            debounce: HoverDebouncer::new(),
+            hovered: None,
+        }
     }
 
     pub fn on_pointer_move(&mut self, hovered: Option<&str>, now_ms: f64) -> Option<CanvasIntent> {
         self.hovered = hovered.map(str::to_string);
-        self.debounce.note_hover(hovered, now_ms).map(CanvasIntent::PrefetchNeighbor)
+        self.debounce
+            .note_hover(hovered, now_ms)
+            .map(CanvasIntent::PrefetchNeighbor)
     }
 
     pub fn on_click(&mut self, target: ClickTarget) -> CanvasIntent {
@@ -149,7 +157,19 @@ mod intent_tests {
     #[test]
     fn keydown_escape_closes_detail() {
         let s = CanvasInteractionState::new();
-        assert!(matches!(s.on_keydown("Escape", false, false), CanvasIntent::CloseDetail));
+        assert!(matches!(
+            s.on_keydown("Escape", false, false),
+            CanvasIntent::CloseDetail
+        ));
+    }
+
+    #[test]
+    fn promote_node_intent_carries_target_id() {
+        let intent = CanvasIntent::PromoteNode("target_42".to_string());
+        match intent {
+            CanvasIntent::PromoteNode(id) => assert_eq!(id, "target_42"),
+            _ => panic!("expected PromoteNode"),
+        }
     }
 
     #[test]
