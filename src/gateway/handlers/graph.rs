@@ -143,13 +143,13 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
         }
     };
 
+    let agent_id = params
+        .agent_id
+        .as_deref()
+        .unwrap_or(crate::routing::DEFAULT_AGENT_ID);
+
     let (entries, links) = match db
-        .get_neighbors(
-            &params.node_id,
-            crate::routing::DEFAULT_AGENT_ID,
-            params.depth,
-            params.limit,
-        )
+        .get_neighbors(&params.node_id, agent_id, params.depth, params.limit)
         .await
     {
         Ok(data) => data,
@@ -159,10 +159,7 @@ pub async fn handle_neighbors_impl(req: JsonRpcRequest, db: MemoryBackend) -> Js
     };
 
     // Look up the center node entry so the frontend can pin it at world origin.
-    let center_entry = match db
-        .get_note_index(&params.node_id, crate::routing::DEFAULT_AGENT_ID)
-        .await
-    {
+    let center_entry = match db.get_note_index(&params.node_id, agent_id).await {
         Ok(Some(e)) => e,
         Ok(None) => {
             return JsonRpcResponse::error(
@@ -389,14 +386,27 @@ mod tests {
     }
 
     fn neighbors_request(node_id: &str, depth: u8, limit: usize) -> JsonRpcRequest {
+        neighbors_request_with_agent(node_id, depth, limit, None)
+    }
+
+    fn neighbors_request_with_agent(
+        node_id: &str,
+        depth: u8,
+        limit: usize,
+        agent_id: Option<&str>,
+    ) -> JsonRpcRequest {
+        let mut params = serde_json::json!({
+            "node_id": node_id,
+            "depth": depth,
+            "limit": limit,
+        });
+        if let Some(id) = agent_id {
+            params["agent_id"] = serde_json::Value::String(id.to_string());
+        }
         JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "graph.neighbors".to_string(),
-            params: Some(serde_json::json!({
-                "node_id": node_id,
-                "depth": depth,
-                "limit": limit,
-            })),
+            params: Some(params),
             id: Some(serde_json::json!(1)),
         }
     }
@@ -548,5 +558,61 @@ mod tests {
             "default agent's note must appear when agent_id omitted: {ids:?}");
         assert!(!ids.iter().any(|id| id.contains("AlphaOnly")),
             "non-default agent's note must NOT appear when agent_id omitted: {ids:?}");
+    }
+
+    #[tokio::test]
+    async fn graph_neighbors_uses_explicit_agent_id() {
+        let db = make_db();
+        // Seed alpha with center→neighbor, beta with same center id but different neighbor
+        let alpha_center = make_note("Hub", "concept", vec!["concept/AlphaPeer"]);
+        let alpha_peer = make_note("AlphaPeer", "concept", vec![]);
+        let beta_center = make_note("Hub", "concept", vec!["concept/BetaPeer"]);
+        let beta_peer = make_note("BetaPeer", "concept", vec![]);
+        db.index_note(&alpha_center, "alpha", "concept").await.unwrap();
+        db.index_note(&alpha_peer, "alpha", "concept").await.unwrap();
+        db.index_note(&beta_center, "beta", "concept").await.unwrap();
+        db.index_note(&beta_peer, "beta", "concept").await.unwrap();
+
+        let req = neighbors_request_with_agent("concept/Hub", 2, 50, Some("alpha"));
+        let resp = handle_neighbors_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphNeighborsResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let neighbor_ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
+            "alpha neighbor must appear: {neighbor_ids:?}");
+        assert!(!neighbor_ids.iter().any(|id| id.contains("BetaPeer")),
+            "beta neighbor must NOT appear: {neighbor_ids:?}");
+    }
+
+    #[tokio::test]
+    async fn graph_neighbors_falls_back_to_default_agent_when_omitted() {
+        let db = make_db();
+        // Same Hub id under default and alpha — different neighbors. With
+        // agent_id omitted, must return ONLY default's MainPeer, not alpha's
+        // AlphaPeer. This proves (a) the fallback resolves to DEFAULT_AGENT_ID,
+        // not (b) "returns all agents' neighbors".
+        let main_center = make_note("Hub", "concept", vec!["concept/MainPeer"]);
+        let main_peer = make_note("MainPeer", "concept", vec![]);
+        let alpha_center = make_note("Hub", "concept", vec!["concept/AlphaPeer"]);
+        let alpha_peer = make_note("AlphaPeer", "concept", vec![]);
+        let agent = crate::routing::DEFAULT_AGENT_ID;
+        db.index_note(&main_center, agent, "concept").await.unwrap();
+        db.index_note(&main_peer, agent, "concept").await.unwrap();
+        db.index_note(&alpha_center, "alpha", "concept").await.unwrap();
+        db.index_note(&alpha_peer, "alpha", "concept").await.unwrap();
+
+        let req = neighbors_request("concept/Hub", 2, 50); // no agent_id
+        let resp = handle_neighbors_impl(req, db).await;
+        assert!(resp.error.is_none(), "expected success: {:?}", resp.error);
+        let result: GraphNeighborsResponse =
+            serde_json::from_value(resp.result.expect("result")).expect("deserialize");
+
+        let neighbor_ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(neighbor_ids.iter().any(|id| id.contains("MainPeer")),
+            "default agent's neighbor must appear when agent_id omitted: {neighbor_ids:?}");
+        assert!(!neighbor_ids.iter().any(|id| id.contains("AlphaPeer")),
+            "non-default agent's neighbor must NOT appear: {neighbor_ids:?}");
     }
 }
