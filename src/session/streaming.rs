@@ -21,11 +21,14 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::harness::loop_callback::LoopCallback;
+use crate::harness::trace::ToolCallEndEvent;
 use crate::providers::delta::ProviderDelta;
 use crate::tools::execution_context::CascadePolicy;
 use crate::tools::orchestrator::ToolOutcome;
 use crate::tools::pipeline::{PipelineOutcome, ToolPipeline};
-use crate::tools::runtime::LoopToolRegistry;
+use crate::tools::runtime::{ToolResult, LoopToolRegistry};
+use tokio::sync::Mutex;
 
 // =============================================================================
 // ReadyToolCall
@@ -74,6 +77,7 @@ impl StreamingToolBridge {
         registry: Arc<LoopToolRegistry>,
         pipeline: Arc<ToolPipeline>,
         cancel: CancellationToken,
+        callback: Option<Box<dyn LoopCallback>>,
     ) -> (Self, StreamingToolExecutor) {
         let (tx, rx) = mpsc::channel(32);
         let bridge = Self {
@@ -86,6 +90,8 @@ impl StreamingToolBridge {
             registry,
             pipeline,
             cancel,
+            callback: Arc::new(Mutex::new(callback)),
+            concurrent_calls: HashMap::new(),
         };
         (bridge, executor)
     }
@@ -155,6 +161,11 @@ pub struct StreamingToolExecutor {
     registry: Arc<LoopToolRegistry>,
     pipeline: Arc<ToolPipeline>,
     cancel: CancellationToken,
+    /// Callback for tool lifecycle events. Box allows interior mutability
+    /// via `as_mut()` after locking.
+    callback: Arc<Mutex<Option<Box<dyn LoopCallback>>>>,
+    /// Tracks concurrent tool calls for callback emission after task completion.
+    concurrent_calls: HashMap<usize, ReadyToolCall>,
 }
 
 impl StreamingToolExecutor {
@@ -162,7 +173,7 @@ impl StreamingToolExecutor {
     pub async fn run(mut self) -> Vec<PipelineOutcome> {
         let batch_cancel = self.cancel.child_token();
         let mut results: Vec<(usize, PipelineOutcome)> = Vec::new();
-        let mut in_flight: Vec<(usize, JoinHandle<PipelineOutcome>)> = Vec::new();
+        let mut in_flight: Vec<JoinHandle<(usize, PipelineOutcome)>> = Vec::new();
         let mut exclusive_queue: Vec<ReadyToolCall> = Vec::new();
 
         // Phase 1: receive tool calls from the channel.
@@ -183,13 +194,14 @@ impl StreamingToolExecutor {
 
                             if is_concurrent && exclusive_queue.is_empty() {
                                 // Spawn immediately with batch-scoped cancel token.
+                                // Track in concurrent_calls for callback emission.
+                                let index = call.index;
+                                self.concurrent_calls.insert(index, call);
                                 let handle = self.spawn_tool_execution_with_cancel(
-                                    call.id.clone(),
-                                    call.name.clone(),
-                                    call.arguments.clone(),
+                                    index,
                                     batch_cancel.child_token(),
                                 );
-                                in_flight.push((call.index, handle));
+                                in_flight.push(handle);
                             } else {
                                 // Queue for sequential execution.
                                 exclusive_queue.push(call);
@@ -201,9 +213,9 @@ impl StreamingToolExecutor {
         }
 
         // Phase 2: await all in-flight concurrent tasks.
-        for (idx, handle) in in_flight {
+        for handle in in_flight {
             match handle.await {
-                Ok(outcome) => {
+                Ok((idx, mut outcome)) => {
                     // Check cascade policy: if a side-effecting tool failed,
                     // cancel all remaining siblings in this batch.
                     if outcome.outcome.is_error {
@@ -217,12 +229,15 @@ impl StreamingToolExecutor {
                             batch_cancel.cancel();
                         }
                     }
+                    if let Some(call) = self.concurrent_calls.remove(&idx) {
+                        self.emit_callback(&call.id, &call.name, &call.arguments, &outcome).await;
+                    }
                     results.push((idx, outcome));
                 }
                 Err(e) => {
                     tracing::error!("Spawned tool task panicked: {}", e);
                     results.push((
-                        idx,
+                        0,
                         PipelineOutcome {
                             outcome: ToolOutcome {
                                 tool_id: String::new(),
@@ -264,13 +279,15 @@ impl StreamingToolExecutor {
     /// Spawn a concurrent tool execution task with an explicit cancel token.
     fn spawn_tool_execution_with_cancel(
         &self,
-        id: String,
-        name: String,
-        arguments: Value,
+        call_index: usize,
         cancel: CancellationToken,
-    ) -> JoinHandle<PipelineOutcome> {
+    ) -> JoinHandle<(usize, PipelineOutcome)> {
+        let call = self.concurrent_calls.get(&call_index).expect("concurrent call must exist");
         let registry = Arc::clone(&self.registry);
         let pipeline = Arc::clone(&self.pipeline);
+        let id = call.id.clone();
+        let name = call.name.clone();
+        let arguments = call.arguments.clone();
 
         tokio::spawn(async move {
             let started_at = Instant::now();
@@ -278,7 +295,7 @@ impl StreamingToolExecutor {
                 .execute(&id, &name, &arguments, &registry, &cancel)
                 .await;
             outcome.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
-            outcome
+            (call_index, outcome)
         })
     }
 
@@ -290,7 +307,39 @@ impl StreamingToolExecutor {
             .execute(id, name, arguments, &self.registry, &self.cancel)
             .await;
         outcome.outcome.duration_ms = started_at.elapsed().as_millis() as u64;
+        self.emit_callback(id, name, arguments, &outcome).await;
         outcome
+    }
+
+    async fn emit_callback(
+        &self,
+        id: &str,
+        name: &str,
+        arguments: &Value,
+        outcome: &PipelineOutcome,
+    ) {
+        let mut callback_guard = self.callback.lock().await;
+        let Some(callback) = callback_guard.as_mut() else {
+            return;
+        };
+
+        let event = ToolCallEndEvent {
+            tool_id: id.to_string(),
+            tool_name: name.to_string(),
+            input: arguments.clone(),
+            duration_ms: outcome.outcome.duration_ms,
+        };
+        let result = if outcome.outcome.is_error {
+            ToolResult::Error {
+                error: outcome.outcome.output_text.clone(),
+                retryable: outcome.outcome.retryable,
+            }
+        } else {
+            ToolResult::Success {
+                output: Value::String(outcome.outcome.output_text.clone()),
+            }
+        };
+        callback.as_mut().on_tool_call_done(&event, &result);
     }
 }
 
@@ -497,7 +546,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         feed_tool_call(&mut bridge, "call_1", "echo", r#"{"msg":"hello"}"#);
         bridge.finish();
@@ -528,7 +577,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         // Feed two concurrent-safe tool calls.
         feed_tool_call(&mut bridge, "c1", "concurrent_slow", "{}");
@@ -568,7 +617,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         // First: concurrent tool, second: exclusive tool.
         feed_tool_call(&mut bridge, "t1", "slow", "{}");
@@ -598,7 +647,7 @@ mod tests {
         let registry = LoopToolRegistry::new();
         let cancel = CancellationToken::new();
         let (bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         // Finish immediately without feeding any deltas.
         bridge.finish();
@@ -644,7 +693,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         // Bash fails (concurrent), then exclusive tool should be aborted.
         feed_tool_call(&mut bridge, "t1", "Bash", "{}");
@@ -674,7 +723,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel);
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel, None);
 
         feed_tool_call(&mut bridge, "t1", "echo", r#"{"msg":"hello"}"#);
         bridge.finish();
@@ -696,7 +745,7 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let (mut bridge, executor) =
-            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel.clone());
+            StreamingToolBridge::new(Arc::new(registry), permissive_pipeline(), cancel.clone(), None);
 
         feed_tool_call(&mut bridge, "s1", "very_slow", "{}");
         bridge.finish();

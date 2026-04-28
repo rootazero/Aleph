@@ -640,7 +640,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "T".into(),
                 content: "C".into(),
                 status: TaskStatus::Blocked,
@@ -662,7 +662,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t1".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Dep".into(),
                 content: "C".into(),
                 status: TaskStatus::Completed,
@@ -677,7 +677,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t2".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Task".into(),
                 content: "C".into(),
                 status: TaskStatus::Blocked,
@@ -700,7 +700,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "T".into(),
                 content: "C".into(),
                 status: TaskStatus::Pending,
@@ -724,7 +724,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t1".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Dep".into(),
                 content: "C".into(),
                 status: TaskStatus::Pending,
@@ -739,7 +739,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t2".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Blocked".into(),
                 content: "C".into(),
                 status: TaskStatus::Blocked,
@@ -764,7 +764,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t1".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Dep1".into(),
                 content: "C".into(),
                 status: TaskStatus::Pending,
@@ -779,7 +779,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t2".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Dep2".into(),
                 content: "C".into(),
                 status: TaskStatus::Pending,
@@ -794,7 +794,7 @@ mod tests {
             .create_artifact(NewArtifact {
                 task_id: "t3".into(),
                 agent_id: "a".into(),
-                artifact_type: ArtifactType::Task,
+                artifact_type: ArtifactType::Custom("task".into()),
                 title: "Blocked".into(),
                 content: "C".into(),
                 status: TaskStatus::Blocked,

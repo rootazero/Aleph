@@ -440,13 +440,53 @@ pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use crate::gateway::agent_instance::AgentInstance;
+    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus as EngineRunStatus, RunState};
     use super::*;
+
+    struct MockExecutionAdapter;
+
+    #[async_trait]
+    impl ExecutionAdapter for MockExecutionAdapter {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+            Err(ExecutionError::RunNotFound(run_id.to_string()))
+        }
+
+        async fn get_status(&self, run_id: &str) -> Option<EngineRunStatus> {
+            Some(EngineRunStatus {
+                run_id: run_id.to_string(),
+                state: RunState::Completed,
+                started_at: Some(Utc::now()),
+                completed_at: Some(Utc::now()),
+                steps_completed: 0,
+                current_tool: None,
+            })
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
 
     #[tokio::test]
     async fn test_agent_run_manager() {
         let router = Arc::new(AgentRouter::new());
         let event_bus = Arc::new(GatewayEventBus::new());
-        let manager = AgentRunManager::new(router, event_bus);
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
         let params = AgentRunParams {
             input: "Hello, world!".to_string(),
@@ -468,7 +508,9 @@ mod tests {
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
         let event_bus = Arc::new(GatewayEventBus::new());
-        let manager = AgentRunManager::new(router, event_bus);
+        let agent_registry = Arc::new(AgentRegistry::new());
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
         let params = AgentRunParams {
             input: "Test".to_string(),
