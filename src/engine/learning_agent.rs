@@ -39,12 +39,53 @@
 use super::reflex_layer::ReflexLayer;
 use super::rule_learner::{LearnerStats, RuleLearner};
 use super::AtomicAction;
+use crate::harness::loop_callback::LoopCallback;
+use crate::harness::trace::ToolCallEndEvent;
+use crate::skill::SkillSystem;
 use crate::sync_primitives::Arc;
+use crate::tools::runtime::ToolResult;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+
+/// Bridge from LoopCallback events to LearningAgent.
+///
+/// Fires `on_l3_success` for successful tool executions, converting tool names
+/// to AtomicAction variants so the RuleLearner can accumulate patterns.
+pub struct LearningCallback {
+    learning_agent: Arc<LearningAgent>,
+}
+
+impl LearningCallback {
+    pub fn new(learning_agent: Arc<LearningAgent>) -> Self {
+        Self { learning_agent }
+    }
+}
+
+impl LoopCallback for LearningCallback {
+    fn on_tool_call_done(&mut self, event: &ToolCallEndEvent, result: &ToolResult) {
+        let ToolResult::Success { .. } = result else {
+            return;
+        };
+        let Some(action) = AtomicAction::from_tool_name(&event.tool_name) else {
+            return;
+        };
+        // Extract input text — use raw input for learning signal
+        let input = event
+            .input
+            .as_str()
+            .map(String::from)
+            .unwrap_or_default();
+        let latency = Duration::from_millis(event.duration_ms);
+        let agent = self.learning_agent.clone();
+        tokio::spawn(async move {
+            agent.on_l3_success(&input, action, latency).await;
+        });
+    }
+}
 
 /// Minimum number of observations before generating rules
 const MIN_OBSERVATIONS: usize = 100;
@@ -81,6 +122,9 @@ pub struct LearningAgent {
     /// Reflex layer (for deploying rules)
     reflex_layer: Arc<RwLock<ReflexLayer>>,
 
+    /// Skill system (for registering learned skills)
+    skill_system: Arc<SkillSystem>,
+
     /// Learning events buffer
     events: DashMap<String, Vec<LearningEvent>>,
 
@@ -93,10 +137,15 @@ pub struct LearningAgent {
 
 impl LearningAgent {
     /// Create a new learning agent
-    pub fn new(learner: Arc<RuleLearner>, reflex_layer: Arc<RwLock<ReflexLayer>>) -> Self {
+    pub fn new(
+        learner: Arc<RuleLearner>,
+        reflex_layer: Arc<RwLock<ReflexLayer>>,
+        skill_system: Arc<SkillSystem>,
+    ) -> Self {
         Self {
             learner,
             reflex_layer,
+            skill_system,
             events: DashMap::new(),
             last_generation: Arc::new(RwLock::new(Instant::now())),
             stats: Arc::new(RwLock::new(AgentStats::default())),
@@ -298,7 +347,7 @@ mod tests {
     async fn test_learning_agent_basic() {
         let learner = Arc::new(RuleLearner::new());
         let reflex_layer = Arc::new(RwLock::new(ReflexLayer::new()));
-        let agent = LearningAgent::new(learner, reflex_layer);
+        let agent = LearningAgent::new(learner, reflex_layer, Arc::new(SkillSystem::new()));
 
         // Simulate L3 successes
         let action = AtomicAction::Search {
@@ -330,7 +379,7 @@ mod tests {
     async fn test_learning_agent_failure() {
         let learner = Arc::new(RuleLearner::new());
         let reflex_layer = Arc::new(RwLock::new(ReflexLayer::new()));
-        let agent = LearningAgent::new(learner, reflex_layer);
+        let agent = LearningAgent::new(learner, reflex_layer, Arc::new(SkillSystem::new()));
 
         let action = AtomicAction::Bash {
             command: "invalid_command".to_string(),
@@ -354,7 +403,7 @@ mod tests {
     async fn test_rule_generation() {
         let learner = Arc::new(RuleLearner::new());
         let reflex_layer = Arc::new(RwLock::new(ReflexLayer::new()));
-        let agent = LearningAgent::new(learner, reflex_layer.clone());
+        let agent = LearningAgent::new(learner, reflex_layer.clone(), Arc::new(SkillSystem::new()));
 
         // Train with enough samples
         let action = AtomicAction::Bash {
@@ -381,7 +430,7 @@ mod tests {
     async fn test_clear() {
         let learner = Arc::new(RuleLearner::new());
         let reflex_layer = Arc::new(RwLock::new(ReflexLayer::new()));
-        let agent = LearningAgent::new(learner, reflex_layer);
+        let agent = LearningAgent::new(learner, reflex_layer, Arc::new(SkillSystem::new()));
 
         let action = AtomicAction::Bash {
             command: "test".to_string(),
