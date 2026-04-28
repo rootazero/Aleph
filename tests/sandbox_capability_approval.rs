@@ -22,7 +22,7 @@ use alephcore::sandbox::exec_approval::{
 };
 use alephcore::sandbox::{
     build_sandbox, NetworkPolicy, OsSandboxDriverTrait, OsSandboxProfile, Sandbox,
-    SandboxCapabilities, SandboxCommand, SandboxConfig, SandboxError, SandboxOutput,
+    SandboxCapabilities, SandboxCommand, SandboxConfig, SandboxError, SandboxHooks, SandboxOutput,
 };
 
 /// Recording driver — every `run` call increments `run_count` and returns a
@@ -133,6 +133,7 @@ fn build_test_sandbox(
         max_output_bytes: 4096,
         linux: Default::default(),
         windows: Default::default(),
+        rate_limit: Default::default(),
     };
     let (driver, run_count) = RecordingDriver::new();
     let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver;
@@ -141,7 +142,7 @@ fn build_test_sandbox(
         ApprovalConfig::default(),
         Some(Box::new(requester)),
     ));
-    let sandbox = build_sandbox(&cfg, driver_trait, gate);
+    let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxHooks::new());
     (sandbox, run_count, calls, tmp)
 }
 

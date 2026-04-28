@@ -13,6 +13,7 @@ use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::ApprovalGate;
+use crate::sandbox::hooks::SandboxHooks;
 use crate::sandbox::workspace::WorkspaceSandbox;
 use crate::sandbox::Sandbox;
 
@@ -28,11 +29,12 @@ pub fn build_sandbox(
     cfg: &SandboxConfig,
     driver: Arc<dyn OsSandboxDriverTrait>,
     approval: Arc<ApprovalGate>,
+    hooks: SandboxHooks,
 ) -> Arc<dyn Sandbox> {
     if !cfg.enabled {
         return Arc::new(NoopSandbox);
     }
-    let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval)
+    let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);
     Arc::new(ws)
@@ -120,9 +122,10 @@ mod tests {
             max_output_bytes: 1024,
             linux: Default::default(),
             windows: Default::default(),
+            rate_limit: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
-        let sandbox = build_sandbox(&cfg, driver, make_gate());
+        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxHooks::new());
 
         // NoopSandbox::execute must surface a structured error — it never
         // reaches the OS driver, so the workspace dir must remain absent.
@@ -163,9 +166,10 @@ mod tests {
             max_output_bytes: 1024,
             linux: Default::default(),
             windows: Default::default(),
+            rate_limit: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
-        let sandbox = build_sandbox(&cfg, driver, make_gate());
+        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxHooks::new());
 
         let before = std::fs::read_dir(tmp.path())
             .map(|d| d.count())
