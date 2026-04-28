@@ -220,12 +220,13 @@ fn build_cron_prompt(snapshot: &JobSnapshot) -> String {
 
     parts.push(format!("[Cron Task: {}]", snapshot.id));
 
-    if let Some(ref channel_id) = snapshot.source_channel_id {
-        parts.push(format!(
-            "You are executing a scheduled task. \
-             When finished, use the message tool to deliver your response to channel {channel_id}. \
-             The result will be sent directly to the user who created this task."
-        ));
+    if snapshot.source_channel_id.is_some() {
+        parts.push(
+            "You are executing a scheduled task. Produce your final answer as plain text — \
+             the runtime will deliver it to the user who created this task automatically. \
+             Do NOT call any messaging tool to send the result."
+                .to_string(),
+        );
     }
 
     parts.push(String::new()); // blank line separator
@@ -354,8 +355,8 @@ mod tests {
         let snapshot = make_test_snapshot();
         let prompt = build_cron_prompt(&snapshot);
         assert!(prompt.contains("[Cron Task: test-job-1]"));
-        assert!(prompt.contains("discord:general"));
-        assert!(prompt.contains("message tool"));
+        assert!(prompt.contains("scheduled task"));
+        assert!(prompt.contains("Do NOT call any messaging tool"));
         assert!(prompt.contains("Check the weather"));
     }
 
@@ -365,7 +366,7 @@ mod tests {
         snapshot.source_channel_id = None;
         let prompt = build_cron_prompt(&snapshot);
         assert!(prompt.contains("[Cron Task: test-job-1]"));
-        assert!(!prompt.contains("message tool"));
+        assert!(!prompt.contains("scheduled task"));
         assert!(prompt.contains("Check the weather"));
     }
 }
