@@ -16,7 +16,9 @@ pub mod context;
 pub mod driver;
 pub mod exec_approval;
 pub mod factory;
+pub mod hooks;
 pub mod platforms;
+pub mod rate_limit;
 pub mod policy;
 pub mod workspace;
 
@@ -26,6 +28,7 @@ pub use config::SandboxConfig;
 pub use context::current_session;
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
+pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
 pub use policy::{
     EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
