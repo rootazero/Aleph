@@ -287,6 +287,7 @@ async fn act_executes_tools_sequentially() {
         system_prompt: None,
         max_iterations: None,
         power: None,
+        stall_config: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -351,6 +352,7 @@ async fn act_tool_failure_returns_harness_tool_error() {
         system_prompt: None,
         max_iterations: None,
         power: None,
+        stall_config: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -435,6 +437,7 @@ async fn think_rebuilds_tool_use_turn_in_prompt() {
         system_prompt: None,
         max_iterations: None,
         power: None,
+        stall_config: None,
     };
     let harness = AgentHarness::new(deps);
 
@@ -594,6 +597,7 @@ async fn act_tool_error_emit_failure_does_not_shadow_tool_error() {
         system_prompt: None,
         max_iterations: None,
         power: None,
+        stall_config: None,
     };
     let harness = AgentHarness::new(deps);
 

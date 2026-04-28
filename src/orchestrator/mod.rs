@@ -9,8 +9,10 @@ pub mod flow_run_tool;
 pub mod flow_spec;
 pub mod harness_bridge;
 pub mod loader;
+pub mod metrics;
 pub mod presets;
 pub mod resolver;
+pub mod retry;
 pub mod sandbox_factory;
 
 pub use dispatch::{
@@ -25,6 +27,8 @@ pub use flow_spec::{
 };
 pub use harness_bridge::AgentHarnessRunner;
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
+pub use retry::{compute_retry_delay, should_retry, RetryConfig};
+pub use metrics::{FlowMetrics, OrchestratorMetrics};
 pub use sandbox_factory::{
     build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,
 };

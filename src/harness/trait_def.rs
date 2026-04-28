@@ -9,6 +9,7 @@
 //! ```
 
 use async_trait::async_trait;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::harness::callback::HarnessCallback;
@@ -84,6 +85,9 @@ pub enum HarnessError {
     /// The run loop was externally cancelled.
     #[error("cancelled")]
     Cancelled,
+    /// Agent stalled — no activity detected within stall timeout.
+    #[error("stalled for {elapsed:?}")]
+    Stalled { elapsed: Duration },
 }
 
 impl From<AlephError> for HarnessError {

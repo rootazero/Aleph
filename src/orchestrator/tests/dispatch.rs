@@ -65,6 +65,7 @@ fn fixture_orchestrator() -> (Orchestrator, Arc<Mutex<Vec<String>>>) {
         brain: BrainRef::Default,
         sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
+        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));
@@ -200,6 +201,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
         brain: BrainRef::Default,
         sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Reuse,
+        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));
@@ -265,45 +267,7 @@ async fn dispatch_rejects_concurrent_same_session_reuse() {
 
 #[tokio::test]
 async fn dispatch_releases_session_lock_after_completion() {
-    // Build Reuse-strategy fixture so both dispatches would land on the same key.
-    let mut spec_map = FlowSet::new();
-    let spec = FlowSpec {
-        id: "default-agent".into(),
-        description: "t".into(),
-        agent: "main".into(),
-        brain: BrainRef::Default,
-        sandbox_kind: SandboxKind::None,
-        session_strategy: SessionStrategy::Reuse,
-        overrides: FlowOverrides::default(),
-    };
-    spec_map.insert("default-agent".into(), Arc::new(spec));
-    let registry = Arc::new(FlowRegistry::new(spec_map));
-    let mut defaults = std::collections::HashMap::new();
-    defaults.insert("main".into(), "default-agent".into());
-
-    let session_service = fake_session_service();
-    let sandbox_factory = build_sandbox_factory(Arc::new(|_| {
-        Ok(Arc::new(DenyAllSandbox::new()) as Arc<dyn Sandbox>)
-    }));
-
-    let invocations = Arc::new(Mutex::new(Vec::<String>::new()));
-    let harness = Arc::new(MockHarness {
-        outcome: crate::orchestrator::dispatch::FlowOutcome {
-            final_text: "ok".into(),
-            iterations: 1,
-            ..Default::default()
-        },
-        invocations: invocations.clone(),
-    });
-
-    let orch = Orchestrator::new(
-        registry,
-        Arc::new(RoutingOverrides::default()),
-        Arc::new(defaults),
-        session_service,
-        sandbox_factory,
-        harness,
-    );
+    let (orch, _invocations) = fixture_orchestrator();
 
     let mk_req = || FlowRequest {
         flow_id: None,
@@ -330,7 +294,7 @@ async fn dispatch_releases_session_lock_after_completion() {
     let _ = second.completion.await.unwrap();
 
     assert_eq!(
-        invocations.lock().unwrap().len(),
+        _invocations.lock().unwrap().len(),
         2,
         "harness must have run twice — both dispatches completed"
     );
@@ -391,6 +355,7 @@ fn fixture_capturing_orchestrator() -> (
         brain: BrainRef::Default,
         sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
+        priority: 128,
         overrides: FlowOverrides::default(),
     };
     spec_map.insert("default-agent".into(), Arc::new(spec));

@@ -47,8 +47,14 @@ pub struct FlowSpec {
     pub brain: BrainRef,
     pub sandbox_kind: SandboxKind,
     pub session_strategy: SessionStrategy,
+    #[serde(default = "default_flow_priority")]
+    pub priority: u8,
     #[serde(default)]
     pub overrides: FlowOverrides,
+}
+
+fn default_flow_priority() -> u8 {
+    128
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -43,6 +43,17 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
+fn not_found(msg: impl Into<String>) -> AlephError {
+    AlephError::NotFound(format!("TeamStore: {}", msg.into()))
+}
+
+fn domain_err(msg: impl Into<String>) -> AlephError {
+    AlephError::Other {
+        message: format!("TeamStore: {}", msg.into()),
+        suggestion: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TeamStore trait
 // ---------------------------------------------------------------------------
@@ -268,7 +279,6 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?;
 
         if affected == 0 {
-            // Distinguish "not found" from "already disbanded"
             let exists: bool = conn
                 .prepare_cached("SELECT 1 FROM teams WHERE id = ?1")
                 .map_err(db_err)?
@@ -277,9 +287,9 @@ impl TeamStore for SqliteTeamStore {
                 .map_err(db_err)?
                 .unwrap_or(false);
             if exists {
-                return Err(db_err(format!("team already disbanded: {id}")));
+                return Err(domain_err(format!("team already disbanded: {id}")));
             }
-            return Err(db_err(format!("team not found: {id}")));
+            return Err(not_found(format!("team not found: {id}")));
         }
         Ok(())
     }
@@ -296,12 +306,11 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?;
 
         match status.as_deref() {
-            None => return Err(db_err(format!("team not found: {id}"))),
+            None => return Err(not_found(format!("team not found: {id}"))),
             Some("active") => {
-                return Err(AlephError::ConfigError {
-                    message: format!("team {id} must be disbanded before deletion"),
-                    suggestion: Some("call disband_team first".into()),
-                })
+                return Err(domain_err(format!(
+                    "team {id} must be disbanded before deletion"
+                )))
             }
             _ => {}
         }
@@ -323,9 +332,9 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?;
 
         match status.as_deref() {
-            None => return Err(db_err(format!("team not found: {}", input.team_id))),
+            None => return Err(not_found(format!("team not found: {}", input.team_id))),
             Some("disbanded") => {
-                return Err(db_err(format!(
+                return Err(domain_err(format!(
                     "cannot add member to disbanded team: {}",
                     input.team_id
                 )))
@@ -395,19 +404,18 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?;
 
         let team = match team {
-            None => return Err(db_err(format!("team not found: {team_id}"))),
+            None => return Err(not_found(format!("team not found: {team_id}"))),
             Some(t) => t,
         };
 
         if team.status == TeamStatus::Disbanded {
-            return Err(db_err(format!(
+            return Err(domain_err(format!(
                 "cannot remove member from disbanded team: {team_id}"
             )));
         }
 
-        // Forbid removing the leader
         if team.leader_id == agent_id {
-            return Err(db_err(format!(
+            return Err(domain_err(format!(
                 "cannot remove the team leader ({})",
                 agent_id
             )));
@@ -421,7 +429,7 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?;
 
         if affected == 0 {
-            return Err(db_err(format!(
+            return Err(domain_err(format!(
                 "agent '{agent_id}' is not a member of team '{team_id}'"
             )));
         }

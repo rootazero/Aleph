@@ -149,6 +149,7 @@ impl HarnessRunner for AgentHarnessRunner {
             system_prompt: None,
             max_iterations: None,
             power,
+            stall_config: None,
         };
         let harness = AgentHarness::new(deps);
         // Fans HarnessCallback events onto the FlowStreamEvent broadcast

@@ -95,6 +95,7 @@ fn roundtrips_preferred_brain() {
         },
         sandbox_kind: SandboxKind::Workspace,
         session_strategy: SessionStrategy::Fresh,
+        priority: 128,
         overrides: FlowOverrides::default(),
     };
     let s = toml::to_string(&flow).unwrap();

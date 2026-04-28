@@ -14,6 +14,7 @@ fn mk_spec(id: &str, agent: &str) -> FlowSpec {
         brain: BrainRef::Default,
         sandbox_kind: SandboxKind::None,
         session_strategy: SessionStrategy::Fresh,
+        priority: 128,
         overrides: FlowOverrides::default(),
     }
 }

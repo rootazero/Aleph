@@ -258,7 +258,8 @@ impl SqliteArtifactStore {
         store
     }
 
-    /// Run schema migration — creates the `task_artifacts` table and index.
+    /// Run schema migration — creates the `task_artifacts` table, indexes,
+    /// and the `task_artifact_dependencies` junction table.
     pub async fn migrate(&self) -> crate::error::Result<()> {
         let conn = self.conn.lock().await;
         conn.execute_batch(
@@ -286,6 +287,17 @@ impl SqliteArtifactStore {
                 ON task_artifacts(task_id, status);
             CREATE INDEX IF NOT EXISTS idx_task_artifacts_assignee
                 ON task_artifacts(assignee);
+
+            -- Junction table for explicit dependency tracking (replaces LIKE-based JSON matching)
+            CREATE TABLE IF NOT EXISTS task_artifact_dependencies (
+                artifact_id    TEXT NOT NULL,
+                depends_on    TEXT NOT NULL,
+                PRIMARY KEY (artifact_id, depends_on),
+                FOREIGN KEY (artifact_id) REFERENCES task_artifacts(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tad_depends_on
+                ON task_artifact_dependencies(depends_on);
             "#,
         )
         .map_err(db_err)?;
@@ -437,54 +449,26 @@ impl SqliteArtifactStore {
         Ok(incomplete_count == 0)
     }
 
-    /// Mark a task artifact as completed and automatically unblock any tasks
-    /// that were waiting on it.
-    ///
-    /// Returns the list of tasks that were unblocked (moved from `blocked` → `pending`).
     pub async fn complete_task(&self, artifact_id: &str) -> crate::error::Result<Vec<TaskArtifact>> {
-        // Step 1: mark the artifact as completed
         self.update_status(artifact_id, TaskStatus::Completed).await?;
 
-        // Step 2: find all artifacts whose `blocked_by` contains `artifact_id`
         let blocked_ids: Vec<String> = {
             let conn = self.conn.lock().await;
             let mut stmt = conn
                 .prepare_cached(
-                    "SELECT id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at, started_at, completed_at \
-                     FROM task_artifacts WHERE blocked_by LIKE ?1",
+                    "SELECT artifact_id FROM task_artifact_dependencies WHERE depends_on = ?1",
                 )
                 .map_err(db_err)?;
-            let pattern = format!("%{}%", artifact_id);
-            let rows = stmt
-                .query_map(params![pattern], |row| {
-                    let id: String = row.get(0)?;
-                    let blocked_by_str: String = row.get(7)?;
-                    let blocked_by: Vec<String> =
-                        serde_json::from_str(&blocked_by_str).unwrap_or_default();
-                    Ok(Some((id, blocked_by)))
-                })
-                .map_err(db_err)?;
-            let mut ids = Vec::new();
-            for row in rows {
-                match row {
-                    Ok(Some((id, blocked_by))) => {
-                        if blocked_by.contains(&artifact_id.to_string()) {
-                            ids.push(id);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => return Err(db_err(e)),
-                }
-            }
-            ids
+            let query = stmt.query_map(params![artifact_id], |row| row.get(0));
+            let rows = query.map_err(db_err)?;
+            let collected = rows.collect::<rusqlite::Result<Vec<String>>>();
+            collected.map_err(db_err)?
         };
 
-        // Step 3: for each blocked artifact, check if all deps are done and unblock
         let mut unblocked = Vec::new();
         for blocked_id in blocked_ids {
             if self.all_dependencies_completed(&[blocked_id.clone()]).await? {
-                let task =
-                    self.update_status(&blocked_id, TaskStatus::Pending).await?;
+                let task = self.update_status(&blocked_id, TaskStatus::Pending).await?;
                 unblocked.push(task);
             }
         }

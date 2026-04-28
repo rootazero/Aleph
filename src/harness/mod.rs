@@ -8,6 +8,7 @@ pub mod callback;
 pub mod chain_context;
 pub mod deps;
 pub mod loop_callback;
+pub mod stall;
 pub mod trace;
 pub mod trace_sink;
 pub mod trait_def;
@@ -16,6 +17,7 @@ pub use agent::AgentHarness;
 pub use callback::{HarnessCallback, NoopHarnessCallback};
 pub use deps::HarnessDeps;
 pub use loop_callback::{LoopCallback, NoopCallback};
+pub use stall::{StallConfig, StallTracker};
 pub use trace_sink::{NoopTraceSink, TraceSink};
 pub use trait_def::{Harness, HarnessError, TurnState};
 

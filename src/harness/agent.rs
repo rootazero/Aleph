@@ -34,6 +34,9 @@ use crate::verification::stop_hooks::{execute_stop_hooks, StopHookContext, StopH
 
 pub struct AgentHarness {
     deps: HarnessDeps,
+    /// Tracks agent activity for stall detection. `None` when stall detection
+    /// is disabled (no `stall_config` in deps).
+    stall_tracker: Option<crate::harness::stall::StallTracker>,
     /// Set when `context_budget.before_turn` returns `FinalReply`. Surfaced
     /// through [`AgentHarness::hit_limit`] so the orchestrator bridge can
     /// populate `FlowOutcome::hit_limit`.
@@ -42,8 +45,18 @@ pub struct AgentHarness {
 
 impl AgentHarness {
     pub fn new(deps: HarnessDeps) -> Self {
+        let stall_tracker = deps
+            .stall_config
+            .as_ref()
+            .map(|config| {
+                crate::harness::stall::StallTracker::new(
+                    config.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                )
+            });
         Self {
             deps,
+            stall_tracker,
             hit_limit: AtomicBool::new(false),
         }
     }
@@ -231,6 +244,12 @@ impl crate::session::SessionDriver for AgentHarness {
                 HarnessError::Session(sess_err) => {
                     crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
                 }
+                HarnessError::Stalled { elapsed } => {
+                    crate::error::AlephError::provider(format!(
+                        "agent stalled after {:?}",
+                        elapsed
+                    ))
+                }
             })
     }
 }
@@ -254,8 +273,17 @@ impl Harness for AgentHarness {
             if cancel.is_cancelled() {
                 return Err(HarnessError::Cancelled);
             }
+            if let Some(ref tracker) = self.stall_tracker {
+                if tracker.is_stalled() {
+                    let elapsed = tracker.elapsed().await;
+                    return Err(HarnessError::Stalled { elapsed });
+                }
+            }
             match self.run_turn(session_id, callback).await? {
                 TurnState::Continue => {
+                    if let Some(ref tracker) = self.stall_tracker {
+                        tracker.record_activity().await;
+                    }
                     iterations = iterations.saturating_add(1);
                     if let Some(limit) = cap {
                         if iterations >= limit {
@@ -771,6 +799,7 @@ mod tests {
             system_prompt: Some("ROLE: SPEC-BOT".into()),
             max_iterations: None,
             power: None,
+            stall_config: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -957,6 +986,7 @@ mod tests {
             system_prompt: None,
             max_iterations: Some(3),
             power: None,
+            stall_config: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;
@@ -1006,6 +1036,7 @@ mod tests {
             system_prompt: None,
             max_iterations: None,
             power: None,
+            stall_config: None,
         };
         let harness = super::AgentHarness::new(deps);
         let mut cb = NoopHarnessCallback;

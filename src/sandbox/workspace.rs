@@ -23,6 +23,7 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
+use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionId;
 
@@ -34,6 +35,7 @@ pub struct WorkspaceSandbox {
     approval_gate: Arc<ApprovalGate>,
     default_timeout: Duration,
     max_output_bytes: usize,
+    hooks: SandboxHooks,
 }
 
 /// Per-session workspace state: cwd on disk plus the capability baseline and
@@ -53,6 +55,7 @@ impl WorkspaceSandbox {
         workspace_root: PathBuf,
         os_driver: Arc<dyn OsSandboxDriverTrait>,
         approval_gate: Arc<ApprovalGate>,
+        hooks: SandboxHooks,
     ) -> Self {
         Self {
             workspace_root,
@@ -61,6 +64,7 @@ impl WorkspaceSandbox {
             approval_gate,
             default_timeout: Duration::from_secs(60),
             max_output_bytes: 1024 * 1024, // 1 MB total budget (512 KB per stream)
+            hooks,
         }
     }
 
@@ -73,6 +77,12 @@ impl WorkspaceSandbox {
     /// Override the default 1 MB combined stdout+stderr truncation budget.
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
+        self
+    }
+
+    /// Override the default hooks (empty by default).
+    pub fn with_hooks(mut self, hooks: SandboxHooks) -> Self {
+        self.hooks = hooks;
         self
     }
 
@@ -122,23 +132,26 @@ fn session_key_to_filename(sid: &SessionId) -> String {
 #[async_trait]
 impl Sandbox for WorkspaceSandbox {
     async fn execute(&self, cmd: SandboxCommand) -> Result<SandboxOutput, SandboxError> {
-        // 1. Resolve session workspace (lazy create on first call).
+        let ctx = SandboxHookContext::new(&cmd.program, &cmd);
+
+        if let SandboxHookResult::Deny { reason } = self.hooks.run_before(&ctx).await {
+            return Err(SandboxError::Other(format!("hook denied: {reason}")));
+        }
+
         let ws = self.for_session(&cmd.session_id).await?;
 
-        // 2. Resolve cwd: None → workspace root; Some(p) must live under root.
         let cwd = match &cmd.cwd {
             None => ws.cwd.clone(),
             Some(p) if p.starts_with(&ws.cwd) => p.clone(),
             Some(_) => {
-                return Err(SandboxError::CapabilityDenied {
+                let err = SandboxError::CapabilityDenied {
                     reason: "cwd outside workspace root".into(),
-                });
+                };
+                self.hooks.run_after(&ctx, Err("cwd outside workspace root")).await;
+                return Err(err);
             }
         };
 
-        // 3. Capability check: within baseline → pass; else consult grants
-        //    cache; else ask ApprovalGate. Approval caches a grant for future
-        //    same-or-narrower requests in this session.
         if !cmd.capabilities.is_within(&ws.baseline) {
             let already_granted = {
                 let granted = ws.granted_elevations.read().await;
@@ -158,18 +171,18 @@ impl Sandbox for WorkspaceSandbox {
                             .insert(cmd.capabilities.clone());
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
-                        return Err(SandboxError::CapabilityDenied {
+                        let err = SandboxError::CapabilityDenied {
                             reason: "user denied elevated capability request".into(),
-                        });
+                        };
+                        self.hooks.run_after(&ctx, Err("user denied")).await;
+                        return Err(err);
                     }
                 }
             }
         }
 
-        // 4. Generate OS-level sandbox profile.
         let profile = self.os_driver.profile_for(&cmd.capabilities, &cwd)?;
 
-        // 5. Run the command under the profile.
         let timeout = cmd.timeout.unwrap_or(self.default_timeout);
         let output = self
             .os_driver
@@ -183,21 +196,38 @@ impl Sandbox for WorkspaceSandbox {
                 timeout,
                 self.max_output_bytes,
             )
-            .await?;
+            .await;
 
-        // 6. Emit capability ledger audit record (tracing).
-        tracing::info!(
-            target: "capability_ledger",
-            session_id = ?cmd.session_id,
-            program = %cmd.program,
-            caps = ?cmd.capabilities,
-            exit = ?output.exit_code,
-            signal = ?output.signal,
-            duration_ms = output.duration_ms,
-            "sandbox.execute"
-        );
+        let outcome = match &output {
+            Ok(out) => {
+                tracing::info!(
+                    target: "capability_ledger",
+                    session_id = ?cmd.session_id,
+                    program = %cmd.program,
+                    caps = ?cmd.capabilities,
+                    exit = ?out.exit_code,
+                    signal = ?out.signal,
+                    duration_ms = out.duration_ms,
+                    "sandbox.execute"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "capability_ledger",
+                    session_id = ?cmd.session_id,
+                    program = %cmd.program,
+                    caps = ?cmd.capabilities,
+                    error = %e,
+                    "sandbox.execute failed"
+                );
+                Err("sandbox execution failed")
+            }
+        };
 
-        Ok(output)
+        self.hooks.run_after(&ctx, outcome).await;
+
+        output
     }
 }
 
@@ -332,8 +362,9 @@ mod tests {
         tmp: &tempfile::TempDir,
         driver: Arc<dyn OsSandboxDriverTrait>,
         gate: Arc<ApprovalGate>,
+        hooks: SandboxHooks,
     ) -> WorkspaceSandbox {
-        WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate)
+        WorkspaceSandbox::new(tmp.path().to_path_buf(), driver, gate, hooks)
     }
 
     #[tokio::test]
@@ -341,7 +372,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let driver = Arc::new(FakeDriver::new());
         let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
-        let sandbox = build_sandbox(&tmp, driver_trait, build_gate_auto_deny());
+        let sandbox = build_sandbox(&tmp, driver_trait, build_gate_auto_deny(), SandboxHooks::new());
         let session = sid();
         let expected_dir = tmp.path().join(session_key_to_filename(&session));
 
@@ -373,7 +404,7 @@ mod tests {
     async fn cwd_outside_workspace_root_is_denied() {
         let tmp = tempfile::tempdir().unwrap();
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
-        let sandbox = build_sandbox(&tmp, driver, build_gate_auto_deny());
+        let sandbox = build_sandbox(&tmp, driver, build_gate_auto_deny(), SandboxHooks::new());
         let err = sandbox
             .execute(SandboxCommand {
                 session_id: sid(),
@@ -395,7 +426,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
         // Elevated request (network) + gate that denies → expect CapabilityDenied.
-        let sandbox = build_sandbox(&tmp, driver, build_gate_with(ApprovalOutcome::Denied));
+        let sandbox = build_sandbox(&tmp, driver, build_gate_with(ApprovalOutcome::Denied), SandboxHooks::new());
         let elevated = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
             ..SandboxCapabilities::strict()
@@ -427,7 +458,7 @@ mod tests {
             ApprovalConfig::default(),
             Some(Box::new(requester)),
         ));
-        let sandbox = build_sandbox(&tmp, driver_trait, gate);
+        let sandbox = build_sandbox(&tmp, driver_trait, gate, SandboxHooks::new());
         let elevated = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
             ..SandboxCapabilities::strict()

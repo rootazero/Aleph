@@ -166,6 +166,15 @@ impl KanbanBoard for SqliteKanbanBoard {
         artifact_id: &str,
         new_status: TaskStatus,
     ) -> Result<TaskArtifact> {
+        let current = self.get_artifact_by_id(artifact_id).await?;
+        let current = current.ok_or_else(|| db_err("artifact not found"))?;
+        if !current.status.can_transition_to(&new_status) {
+            return Err(db_err(format!(
+                "invalid status transition from {:?} to {:?}",
+                current.status, new_status
+            )));
+        }
+
         let conn = self.conn.lock().await;
         let now = Utc::now();
 
@@ -194,61 +203,40 @@ impl KanbanBoard for SqliteKanbanBoard {
             let conn = self.conn.lock().await;
             let mut stmt = conn
                 .prepare_cached(
-                    "SELECT id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at, started_at, completed_at \
-                     FROM task_artifacts WHERE blocked_by LIKE ?1",
+                    "SELECT artifact_id FROM task_artifact_dependencies WHERE depends_on = ?1",
                 )
                 .map_err(db_err)?;
-
-            let pattern = format!("%{}%", artifact_id);
-            let rows = match stmt.query_map(params![pattern], |row| {
-                let id: String = row.get(0)?;
-                let blocked_by_str: String = row.get(7)?;
-                let blocked_by: Vec<String> =
-                    serde_json::from_str(&blocked_by_str).unwrap_or_default();
-                if blocked_by.contains(&artifact_id.to_string()) {
-                    Ok(Some(id))
-                } else {
-                    Ok(None)
-                }
-            }) {
-                Ok(r) => r,
-                Err(e) => return Err(db_err(e)),
-            };
-            let mut ids = Vec::new();
-            for row in rows {
-                match row {
-                    Ok(Some(id)) => ids.push(id),
-                    Ok(None) => {}
-                    Err(e) => return Err(db_err(e)),
-                }
-            }
-            ids
+            let rows = stmt
+                .query_map(params![artifact_id], |row| row.get(0))
+                .map_err(db_err)?;
+            let result = rows.collect::<rusqlite::Result<Vec<String>>>();
+            result.map_err(db_err)?
         };
 
         let mut unblocked = vec![];
         for blocked_id in blocked_ids {
-            // Inline all_dependencies_completed: check if this artifact has no remaining incomplete deps
             let should_unblock = {
                 let conn = self.conn.lock().await;
-                let blocked_by_str: String = conn
-                    .query_row(
-                        "SELECT blocked_by FROM task_artifacts WHERE id = ?1",
-                        [&blocked_id],
-                        |row| row.get(0),
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT depends_on FROM task_artifact_dependencies WHERE artifact_id = ?1",
                     )
                     .map_err(db_err)?;
-                let blocked_by: Vec<String> =
-                    serde_json::from_str(&blocked_by_str).unwrap_or_default();
-                if blocked_by.is_empty() {
+                let deps: Vec<String> = stmt
+                    .query_map(params![&blocked_id], |row| row.get(0))
+                    .map_err(db_err)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(db_err)?;
+                if deps.is_empty() {
                     true
                 } else {
-                    let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    let placeholders = deps.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                     let sql = format!(
                         "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
                         placeholders
                     );
                     let params_vec: Vec<&dyn rusqlite::types::ToSql> =
-                        blocked_by.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+                        deps.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
                     let incomplete_count: i64 = conn
                         .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
                         .map_err(db_err)?;
@@ -266,6 +254,12 @@ impl KanbanBoard for SqliteKanbanBoard {
 
     async fn add_dependency(&self, artifact_id: &str, depends_on: &str) -> Result<()> {
         let conn = self.conn.lock().await;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO task_artifact_dependencies (artifact_id, depends_on) VALUES (?1, ?2)",
+            params![artifact_id, depends_on],
+        )
+        .map_err(db_err)?;
 
         let blocked_by_str: String = conn
             .query_row(

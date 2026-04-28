@@ -10,6 +10,7 @@
 
 use crate::context::budget::ContextBudget;
 use crate::context::compact::compactor::ContextCompactor;
+use crate::harness::stall::StallConfig;
 use crate::harness::trace_sink::TraceSink;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
@@ -59,4 +60,8 @@ pub struct HarnessDeps {
     /// idle sleep for the duration of each turn so long-running Think→Act loops
     /// don't get cut off by macOS putting the host to sleep.
     pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
+    /// Stall detection configuration. When set, the harness monitors for
+    /// inactivity and returns `HarnessError::Stalled` if no activity
+    /// is detected within the configured timeout.
+    pub stall_config: Option<StallConfig>,
 }
