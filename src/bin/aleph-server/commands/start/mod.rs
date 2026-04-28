@@ -972,6 +972,74 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    // Register KanbanAutoUnblocker + TeamEventLogger on GlobalBus.
+    // Both handlers are fire-and-forget (handle returns empty vec), so we pass a
+    // dummy EventContext — they never call ctx.bus.publish().
+    if let (Some(artifact_store), Some(event_store)) = (
+        agent_result.artifact_store.clone(),
+        agent_result.event_store.clone(),
+    ) {
+        use alephcore::event::{AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus};
+        use alephcore::teams::events::TeamEventLogger;
+        use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
+
+        let artifact_store_concrete = Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
+            .expect("artifact_store must be SqliteArtifactStore");
+        let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
+        let team_logger = Arc::new(TeamEventLogger::new(event_store));
+        let dummy_bus = EventBus::new();
+        let ctx = EventContext::new(dummy_bus);
+
+        let kanban_handler_clone = kanban_handler.clone();
+        let ctx_kanban = ctx.clone();
+        let _kanban_sub = GlobalBus::global()
+            .subscribe_async(EventFilter::new(vec![EventType::TeamTaskCompleted]), move |global_event| {
+                let AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary } = global_event.event else {
+                    return;
+                };
+                let handler = kanban_handler_clone.clone();
+                let task_id_str = task_id.clone();
+                let ctx = ctx_kanban.clone();
+                tokio::spawn(async move {
+                    match handler.handle(&AlephEvent::TeamTaskCompleted { team_id, task_id, result_summary }, &ctx).await {
+                        Ok(_) => {},
+                        Err(e) => tracing::debug!(handler = handler.name(), task_id = %task_id_str, error = %e, "KanbanAutoUnblocker handle error"),
+                    }
+                });
+            })
+            .await;
+
+        let team_logger_clone = team_logger.clone();
+        let ctx_team = ctx.clone();
+        let _team_sub = GlobalBus::global()
+            .subscribe_async(
+                EventFilter::new(vec![
+                    EventType::TeamCreated,
+                    EventType::TeamMemberAdded,
+                    EventType::TeamMemberRemoved,
+                    EventType::TeamTaskAssigned,
+                    EventType::TeamTaskUpdated,
+                    EventType::TeamTaskCompleted,
+                    EventType::TeamDisbanded,
+                    EventType::TeamMessageSent,
+                ]),
+                move |global_event| {
+                    let handler = team_logger_clone.clone();
+                    let event = global_event.event.clone();
+                    let ctx = ctx_team.clone();
+                    tokio::spawn(async move {
+                        match handler.handle(&event, &ctx).await {
+                            Ok(_) => {},
+                            Err(e) => tracing::warn!(handler = handler.name(), error = %e, "TeamEventLogger handle error"),
+                        }
+                    });
+                },
+            )
+            .await;
+
+        tracing::info!("Team event handlers registered (KanbanAutoUnblocker, TeamEventLogger)");
+    }
+
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
     server.openai_agent_registry = agent_result.agent_registry.clone();

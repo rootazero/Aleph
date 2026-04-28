@@ -128,38 +128,6 @@ impl SqliteKanbanBoard {
             .map_err(db_err)
     }
 
-    async fn all_dependencies_completed(&self, artifact_id: &str) -> Result<bool> {
-        let conn = self.conn.lock().await;
-
-        let blocked_by_str: String = conn
-            .query_row(
-                "SELECT blocked_by FROM task_artifacts WHERE id = ?1",
-                [artifact_id],
-                |row| row.get(0),
-            )
-            .map_err(db_err)?;
-
-        let blocked_by: Vec<String> =
-            serde_json::from_str(&blocked_by_str).unwrap_or_default();
-        if blocked_by.is_empty() {
-            return Ok(true);
-        }
-
-        let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
-            placeholders
-        );
-
-        let params_vec: Vec<&dyn rusqlite::types::ToSql> =
-            blocked_by.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-
-        let incomplete_count: i64 = conn
-            .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
-            .map_err(db_err)?;
-
-        Ok(incomplete_count == 0)
-    }
 }
 
 #[async_trait]
@@ -259,7 +227,35 @@ impl KanbanBoard for SqliteKanbanBoard {
 
         let mut unblocked = vec![];
         for blocked_id in blocked_ids {
-            if self.all_dependencies_completed(&blocked_id).await? {
+            // Inline all_dependencies_completed: check if this artifact has no remaining incomplete deps
+            let should_unblock = {
+                let conn = self.conn.lock().await;
+                let blocked_by_str: String = conn
+                    .query_row(
+                        "SELECT blocked_by FROM task_artifacts WHERE id = ?1",
+                        [&blocked_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(db_err)?;
+                let blocked_by: Vec<String> =
+                    serde_json::from_str(&blocked_by_str).unwrap_or_default();
+                if blocked_by.is_empty() {
+                    true
+                } else {
+                    let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                    let sql = format!(
+                        "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
+                        placeholders
+                    );
+                    let params_vec: Vec<&dyn rusqlite::types::ToSql> =
+                        blocked_by.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+                    let incomplete_count: i64 = conn
+                        .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
+                        .map_err(db_err)?;
+                    incomplete_count == 0
+                }
+            };
+            if should_unblock {
                 let task = self.move_task(&blocked_id, TaskStatus::Pending).await?;
                 unblocked.push(task);
             }

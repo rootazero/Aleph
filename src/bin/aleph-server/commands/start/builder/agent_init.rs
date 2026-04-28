@@ -57,7 +57,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// Event log store for team event logging and KanbanAutoUnblocker
     pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
     /// Artifact store for task artifact management and KanbanAutoUnblocker
-    pub artifact_store: Option<Arc<alephcore::teams::artifacts::SqliteArtifactStore>>,
+    pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
     /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
@@ -274,17 +274,46 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }};
         }
 
-        let a = init_store!(
-            SqliteArtifactStore,
-            dyn alephcore::teams::artifacts::ArtifactStore,
-            "Artifact store",
-            db_path
-        );
-        // Retain concrete type for KanbanAutoUnblocker
-        let artifact_store: Option<Arc<SqliteArtifactStore>> = a
-            .as_ref()
-            .and_then(|s| Arc::clone(s).downcast().ok());
-        drop(a); // consumed; we keep artifact_store and cast ev below
+        // Construct artifact store manually to retain concrete type for KanbanAutoUnblocker
+        let artifact_store: Option<Arc<SqliteArtifactStore>> = match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
+                    if !daemon {
+                        eprintln!("Warning: Failed to set WAL mode for Artifact store: {}", e);
+                    }
+                }
+                let store = Arc::new(SqliteArtifactStore::new(conn));
+                let store_concrete = store.clone();
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(store_concrete.migrate())
+                }) {
+                    Ok(()) => {
+                        if !daemon {
+                            println!("  Artifact store initialized (SQLite)");
+                        }
+                        Some(store as Arc<SqliteArtifactStore>)
+                    }
+                    Err(e) => {
+                        if !daemon {
+                            eprintln!(
+                                "Warning: Artifact store migration failed: {}. Related tools disabled.",
+                                e
+                            );
+                        }
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                if !daemon {
+                    eprintln!(
+                        "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
+                        e
+                    );
+                }
+                None
+            }
+        };
         let ev = init_store!(
             SqliteEventLogStore,
             dyn alephcore::teams::events::EventLogStore,
@@ -303,7 +332,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             "Session store",
             db_path
         );
-        (a, ev, m, s)
+        let artifact_store_trait: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>> = artifact_store.as_ref().map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
+        (artifact_store_trait, ev, m, s)
     };
 
     // Build higher-level team components from the stores above.

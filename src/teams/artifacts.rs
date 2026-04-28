@@ -3,6 +3,7 @@
 //! Artifacts are rich outputs produced by agents during task execution —
 //! reports, code snippets, reviews, discoveries, etc.
 
+use std::any::Any;
 use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
@@ -217,7 +218,7 @@ fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> 
 
 /// Async persistence interface for task artifacts.
 #[async_trait]
-pub trait ArtifactStore: Send + Sync {
+pub trait ArtifactStore: Send + Sync + Any {
     /// Create and persist a new artifact, returning the full record.
     async fn create_artifact(&self, input: NewArtifact) -> crate::error::Result<TaskArtifact>;
 
@@ -630,5 +631,187 @@ mod tests {
         assert!(TaskStatus::Failed.can_transition_to(&TaskStatus::Pending));
         assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Pending));
         assert!(TaskStatus::Pending.can_transition_to(&TaskStatus::Pending));
+    }
+
+    #[tokio::test]
+    async fn test_all_dependencies_completed_empty() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+        let artifact = store
+            .create_artifact(NewArtifact {
+                task_id: "t".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "T".into(),
+                content: "C".into(),
+                status: TaskStatus::Blocked,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        assert!(store.all_dependencies_completed(&[]).await.unwrap());
+        assert!(store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_all_dependencies_completed_with_deps() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+        let dep = store
+            .create_artifact(NewArtifact {
+                task_id: "t1".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Dep".into(),
+                content: "C".into(),
+                status: TaskStatus::Completed,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let artifact = store
+            .create_artifact(NewArtifact {
+                task_id: "t2".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Task".into(),
+                content: "C".into(),
+                status: TaskStatus::Blocked,
+                blocked_by: vec![dep.id.clone()],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        assert!(store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+        store.update_status(&dep.id, TaskStatus::Pending).await.unwrap();
+        assert!(!store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_no_dependents() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+        let artifact = store
+            .create_artifact(NewArtifact {
+                task_id: "t".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "T".into(),
+                content: "C".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let unblocked = store.complete_task(&artifact.id).await.unwrap();
+        assert!(unblocked.is_empty());
+        let fetched = store.get_artifact(&artifact.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status, TaskStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_unblocks_dependent() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+        let dep = store
+            .create_artifact(NewArtifact {
+                task_id: "t1".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Dep".into(),
+                content: "C".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let blocked = store
+            .create_artifact(NewArtifact {
+                task_id: "t2".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Blocked".into(),
+                content: "C".into(),
+                status: TaskStatus::Blocked,
+                blocked_by: vec![dep.id.clone()],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let unblocked = store.complete_task(&dep.id).await.unwrap();
+        assert_eq!(unblocked.len(), 1);
+        assert_eq!(unblocked[0].id, blocked.id);
+        let fetched = store.get_artifact(&blocked.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status, TaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_complete_task_does_not_unblock_partially_blocked() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+        let dep1 = store
+            .create_artifact(NewArtifact {
+                task_id: "t1".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Dep1".into(),
+                content: "C".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let dep2 = store
+            .create_artifact(NewArtifact {
+                task_id: "t2".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Dep2".into(),
+                content: "C".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let blocked = store
+            .create_artifact(NewArtifact {
+                task_id: "t3".into(),
+                agent_id: "a".into(),
+                artifact_type: ArtifactType::Task,
+                title: "Blocked".into(),
+                content: "C".into(),
+                status: TaskStatus::Blocked,
+                blocked_by: vec![dep1.id.clone(), dep2.id.clone()],
+                assignee: None,
+                priority: 0,
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let unblocked = store.complete_task(&dep1.id).await.unwrap();
+        assert!(unblocked.is_empty());
+        let fetched = store.get_artifact(&blocked.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status, TaskStatus::Blocked);
+        store.update_status(&dep1.id, TaskStatus::Completed).await.unwrap();
+        let unblocked = store.complete_task(&dep2.id).await.unwrap();
+        assert_eq!(unblocked.len(), 1);
+        assert_eq!(unblocked[0].id, blocked.id);
     }
 }
