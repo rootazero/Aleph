@@ -24,6 +24,7 @@ pub mod masker;
 pub mod parser;
 pub mod risk;
 pub mod sanitize;
+pub mod secret_patterns;
 pub mod socket;
 pub mod storage;
 

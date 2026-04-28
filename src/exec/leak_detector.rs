@@ -92,69 +92,17 @@ impl LeakDetector {
 
     /// Create a LeakDetector with default patterns for common secret types.
     pub fn default_patterns() -> Self {
-        let prefixes = vec![
-            "sk-",
-            "AIza",
-            "AKIA",
-            "ghp_",
-            "gho_",
-            "ghu_",
-            "ghs_",
-            "ghr_",
-            "xoxb-",
-            "xoxa-",
-            "xoxp-",
-            "xoxr-",
-            "xoxs-",
-            "-----BEGIN",
-            "bearer ",
-            "Bearer ",
-        ];
-
-        let patterns = vec![
-            LeakPattern {
-                name: "openai_key",
-                regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "anthropic_key",
-                regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "google_api_key",
-                regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "aws_access_key",
-                regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "github_token",
-                regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "slack_token",
-                regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "private_key",
-                regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
-                action: LeakAction::Block,
-            },
-            LeakPattern {
-                name: "bearer_token",
-                regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
-                action: LeakAction::Redact,
-            },
-        ];
-
-        Self::new(prefixes, patterns)
+        let assets = crate::exec::secret_patterns::leak_detector_assets();
+        let patterns = assets
+            .patterns
+            .into_iter()
+            .map(|p| LeakPattern {
+                name: p.name,
+                regex: p.regex,
+                action: p.action,
+            })
+            .collect();
+        Self::new(assets.prefixes, patterns)
     }
 
     /// Scan content for leaks (internal implementation).
@@ -172,11 +120,15 @@ impl LeakDetector {
             if let Some(m) = pattern.regex.find(content) {
                 let matched = m.as_str();
                 let truncated = if matched.len() > 20 {
-                    let mut end = 20;
-                    while end > 0 && !matched.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    format!("{}...", &matched[..end])
+                    // Truncate to 20 chars, scanning backward from byte 20 to find
+                    // the nearest valid UTF-8 character boundary so we don't split
+                    // a multi-byte codepoint.
+                    let byte_offset = matched
+                        .char_indices()
+                        .nth(20)
+                        .map(|(i, _)| i)
+                        .unwrap_or(matched.len());
+                    format!("{}...", &matched[..byte_offset])
                 } else {
                     matched.to_string()
                 };

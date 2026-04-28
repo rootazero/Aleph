@@ -1,0 +1,174 @@
+//! Shared secret detection patterns for LeakDetector and SecretMasker.
+//!
+//! All secret patterns are defined here in one place to prevent drift
+//! between the two consumers.
+
+use regex::Regex;
+
+pub struct SecretPattern {
+    pub regex: Regex,
+    pub replacement: &'static str,
+}
+
+pub struct LeakPatternDef {
+    pub name: &'static str,
+    pub regex: Regex,
+    pub action: super::leak_detector::LeakAction,
+}
+
+pub struct LeakDetectorAssets {
+    pub prefixes: Vec<&'static str>,
+    pub patterns: Vec<LeakPatternDef>,
+}
+
+pub fn secret_masker_patterns() -> Vec<SecretPattern> {
+    vec![
+        SecretPattern {
+            regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
+            replacement: "sk-***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+            replacement: "sk-ant-***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+            replacement: "AIza***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
+            replacement: "AKIA***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)\s*[=:]\s*['"]?([a-zA-Z0-9/+=]{40})['"]?"#).unwrap(),
+            replacement: "$1=***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+            replacement: "gh*_***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
+            replacement: "$1=***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----").unwrap(),
+            replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
+        },
+        SecretPattern {
+            regex: Regex::new(r"://([^:]+):([^@]+)@").unwrap(),
+            replacement: "://$1:***REDACTED***@",
+        },
+        SecretPattern {
+            regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)\s*[=:]\s*['"]?([^\s'"]{8,})['"]?"#).unwrap(),
+            replacement: "$1=***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
+            replacement: "xox*-***REDACTED***",
+        },
+        SecretPattern {
+            regex: Regex::new(r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}").unwrap(),
+            replacement: "***DISCORD_TOKEN_REDACTED***",
+        },
+    ]
+}
+
+pub fn leak_detector_assets() -> LeakDetectorAssets {
+    let prefixes = vec![
+        "sk-",
+        "AIza",
+        "AKIA",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "xoxb-",
+        "xoxa-",
+        "xoxp-",
+        "xoxr-",
+        "xoxs-",
+        "-----BEGIN",
+        "bearer ",
+        "Bearer ",
+    ];
+
+    let patterns = vec![
+        LeakPatternDef {
+            name: "openai_key",
+            regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "anthropic_key",
+            regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "google_api_key",
+            regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "aws_access_key",
+            regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "github_token",
+            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "slack_token",
+            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "private_key",
+            regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "bearer_token",
+            regex: Regex::new(r"(?i)bearer\s+[a-zA-Z0-9\-._~+/]+=*").unwrap(),
+            action: super::leak_detector::LeakAction::Redact,
+        },
+    ];
+
+    LeakDetectorAssets { prefixes, patterns }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn masker_patterns_detect_openai_key() {
+        for p in secret_masker_patterns() {
+            if p.regex.is_match("sk-abcdefghijklmnopqrstuvwxyz123456789012345678") {
+                return;
+            }
+        }
+        panic!("OpenAI key pattern should exist in masker patterns");
+    }
+
+    #[test]
+    fn openai_pattern_in_both() {
+        let masker = secret_masker_patterns();
+        let leak_assets = leak_detector_assets();
+        let openai = leak_assets.patterns.iter().find(|p| p.name == "openai_key").unwrap();
+        let found = masker.iter().any(|mp| mp.regex.as_str() == openai.regex.as_str());
+        assert!(found, "openai_key regex should be identical in both");
+    }
+
+    #[test]
+    fn github_token_pattern_in_both() {
+        let masker = secret_masker_patterns();
+        let leak_assets = leak_detector_assets();
+        let github = leak_assets.patterns.iter().find(|p| p.name == "github_token").unwrap();
+        let found = masker.iter().any(|mp| mp.regex.as_str() == github.regex.as_str());
+        assert!(found, "github_token regex should be identical in both");
+    }
+}

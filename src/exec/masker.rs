@@ -1,85 +1,9 @@
-//! SecretMasker - Redact sensitive information from output.
-//!
-//! Detects and masks:
-//! - API keys (OpenAI, Anthropic, Google, AWS, etc.)
-//! - Private keys (SSH, PEM)
-//! - Passwords and tokens
-//! - Connection strings
-
+use crate::exec::secret_patterns::secret_masker_patterns;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-/// Secret pattern with replacement
-struct SecretPattern {
-    regex: Regex,
-    replacement: &'static str,
-}
-
-/// All secret patterns
-static SECRET_PATTERNS: Lazy<Vec<SecretPattern>> = Lazy::new(|| {
-    vec![
-        // OpenAI API Key (sk-...)
-        SecretPattern {
-            regex: Regex::new(r"sk-[a-zA-Z0-9]{20,}").unwrap(),
-            replacement: "sk-***REDACTED***",
-        },
-        // Anthropic API Key (sk-ant-...)
-        SecretPattern {
-            regex: Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
-            replacement: "sk-ant-***REDACTED***",
-        },
-        // Google API Key
-        SecretPattern {
-            regex: Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
-            replacement: "AIza***REDACTED***",
-        },
-        // AWS Access Key ID
-        SecretPattern {
-            regex: Regex::new(r"AKIA[A-Z0-9]{16}").unwrap(),
-            replacement: "AKIA***REDACTED***",
-        },
-        // AWS Secret Access Key
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(aws_secret_access_key|secret_access_key)\s*[=:]\s*['"]?([a-zA-Z0-9/+=]{40})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        // GitHub Token
-        SecretPattern {
-            regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
-            replacement: "gh*_***REDACTED***",
-        },
-        // Generic Bearer Token
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        // Private Key Block
-        SecretPattern {
-            regex: Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----").unwrap(),
-            replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
-        },
-        // Password in URL
-        SecretPattern {
-            regex: Regex::new(r"://([^:]+):([^@]+)@").unwrap(),
-            replacement: "://$1:***REDACTED***@",
-        },
-        // Generic password assignment
-        SecretPattern {
-            regex: Regex::new(r#"(?i)(password|passwd|pwd|secret)\s*[=:]\s*['"]?([^\s'"]{8,})['"]?"#).unwrap(),
-            replacement: "$1=***REDACTED***",
-        },
-        // Slack Token
-        SecretPattern {
-            regex: Regex::new(r"xox[baprs]-[a-zA-Z0-9\-]{10,}").unwrap(),
-            replacement: "xox*-***REDACTED***",
-        },
-        // Discord Token
-        SecretPattern {
-            regex: Regex::new(r"[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27}").unwrap(),
-            replacement: "***DISCORD_TOKEN_REDACTED***",
-        },
-    ]
-});
+static SECRET_PATTERNS: Lazy<Vec<(regex::Regex, &'static str)>> =
+    Lazy::new(|| secret_masker_patterns().into_iter().map(|p| (p.regex, p.replacement)).collect());
 
 /// SecretMasker for redacting sensitive information.
 #[derive(Debug, Clone, Default)]
@@ -101,42 +25,28 @@ impl SecretMasker {
         Ok(())
     }
 
-    /// Mask secrets in the given text.
     pub fn mask(&self, text: &str) -> String {
         let mut result = text.to_string();
-
-        // Apply default patterns
-        for pattern in SECRET_PATTERNS.iter() {
-            result = pattern
-                .regex
-                .replace_all(&result, pattern.replacement)
-                .to_string();
+        for (regex, replacement) in SECRET_PATTERNS.iter() {
+            result = regex.replace_all(&result, *replacement).to_string();
         }
-
-        // Apply custom patterns
         for (regex, replacement) in &self.custom_patterns {
             result = regex.replace_all(&result, replacement.as_str()).to_string();
         }
-
         result
     }
 
-    /// Check if the text contains any secrets.
     pub fn contains_secrets(&self, text: &str) -> bool {
-        // Check default patterns
-        for pattern in SECRET_PATTERNS.iter() {
-            if pattern.regex.is_match(text) {
+        for (regex, _) in SECRET_PATTERNS.iter() {
+            if regex.is_match(text) {
                 return true;
             }
         }
-
-        // Check custom patterns
         for (regex, _) in &self.custom_patterns {
             if regex.is_match(text) {
                 return true;
             }
         }
-
         false
     }
 }
