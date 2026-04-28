@@ -1,6 +1,7 @@
 use alephcore::sandbox::{
     build_sandbox, create_platform_driver, SandboxCapabilities, SandboxConfig, SandboxPolicy,
 };
+use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,7 +57,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
         ));
 
         b.iter(|| {
-            let sandbox = build_sandbox(&config, driver.clone(), approval.clone());
+            let sandbox = build_sandbox(&config, driver.clone(), approval.clone(), SandboxRateLimitConfig::default());
             black_box(sandbox);
         });
     });
@@ -76,7 +77,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
         ));
 
         b.iter(|| {
-            let sandbox = build_sandbox(&config, driver.clone(), approval.clone());
+            let sandbox = build_sandbox(&config, driver.clone(), approval.clone(), SandboxRateLimitConfig::default());
             black_box(sandbox);
         });
     });

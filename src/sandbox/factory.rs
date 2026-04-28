@@ -14,6 +14,7 @@ use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::driver::OsSandboxDriverTrait;
 use crate::sandbox::exec_approval::gate::ApprovalGate;
 use crate::sandbox::hooks::SandboxHooks;
+use crate::sandbox::rate_limit::{RateLimitHook, SandboxRateLimitConfig, SandboxRateLimiter};
 use crate::sandbox::workspace::WorkspaceSandbox;
 use crate::sandbox::Sandbox;
 
@@ -29,11 +30,14 @@ pub fn build_sandbox(
     cfg: &SandboxConfig,
     driver: Arc<dyn OsSandboxDriverTrait>,
     approval: Arc<ApprovalGate>,
-    hooks: SandboxHooks,
+    rate_limit_config: SandboxRateLimitConfig,
 ) -> Arc<dyn Sandbox> {
     if !cfg.enabled {
         return Arc::new(NoopSandbox);
     }
+    let rate_limiter = Arc::new(SandboxRateLimiter::new(rate_limit_config));
+    let hooks = SandboxHooks::new()
+        .with_before(Arc::new(RateLimitHook::new(rate_limiter)));
     let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);
@@ -64,6 +68,7 @@ mod tests {
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::types::ApprovalConfig;
+    use crate::sandbox::rate_limit::SandboxRateLimitConfig;
 
     /// Minimal driver used for factory tests — never invoked because the
     /// factory tests do not call `execute`.
@@ -125,7 +130,7 @@ mod tests {
             rate_limit: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
-        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxHooks::new());
+        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
 
         // NoopSandbox::execute must surface a structured error — it never
         // reaches the OS driver, so the workspace dir must remain absent.
@@ -169,7 +174,7 @@ mod tests {
             rate_limit: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
-        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxHooks::new());
+        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
 
         let before = std::fs::read_dir(tmp.path())
             .map(|d| d.count())

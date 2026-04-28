@@ -22,8 +22,9 @@ use alephcore::sandbox::exec_approval::{
 };
 use alephcore::sandbox::{
     build_sandbox, NetworkPolicy, OsSandboxDriverTrait, OsSandboxProfile, Sandbox,
-    SandboxCapabilities, SandboxCommand, SandboxConfig, SandboxError, SandboxHooks, SandboxOutput,
+    SandboxCapabilities, SandboxCommand, SandboxConfig, SandboxError, SandboxOutput,
 };
+use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
 
 /// Recording driver — every `run` call increments `run_count` and returns a
 /// canned successful `SandboxOutput`. Used so tests can assert whether the
@@ -142,7 +143,7 @@ fn build_test_sandbox(
         ApprovalConfig::default(),
         Some(Box::new(requester)),
     ));
-    let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxHooks::new());
+    let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxRateLimitConfig::default());
     (sandbox, run_count, calls, tmp)
 }
 
