@@ -23,51 +23,53 @@ impl OrchestratorMetrics {
     }
 
     pub fn record_flow_started(&self) {
-        self.flows_started.fetch_add(1, Ordering::SeqCst);
-        self.active_flows.fetch_add(1, Ordering::SeqCst);
+        // Relaxed is sufficient: these are independent counters where atomicity
+        // is the only requirement, not sequential consistency across threads.
+        self.flows_started.fetch_add(1, Ordering::Relaxed);
+        self.active_flows.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_flow_completed(&self) {
-        self.flows_completed.fetch_add(1, Ordering::SeqCst);
-        self.active_flows.fetch_sub(1, Ordering::SeqCst);
+        self.flows_completed.fetch_add(1, Ordering::Relaxed);
+        self.active_flows.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn record_flow_failed(&self) {
-        self.flows_failed.fetch_add(1, Ordering::SeqCst);
-        self.active_flows.fetch_sub(1, Ordering::SeqCst);
+        self.flows_failed.fetch_add(1, Ordering::Relaxed);
+        self.active_flows.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn record_flow_cancelled(&self) {
-        self.flows_cancelled.fetch_add(1, Ordering::SeqCst);
-        self.active_flows.fetch_sub(1, Ordering::SeqCst);
+        self.flows_cancelled.fetch_add(1, Ordering::Relaxed);
+        self.active_flows.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn record_flow_stalled(&self) {
-        self.flows_stalled.fetch_add(1, Ordering::SeqCst);
-        self.active_flows.fetch_sub(1, Ordering::SeqCst);
+        self.flows_stalled.fetch_add(1, Ordering::Relaxed);
+        self.active_flows.fetch_sub(1, Ordering::Relaxed);
     }
 
     pub fn record_retry(&self) {
-        self.total_retries.fetch_add(1, Ordering::SeqCst);
+        self.total_retries.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_turn(&self) {
-        self.total_turns.fetch_add(1, Ordering::SeqCst);
+        self.total_turns.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn active_flows(&self) -> u64 {
-        self.active_flows.load(Ordering::SeqCst)
+        self.active_flows.load(Ordering::Relaxed)
     }
 
     pub fn flows_started(&self) -> u64 {
-        self.flows_started.load(Ordering::SeqCst)
+        self.flows_started.load(Ordering::Relaxed)
     }
 
     pub fn completion_rate(&self) -> f64 {
-        let completed = self.flows_completed.load(Ordering::SeqCst);
-        let failed = self.flows_failed.load(Ordering::SeqCst);
-        let cancelled = self.flows_cancelled.load(Ordering::SeqCst);
-        let stalled = self.flows_stalled.load(Ordering::SeqCst);
+        let completed = self.flows_completed.load(Ordering::Relaxed);
+        let failed = self.flows_failed.load(Ordering::Relaxed);
+        let cancelled = self.flows_cancelled.load(Ordering::Relaxed);
+        let stalled = self.flows_stalled.load(Ordering::Relaxed);
         let total = completed + failed + cancelled + stalled;
         if total == 0 {
             0.0
@@ -77,10 +79,10 @@ impl OrchestratorMetrics {
     }
 
     pub fn stall_rate(&self) -> f64 {
-        let completed = self.flows_completed.load(Ordering::SeqCst);
-        let failed = self.flows_failed.load(Ordering::SeqCst);
-        let cancelled = self.flows_cancelled.load(Ordering::SeqCst);
-        let stalled = self.flows_stalled.load(Ordering::SeqCst);
+        let completed = self.flows_completed.load(Ordering::Relaxed);
+        let failed = self.flows_failed.load(Ordering::Relaxed);
+        let cancelled = self.flows_cancelled.load(Ordering::Relaxed);
+        let stalled = self.flows_stalled.load(Ordering::Relaxed);
         let total = completed + failed + cancelled + stalled;
         if total == 0 {
             0.0

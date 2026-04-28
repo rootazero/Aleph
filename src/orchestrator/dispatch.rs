@@ -126,6 +126,13 @@ impl std::fmt::Debug for FlowRequest {
     }
 }
 
+/// Hardcoded broadcast channel buffer size. This caps the number of queued
+/// flow-stream events before the sender (harness) blocks. If the receiver
+/// (Gateway) falls behind, the harness loop will stall at the next `send`.
+/// 256 is a deliberate balance: large enough for bursts of rapid tool calls,
+/// small enough to bound memory overhead per active flow.
+const CHANNEL_BUFFER_SIZE: usize = 256;
+
 /// Orchestrator dependencies. Most are behind `Arc<dyn Trait>` so the struct
 /// itself is cheap to share. Per-session lock is an internal `Mutex<HashSet>`.
 pub struct Orchestrator {
@@ -235,7 +242,7 @@ impl Orchestrator {
         let sandbox = (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key)?;
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
-        let (event_tx, event_rx) = broadcast::channel::<FlowStreamEvent>(256);
+        let (event_tx, event_rx) = broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE);
         let (done_tx, done_rx) = oneshot::channel();
         let cancel = CancellationToken::new();
 
@@ -267,6 +274,10 @@ impl Orchestrator {
                     trace_sink,
                 )
                 .await;
+            // `done_tx.send` returns Err only when `done_rx` was dropped by the
+            // caller — meaning the handle was abandoned and no one is waiting for
+            // the result. Dropping the result is intentional; a `return` or `?`
+            // here would propagate an error that signals nothing actionable.
             let _ = done_tx.send(outcome);
             // _lock drops here, releasing the session key regardless of panic.
         });

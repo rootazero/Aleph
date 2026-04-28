@@ -86,6 +86,14 @@ pub enum SandboxKind {
 pub enum SessionStrategy {
     Reuse,
     Fresh,
+    /// Spawn a new child session linked to a parent.
+    ///
+    /// The parent is resolved in this order:
+    /// 1. `parent_session` field from the runtime `FlowRequest` (if present)
+    /// 2. `parent_session_key` from this config field (TOML static value)
+    ///
+    /// This means a TOML config author should treat `parent_session_key` as a
+    /// fallback default, not the primary binding — the runtime always wins.
     Child {
         #[serde(default)]
         parent_session_key: Option<String>,
