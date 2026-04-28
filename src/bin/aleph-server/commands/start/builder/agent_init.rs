@@ -90,7 +90,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Phase 3 Task 8: sandbox for exec-class tools.
     sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
 ) -> AgentHandlersResult {
-    let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
+    let mut run_manager: Option<Arc<AgentRunManager>> = None;
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
@@ -1459,6 +1459,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         agent_reg = Some(agent_registry.clone());
         tool_reg_out = Some(tool_registry_for_heartbeat);
 
+        // Create run_manager with real execution dependencies
+        let real_run_manager = Arc::new(AgentRunManager::new(
+            router.clone(),
+            event_bus.clone(),
+            agent_registry.clone(),
+            engine_arc.clone(),
+        ));
+        run_manager = Some(real_run_manager);
+
         // activity.stats — returns active agent run count + coord task count
         {
             let exec_adapter_for_stats: Arc<dyn alephcore::gateway::ExecutionAdapter> =
@@ -1498,13 +1507,25 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             );
             println!();
         }
-        let run_manager_clone = run_manager.clone();
+        use alephcore::gateway::execution_engine::SimpleExecutionEngine;
+        use alephcore::gateway::execution_engine::ExecutionEngineConfig;
+
+        let simple_engine = Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default()));
+        let simple_adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = simple_engine;
+        let fallback_agent_registry = Arc::new(AgentRegistry::new());
+        let fallback_run_manager = Arc::new(AgentRunManager::new(
+            router.clone(),
+            event_bus.clone(),
+            fallback_agent_registry,
+            simple_adapter,
+        ));
+        let run_manager_clone = fallback_run_manager.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let manager = run_manager_clone.clone();
             async move { handle_run(req, manager).await }
         });
 
-        let rm_chat = run_manager.clone();
+        let rm_chat = fallback_run_manager.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let manager = rm_chat.clone();
             async move { chat_handlers::handle_send(req, manager).await }
@@ -1819,24 +1840,26 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     }
 
     // Register status/cancel (work for both real and simulated modes)
-    let run_manager_status = run_manager.clone();
-    server.handlers_mut().register("agent.status", move |req| {
-        let manager = run_manager_status.clone();
-        async move { handle_agent_status(req, manager).await }
-    });
+    if let Some(ref rm) = run_manager {
+        let rm_status = rm.clone();
+        server.handlers_mut().register("agent.status", move |req| {
+            let manager = rm_status.clone();
+            async move { handle_agent_status(req, manager).await }
+        });
 
-    let run_manager_cancel = run_manager.clone();
-    server.handlers_mut().register("agent.cancel", move |req| {
-        let manager = run_manager_cancel.clone();
-        async move { handle_agent_cancel(req, manager).await }
-    });
+        let rm_cancel = rm.clone();
+        server.handlers_mut().register("agent.cancel", move |req| {
+            let manager = rm_cancel.clone();
+            async move { handle_agent_cancel(req, manager).await }
+        });
 
-    // Register chat handlers (abort, history, clear work for both real and simulated)
-    let rm_abort = run_manager.clone();
-    server.handlers_mut().register("chat.abort", move |req| {
-        let manager = rm_abort.clone();
-        async move { chat_handlers::handle_abort(req, manager).await }
-    });
+        // Register chat handlers (abort, history, clear work for both real and simulated)
+        let rm_abort = rm.clone();
+        server.handlers_mut().register("chat.abort", move |req| {
+            let manager = rm_abort.clone();
+            async move { chat_handlers::handle_abort(req, manager).await }
+        });
+    }
 
     let sm_history = session_store.clone();
     server.handlers_mut().register("chat.history", move |req| {
@@ -1881,7 +1904,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     }
 
     AgentHandlersResult {
-        _run_manager: run_manager,
+        _run_manager: run_manager.expect("run_manager must be set in both real and simulated modes"),
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,

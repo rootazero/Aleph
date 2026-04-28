@@ -2,18 +2,21 @@
 //!
 //! RPC handlers for agent operations: run, wait, cancel, status.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{info, error};
 
 use super::super::event_bus::GatewayEventBus;
-use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, RunSummary, StreamEvent};
+use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, StreamEvent};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::router::{AgentRouter, SessionKey};
+use super::super::agent_instance::AgentRegistry;
+use super::super::execution_adapter::ExecutionAdapter;
+use super::super::execution_engine::RunRequest;
 use super::parse_params;
 
 /// A file attachment sent with a message
@@ -97,14 +100,23 @@ pub struct AgentRunManager {
     router: Arc<AgentRouter>,
     event_bus: Arc<GatewayEventBus>,
     active_runs: Arc<RwLock<HashMap<String, RunState>>>,
+    agent_registry: Arc<AgentRegistry>,
+    execution_adapter: Arc<dyn ExecutionAdapter>,
 }
 
 impl AgentRunManager {
-    pub fn new(router: Arc<AgentRouter>, event_bus: Arc<GatewayEventBus>) -> Self {
+    pub fn new(
+        router: Arc<AgentRouter>,
+        event_bus: Arc<GatewayEventBus>,
+        agent_registry: Arc<AgentRegistry>,
+        execution_adapter: Arc<dyn ExecutionAdapter>,
+    ) -> Self {
         Self {
             router,
             event_bus,
             active_runs: Arc::new(RwLock::new(HashMap::new())),
+            agent_registry,
+            execution_adapter,
         }
     }
 
@@ -163,14 +175,53 @@ impl AgentRunManager {
             }
         }
 
-        // Spawn the actual agent execution (simulated for now)
-        let event_bus = self.event_bus.clone();
+        let agent_id = session_key.agent_id();
+        let agent = match self.agent_registry.get(agent_id).await {
+            Some(a) => a,
+            None => {
+                error!("Agent not found: {}", agent_id);
+                let mut runs = self.active_runs.write().await;
+                if let Some(run) = runs.get_mut(&run_id) {
+                    run.status = RunStatus::Failed(format!("Agent not found: {}", agent_id));
+                }
+                return Err(format!("Agent not found: {}", agent_id));
+            }
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert("channel_id".to_string(), params.channel.unwrap_or_default());
+        metadata.insert("sender_id".to_string(), "websocket".to_string());
+        if let Some(peer_id) = &params.peer_id {
+            metadata.insert("peer_id".to_string(), peer_id.clone());
+        }
+
+        let request = RunRequest {
+            run_id: run_id.clone(),
+            input: params.input.clone(),
+            session_key: session_key.clone(),
+            timeout_secs: None,
+            metadata,
+            attachments: vec![],
+            pending_media: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let emitter: Arc<dyn EventEmitter + Send + Sync> =
+            Arc::new(GatewayEventEmitter::new(self.event_bus.clone()));
+
+        let execution_adapter = self.execution_adapter.clone();
         let active_runs = self.active_runs.clone();
-        let run_id_clone = run_id.clone();
-        let input = params.input.clone();
+        let run_id_for_spawn = run_id.clone();
 
         tokio::spawn(async move {
-            execute_agent_run(run_id_clone, input, event_bus, active_runs).await;
+            let result = execution_adapter.execute(request, agent, emitter).await;
+
+            let mut runs = active_runs.write().await;
+            if let Some(run) = runs.get_mut(&run_id_for_spawn) {
+                run.status = match result {
+                    Ok(()) => RunStatus::Completed,
+                    Err(e) => RunStatus::Failed(e.to_string()),
+                };
+            }
         });
 
         Ok(AgentRunResult {
@@ -201,82 +252,6 @@ impl AgentRunManager {
     pub async fn list_runs(&self) -> Vec<RunState> {
         self.active_runs.read().await.values().cloned().collect()
     }
-}
-
-/// Execute an agent run (simulated implementation)
-///
-/// In a real implementation, this would call the actual agent loop.
-/// For Phase 2, we simulate the execution with mock events.
-async fn execute_agent_run(
-    run_id: String,
-    input: String,
-    event_bus: Arc<GatewayEventBus>,
-    active_runs: Arc<RwLock<HashMap<String, RunState>>>,
-) {
-    let emitter = GatewayEventEmitter::new(event_bus);
-    let start_time = Instant::now();
-
-    // Simulate reasoning
-    emitter
-        .emit_reasoning(&run_id, "Analyzing the request...", false)
-        .await;
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    emitter
-        .emit_reasoning(
-            &run_id,
-            &format!(
-                "Processing input: {}",
-                input.chars().take(50).collect::<String>()
-            ),
-            false,
-        )
-        .await;
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    emitter
-        .emit_reasoning(&run_id, "Formulating response...", true)
-        .await;
-
-    // Simulate response
-    let response = format!("Echo: {}", input);
-    let chunk_size = 50;
-    let response_chars: Vec<char> = response.chars().collect();
-    let chunks: Vec<String> = response_chars
-        .chunks(chunk_size)
-        .map(|c| c.iter().collect::<String>())
-        .collect();
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        let is_final = i == chunks.len() - 1;
-        emitter
-            .emit_response_chunk(&run_id, chunk, "", i as u32, is_final, false)
-            .await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    }
-
-    // Complete the run
-    let duration_ms = start_time.elapsed().as_millis() as u64;
-    let summary = RunSummary {
-        total_tokens: 100,
-        tool_calls: 0,
-        loops: 1,
-        final_response: Some(response),
-    };
-
-    emitter
-        .emit_run_complete(&run_id, summary, duration_ms)
-        .await;
-
-    // Update run state
-    {
-        let mut runs = active_runs.write().await;
-        if let Some(run) = runs.get_mut(&run_id) {
-            run.status = RunStatus::Completed;
-        }
-    }
-
-    debug!("Completed run {} in {}ms", run_id, duration_ms);
 }
 
 /// Handle agent.run RPC request
