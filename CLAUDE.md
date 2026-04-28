@@ -63,6 +63,28 @@
 - **实现**: 主循环的 LLM 一次调用自然覆盖所有判断（意图理解 + 工具选择 + 安全评估 + 完成度判断）
 - **效果**: 零额外 LLM 调用，零中间件税，模型推理能力完整释放
 
+### R11. 薄 Harness 哲学，笨循环编排核心 (Thin Harness, Dumb Loop)
+
+> *"If you're not the model, you're the harness."* — Vivek Trivedy
+> *"Models get stronger → harness gets thinner."* — Anthropic
+
+- **薄 Harness 哲学 (Thin Harness)**: Aleph 采纳 Anthropic 流派，运行时极简、信任模型。Harness 是脚手架不是认知层。**模型越强，Harness 越薄** — 优秀的 Harness 必须通过"面向未来测试 (Future-Proof Test)"：换更强的模型，性能自然提升，无需修改 Harness 代码
+- **笨循环 (Dumb Loop)**: `src/harness/` 仅承载 Think→Act 轮次调度，**不参与任何推理**。所有智能决策（意图理解、工具选择、安全评估、完成度判断）由 LLM 一次推理调用自然完成
+- **核心边界**: `src/harness/` 严格保持在 **9 文件 / ~1500 行** 以内（agent.rs / deps.rs / trait_def.rs / callback.rs / loop_callback.rs / trace.rs / trace_sink.rs / chain_context.rs / mod.rs）。任何膨胀都是违规
+- **循环里的 5 个"不"**:
+  1. ❌ 不判断意图分类
+  2. ❌ 不做工具过滤 / 相关性评分
+  3. ❌ 不做完成度判断（除模型显式 stop）
+  4. ❌ 不做内容审查 / 安全打分
+  5. ❌ 不做错误恢复策略选择
+- **12 模块各归其所**: 行业共识的 12 大 Harness 模块（Tools/Memory/Context/Prompt/State/Error/Guardrails/Verification/Subagents/Init...）每一个都有独立物理位置，**不在 `src/harness/` 内堆积**
+- **YAGNI 撤回模式**: 任何"零现有消费者"的抽象立即删除/撤回，绝不"为未来留口"。dissolution 期间累计删除 ~5,200 行死代码
+- **加代码前必答 3 问**:
+  1. 这是脚手架还是认知？认知必须搬到 prompt
+  2. 模型升级一档还需要它吗？不需要就删
+  3. 现在有几个真实消费者？零个就撤回
+- **关联**: 是 R3 (核心轻量化) + R8 (LLM 主权) + R10 (智慧在 Prompt) 在 Agent Harness 工程上的具体落地。详见 [HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md)
+
 ---
 
 ## 🧬 设计原则 (Design Principles)
@@ -207,6 +229,7 @@ target/release/aleph-server start
 | 文档 | 链接 |
 |------|------|
 | ARCHITECTURE.md | [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) |
+| **HARNESS_PHILOSOPHY.md** | [docs/reference/HARNESS_PHILOSOPHY.md](docs/reference/HARNESS_PHILOSOPHY.md) — 薄 Harness 哲学 + 笨循环编排核心（R11 详解） |
 | AGENT_SYSTEM.md | [docs/reference/AGENT_SYSTEM.md](docs/reference/AGENT_SYSTEM.md) |
 | AGENT_LOOP_CONTEXT_BUDGET.md | [docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md](docs/reference/AGENT_LOOP_CONTEXT_BUDGET.md) |
 | AGENT_LOOP_TOOL_EXECUTION.md | [docs/reference/AGENT_LOOP_TOOL_EXECUTION.md](docs/reference/AGENT_LOOP_TOOL_EXECUTION.md) |
