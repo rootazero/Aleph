@@ -54,6 +54,64 @@ impl ArtifactType {
 // TaskArtifact
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// TaskStatus
+// ---------------------------------------------------------------------------
+
+/// Workflow status for a task artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Blocked,
+    Failed,
+}
+
+impl TaskStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Self {
+        match s {
+            "pending" => Self::Pending,
+            "in_progress" => Self::InProgress,
+            "completed" => Self::Completed,
+            "blocked" => Self::Blocked,
+            "failed" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
+
+    /// Whether self can transition to new_status.
+    pub fn can_transition_to(&self, new_status: &TaskStatus) -> bool {
+        match (self, new_status) {
+            (a, b) if a == b => true,
+            (Self::Pending, Self::InProgress) => true,
+            (Self::Pending, Self::Blocked) => true,
+            (Self::InProgress, Self::Completed) => true,
+            (Self::InProgress, Self::Failed) => true,
+            (Self::Blocked, Self::Pending) => true,
+            (Self::Failed, Self::Pending) => true,
+            (Self::Completed, _) => false,
+            _ => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TaskArtifact
+// ---------------------------------------------------------------------------
+
 /// A rich output produced by an agent while executing a task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskArtifact {
@@ -64,12 +122,24 @@ pub struct TaskArtifact {
     pub title: String,
     /// Markdown content body.
     pub content: String,
+    /// Workflow status.
+    pub status: TaskStatus,
+    /// Artifact IDs that must complete before this task can proceed.
+    pub blocked_by: Vec<String>,
+    /// Assigned agent for this task.
+    pub assignee: Option<String>,
+    /// Lower value = higher priority.
+    pub priority: i32,
     /// Arbitrary structured metadata.
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
+    /// When the task moved to InProgress.
+    pub started_at: Option<DateTime<Utc>>,
+    /// When the task reached a terminal state.
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
-/// Input for creating a new artifact (no id or timestamp).
+/// Input for creating a new artifact (no id or timestamps).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewArtifact {
     pub task_id: String,
@@ -77,8 +147,20 @@ pub struct NewArtifact {
     pub artifact_type: ArtifactType,
     pub title: String,
     pub content: String,
+    #[serde(default)]
+    pub status: TaskStatus,
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default = "default_priority")]
+    pub priority: i32,
     #[serde(default = "default_metadata")]
     pub metadata: serde_json::Value,
+}
+
+fn default_priority() -> i32 {
+    0
 }
 
 fn default_metadata() -> serde_json::Value {
@@ -98,8 +180,14 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
 
 fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> {
     let artifact_type_str: String = row.get(3)?;
-    let metadata_str: String = row.get(6)?;
-    let created_at_str: String = row.get(7)?;
+    let status_str: String = row.get(6)?;
+    let blocked_by_str: String = row.get(7)?;
+    let assignee: Option<String> = row.get(8)?;
+    let priority: i32 = row.get(9)?;
+    let metadata_str: String = row.get(10)?;
+    let created_at_str: String = row.get(11)?;
+    let started_at_str: Option<String> = row.get(12)?;
+    let completed_at_str: Option<String> = row.get(13)?;
 
     Ok(TaskArtifact {
         id: row.get(0)?,
@@ -108,10 +196,18 @@ fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> 
         artifact_type: ArtifactType::from_stored(&artifact_type_str),
         title: row.get(4)?,
         content: row.get(5)?,
+        status: TaskStatus::from_stored(&status_str),
+        blocked_by: serde_json::from_str(&blocked_by_str).unwrap_or_default(),
+        assignee,
+        priority,
         metadata: serde_json::from_str(&metadata_str).unwrap_or_else(|_| default_metadata()),
         created_at: DateTime::parse_from_rfc3339(&created_at_str)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),
+        started_at: started_at_str
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+        completed_at: completed_at_str
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
     })
 }
 
@@ -140,7 +236,7 @@ pub trait ArtifactStore: Send + Sync {
 // ---------------------------------------------------------------------------
 
 pub struct SqliteArtifactStore {
-    conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteArtifactStore {
@@ -173,12 +269,22 @@ impl SqliteArtifactStore {
                 artifact_type TEXT NOT NULL,
                 title         TEXT NOT NULL,
                 content       TEXT NOT NULL DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'pending',
+                blocked_by    TEXT NOT NULL DEFAULT '[]',
+                assignee      TEXT,
+                priority      INTEGER NOT NULL DEFAULT 0,
                 metadata      TEXT NOT NULL DEFAULT '{}',
-                created_at    TEXT NOT NULL
+                created_at    TEXT NOT NULL,
+                started_at    TEXT,
+                completed_at  TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_task_artifacts_task_id
                 ON task_artifacts(task_id);
+            CREATE INDEX IF NOT EXISTS idx_task_artifacts_status
+                ON task_artifacts(task_id, status);
+            CREATE INDEX IF NOT EXISTS idx_task_artifacts_assignee
+                ON task_artifacts(assignee);
             "#,
         )
         .map_err(db_err)?;
@@ -200,11 +306,13 @@ impl ArtifactStore for SqliteArtifactStore {
         let now_str = now.to_rfc3339();
         let metadata_str =
             serde_json::to_string(&input.metadata).unwrap_or_else(|_| "{}".to_string());
+        let blocked_by_str =
+            serde_json::to_string(&input.blocked_by).unwrap_or_else(|_| "[]".to_string());
 
         conn.execute(
             r#"
-            INSERT INTO task_artifacts (id, task_id, agent_id, artifact_type, title, content, metadata, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            INSERT INTO task_artifacts (id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             "#,
             params![
                 id,
@@ -213,6 +321,10 @@ impl ArtifactStore for SqliteArtifactStore {
                 input.artifact_type.as_str(),
                 input.title,
                 input.content,
+                input.status.as_str(),
+                blocked_by_str,
+                input.assignee,
+                input.priority,
                 metadata_str,
                 now_str,
             ],
@@ -226,8 +338,14 @@ impl ArtifactStore for SqliteArtifactStore {
             artifact_type: input.artifact_type,
             title: input.title,
             content: input.content,
+            status: input.status,
+            blocked_by: input.blocked_by,
+            assignee: input.assignee,
+            priority: input.priority,
             metadata: input.metadata,
             created_at: now,
+            started_at: None,
+            completed_at: None,
         })
     }
 
@@ -235,7 +353,7 @@ impl ArtifactStore for SqliteArtifactStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, task_id, agent_id, artifact_type, title, content, metadata, created_at \
+                "SELECT id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at, started_at, completed_at \
                  FROM task_artifacts WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -252,7 +370,7 @@ impl ArtifactStore for SqliteArtifactStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, task_id, agent_id, artifact_type, title, content, metadata, created_at \
+                "SELECT id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at, started_at, completed_at \
                  FROM task_artifacts WHERE task_id = ?1 ORDER BY created_at ASC",
             )
             .map_err(db_err)?;
@@ -264,6 +382,113 @@ impl ArtifactStore for SqliteArtifactStore {
             .map_err(db_err)?;
 
         Ok(artifacts)
+    }
+}
+
+impl SqliteArtifactStore {
+    pub async fn update_status(
+        &self,
+        artifact_id: &str,
+        new_status: TaskStatus,
+    ) -> crate::error::Result<TaskArtifact> {
+        let conn = self.conn.lock().await;
+        let now = Utc::now();
+
+        let (started_at, completed_at) = match new_status {
+            TaskStatus::InProgress => (Some(now.to_rfc3339()), None),
+            TaskStatus::Completed | TaskStatus::Failed => (None, Some(now.to_rfc3339())),
+            _ => (None, None),
+        };
+
+        conn.execute(
+            "UPDATE task_artifacts SET status = ?1, started_at = ?2, completed_at = ?3 WHERE id = ?4",
+            params![new_status.as_str(), started_at, completed_at, artifact_id],
+        )
+        .map_err(db_err)?;
+
+        drop(conn);
+        self.get_artifact(artifact_id)
+            .await
+            .and_then(|opt| opt.ok_or_else(|| db_err("artifact not found after update")))
+    }
+
+    /// Check whether all dependencies of a task are completed.
+    ///
+    /// `blocked_by` is the JSON array stored in the `blocked_by` column.
+    /// Returns `true` if the array is empty or if all artifact IDs in it
+    /// have `status == 'completed'`.
+    async fn all_dependencies_completed(&self, blocked_by: &[String]) -> crate::error::Result<bool> {
+        if blocked_by.is_empty() {
+            return Ok(true);
+        }
+
+        let conn = self.conn.lock().await;
+        let placeholders = blocked_by.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
+            placeholders
+        );
+        let params_vec: Vec<&dyn rusqlite::types::ToSql> =
+            blocked_by.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let incomplete_count: i64 = conn
+            .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
+            .map_err(db_err)?;
+        Ok(incomplete_count == 0)
+    }
+
+    /// Mark a task artifact as completed and automatically unblock any tasks
+    /// that were waiting on it.
+    ///
+    /// Returns the list of tasks that were unblocked (moved from `blocked` → `pending`).
+    pub async fn complete_task(&self, artifact_id: &str) -> crate::error::Result<Vec<TaskArtifact>> {
+        // Step 1: mark the artifact as completed
+        self.update_status(artifact_id, TaskStatus::Completed).await?;
+
+        // Step 2: find all artifacts whose `blocked_by` contains `artifact_id`
+        let blocked_ids: Vec<String> = {
+            let conn = self.conn.lock().await;
+            let mut stmt = conn
+                .prepare_cached(
+                    "SELECT id, task_id, agent_id, artifact_type, title, content, status, blocked_by, assignee, priority, metadata, created_at, started_at, completed_at \
+                     FROM task_artifacts WHERE blocked_by LIKE ?1",
+                )
+                .map_err(db_err)?;
+            let pattern = format!("%{}%", artifact_id);
+            let rows = stmt
+                .query_map(params![pattern], |row| {
+                    let id: String = row.get(0)?;
+                    let blocked_by_str: String = row.get(7)?;
+                    let blocked_by: Vec<String> =
+                        serde_json::from_str(&blocked_by_str).unwrap_or_default();
+                    Ok(Some((id, blocked_by)))
+                })
+                .map_err(db_err)?;
+            let mut ids = Vec::new();
+            for row in rows {
+                match row {
+                    Ok(Some((id, blocked_by))) => {
+                        if blocked_by.contains(&artifact_id.to_string()) {
+                            ids.push(id);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => return Err(db_err(e)),
+                }
+            }
+            ids
+        };
+
+        // Step 3: for each blocked artifact, check if all deps are done and unblock
+        let mut unblocked = Vec::new();
+        for blocked_id in blocked_ids {
+            if self.all_dependencies_completed(&[blocked_id.clone()]).await? {
+                let task =
+                    self.update_status(&blocked_id, TaskStatus::Pending).await?;
+                unblocked.push(task);
+            }
+        }
+
+        Ok(unblocked)
     }
 }
 
@@ -286,6 +511,10 @@ mod tests {
                 artifact_type: ArtifactType::Report,
                 title: "Status Report".into(),
                 content: "# Summary\n\nAll good.".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
                 metadata: serde_json::json!({"priority": "high"}),
             })
             .await
@@ -297,21 +526,22 @@ mod tests {
         assert_eq!(artifact.title, "Status Report");
         assert_eq!(artifact.content, "# Summary\n\nAll good.");
         assert_eq!(artifact.metadata["priority"], "high");
+        assert_eq!(artifact.status, TaskStatus::Pending);
+        assert!(artifact.started_at.is_none());
+        assert!(artifact.completed_at.is_none());
         assert!(!artifact.id.is_empty());
 
-        // Fetch by ID
         let fetched = store.get_artifact(&artifact.id).await.unwrap().unwrap();
         assert_eq!(fetched.id, artifact.id);
         assert_eq!(fetched.title, "Status Report");
         assert_eq!(fetched.artifact_type, ArtifactType::Report);
         assert_eq!(fetched.metadata["priority"], "high");
+        assert_eq!(fetched.status, TaskStatus::Pending);
 
-        // Fetch by task_id
         let task_artifacts = store.get_artifacts_for_task("task-1").await.unwrap();
         assert_eq!(task_artifacts.len(), 1);
         assert_eq!(task_artifacts[0].id, artifact.id);
 
-        // Non-existent returns None / empty
         assert!(store.get_artifact("no-such-id").await.unwrap().is_none());
         assert!(store
             .get_artifacts_for_task("no-such-task")
@@ -331,6 +561,10 @@ mod tests {
                 artifact_type: ArtifactType::Custom("analysis".into()),
                 title: "Deep Analysis".into(),
                 content: "Detailed findings.".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
                 metadata: serde_json::Value::Object(serde_json::Map::new()),
             })
             .await
@@ -341,12 +575,60 @@ mod tests {
             ArtifactType::Custom("analysis".into())
         );
 
-        // Roundtrip through SQLite
         let fetched = store.get_artifact(&artifact.id).await.unwrap().unwrap();
         assert_eq!(
             fetched.artifact_type,
             ArtifactType::Custom("analysis".into())
         );
         assert_eq!(fetched.title, "Deep Analysis");
+    }
+
+    #[tokio::test]
+    async fn test_status_transitions() {
+        let store = SqliteArtifactStore::new_in_memory().await;
+
+        let artifact = store
+            .create_artifact(NewArtifact {
+                task_id: "task-3".into(),
+                agent_id: "agent-1".into(),
+                artifact_type: ArtifactType::Plan,
+                title: "Plan".into(),
+                content: "Details".into(),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: Some("agent-2".into()),
+                priority: 1,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(artifact.status, TaskStatus::Pending);
+        assert!(artifact.started_at.is_none());
+
+        let updated = store
+            .update_status(&artifact.id, TaskStatus::InProgress)
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TaskStatus::InProgress);
+        assert!(updated.started_at.is_some());
+
+        let completed = store
+            .update_status(&artifact.id, TaskStatus::Completed)
+            .await
+            .unwrap();
+        assert_eq!(completed.status, TaskStatus::Completed);
+        assert!(completed.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_task_status_can_transition() {
+        assert!(TaskStatus::Pending.can_transition_to(&TaskStatus::InProgress));
+        assert!(TaskStatus::Pending.can_transition_to(&TaskStatus::Blocked));
+        assert!(TaskStatus::InProgress.can_transition_to(&TaskStatus::Completed));
+        assert!(TaskStatus::Blocked.can_transition_to(&TaskStatus::Pending));
+        assert!(TaskStatus::Failed.can_transition_to(&TaskStatus::Pending));
+        assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Pending));
+        assert!(TaskStatus::Pending.can_transition_to(&TaskStatus::Pending));
     }
 }

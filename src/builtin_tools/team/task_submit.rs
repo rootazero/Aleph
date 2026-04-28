@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact};
+use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -94,6 +94,10 @@ impl AlephTool for TaskSubmitTool {
                 title: args.title,
                 content: args.content,
                 metadata: args.metadata,
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
             })
             .await
             .map_err(|e| AlephError::other(format!("Failed to create artifact: {e}")))?;

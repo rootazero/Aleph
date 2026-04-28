@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact};
+use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::MessageType;
@@ -190,6 +190,10 @@ impl SessionCoordinator {
                         "agreed_by": outcome.agreed_by,
                         "dissent": outcome.dissent,
                     }),
+                    status: TaskStatus::Completed,
+                    blocked_by: vec![],
+                    assignee: None,
+                    priority: 0,
                 })
                 .await;
         }

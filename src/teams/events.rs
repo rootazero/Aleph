@@ -45,6 +45,14 @@ pub enum TeamEventType {
     ShutdownResolved,
     PlanSubmitted,
     PlanResolved,
+
+    // Team lifecycle events (new - EventBus integration)
+    TeamCreated,
+    MemberAdded,
+    MemberRemoved,
+    TaskAssigned,
+    TaskUpdated,
+    TeamDisbanded,
 }
 
 impl TeamEventType {
@@ -63,6 +71,12 @@ impl TeamEventType {
             Self::ShutdownResolved => "shutdown_resolved",
             Self::PlanSubmitted => "plan_submitted",
             Self::PlanResolved => "plan_resolved",
+            Self::TeamCreated => "team_created",
+            Self::MemberAdded => "member_added",
+            Self::MemberRemoved => "member_removed",
+            Self::TaskAssigned => "task_assigned",
+            Self::TaskUpdated => "task_updated",
+            Self::TeamDisbanded => "team_disbanded",
         }
     }
 
@@ -81,6 +95,12 @@ impl TeamEventType {
             "shutdown_resolved" => Some(Self::ShutdownResolved),
             "plan_submitted" => Some(Self::PlanSubmitted),
             "plan_resolved" => Some(Self::PlanResolved),
+            "team_created" => Some(Self::TeamCreated),
+            "member_added" => Some(Self::MemberAdded),
+            "member_removed" => Some(Self::MemberRemoved),
+            "task_assigned" => Some(Self::TaskAssigned),
+            "task_updated" => Some(Self::TaskUpdated),
+            "team_disbanded" => Some(Self::TeamDisbanded),
             _ => None,
         }
     }
@@ -344,6 +364,144 @@ impl EventLogStore for SqliteEventLogStore {
             .map_err(db_err)?;
 
         Ok(deleted)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TeamEventLogger — EventHandler for EventBus integration
+// ---------------------------------------------------------------------------
+
+use crate::event::{EventContext, EventHandler, HandlerError};
+use crate::event::{AlephEvent, EventType};
+
+/// Event handler that listens for team-related AlephEvents and logs them
+/// to the team's event store.
+pub struct TeamEventLogger {
+    store: Arc<dyn EventLogStore>,
+}
+
+impl TeamEventLogger {
+    /// Create a new logger wrapping the given event store.
+    pub fn new(store: Arc<dyn EventLogStore>) -> Self {
+        Self { store }
+    }
+
+    /// Map an AlephEvent team variant to a TeamEventType and extract metadata.
+    fn map_event(event: &AlephEvent) -> Option<(TeamEventType, String, serde_json::Value)> {
+        match event {
+            AlephEvent::TeamCreated {
+                team_id,
+                name,
+                member_ids,
+            } => Some((
+                TeamEventType::TeamCreated,
+                team_id.clone(),
+                serde_json::json!({"name": name, "member_ids": member_ids}),
+            )),
+            AlephEvent::TeamMemberAdded {
+                team_id,
+                member_id,
+                role,
+            } => Some((
+                TeamEventType::MemberAdded,
+                team_id.clone(),
+                serde_json::json!({"member_id": member_id, "role": role}),
+            )),
+            AlephEvent::TeamMemberRemoved {
+                team_id,
+                member_id,
+            } => Some((
+                TeamEventType::MemberRemoved,
+                team_id.clone(),
+                serde_json::json!({"member_id": member_id}),
+            )),
+            AlephEvent::TeamTaskAssigned {
+                team_id,
+                task_id,
+                assignee_id,
+            } => Some((
+                TeamEventType::TaskAssigned,
+                team_id.clone(),
+                serde_json::json!({"task_id": task_id, "assignee_id": assignee_id}),
+            )),
+            AlephEvent::TeamTaskUpdated {
+                team_id,
+                task_id,
+                status,
+                progress,
+            } => Some((
+                TeamEventType::TaskUpdated,
+                team_id.clone(),
+                serde_json::json!({"task_id": task_id, "status": status, "progress": progress}),
+            )),
+            AlephEvent::TeamTaskCompleted {
+                team_id,
+                task_id,
+                result_summary,
+            } => Some((
+                TeamEventType::TaskCompleted,
+                team_id.clone(),
+                serde_json::json!({"task_id": task_id, "result_summary": result_summary}),
+            )),
+            AlephEvent::TeamDisbanded { team_id } => Some((
+                TeamEventType::TeamDisbanded,
+                team_id.clone(),
+                serde_json::json!({}),
+            )),
+            AlephEvent::TeamMessageSent(e) => Some((
+                TeamEventType::MessageSent,
+                e.team_id.clone(),
+                serde_json::json!({
+                    "message_id": e.message_id,
+                    "to_agents": e.to_agents,
+                    "subject": e.subject,
+                }),
+            )),
+            _ => None,
+        }
+    }
+}
+
+#[async_trait]
+impl EventHandler for TeamEventLogger {
+    fn name(&self) -> &'static str {
+        "TeamEventLogger"
+    }
+
+    fn subscriptions(&self) -> Vec<EventType> {
+        vec![
+            EventType::TeamCreated,
+            EventType::TeamMemberAdded,
+            EventType::TeamMemberRemoved,
+            EventType::TeamTaskAssigned,
+            EventType::TeamTaskUpdated,
+            EventType::TeamTaskCompleted,
+            EventType::TeamDisbanded,
+            EventType::TeamMessageSent,
+        ]
+    }
+
+    async fn handle(
+        &self,
+        event: &AlephEvent,
+        _ctx: &EventContext,
+    ) -> Result<Vec<AlephEvent>, HandlerError> {
+        let Some((event_type, team_id, payload)) = Self::map_event(event) else {
+            return Ok(vec![]);
+        };
+
+        let new_event = NewTeamEvent {
+            team_id,
+            event_type,
+            agent_id: "system".to_string(),
+            payload,
+        };
+
+        if let Err(e) = self.store.log_event(new_event).await {
+            tracing::warn!(error = %e, "Failed to log team event");
+        }
+
+        Ok(vec![])
     }
 }
 

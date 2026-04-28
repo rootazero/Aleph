@@ -132,7 +132,16 @@ impl SessionRecorder {
             // Part update events are meta-events, not session parts themselves
             | AlephEvent::PartAdded(_)
             | AlephEvent::PartUpdated(_)
-            | AlephEvent::PartRemoved(_) => None,
+            | AlephEvent::PartRemoved(_)
+            // Team events don't map to session parts
+            | AlephEvent::TeamCreated { .. }
+            | AlephEvent::TeamMemberAdded { .. }
+            | AlephEvent::TeamMemberRemoved { .. }
+            | AlephEvent::TeamTaskAssigned { .. }
+            | AlephEvent::TeamTaskUpdated { .. }
+            | AlephEvent::TeamTaskCompleted { .. }
+            | AlephEvent::TeamDisbanded { .. }
+            | AlephEvent::TeamMessageSent(_) => None,
         }
     }
 

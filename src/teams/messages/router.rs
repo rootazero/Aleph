@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::store::MessageStore;
 use super::types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
 use crate::error::Result;
+use crate::event::{AlephEvent, EventBus, TeamMessageEvent};
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
 
 // ---------------------------------------------------------------------------
@@ -68,6 +69,8 @@ pub struct MessageRouter {
     escalation_rules: EscalationRule,
     /// Team leader agent ID for escalation notifications.
     leader_id: Option<String>,
+    /// Optional event bus for publishing team events.
+    bus: Option<EventBus>,
 }
 
 impl MessageRouter {
@@ -82,7 +85,14 @@ impl MessageRouter {
             event_store,
             escalation_rules,
             leader_id,
+            bus: None,
         }
+    }
+
+    /// Attach an event bus for publishing team events.
+    pub fn with_bus(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     /// Send a message, log the event, and check escalation rules.
@@ -120,19 +130,37 @@ impl MessageRouter {
 
         let msg = self.msg_store.send_message(new_msg).await?;
 
-        // 3. Log MessageSent event
-        let _ = self
-            .event_store
-            .log_event(NewTeamEvent {
+        // 3. Publish event via EventBus if available, else fall back to direct logging
+        let to_agents: Vec<String> = msg
+            .recipients
+            .iter()
+            .map(|r| r.agent_id.clone())
+            .collect();
+
+        if let Some(ref bus) = self.bus {
+            bus.publish(AlephEvent::TeamMessageSent(TeamMessageEvent {
                 team_id: team_id.clone(),
-                event_type: TeamEventType::MessageSent,
-                agent_id: from_agent.clone(),
-                payload: serde_json::json!({
-                    "message_id": msg.id,
-                    "subject": msg.subject,
-                }),
-            })
+                message_id: msg.id.clone(),
+                from_agent: from_agent.clone(),
+                to_agents,
+                subject: msg.subject.clone(),
+                timestamp: msg.created_at.timestamp_millis(),
+            }))
             .await;
+        } else {
+            let _ = self
+                .event_store
+                .log_event(NewTeamEvent {
+                    team_id: team_id.clone(),
+                    event_type: TeamEventType::MessageSent,
+                    agent_id: from_agent.clone(),
+                    payload: serde_json::json!({
+                        "message_id": msg.id,
+                        "subject": msg.subject,
+                    }),
+                })
+                .await;
+        }
 
         // 4. Check escalation rules
         if self.escalation_rules.enabled {

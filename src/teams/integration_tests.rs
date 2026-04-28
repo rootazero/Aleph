@@ -56,6 +56,10 @@ async fn test_two_agent_collaboration() {
             title: "Initial analysis".into(),
             content: "Cache optimization proposal.".into(),
             metadata: json!({"version": 1}),
+            status: TaskStatus::Pending,
+            blocked_by: vec![],
+            assignee: None,
+            priority: 0,
         })
         .await
         .unwrap();

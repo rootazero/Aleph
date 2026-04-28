@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
-use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskArtifact};
+use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskArtifact, TaskStatus};
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
 use crate::teams::messages::router::{MessageRouter, SendRequest};
 use crate::teams::messages::types::{MessageType, TeamMessage};
@@ -55,6 +55,10 @@ impl PlanManager {
                 title: title.to_string(),
                 content: content.to_string(),
                 metadata: serde_json::json!({}),
+                status: TaskStatus::Pending,
+                blocked_by: vec![],
+                assignee: None,
+                priority: 0,
             })
             .await?;
 

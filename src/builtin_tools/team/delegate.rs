@@ -20,7 +20,7 @@ use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::router::SessionKey;
 use crate::sync_primitives::{Arc, Mutex};
-use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact};
+use crate::teams::artifacts::{ArtifactStore, ArtifactType, NewArtifact, TaskStatus};
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
@@ -311,6 +311,10 @@ impl AlephTool for TeamDelegateTool {
                             title: format!("Delegation result: {}", args.task),
                             content: reply_text.clone(),
                             metadata: serde_json::Value::Null,
+                            status: TaskStatus::Completed,
+                            blocked_by: vec![],
+                            assignee: None,
+                            priority: 0,
                         })
                         .await;
                 }
