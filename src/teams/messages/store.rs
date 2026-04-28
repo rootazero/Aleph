@@ -279,47 +279,84 @@ impl SqliteMessageStore {
         })
     }
 
-    /// Fetch recipients and attachments for a raw message and produce a full TeamMessage.
-    fn materialise(conn: &Connection, raw: RawMessage) -> Result<TeamMessage, AlephError> {
-        let mut recip_stmt = conn
-            .prepare_cached("SELECT agent_id, role FROM message_recipients WHERE message_id = ?1")
-            .map_err(db_err)?;
-        let recipients = recip_stmt
-            .query_map(params![raw.id], |r| {
-                let agent_id: String = r.get(0)?;
-                let role_str: String = r.get(1)?;
-                Ok(Recipient {
+    /// Batch-fetch recipients for multiple messages in a single query.
+    fn batch_fetch_recipients(
+        conn: &Connection,
+        message_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<Recipient>>, AlephError> {
+        if message_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT message_id, agent_id, role FROM message_recipients WHERE message_id IN ({})",
+            placeholders
+        );
+
+        let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            message_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+
+        let mut map: std::collections::HashMap<String, Vec<Recipient>> =
+            std::collections::HashMap::new();
+
+        let rows = stmt
+            .query_map(params.as_slice(), |r| {
+                let msg_id: String = r.get(0)?;
+                let agent_id: String = r.get(1)?;
+                let role_str: String = r.get(2)?;
+                Ok((msg_id, Recipient {
                     agent_id,
                     role: RecipientRole::from_stored(&role_str),
-                })
+                }))
             })
-            .map_err(db_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_err)?;
 
-        let mut attach_stmt = conn
-            .prepare_cached("SELECT artifact_id FROM message_attachments WHERE message_id = ?1")
-            .map_err(db_err)?;
-        let attachments = attach_stmt
-            .query_map(params![raw.id], |r| r.get::<_, String>(0))
-            .map_err(db_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
+        for row in rows {
+            let (msg_id, recipient) = row.map_err(db_err)?;
+            map.entry(msg_id).or_default().push(recipient);
+        }
+
+        Ok(map)
+    }
+
+    /// Batch-fetch attachments for multiple messages in a single query.
+    fn batch_fetch_attachments(
+        conn: &Connection,
+        message_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, AlephError> {
+        if message_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT message_id, artifact_id FROM message_attachments WHERE message_id IN ({})",
+            placeholders
+        );
+
+        let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            message_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+
+        let rows = stmt
+            .query_map(params.as_slice(), |r| {
+                let msg_id: String = r.get(0)?;
+                let artifact_id: String = r.get(1)?;
+                Ok((msg_id, artifact_id))
+            })
             .map_err(db_err)?;
 
-        Ok(TeamMessage {
-            id: raw.id,
-            team_id: raw.team_id,
-            from_agent: raw.from_agent,
-            msg_type: MessageType::from_stored(&raw.msg_type_str),
-            subject: raw.subject,
-            content: raw.content,
-            recipients,
-            reply_to: raw.reply_to,
-            thread_id: raw.thread_id,
-            attachments,
-            created_at: parse_rfc3339(&raw.created_at_str),
-            expires_at: parse_rfc3339_opt(&raw.expires_at_str),
-        })
+        for row in rows {
+            let (msg_id, artifact_id) = row.map_err(db_err)?;
+            map.entry(msg_id).or_default().push(artifact_id);
+        }
+
+        Ok(map)
     }
 }
 
@@ -417,26 +454,49 @@ impl MessageStore for SqliteMessageStore {
             result
         };
 
-        // Materialise each message with its relations.
-        // NOTE: This is an N+1 query pattern (2 sub-queries per message for recipients
-        // and attachments). This is acceptable because team inboxes are small (typically
-        // <50 unread messages) and all queries hit the same locked SQLite connection
-        // with prepare_cached, so overhead is minimal. Batching with IN(...) clauses
-        // would add complexity without meaningful benefit at this scale.
-        let mut messages = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let raw = conn
-                .prepare_cached(
-                    r#"
-                    SELECT id, team_id, from_agent, msg_type, subject, content,
-                           reply_to, thread_id, created_at, expires_at
-                    FROM team_messages WHERE id = ?1
-                    "#,
-                )
-                .map_err(db_err)?
-                .query_row(params![id], Self::read_message_row)
+        // Batch-fetch all raw message rows in a single query.
+        let raws: Vec<RawMessage> = if ids.is_empty() {
+            vec![]
+        } else {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT id, team_id, from_agent, msg_type, subject, content, \
+                 reply_to, thread_id, created_at, expires_at \
+                 FROM team_messages WHERE id IN ({})",
+                placeholders
+            );
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+            let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
+            let rows = stmt
+                .query_map(params.as_slice(), Self::read_message_row)
                 .map_err(db_err)?;
-            messages.push(Self::materialise(&conn, raw)?);
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_err)?
+        };
+
+        // Batch-fetch recipients and attachments for all messages (2 queries total).
+        let recipients_map = Self::batch_fetch_recipients(&conn, &ids)?;
+        let attachments_map = Self::batch_fetch_attachments(&conn, &ids)?;
+
+        let mut messages = Vec::with_capacity(raws.len());
+        for raw in raws {
+            let recipients = recipients_map.get(&raw.id).cloned().unwrap_or_default();
+            let attachments = attachments_map.get(&raw.id).cloned().unwrap_or_default();
+            messages.push(TeamMessage {
+                id: raw.id,
+                team_id: raw.team_id,
+                from_agent: raw.from_agent,
+                msg_type: MessageType::from_stored(&raw.msg_type_str),
+                subject: raw.subject,
+                content: raw.content,
+                recipients,
+                reply_to: raw.reply_to,
+                thread_id: raw.thread_id,
+                attachments,
+                created_at: parse_rfc3339(&raw.created_at_str),
+                expires_at: parse_rfc3339_opt(&raw.expires_at_str),
+            });
         }
 
         Ok(messages)
@@ -487,10 +547,29 @@ impl MessageStore for SqliteMessageStore {
             result
         };
 
-        // Phase 2: materialise with relations (N+1 pattern — see read_inbox comment)
+        // Batch-fetch recipients and attachments (2 queries total instead of 2N).
+        let ids: Vec<String> = raws.iter().map(|r| r.id.clone()).collect();
+        let recipients_map = Self::batch_fetch_recipients(&conn, &ids)?;
+        let attachments_map = Self::batch_fetch_attachments(&conn, &ids)?;
+
         let mut messages = Vec::with_capacity(raws.len());
         for raw in raws {
-            messages.push(Self::materialise(&conn, raw)?);
+            let recipients = recipients_map.get(&raw.id).cloned().unwrap_or_default();
+            let attachments = attachments_map.get(&raw.id).cloned().unwrap_or_default();
+            messages.push(TeamMessage {
+                id: raw.id,
+                team_id: raw.team_id,
+                from_agent: raw.from_agent,
+                msg_type: MessageType::from_stored(&raw.msg_type_str),
+                subject: raw.subject,
+                content: raw.content,
+                recipients,
+                reply_to: raw.reply_to,
+                thread_id: raw.thread_id,
+                attachments,
+                created_at: parse_rfc3339(&raw.created_at_str),
+                expires_at: parse_rfc3339_opt(&raw.expires_at_str),
+            });
         }
 
         Ok(messages)

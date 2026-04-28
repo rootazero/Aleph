@@ -54,6 +54,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     #[allow(dead_code)]
     pub command_handler:
         Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
+    /// Event log store for team event logging and KanbanAutoUnblocker
+    pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
+    /// Artifact store for task artifact management and KanbanAutoUnblocker
+    pub artifact_store: Option<Arc<alephcore::teams::artifacts::SqliteArtifactStore>>,
     /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
@@ -276,6 +280,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             "Artifact store",
             db_path
         );
+        // Retain concrete type for KanbanAutoUnblocker
+        let artifact_store: Option<Arc<SqliteArtifactStore>> = a
+            .as_ref()
+            .and_then(|s| Arc::clone(s).downcast().ok());
+        drop(a); // consumed; we keep artifact_store and cast ev below
         let ev = init_store!(
             SqliteEventLogStore,
             dyn alephcore::teams::events::EventLogStore,
@@ -1895,6 +1904,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         team_store,
         coord_task_store: coord_store,
         command_handler: command_handler_out,
+        event_store: event_store.clone(),
+        artifact_store: artifact_store.clone(),
         orchestrator_cell: orch_cell_out,
     }
 }

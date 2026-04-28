@@ -87,6 +87,16 @@ pub enum EventType {
     PartUpdated,
     PartRemoved,
 
+    // Team events
+    TeamCreated,
+    TeamMemberAdded,
+    TeamMemberRemoved,
+    TeamTaskAssigned,
+    TeamTaskUpdated,
+    TeamTaskCompleted,
+    TeamDisbanded,
+    TeamMessageSent,
+
     // Wildcard for components that want all events
     All,
 }
@@ -154,6 +164,44 @@ pub enum AlephEvent {
     PartAdded(crate::components::PartUpdateData),
     PartUpdated(crate::components::PartUpdateData),
     PartRemoved(crate::components::PartUpdateData),
+
+    // Team events
+    TeamCreated {
+        team_id: String,
+        name: String,
+        member_ids: Vec<String>,
+    },
+    TeamMemberAdded {
+        team_id: String,
+        member_id: String,
+        role: String,
+    },
+    TeamMemberRemoved {
+        team_id: String,
+        member_id: String,
+    },
+    TeamTaskAssigned {
+        team_id: String,
+        task_id: String,
+        assignee_id: String,
+    },
+    TeamTaskUpdated {
+        team_id: String,
+        task_id: String,
+        status: String,
+        progress: Option<f32>,
+    },
+    TeamTaskCompleted {
+        team_id: String,
+        task_id: String,
+        result_summary: Option<String>,
+    },
+    TeamDisbanded {
+        team_id: String,
+    },
+
+    // Team messaging events
+    TeamMessageSent(TeamMessageEvent),
 }
 
 impl AlephEvent {
@@ -187,6 +235,14 @@ impl AlephEvent {
             Self::PartAdded(_) => EventType::PartAdded,
             Self::PartUpdated(_) => EventType::PartUpdated,
             Self::PartRemoved(_) => EventType::PartRemoved,
+            Self::TeamCreated { .. } => EventType::TeamCreated,
+            Self::TeamMemberAdded { .. } => EventType::TeamMemberAdded,
+            Self::TeamMemberRemoved { .. } => EventType::TeamMemberRemoved,
+            Self::TeamTaskAssigned { .. } => EventType::TeamTaskAssigned,
+            Self::TeamTaskUpdated { .. } => EventType::TeamTaskUpdated,
+            Self::TeamTaskCompleted { .. } => EventType::TeamTaskCompleted,
+            Self::TeamDisbanded { .. } => EventType::TeamDisbanded,
+            Self::TeamMessageSent(_) => EventType::TeamMessageSent,
         }
     }
 
@@ -220,6 +276,14 @@ impl AlephEvent {
             Self::PartAdded(_) => "PartAdded",
             Self::PartUpdated(_) => "PartUpdated",
             Self::PartRemoved(_) => "PartRemoved",
+            Self::TeamCreated { .. } => "TeamCreated",
+            Self::TeamMemberAdded { .. } => "TeamMemberAdded",
+            Self::TeamMemberRemoved { .. } => "TeamMemberRemoved",
+            Self::TeamTaskAssigned { .. } => "TeamTaskAssigned",
+            Self::TeamTaskUpdated { .. } => "TeamTaskUpdated",
+            Self::TeamTaskCompleted { .. } => "TeamTaskCompleted",
+            Self::TeamDisbanded { .. } => "TeamDisbanded",
+            Self::TeamMessageSent(_) => "TeamMessageSent",
         }
     }
 }
@@ -495,6 +559,21 @@ pub struct UserQuestion {
 pub struct UserResponse {
     pub question_id: String,
     pub response: String,
+}
+
+// ============================================================================
+// Team Event Types
+// ============================================================================
+
+/// Team message sent event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamMessageEvent {
+    pub team_id: String,
+    pub message_id: String,
+    pub from_agent: String,
+    pub to_agents: Vec<String>,
+    pub subject: String,
+    pub timestamp: i64,
 }
 
 // ============================================================================
