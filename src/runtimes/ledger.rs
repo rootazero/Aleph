@@ -18,25 +18,34 @@ use tracing::{debug, warn};
 
 /// Lifecycle status of a capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CapabilityStatus {
     /// Not known / not yet probed.
+    #[serde(alias = "Missing")]
     Missing,
     /// A probe is in progress (version check running).
+    #[serde(alias = "Probing")]
     Probing,
     /// Download / bootstrap is in progress.
+    #[serde(alias = "Bootstrapping")]
     Bootstrapping,
     /// Executable is available and verified.
+    #[serde(alias = "Ready")]
     Ready,
     /// Was Ready, but a periodic re-probe is needed (version drift, etc.).
+    #[serde(alias = "Stale")]
     Stale,
 }
 
 /// How the capability was obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CapabilitySource {
     /// Found on the system PATH (user-installed).
+    #[serde(alias = "System")]
     System,
     /// Installed and managed by Aleph under `~/.aleph/runtimes/`.
+    #[serde(alias = "AlephManaged")]
     AlephManaged,
 }
 
