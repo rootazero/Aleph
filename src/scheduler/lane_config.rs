@@ -31,7 +31,6 @@ pub struct LaneConfig {
     pub global_max_concurrent: usize,
     pub anti_starvation_threshold_ms: u64,
     pub max_recursion_depth: usize,
-    pub priority_boost_per_30s: i8,
 }
 
 impl Default for LaneConfig {
@@ -53,7 +52,6 @@ impl Default for LaneConfig {
             global_max_concurrent: 16,
             anti_starvation_threshold_ms: 30_000,
             max_recursion_depth: 5,
-            priority_boost_per_30s: 1,
         }
     }
 }
@@ -74,7 +72,6 @@ mod tests {
         assert_eq!(config.global_max_concurrent, 16);
         assert_eq!(config.max_recursion_depth, 5);
         assert_eq!(config.anti_starvation_threshold_ms, 30_000);
-        assert_eq!(config.priority_boost_per_30s, 1);
     }
 
     #[test]

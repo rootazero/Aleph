@@ -21,16 +21,12 @@ pub struct SchedulerContext {
     pub dequeued_run_id: Option<String>,
     /// Last dequeue result (success/failure)
     pub last_dequeue_result: Option<bool>,
-    /// Priority boost value
-    pub priority_boost: Option<i8>,
 
     // LaneScheduler testing
     /// Current lane scheduler under test
     pub lane_scheduler: Option<Arc<LaneScheduler>>,
     /// Last scheduled run (run_id, lane, guard)
     pub last_scheduled: Option<(String, Lane, ScheduleGuard)>,
-    /// Number of runs that received anti-starvation boost
-    pub anti_starvation_boost_count: usize,
     /// Last recursion depth check result
     pub recursion_check_result: Option<Result<(), String>>,
     /// Counter for generating unique run IDs
@@ -43,7 +39,6 @@ impl std::fmt::Debug for SchedulerContext {
             .field("lane_state", &self.lane_state.as_ref().map(|_| "LaneState"))
             .field("dequeued_run_id", &self.dequeued_run_id)
             .field("last_dequeue_result", &self.last_dequeue_result)
-            .field("priority_boost", &self.priority_boost)
             .field(
                 "lane_scheduler",
                 &self.lane_scheduler.as_ref().map(|_| "LaneScheduler"),
@@ -51,10 +46,6 @@ impl std::fmt::Debug for SchedulerContext {
             .field(
                 "last_scheduled",
                 &self.last_scheduled.as_ref().map(|(id, lane, _)| (id, lane)),
-            )
-            .field(
-                "anti_starvation_boost_count",
-                &self.anti_starvation_boost_count,
             )
             .field("recursion_check_result", &self.recursion_check_result)
             .field("run_counter", &self.run_counter)

@@ -119,20 +119,6 @@ async fn when_complete_run(w: &mut AlephWorld, run_id: String) {
     lane_state.semaphore().add_permits(1);
 }
 
-#[when(expr = "I calculate priority boost for {string} at timestamp {int}")]
-async fn when_calculate_priority_boost(w: &mut AlephWorld, run_id: String, current_time: i64) {
-    let ctx = w
-        .scheduler
-        .as_mut()
-        .expect("Scheduler context not initialized");
-    let lane_state = ctx.lane_state.as_ref().expect("LaneState not created");
-    ctx.priority_boost = Some(
-        lane_state
-            .calculate_priority_boost(&run_id, current_time)
-            .await,
-    );
-}
-
 // =============================================================================
 // LaneState: Then Steps
 // =============================================================================
@@ -224,22 +210,6 @@ async fn then_run_should_be_running(w: &mut AlephWorld, run_id: String) {
     );
 }
 
-#[then(expr = "the priority boost should be at least {int}")]
-async fn then_priority_boost_should_be_at_least(w: &mut AlephWorld, min_boost: i8) {
-    let ctx = w
-        .scheduler
-        .as_ref()
-        .expect("Scheduler context not initialized");
-    let boost = ctx
-        .priority_boost
-        .expect("No priority boost was calculated");
-    assert!(
-        boost >= min_boost,
-        "Expected priority boost to be at least {}, but got {}",
-        min_boost,
-        boost
-    );
-}
 // =============================================================================
 // LaneScheduler: Given Steps
 // =============================================================================
@@ -392,32 +362,6 @@ async fn when_wait_for_anti_starvation_conditions(w: &mut AlephWorld) {
     tokio::time::sleep(wait_duration).await;
 }
 
-#[when("I sweep anti-starvation")]
-async fn when_sweep_anti_starvation(w: &mut AlephWorld) {
-    let ctx = w
-        .scheduler
-        .as_mut()
-        .expect("Scheduler context not initialized");
-    let scheduler = ctx
-        .lane_scheduler
-        .as_ref()
-        .expect("LaneScheduler not created");
-    ctx.anti_starvation_boost_count = scheduler.sweep_anti_starvation().await;
-}
-
-#[when("I sweep anti-starvation immediately")]
-async fn when_sweep_anti_starvation_immediately(w: &mut AlephWorld) {
-    let ctx = w
-        .scheduler
-        .as_mut()
-        .expect("Scheduler context not initialized");
-    let scheduler = ctx
-        .lane_scheduler
-        .as_ref()
-        .expect("LaneScheduler not created");
-    ctx.anti_starvation_boost_count = scheduler.sweep_anti_starvation().await;
-}
-
 #[when(expr = "I spawn child {string} from parent {string}")]
 async fn when_spawn_child_from_parent(w: &mut AlephWorld, child_id: String, parent_id: String) {
     let ctx = w
@@ -564,54 +508,6 @@ async fn then_runs_should_remain_queued(w: &mut AlephWorld, expected_count: usiz
     );
 }
 
-#[then(expr = "{int} run should receive priority boost")]
-#[then(expr = "{int} runs should receive priority boost")]
-async fn then_runs_should_receive_priority_boost(w: &mut AlephWorld, expected_count: usize) {
-    let ctx = w
-        .scheduler
-        .as_ref()
-        .expect("Scheduler context not initialized");
-    assert_eq!(
-        ctx.anti_starvation_boost_count, expected_count,
-        "Expected {} runs to receive priority boost, but found {}",
-        expected_count, ctx.anti_starvation_boost_count
-    );
-}
-
-#[then(expr = "lane {string} should have priority boost of {int}")]
-async fn then_lane_should_have_priority_boost(
-    w: &mut AlephWorld,
-    lane_str: String,
-    expected_boost: i8,
-) {
-    let ctx = w
-        .scheduler
-        .as_ref()
-        .expect("Scheduler context not initialized");
-    let scheduler = ctx
-        .lane_scheduler
-        .as_ref()
-        .expect("LaneScheduler not created");
-    let lane = SchedulerContext::parse_lane(&lane_str);
-
-    // Get the lane state and check its priority boost
-    let stats = scheduler.stats().await;
-    let lane_stats = stats.lanes.get(&lane).expect("Lane not found in stats");
-
-    // For now, we just verify the lane exists and has stats
-    // The actual priority boost is tracked internally in LaneState
-    // Verify the lane exists and has valid stats (queued is usize, always >= 0)
-    let _ = lane_stats.queued;
-
-    // Note: In a real implementation, we'd expose priority_boost through stats
-    // For now, we verify the boost count was correct
-    assert_eq!(
-        ctx.anti_starvation_boost_count, expected_boost as usize,
-        "Expected boost count to be {}, but got {}",
-        expected_boost, ctx.anti_starvation_boost_count
-    );
-}
-
 #[then(expr = "spawning child {string} from parent {string} should fail")]
 async fn then_spawning_child_should_fail(w: &mut AlephWorld, child_id: String, parent_id: String) {
     let ctx = w
@@ -728,8 +624,3 @@ async fn then_lane_should_have_running_runs(
     );
 }
 
-#[then("the anti-starvation sweep should complete")]
-async fn then_anti_starvation_sweep_should_complete(_w: &mut AlephWorld) {
-    // This step just verifies that the sweep completed without error
-    // The actual boost count is verified in other steps
-}

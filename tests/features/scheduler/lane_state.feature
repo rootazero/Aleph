@@ -49,12 +49,3 @@ Feature: LaneState Queue and Semaphore Management
     And run "run-1" should be running
     When I complete run "run-1"
     Then there should be 0 running runs
-
-  @lane_state
-  Scenario: Calculate priority boost based on wait time
-    Given a LaneState with max_concurrent 2
-    And I enqueue run "run-1" at timestamp 1000
-    When I calculate priority boost for "run-1" at timestamp 41001
-    Then the priority boost should be at least 1
-    When I calculate priority boost for "run-1" at timestamp 51000
-    Then the priority boost should be at least 2

@@ -52,21 +52,6 @@ Feature: LaneScheduler Integration Tests
     And 3 runs should remain queued
 
   @lane_scheduler
-  Scenario: Anti-starvation priority boost
-    Given a LaneScheduler with 30 second starvation threshold
-    When I enqueue run "starving-run" to lane "Cron"
-    And I wait for anti-starvation conditions
-    And I sweep anti-starvation
-    Then the anti-starvation sweep should complete
-
-  @lane_scheduler
-  Scenario: Anti-starvation no boost below threshold
-    Given a LaneScheduler with 30 second starvation threshold
-    When I enqueue run "recent-run" to lane "Cron"
-    And I sweep anti-starvation immediately
-    Then 0 runs should receive priority boost
-
-  @lane_scheduler
   Scenario: Recursion depth limit enforcement
     Given a LaneScheduler with max recursion depth 3
     When I spawn child "c1" from parent "p0"

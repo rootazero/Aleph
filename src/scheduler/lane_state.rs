@@ -118,27 +118,6 @@ impl LaneState {
         self.running.read().await.contains(run_id)
     }
 
-    /// Calculate priority boost based on wait time
-    ///
-    /// Returns +1 boost per 10 seconds over 30 second threshold, max +10.
-    /// Returns 0 if the run is not in the queue (may have already been scheduled).
-    pub async fn calculate_priority_boost(&self, run_id: &str, current_time: i64) -> i8 {
-        let queue = self.queue.read().await;
-
-        if let Some(queued_run) = queue.iter().find(|qr| qr.run_id == run_id) {
-            let wait_ms = (current_time - queued_run.enqueued_at).max(0) as u64;
-            let threshold_ms = 30_000u64;
-
-            if wait_ms > threshold_ms {
-                ((wait_ms - threshold_ms) / 10_000).min(10) as i8
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    }
-
     /// Get a reference to the semaphore (for testing)
     pub fn semaphore(&self) -> &Arc<Semaphore> {
         &self.semaphore
@@ -193,23 +172,4 @@ mod tests {
         assert!(!state.is_running("run-1").await);
     }
 
-    #[tokio::test]
-    async fn test_priority_boost_calculation() {
-        let state = LaneState::new(2);
-
-        // Enqueue at timestamp 1000
-        state.enqueue_at("run-1".to_string(), 1000).await;
-
-        // At 31000 (31 seconds later), should have boost of 1
-        let boost = state.calculate_priority_boost("run-1", 31000).await;
-        assert_eq!(boost, 0); // 31000 - 1000 = 30000, which is exactly threshold, so 0
-
-        // At 41000 (41 seconds later), should have boost of 1
-        let boost = state.calculate_priority_boost("run-1", 41000).await;
-        assert_eq!(boost, 1); // 41000 - 1000 = 40000, (40000 - 30000) / 10000 = 1
-
-        // At 131000 (131 seconds later), should have boost of 10 (capped)
-        let boost = state.calculate_priority_boost("run-1", 131000).await;
-        assert_eq!(boost, 10); // Should be capped at 10
-    }
 }
