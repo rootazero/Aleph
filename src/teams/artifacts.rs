@@ -99,6 +99,7 @@ impl TaskStatus {
             (a, b) if a == b => true,
             (Self::Pending, Self::InProgress) => true,
             (Self::Pending, Self::Blocked) => true,
+            (Self::Pending, Self::Completed) => true,
             (Self::InProgress, Self::Completed) => true,
             (Self::InProgress, Self::Failed) => true,
             (Self::Blocked, Self::Pending) => true,

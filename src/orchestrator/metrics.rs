@@ -67,14 +67,11 @@ impl OrchestratorMetrics {
 
     pub fn completion_rate(&self) -> f64 {
         let completed = self.flows_completed.load(Ordering::Relaxed);
-        let failed = self.flows_failed.load(Ordering::Relaxed);
-        let cancelled = self.flows_cancelled.load(Ordering::Relaxed);
-        let stalled = self.flows_stalled.load(Ordering::Relaxed);
-        let total = completed + failed + cancelled + stalled;
-        if total == 0 {
+        let started = self.flows_started.load(Ordering::Relaxed);
+        if started == 0 {
             0.0
         } else {
-            completed as f64 / total as f64
+            completed as f64 / started as f64
         }
     }
 

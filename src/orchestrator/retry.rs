@@ -98,7 +98,8 @@ pub fn compute_retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
     }
 
     // Cap exponent at 10 to prevent overflow (2^10 = 1024)
-    let exp = attempt.min(10);
+    // Use attempt-1 so that attempt=1 gives 2^0=1 (no backoff on first retry)
+    let exp = attempt.saturating_sub(1).min(10);
 
     // Use checked arithmetic to prevent overflow
     let multiplier = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
@@ -185,8 +186,10 @@ mod tests {
         assert_eq!(compute_retry_delay(1, &config), Duration::from_secs(5));
         assert_eq!(compute_retry_delay(2, &config), Duration::from_secs(10));
         assert_eq!(compute_retry_delay(3, &config), Duration::from_secs(20));
-        // Attempt 4 would be 40s, but capped at 60s
-        assert_eq!(compute_retry_delay(4, &config), Duration::from_secs(60));
+        // Attempt 4: 5 * 2^3 = 40s (not capped, 40s < 60s)
+        assert_eq!(compute_retry_delay(4, &config), Duration::from_secs(40));
+        // Attempt 5: 5 * 2^4 = 80s, capped to 60s
+        assert_eq!(compute_retry_delay(5, &config), Duration::from_secs(60));
 
         assert!(should_retry(0, &config));
         assert!(should_retry(1, &config));
