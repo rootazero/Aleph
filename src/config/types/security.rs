@@ -54,7 +54,7 @@ pub struct CustomRiskPattern {
 /// pattern = "^my_safe_script\\s+"
 /// reason = "Auto-approved"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ShellSecurityConfig {
     /// Enable custom risk patterns (default: false)
     #[serde(default = "default_false")]
@@ -75,17 +75,6 @@ pub struct ShellSecurityConfig {
 
 fn default_false() -> bool {
     false
-}
-
-impl Default for ShellSecurityConfig {
-    fn default() -> Self {
-        Self {
-            enable_custom_patterns: false,
-            custom_blocked: Vec::new(),
-            custom_danger: Vec::new(),
-            custom_safe: Vec::new(),
-        }
-    }
 }
 
 impl ShellSecurityConfig {
