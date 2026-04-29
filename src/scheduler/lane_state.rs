@@ -49,20 +49,26 @@ pub struct LaneState {
 }
 
 impl LaneState {
-    /// Create a new LaneState with the given concurrency limit
+    /// Create a new LaneState with the given concurrency limit.
     ///
-    /// # Panics
-    ///
-    /// Panics if `max_concurrent` is 0, as this would cause all runs to hang indefinitely.
+    /// `max_concurrent == 0` would block every run forever, so we clamp it
+    /// to 1 and emit a `warn!` instead of panicking. The configuration bug
+    /// upstream still needs fixing, but a single typo in `LaneConfig`
+    /// should not crash the daemon (P7 — defensive design at boundaries).
     pub fn new(max_concurrent: usize) -> Self {
-        assert!(
-            max_concurrent > 0,
-            "max_concurrent must be > 0 to prevent indefinite blocking"
-        );
+        let effective = if max_concurrent == 0 {
+            tracing::warn!(
+                "LaneState constructed with max_concurrent=0; clamping to 1 \
+                 — fix the upstream LaneConfig"
+            );
+            1
+        } else {
+            max_concurrent
+        };
         Self {
             queue: RwLock::new(VecDeque::new()),
             running: RwLock::new(HashSet::new()),
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            semaphore: Arc::new(Semaphore::new(effective)),
         }
     }
 
@@ -172,4 +178,18 @@ mod tests {
         assert!(!state.is_running("run-1").await);
     }
 
+    #[tokio::test]
+    async fn lane_state_with_zero_max_concurrent_clamps_to_one() {
+        // Previously panicked via assert!; daemon must survive a config typo.
+        let state = LaneState::new(0);
+
+        let p1 = state.try_acquire_permit();
+        assert!(p1.is_some(), "clamp should grant exactly one permit");
+        let p2 = state.try_acquire_permit();
+        assert!(p2.is_none(), "clamp must not exceed 1 concurrent permit");
+
+        drop(p1);
+        let p3 = state.try_acquire_permit();
+        assert!(p3.is_some(), "permit recycles after drop");
+    }
 }

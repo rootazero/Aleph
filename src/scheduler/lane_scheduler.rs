@@ -50,8 +50,13 @@ impl LaneScheduler {
     pub fn new(config: LaneConfig) -> Self {
         let mut lanes = HashMap::new();
 
-        // Initialize each lane with its quota
+        // Initialize each lane with its quota. LaneState clamps zero to 1
+        // internally; we log the offending lane here so the warn line carries
+        // the lane name instead of just the symptom.
         for (lane, quota) in &config.quotas {
+            if quota.max_concurrent == 0 {
+                tracing::warn!(?lane, "lane quota has max_concurrent=0; clamping to 1");
+            }
             lanes.insert(*lane, Arc::new(LaneState::new(quota.max_concurrent)));
         }
 
