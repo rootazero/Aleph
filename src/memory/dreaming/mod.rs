@@ -121,8 +121,12 @@ impl DreamPipeline {
         Self { stages }
     }
 
-    /// Build a pipeline from a DreamStrategy.
-    pub fn from_strategy(strategy: DreamStrategy) -> Self {
+    /// Build a pipeline from a DreamStrategy, threading runtime config into stages
+    /// that need it (currently SkillDistill's per-cycle cap, D5).
+    pub fn from_strategy(
+        strategy: DreamStrategy,
+        dreaming_cfg: &crate::config::types::memory::DreamingConfig,
+    ) -> Self {
         let stage_list: Vec<Box<dyn DreamStage>> = match strategy {
             DreamStrategy::Consolidate => vec![
                 Box::new(stages::NoteLintStage),
@@ -135,7 +139,9 @@ impl DreamPipeline {
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteConsolidateStage),
                 Box::new(stages::NoteSynthesisStage),
-                Box::new(stages::SkillDistillStage),
+                Box::new(stages::SkillDistillStage {
+                    max_per_cycle: dreaming_cfg.skill_distill_max_per_cycle,
+                }),
                 Box::new(stages::DailyDigestStage),
             ],
             DreamStrategy::Conserve => vec![
@@ -589,7 +595,7 @@ impl DreamDaemon {
         info!(strategy = %strategy, rationale = %selection.rationale, "Dream strategy selected");
 
         // --- Phase 4: Build and run pipeline ---
-        let pipeline = DreamPipeline::from_strategy(strategy);
+        let pipeline = DreamPipeline::from_strategy(strategy, &self.config);
 
         // NOTE: Full DreamContext wiring requires NoteIndexer and EmbeddingProvider
         // (same constraint as before). Return stub report until those are wired.
@@ -704,7 +710,8 @@ mod tests {
 
     #[test]
     fn pipeline_from_strategy_consolidate() {
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate);
+        let cfg = crate::config::types::memory::DreamingConfig::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate, &cfg);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
@@ -720,7 +727,8 @@ mod tests {
 
     #[test]
     fn pipeline_from_strategy_synthesize() {
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize);
+        let cfg = crate::config::types::memory::DreamingConfig::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
@@ -736,8 +744,10 @@ mod tests {
 
     #[test]
     fn pipeline_from_strategy_conserve() {
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve);
+        let cfg = crate::config::types::memory::DreamingConfig::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(names, vec!["note_lint", "index_refresher"]);
     }
+
 }

@@ -391,6 +391,10 @@ pub struct DreamingConfig {
     /// Max insights per weekly synthesis
     #[serde(default = "default_synthesis_max_insights")]
     pub synthesis_max_insights: usize,
+    /// Max skill-notes distilled from each synthesis note per dream cycle (D5).
+    /// Was previously hardcoded to 3 in the SkillDistill prompt.
+    #[serde(default = "default_skill_distill_max_per_cycle")]
+    pub skill_distill_max_per_cycle: u32,
 }
 
 impl Default for DreamingConfig {
@@ -406,6 +410,7 @@ impl Default for DreamingConfig {
             drift_max_pairs_per_run: default_drift_max_pairs_per_run(),
             synthesis_min_cluster_size: default_synthesis_min_cluster_size(),
             synthesis_max_insights: default_synthesis_max_insights(),
+            skill_distill_max_per_cycle: default_skill_distill_max_per_cycle(),
         }
     }
 }
@@ -577,6 +582,10 @@ pub fn default_synthesis_min_cluster_size() -> usize {
 
 pub fn default_synthesis_max_insights() -> usize {
     10
+}
+
+pub fn default_skill_distill_max_per_cycle() -> u32 {
+    3
 }
 
 // Memory decay defaults
@@ -1085,6 +1094,18 @@ mod tests {
         assert_eq!(config.weekly_interval_days, 7);
         assert_eq!(config.drift_max_pairs_per_run, 20);
         assert_eq!(config.synthesis_min_cluster_size, 3);
+        assert_eq!(config.synthesis_max_insights, 10);
+        assert_eq!(config.skill_distill_max_per_cycle, 3);
+    }
+
+    #[test]
+    fn dreaming_config_skill_distill_max_overridable_via_toml() {
+        let toml_src = r#"
+            skill_distill_max_per_cycle = 7
+        "#;
+        let config: DreamingConfig = toml::from_str(toml_src).expect("parse");
+        assert_eq!(config.skill_distill_max_per_cycle, 7);
+        // Other fields fall back to defaults
         assert_eq!(config.synthesis_max_insights, 10);
     }
 

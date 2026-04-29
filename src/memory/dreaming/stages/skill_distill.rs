@@ -14,7 +14,17 @@ use crate::providers::message::UnifiedMessage;
 
 use super::DreamStage;
 
-pub struct SkillDistillStage;
+pub struct SkillDistillStage {
+    pub max_per_cycle: u32,
+}
+
+impl Default for SkillDistillStage {
+    fn default() -> Self {
+        Self {
+            max_per_cycle: crate::config::types::memory::default_skill_distill_max_per_cycle(),
+        }
+    }
+}
 
 #[async_trait]
 impl DreamStage for SkillDistillStage {
@@ -53,7 +63,7 @@ impl DreamStage for SkillDistillStage {
                 })
                 .unwrap_or("general");
 
-            let prompt = build_distill_prompt(&content, category);
+            let prompt = build_distill_prompt(&content, category, self.max_per_cycle);
             let system = "You are a skill extraction engine. Extract actionable, reusable patterns from synthesis notes. Return a JSON array.";
 
             let msgs = vec![UnifiedMessage::user(&prompt)];
@@ -106,11 +116,11 @@ impl DreamStage for SkillDistillStage {
 }
 
 /// Build the LLM prompt for skill extraction from synthesis content.
-pub fn build_distill_prompt(synthesis_text: &str, source_category: &str) -> String {
+pub fn build_distill_prompt(synthesis_text: &str, source_category: &str, max_per_cycle: u32) -> String {
     format!(
         "Analyze this synthesis note from the '{source_category}' category and extract reusable skill patterns.\n\n\
          Synthesis:\n{synthesis_text}\n\n\
-         Extract 0-3 actionable skill patterns. For each, provide:\n\
+         Extract 0-{max_per_cycle} actionable skill patterns. For each, provide:\n\
          - A kebab-case title (e.g., \"async-error-handling\")\n\
          - 2-5 concise fact bullets (third person, actionable)\n\n\
          Return as JSON array:\n\
@@ -167,16 +177,28 @@ mod tests {
 
     #[test]
     fn stage_name() {
-        assert_eq!(SkillDistillStage.name(), "skill_distill");
+        assert_eq!(SkillDistillStage::default().name(), "skill_distill");
+    }
+
+    #[test]
+    fn stage_default_uses_config_default_cap() {
+        assert_eq!(SkillDistillStage::default().max_per_cycle, 3);
     }
 
     #[test]
     fn prompt_contains_synthesis_content() {
         let synthesis_text = "Cross-cutting theme: async patterns are preferred.";
-        let prompt = build_distill_prompt(synthesis_text, "learning");
+        let prompt = build_distill_prompt(synthesis_text, "learning", 3);
         assert!(prompt.contains("async patterns"));
         assert!(prompt.contains("learning"));
         assert!(prompt.contains("skill"));
+    }
+
+    #[test]
+    fn prompt_uses_configured_cap() {
+        let prompt = build_distill_prompt("text", "general", 7);
+        assert!(prompt.contains("Extract 0-7"));
+        assert!(!prompt.contains("Extract 0-3"));
     }
 
     #[test]
