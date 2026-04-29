@@ -125,8 +125,8 @@ mod resolve_tests {
             .await
             .unwrap();
 
-        let result = resolve_wikilink(&*db, "wiki/rust", "default").await;
-        assert_eq!(result, Some("wiki/rust".to_string()));
+        let result = resolve_wikilink(&*db, "reference/rust", "default").await;
+        assert_eq!(result, Some("reference/rust".to_string()));
     }
 
     #[tokio::test]
@@ -137,7 +137,7 @@ mod resolve_tests {
             .unwrap();
 
         let result = resolve_wikilink(&*db, "rust", "default").await;
-        assert_eq!(result, Some("wiki/rust".to_string()));
+        assert_eq!(result, Some("reference/rust".to_string()));
     }
 
     #[tokio::test]
