@@ -4,11 +4,38 @@
 //! allowing sessions to be shared across platforms.
 
 use std::collections::HashMap;
+use std::fmt;
 
-/// Validate identity links for duplicate IDs across canonical names.
-/// Logs a warning for each ID that appears in more than one canonical.
-pub fn validate_identity_links(identity_links: &HashMap<String, Vec<String>>) {
-    let mut id_to_canonicals: std::collections::HashMap<String, Vec<&str>> = HashMap::new();
+/// A configured ID maps to more than one canonical user — this would let the
+/// alphabetic tie-break in `resolve_linked_peer_id` flip ownership across
+/// config reloads, which is a cross-user data leak.
+#[derive(Debug)]
+pub struct DuplicateIdentityLinkError {
+    pub id: String,
+    pub canonicals: Vec<String>,
+}
+
+impl fmt::Display for DuplicateIdentityLinkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "identity link ID '{}' appears under multiple canonical names {:?}; \
+             each cross-channel ID must belong to exactly one canonical to prevent \
+             tie-break drift across config reloads",
+            self.id, self.canonicals
+        )
+    }
+}
+
+impl std::error::Error for DuplicateIdentityLinkError {}
+
+/// Validate identity links — every (channel, id) pair must resolve to exactly
+/// one canonical. Returns the first conflict so callers (deserialize hooks)
+/// can reject the whole config rather than load a broken state.
+pub fn validate_identity_links(
+    identity_links: &HashMap<String, Vec<String>>,
+) -> Result<(), DuplicateIdentityLinkError> {
+    let mut id_to_canonicals: HashMap<String, Vec<String>> = HashMap::new();
 
     for (canonical, ids) in identity_links.iter() {
         for id in ids {
@@ -17,27 +44,37 @@ pub fn validate_identity_links(identity_links: &HashMap<String, Vec<String>>) {
                 continue;
             }
             id_to_canonicals
-                .entry(id_lower.clone())
+                .entry(id_lower)
                 .or_default()
-                .push(canonical.as_str());
+                .push(canonical.clone());
         }
     }
 
-    for (id, canonicals) in id_to_canonicals {
+    // Sort the (id, canonicals) pairs for deterministic error selection so
+    // tests don't depend on HashMap iteration order.
+    let mut pairs: Vec<(String, Vec<String>)> = id_to_canonicals.into_iter().collect();
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (id, mut canonicals) in pairs {
         if canonicals.len() > 1 {
-            tracing::warn!(
-                id,
-                canonicals = ?canonicals,
-                "identity link ID appears under multiple canonical names; first match wins at runtime"
-            );
+            canonicals.sort();
+            return Err(DuplicateIdentityLinkError { id, canonicals });
         }
     }
+
+    Ok(())
 }
 
 /// Resolve a peer ID to its canonical identity via identity links.
 ///
 /// Checks both bare peer ID and channel-scoped peer ID.
 /// Returns the canonical name if a link is found, None otherwise.
+///
+/// Assumes `identity_links` has been validated by `validate_identity_links`
+/// at deserialize time (no ID maps to more than one canonical). The
+/// alphabetic sort below only protects in-memory mutation paths and the
+/// `Default::default()` empty case — duplicates loaded via config are
+/// rejected before reaching here.
 pub(crate) fn resolve_linked_peer_id(
     identity_links: &HashMap<String, Vec<String>>,
     channel: &str,
@@ -158,14 +195,58 @@ mod tests {
 
     #[test]
     fn test_duplicate_id_across_canonicals_picks_first() {
-        // When two canonicals share the same ID, the first one in sorted order wins.
-        // Sorting by canonical name makes resolution deterministic.
+        // Documents the alphabetic tie-break for in-memory mutation paths.
+        // Configs loaded via serde are now rejected by `validate_identity_links`
+        // before reaching this code, but a directly-constructed HashMap (as in
+        // tests or programmatic mutation) still hits this fallback.
         let mut links = HashMap::new();
         links.insert("alice".to_string(), vec!["telegram:123".to_string()]);
         links.insert("bob".to_string(), vec!["telegram:123".to_string()]); // duplicate ID
 
         let result = resolve_linked_peer_id(&links, "telegram", "123");
-        // alice < bob alphabetically, so alice is returned
         assert_eq!(result, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn validate_accepts_unique_ids() {
+        let links = test_links();
+        assert!(validate_identity_links(&links).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_empty_map() {
+        let links = HashMap::new();
+        assert!(validate_identity_links(&links).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_id_across_canonicals() {
+        let mut links = HashMap::new();
+        links.insert("alice".to_string(), vec!["telegram:123".to_string()]);
+        links.insert("bob".to_string(), vec!["telegram:123".to_string()]);
+
+        let err = validate_identity_links(&links).unwrap_err();
+        assert_eq!(err.id, "telegram:123");
+        assert_eq!(err.canonicals, vec!["alice".to_string(), "bob".to_string()]);
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_id_case_insensitive() {
+        // Case-insensitive comparison must catch upper/lower variants.
+        let mut links = HashMap::new();
+        links.insert("alice".to_string(), vec!["Telegram:ABC".to_string()]);
+        links.insert("bob".to_string(), vec!["telegram:abc".to_string()]);
+
+        let err = validate_identity_links(&links).unwrap_err();
+        assert_eq!(err.id, "telegram:abc");
+    }
+
+    #[test]
+    fn validate_ignores_empty_strings() {
+        let mut links = HashMap::new();
+        links.insert("alice".to_string(), vec!["".to_string(), "  ".to_string()]);
+        links.insert("bob".to_string(), vec!["".to_string()]);
+        // Empty IDs are skipped — no duplicate is reported.
+        assert!(validate_identity_links(&links).is_ok());
     }
 }

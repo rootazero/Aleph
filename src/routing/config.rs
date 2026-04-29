@@ -14,7 +14,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let links = HashMap::<String, Vec<String>>::deserialize(deserializer)?;
-    validate_identity_links(&links);
+    validate_identity_links(&links).map_err(serde::de::Error::custom)?;
     Ok(links)
 }
 
@@ -123,5 +123,33 @@ mod tests {
         assert_eq!(binding.agent_id, "main");
         assert_eq!(binding.match_rule.channel.as_deref(), Some("telegram"));
         assert_eq!(binding.match_rule.workspace.as_deref(), Some("crypto"));
+    }
+
+    #[test]
+    fn session_config_rejects_duplicate_identity_link_ids() {
+        // The same channel:id appearing under two canonicals would let the
+        // tie-break flip on every reload, leaking messages between users.
+        let toml_str = r#"
+            [identity_links]
+            alice = ["telegram:123"]
+            bob = ["telegram:123"]
+        "#;
+        let err = toml::from_str::<SessionConfig>(toml_str).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("telegram:123"),
+            "error should mention the conflicting ID; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn session_config_accepts_unique_identity_links() {
+        let toml_str = r#"
+            [identity_links]
+            alice = ["telegram:123", "discord:456"]
+            bob = ["telegram:789"]
+        "#;
+        let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.identity_links.len(), 2);
     }
 }
