@@ -241,7 +241,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = tool.handle_list(Some("reference")).await.unwrap();
+        let result = tool.handle_list(Some("wiki")).await.unwrap();
         let entries = result.entries.unwrap();
         assert_eq!(entries, vec!["go".to_string(), "rust".to_string()]);
     }
