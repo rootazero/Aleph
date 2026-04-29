@@ -203,75 +203,20 @@ git commit -m "harness: remove dead LearningCallback stub"
 
 ---
 
-### Task 5: Remove `NoteType` enum (D3 — collapse to string `NoteCategory`)
+### Task 5: ~~Remove `NoteType` enum (D3)~~ — **WITHDRAWN**
 
-**Files:**
-- Modify: `src/memory/proptest_enums.rs`
-- Modify: every file referencing `NoteType` (find via grep)
+**Status:** withdrawn 2026-04-29 during execution. Do not implement.
 
-- [ ] **Step 1: Catalogue every reference**
-```bash
-rg "NoteType\b" /Volumes/TBU4/Workspace/Aleph/src/ /Volumes/TBU4/Workspace/Aleph/tests/ \
-  | tee /tmp/notetype_refs.txt
-```
-Read `/tmp/notetype_refs.txt`. Each reference falls into one of:
-- The enum definition itself (delete)
-- A pattern match `NoteType::Skill | NoteType::Feedback | ...` (rewrite as string `category == "skill"`)
-- A function signature taking `NoteType` (change to `&str` or `String`)
-- A test using `NoteType::Skill` (change to literal `"skill"`)
+**Why withdrawn:** Path-discovery during execution showed the spec's "dual-tracking" claim was wrong. `NoteType` lives at `src/memory/context/enums.rs:19` (not `proptest_enums.rs`) on the L1 fact layer (`MemoryFact.note_type`) with 30+ consumers across `dispatcher/tool_index/`, `skill/`, `memory/{events,store,noise_filter,context_comptroller}/`, `recall/` etc. It drives `to_category_dir()` (filesystem layout), `default_path()` (URI mapping), `default_category()` (mapping to `MemoryCategory`), and `MemoryFactFilter.note_type` (query filtering). `KnowledgeNote.category` is a free-form string at the note layer that already exists — they are different fields at different layers, not duplicates.
 
-- [ ] **Step 2: For each non-definition reference, rewrite to use string**
+The original brainstorming concern (*"is storing learned content only in a `skill` enum too narrow?"*) was about **storage breadth** — what categories the dream loop should write to. That concern is fully addressed by:
+- **Task 14** — `DistillAction` enum shared by Skill + Feedback distill
+- **Task 15** — multi-action SkillDistill (write/update/skip/dedup)
+- **Task 21** — FeedbackDistill stage writing `feedback`-category notes
 
-Example pattern, before:
-```rust
-match note.note_type {
-    NoteType::Skill => process_skill(note),
-    NoteType::Feedback => process_feedback(note),
-    _ => {}
-}
-```
-After:
-```rust
-match note.category.as_str() {
-    "skill" => process_skill(note),
-    "feedback" => process_feedback(note),
-    _ => {}
-}
-```
+These let dreams write to any free-form `KnowledgeNote.category` value without touching `NoteType`.
 
-For each call site, use Edit to make this transformation. Work through `/tmp/notetype_refs.txt` top to bottom.
-
-- [ ] **Step 3: Delete the `NoteType` enum definition**
-
-In `src/memory/proptest_enums.rs` (or wherever it lives — verify with `rg "enum NoteType"`):
-- Delete the `enum NoteType { ... }` block
-- Delete any `impl` blocks for `NoteType`
-- Delete any `From<NoteType>` / `From<&str> for NoteType` conversions
-
-- [ ] **Step 4: Build clean**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -20
-```
-Expected: 0 errors. If errors remain, return to Step 2.
-
-- [ ] **Step 5: Run library tests**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib 2>&1 | tail -15
-```
-Expected: all green.
-
-- [ ] **Step 6: Verify no `NoteType` reference remains**
-```bash
-rg "NoteType" /Volumes/TBU4/Workspace/Aleph/src/ /Volumes/TBU4/Workspace/Aleph/tests/
-```
-Expected: empty.
-
-- [ ] **Step 7: Commit**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph
-git add -A src/memory/ src/agents/ tests/
-git commit -m "memory: collapse NoteType enum to string NoteCategory (D3)"
-```
+**Action required:** none. Skip directly to Task 6.
 
 ---
 

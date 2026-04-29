@@ -21,7 +21,10 @@ Inspiration was drawn from two external projects:
 - **evolver** (`/Volumes/TBU4/Github/evolver`) — signal-driven evolution with Gene/Capsule/Event three-tier asset model, built-in validation, dedup, and decay
 - **hermes-agent** (`/Volumes/TBU4/Github/hermes-agent`) — lifecycle-hook-driven memory capture (`sync_turn` / `on_session_end` / `on_pre_compress`), frozen snapshot pattern, tiered context recall, in-memory injection security scanning
 
-The user's framing question — *"is storing learned content only in a `skill` enum too narrow? would the whole note layer be a better learning store?"* — turns out to rest on a misconception: the current code writes to a `NoteCategory("skill")` *string*, not an enum. A separate `NoteType::Skill` enum exists in `src/memory/proptest_enums.rs:8` and is dual-tracked with the string category — this is bug **D3**.
+The user's framing question — *"is storing learned content only in a `skill` enum too narrow? would the whole note layer be a better learning store?"* — has two layers that need separating:
+
+- **Storage breadth (the real question):** dreams currently emit only `skill` notes. Loop 2 (FeedbackDistill, Phase 3) and the upgraded SkillDistill 4-action contract (Phase 2) directly answer this — dreams will emit `feedback`, `lesson`, etc. notes via the existing free-form `KnowledgeNote.category` string. The note layer is already the storage substrate; the work is broadening *what* gets written.
+- **D3 — `NoteType` enum vs `category` string:** investigation during execution showed these live at different layers. `NoteType` is on `MemoryFact` (L1 fact layer) and drives 30+ consumers (filesystem mapping via `to_category_dir`, default URIs via `default_path`, query filters in `MemoryFactFilter`, mapping to `MemoryCategory`). `KnowledgeNote.category` is a free-form string on the note layer. They are not the same field. **D3 has been withdrawn from scope** — the original storage-breadth concern is fully met by Phase 2/3 work without touching `NoteType`.
 
 Reframed: the real opportunity is to **add a second, structurally-symmetric learning loop for user-correction signals** while fixing the bugs that already accumulated in the existing one.
 
@@ -31,7 +34,7 @@ Reframed: the real opportunity is to **add a second, structurally-symmetric lear
 |----|--------|----------|
 | **D1** | L3 rule learning never connected to harness | `src/engine/learning_agent.rs:40` — TODO #1819 |
 | **D2** | `LearningCallback` never instantiated | `src/harness/loop_callback.rs` only has `NoopCallback` |
-| **D3** | `NoteType::Skill` enum vs `category="skill"` string dual-tracked | `src/memory/proptest_enums.rs:8-20` vs `src/memory/dreaming/stages/skill_distill.rs:80` |
+| **D3** | ~~`NoteType::Skill` enum vs `category="skill"` string dual-tracked~~ **WITHDRAWN** — investigation showed `NoteType` (L1 fact layer, 30+ consumers) and `KnowledgeNote.category` (note layer, free-form string) live at different layers and are not duplicates. The storage-breadth concern that motivated D3 is met by Phase 2/3 (FeedbackDistill + multi-action SkillDistill) writing to the existing free-form note-layer category. | n/a |
 | **D4** | `SkillDistill` writes wikilinks but never cleans stale ones | `src/memory/dreaming/stages/skill_distill.rs:80` |
 | **D5** | "0–3 items" cap hardcoded into the prompt | `src/memory/dreaming/stages/skill_distill.rs:109` |
 
@@ -45,7 +48,7 @@ Replace the dead engine-side path with a second memory-side learning loop for **
 2. Puts all judgment inside LLM calls — no rule engines, no regex (R8 / P8)
 3. Reuses existing infrastructure (DreamStage trait, NoteIndexer, CompressionService, Tool registry) — minimal new types
 4. Net code change should be **negative** (remove > add)
-5. Bundles the bug fixes (D3 / D4 / D5) in scope; leaves D1 / D2 as deletions
+5. Bundles the bug fixes (D4 / D5) in scope; leaves D1 / D2 as deletions; D3 withdrawn (see §1)
 
 ---
 
@@ -151,7 +154,7 @@ changes land in Phase 2).
 | `src/memory/dreaming/stages/lint.rs` | Add stale wikilink scan: walk `[[path]]` references, drop ones whose target no longer exists | D4 |
 | `src/memory/dreaming/config.rs` (or equivalent) | Add `skill_distill_max_per_cycle: u32` (default 3), `feedback_distill_max_per_cycle: u32` (default 5), `feedback_distill_min_candidates: u32` (default 3), `dedup_similarity_threshold: f32` (default 0.85) | D5, new stage scheduling |
 | `src/memory/notes/{indexer.rs, fact.rs}` | NoteFact gains `confidence: f32`, `severity: Severity`, `source_facts: Vec<FactId>`. `write_note()` accepts new params. Old notes deserialize with `#[serde(default)]` (confidence=1.0, severity=Med, source_facts=[]) | confidence/severity |
-| `src/memory/proptest_enums.rs` and all `NoteType::Skill` references | Delete `NoteType` enum; use string `NoteCategory` everywhere. Update tests | D3 |
+| ~~`src/memory/proptest_enums.rs` and all `NoteType::Skill` references~~ | ~~Delete `NoteType` enum; use string `NoteCategory` everywhere~~ — **D3 withdrawn**, see §1 | ~~D3~~ |
 | `src/memory/retrieval/*` ranking function | Score = `embedding_sim × note.weight × note.confidence × severity_boost(severity) + recency_bonus`. `severity_boost`: High=1.2, Med=1.0, Low=0.85 | Use confidence in ranking |
 | `src/memory/dreaming/strategy.rs` | Both `synthesize` and `consolidate` strategies include `FeedbackDistill` alongside `SkillDistill` | Schedule new stage |
 | `src/agents/rig/tools.rs` (or wherever tools are registered) | Register `flag_user_correction` tool | Expose new tool |
@@ -457,7 +460,7 @@ Defenses:
 
 ### Phase 1 — Cleanup + base bug fixes (lowest risk, ships first)
 
-**Changes**: delete RuleLearner / LearningAgent / LearningCallback stub. D3 (collapse `NoteType::Skill` enum to string). D4 (lint stale wikilinks). D5 (move 0–3 cap into dream config).
+**Changes**: delete RuleLearner / LearningAgent / LearningCallback stub. D4 (lint stale wikilinks). D5 (move 0–3 cap into dream config). D3 withdrawn (see §1).
 
 **Verification gates** (must all pass before Phase 2):
 - [ ] `cargo test -p alephcore --lib` green
@@ -523,7 +526,7 @@ Defenses:
 |-----------|--------|
 | Net code change | -200 to -300 lines (delete ~850, add ~600) |
 | TODOs removed | -2 (TODO #1819 in two locations) |
-| Bugs closed | D3, D4, D5 |
+| Bugs closed | D4, D5 (D3 withdrawn — see §1) |
 | New capability | Feedback loop end-to-end demonstrable |
 | Test coverage | ≥80% on touched modules |
 | Architectural redlines (R3 / R8 / R10 / R11) | All preserved (`src/harness/` line count unchanged) |
