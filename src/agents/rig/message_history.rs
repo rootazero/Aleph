@@ -112,8 +112,37 @@ impl ChatMessage {
     }
 
     /// Create a tool result message
+    ///
+    /// Context fields from `ToolCallResult` (summary, goal_contribution,
+    /// extracted_knowledge) are prepended to the content so they are available
+    /// to the LLM in subsequent turns even though they are not stored as
+    /// first-class message fields.
     pub fn tool_result(result: &ToolCallResult) -> Self {
-        let content = if result.success {
+        let mut content_parts = Vec::new();
+
+        // Inject context fields when present
+        if let Some(summary) = &result.summary {
+            content_parts.push(format!("[Summary] {}", summary));
+        }
+        if let Some(contribution) = &result.goal_contribution {
+            content_parts.push(format!("[GoalContribution] {}", contribution));
+        }
+            if !result.extracted_knowledge.is_empty() {
+                let knowledge_preview: Vec<String> = result
+                    .extracted_knowledge
+                    .iter()
+                    .map(|k| {
+                        if k.value.len() > 200 {
+                            format!("{}... [{} chars]", &k.value[..200], k.value.len())
+                        } else {
+                            k.value.clone()
+                        }
+                    })
+                    .collect();
+                content_parts.push(format!("[ExtractedKnowledge] {}", knowledge_preview.join("; ")));
+            }
+
+        let base_content = if result.success {
             result.content.clone()
         } else {
             format!(
@@ -121,10 +150,13 @@ impl ChatMessage {
                 result.error.as_deref().unwrap_or("Unknown error")
             )
         };
+        content_parts.push(base_content);
+
+        let full_content = content_parts.join("\n");
 
         Self {
             role: MessageRole::Tool,
-            content: Some(content),
+            content: Some(full_content),
             tool_calls: None,
             tool_call_id: Some(result.tool_call_id.clone()),
             name: Some(result.name.clone()),
