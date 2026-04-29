@@ -17,7 +17,7 @@ pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{sanitize_title, KnowledgeNote};
 pub use retrieval::{NoteContent, NoteRetrieval};
 pub use search_result::NoteSearchResult;
-pub use wikilink::{extract_wikilinks, resolve_wikilink, rewrite_wikilinks};
+pub use wikilink::{extract_wikilinks, remove_wikilink, resolve_wikilink, rewrite_wikilinks};
 
 pub mod ingest;
 pub mod profile;

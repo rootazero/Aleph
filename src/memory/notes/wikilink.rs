@@ -35,6 +35,24 @@ pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
         .into_owned()
 }
 
+/// Delete every `[[name]]` occurrence from `text`, leaving other links intact.
+///
+/// Used by `NoteLintStage` (D4) to purge wikilinks pointing at notes that
+/// no longer exist and have no fuzzy-match candidate. Whitespace around the
+/// removed link is intentionally not collapsed — the original surrounding
+/// text is preserved verbatim minus the `[[...]]` token.
+pub fn remove_wikilink(text: &str, name: &str) -> String {
+    WIKILINK_RE
+        .replace_all(text, |caps: &regex::Captures| {
+            if &caps[1] == name {
+                String::new()
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned()
+}
+
 /// Resolve a wikilink target to a note path using Obsidian-compatible rules.
 ///
 /// 1. If link contains '/' → exact path match
@@ -88,6 +106,24 @@ mod tests {
         let text = "[[Alpha]] [[Beta]] [[Gamma]]";
         let result = rewrite_wikilinks(text, "Beta", "Delta");
         assert_eq!(result, "[[Alpha]] [[Delta]] [[Gamma]]");
+    }
+
+    #[test]
+    fn remove_wikilink_drops_named_target() {
+        let text = "see [[stale]] and [[keep]]";
+        assert_eq!(remove_wikilink(text, "stale"), "see  and [[keep]]");
+    }
+
+    #[test]
+    fn remove_wikilink_drops_all_occurrences() {
+        let text = "[[x]] x [[x]] [[y]]";
+        assert_eq!(remove_wikilink(text, "x"), " x  [[y]]");
+    }
+
+    #[test]
+    fn remove_wikilink_no_op_when_target_absent() {
+        let text = "[[a]] [[b]]";
+        assert_eq!(remove_wikilink(text, "z"), "[[a]] [[b]]");
     }
 }
 

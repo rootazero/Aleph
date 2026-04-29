@@ -13,8 +13,8 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
-use crate::memory::notes::rewrite_wikilinks;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::{remove_wikilink, rewrite_wikilinks};
 
 use super::DreamStage;
 
@@ -140,13 +140,53 @@ impl DreamStage for NoteLintStage {
                     .map(|e| e.filename.as_str())
                     .collect();
 
-                if fuzzy_matches.len() != 1 {
-                    // Ambiguous or truly missing — report only
+                if fuzzy_matches.is_empty() {
+                    // D4: truly missing target — purge the wikilink from the file body.
+                    // tracing log preserves the original target for audit.
+                    let file_path = ctx
+                        .indexer
+                        .memory_dir()
+                        .join(&ctx.agent_id)
+                        .join(category)
+                        .join(format!("{filename}.md"));
+
+                    let content = match tokio::fs::read_to_string(&file_path).await {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+
+                    let cleaned = remove_wikilink(&content, &target);
+                    if cleaned == content {
+                        // Link not present in body (already stripped or stored elsewhere) — skip
+                        continue;
+                    }
+
+                    if let Err(e) = tokio::fs::write(&file_path, &cleaned).await {
+                        tracing::warn!(path = %file_path.display(), error = %e, "NoteLint: failed to write purged content");
+                        continue;
+                    }
+
+                    let _ = ctx
+                        .indexer
+                        .index_file(&ctx.agent_id, category, &file_path)
+                        .await;
+
+                    ctx.note_contents.remove(path);
+                    tracing::info!(
+                        path,
+                        purged_target = target,
+                        "NoteLint: purged stale wikilink (D4)"
+                    );
+                    continue;
+                }
+
+                if fuzzy_matches.len() > 1 {
+                    // Ambiguous — log only; never auto-pick to avoid mis-deletion
                     tracing::info!(
                         path,
                         target,
                         candidates = fuzzy_matches.len(),
-                        "NoteLint: broken wikilink, no unique fuzzy match"
+                        "NoteLint: ambiguous wikilink, no unique fuzzy match — kept as-is"
                     );
                     continue;
                 }
