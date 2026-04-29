@@ -59,8 +59,8 @@ impl RecursionTracker {
 
         if current_depth >= max_depth {
             return Err(AlephError::config(format!(
-                "Recursion depth limit reached: {} >= {}",
-                current_depth, max_depth
+                "Recursion depth limit reached for run '{}': {} >= {}",
+                parent_run_id, current_depth, max_depth
             )));
         }
 

@@ -9,6 +9,7 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tokio::sync::Semaphore;
+use tracing::debug;
 
 use super::Lane;
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
@@ -70,14 +71,14 @@ impl LaneScheduler {
     /// Enqueue a run to a specific lane
     pub async fn enqueue(&self, run_id: String, lane: Lane) {
         if let Some(state) = self.lanes.get(&lane) {
-            // Track enqueue time for anti-starvation
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64;
             self.wait_tracker.track_enqueue(&run_id, lane, now).await;
-
             state.enqueue(run_id).await;
+        } else {
+            debug!(run_id = %run_id, lane = ?lane, "enqueue called for lane with no quota — run dropped");
         }
     }
 
@@ -177,44 +178,6 @@ impl LaneScheduler {
         self.recursion_tracker.remove(run_id).await;
     }
 
-    /// Sweep for starving runs and apply priority boosts
-    ///
-    /// This method should be called periodically (e.g., every 30 seconds) to
-    /// identify runs that have been waiting too long and boost their priority.
-    ///
-    /// Returns the number of runs that received priority boosts.
-    pub async fn sweep_anti_starvation(&self) -> usize {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        let threshold_ms = self.config.anti_starvation_threshold_ms;
-        let mut boosted_count = 0;
-
-        // Get all waiting runs
-        let wait_times = self.wait_tracker.get_all_wait_times(current_time).await;
-
-        for (run_id, lane, wait_ms) in wait_times {
-            if wait_ms > threshold_ms {
-                // Calculate boost
-                let boost = self
-                    .wait_tracker
-                    .calculate_boost(&run_id, current_time, threshold_ms, 1)
-                    .await;
-
-                if boost > 0 {
-                    // Apply boost to the lane state
-                    if let Some(state) = self.lanes.get(&lane) {
-                        state.set_priority_boost(boost).await;
-                        boosted_count += 1;
-                    }
-                }
-            }
-        }
-
-        boosted_count
-    }
 
     /// Check if a parent run can spawn a child without exceeding recursion depth
     ///
@@ -487,55 +450,6 @@ mod tests {
             .get_wait_time("run-1", current_time)
             .await;
         assert_eq!(wait_time_after, 0);
-    }
-
-    #[tokio::test]
-    async fn test_anti_starvation_sweep() {
-        let config = LaneConfig::default();
-        let scheduler = LaneScheduler::new(config);
-
-        // Manually track an old run (simulating 60 seconds wait)
-        let old_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
-            - 60_000;
-
-        scheduler
-            .wait_tracker
-            .track_enqueue("old-run", Lane::Cron, old_time)
-            .await;
-
-        // Sweep should find and boost this run
-        let boosted = scheduler.sweep_anti_starvation().await;
-        assert_eq!(boosted, 1);
-
-        // Check that the lane received a boost
-        let state = scheduler.lanes.get(&Lane::Cron).unwrap();
-        let boost = state.priority_boost().await;
-        assert_eq!(boost, 1); // 60s - 30s threshold = 30s = +1 boost
-    }
-
-    #[tokio::test]
-    async fn test_anti_starvation_no_boost_below_threshold() {
-        let config = LaneConfig::default();
-        let scheduler = LaneScheduler::new(config);
-
-        // Track a recent run (10 seconds ago, below 30s threshold)
-        let recent_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
-            - 10_000;
-
-        scheduler
-            .wait_tracker
-            .track_enqueue("recent-run", Lane::Cron, recent_time)
-            .await;
-
-        // Sweep should not boost this run
-        let boosted = scheduler.sweep_anti_starvation().await;
-        assert_eq!(boosted, 0);
     }
 
     #[tokio::test]

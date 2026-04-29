@@ -46,18 +46,23 @@ pub struct LaneState {
     running: RwLock<HashSet<String>>,
     /// Semaphore for concurrency control
     semaphore: Arc<Semaphore>,
-    /// Current priority boost (calculated from wait times)
-    priority_boost: RwLock<i8>,
 }
 
 impl LaneState {
     /// Create a new LaneState with the given concurrency limit
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_concurrent` is 0, as this would cause all runs to hang indefinitely.
     pub fn new(max_concurrent: usize) -> Self {
+        assert!(
+            max_concurrent > 0,
+            "max_concurrent must be > 0 to prevent indefinite blocking"
+        );
         Self {
             queue: RwLock::new(VecDeque::new()),
             running: RwLock::new(HashSet::new()),
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
-            priority_boost: RwLock::new(0),
         }
     }
 
@@ -115,18 +120,16 @@ impl LaneState {
 
     /// Calculate priority boost based on wait time
     ///
-    /// Returns +1 boost per 10 seconds over 30 second threshold, max +10
+    /// Returns +1 boost per 10 seconds over 30 second threshold, max +10.
+    /// Returns 0 if the run is not in the queue (may have already been scheduled).
     pub async fn calculate_priority_boost(&self, run_id: &str, current_time: i64) -> i8 {
         let queue = self.queue.read().await;
 
-        // Find the run in the queue
         if let Some(queued_run) = queue.iter().find(|qr| qr.run_id == run_id) {
             let wait_ms = (current_time - queued_run.enqueued_at).max(0) as u64;
             let threshold_ms = 30_000u64;
 
             if wait_ms > threshold_ms {
-                // +1 boost per 10 seconds over threshold, max +10
-
                 ((wait_ms - threshold_ms) / 10_000).min(10) as i8
             } else {
                 0
@@ -134,16 +137,6 @@ impl LaneState {
         } else {
             0
         }
-    }
-
-    /// Get the current priority boost
-    pub async fn priority_boost(&self) -> i8 {
-        *self.priority_boost.read().await
-    }
-
-    /// Set the priority boost
-    pub async fn set_priority_boost(&self, boost: i8) {
-        *self.priority_boost.write().await = boost;
     }
 
     /// Get a reference to the semaphore (for testing)
