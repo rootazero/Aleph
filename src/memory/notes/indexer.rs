@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 
 use crate::error::AlephError;
+use crate::memory::dreaming::distill_action::DistillAction;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
@@ -395,6 +396,153 @@ impl<S: NoteStore> NoteIndexer<S> {
 
         self.notify_orientation(agent_id, &category, &safe_old);
         self.notify_orientation(agent_id, &category, &safe_new);
+        Ok(())
+    }
+
+    /// Apply a `DistillAction` emitted by a Distill stage (SkillDistill, FeedbackDistill).
+    ///
+    /// Pure plumbing — the LLM already judged what to do; this method just executes
+    /// the I/O. Phase 2 Decision 2: the candidate selection happens upstream
+    /// (`find_similar_notes` → injected into the LLM prompt → LLM emits the action).
+    ///
+    /// `category` is the destination/source category (e.g. `"skill"` for SkillDistill).
+    /// For `Strengthen` and `Supersede`, the category is parsed from the embedded
+    /// note path so cross-category deletes work correctly.
+    pub async fn apply_distill_action(
+        &self,
+        agent_id: &str,
+        category: &str,
+        action: &DistillAction,
+    ) -> Result<(), AlephError> {
+        match action {
+            DistillAction::New {
+                title,
+                rule,
+                confidence,
+                severity,
+                source_facts,
+            } => {
+                let now = chrono::Utc::now().timestamp();
+                let note = KnowledgeNote {
+                    title: title.clone(),
+                    category: category.to_string(),
+                    tags: vec![],
+                    facts: vec![rule.clone()],
+                    links: vec![],
+                    created_at: now,
+                    updated_at: now,
+                    content_hash: String::new(),
+                    confidence: *confidence,
+                    severity: *severity,
+                    source_facts: source_facts.clone(),
+                };
+                self.write_note(agent_id, category, &note).await?;
+            }
+            DistillAction::Strengthen {
+                existing_note_path,
+                source_facts,
+            } => {
+                let (cat, filename) = existing_note_path.split_once('/').ok_or_else(|| {
+                    AlephError::ConfigError {
+                        message: format!(
+                            "Strengthen: invalid existing_note_path '{existing_note_path}' \
+                             (expected 'category/filename')"
+                        ),
+                        suggestion: None,
+                    }
+                })?;
+                let safe_title = sanitize_title(filename);
+                let file_path = self
+                    .memory_dir
+                    .join(agent_id)
+                    .join(cat)
+                    .join(format!("{safe_title}.md"));
+                if !file_path.exists() {
+                    return Err(AlephError::other(format!(
+                        "Strengthen target missing on disk: {existing_note_path}"
+                    )));
+                }
+                let content =
+                    fs::read_to_string(&file_path)
+                        .await
+                        .map_err(|e| AlephError::ConfigError {
+                            message: format!("Strengthen read {file_path:?}: {e}"),
+                            suggestion: None,
+                        })?;
+                let mut note = KnowledgeNote::from_markdown(filename, &content)?;
+                for f in source_facts {
+                    if !note.source_facts.contains(f) {
+                        note.source_facts.push(f.clone());
+                    }
+                }
+                note.updated_at = chrono::Utc::now().timestamp();
+                let md = note.to_markdown();
+                note.content_hash = sha2_hash(&md);
+                fs::write(&file_path, &md)
+                    .await
+                    .map_err(|e| AlephError::ConfigError {
+                        message: format!("Strengthen write {file_path:?}: {e}"),
+                        suggestion: None,
+                    })?;
+                self.store.index_note(&note, agent_id, cat).await?;
+                self.notify_orientation(agent_id, cat, &safe_title);
+            }
+            DistillAction::Supersede {
+                old_note_path,
+                title,
+                rule,
+                confidence,
+                severity,
+                source_facts,
+            } => {
+                let (old_cat, old_filename) = old_note_path.split_once('/').ok_or_else(|| {
+                    AlephError::ConfigError {
+                        message: format!(
+                            "Supersede: invalid old_note_path '{old_note_path}' \
+                             (expected 'category/filename')"
+                        ),
+                        suggestion: None,
+                    }
+                })?;
+                let safe_old = sanitize_title(old_filename);
+                let old_file = self
+                    .memory_dir
+                    .join(agent_id)
+                    .join(old_cat)
+                    .join(format!("{safe_old}.md"));
+                if old_file.exists() {
+                    let _ = fs::remove_file(&old_file).await;
+                }
+                self.store.remove_note_index(old_note_path, agent_id).await?;
+                self.notify_orientation(agent_id, old_cat, &safe_old);
+
+                let now = chrono::Utc::now().timestamp();
+                let note = KnowledgeNote {
+                    title: title.clone(),
+                    category: category.to_string(),
+                    tags: vec![],
+                    facts: vec![rule.clone()],
+                    links: vec![],
+                    created_at: now,
+                    updated_at: now,
+                    content_hash: String::new(),
+                    confidence: *confidence,
+                    severity: *severity,
+                    source_facts: source_facts.clone(),
+                };
+                self.write_note(agent_id, category, &note).await?;
+            }
+            DistillAction::Skip {
+                source_fact,
+                reason,
+            } => {
+                tracing::debug!(
+                    source_fact = %source_fact,
+                    reason = %reason,
+                    "DistillAction::Skip"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -828,6 +976,55 @@ mod reference_hook_tests {
         let listed = backend.list_notes("default").await.unwrap();
         assert_eq!(listed.len(), 1, "write_note must also index to SQLite");
         assert_eq!(listed[0].path, "learning/rust-async");
+    }
+
+    #[tokio::test]
+    async fn apply_distill_action_strengthen_appends_source_facts() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        // Seed an existing skill note with one source_fact
+        let seed = KnowledgeNote {
+            title: "async-error-handling".into(),
+            category: "skill".into(),
+            tags: vec![],
+            facts: vec!["always propagate errors with ?".into()],
+            links: vec![],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            content_hash: String::new(),
+            source_facts: vec!["fact-original".into()],
+            ..Default::default()
+        };
+        indexer.write_note("default", "skill", &seed).await.unwrap();
+
+        // Strengthen with a new source_fact
+        let action = DistillAction::Strengthen {
+            existing_note_path: "skill/async-error-handling".into(),
+            source_facts: vec!["fact-new".into(), "fact-original".into()], // includes a dup
+        };
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
+
+        // Re-read from disk and verify source_facts merged + de-duplicated
+        let file = dir
+            .path()
+            .join("note")
+            .join("default")
+            .join("skill")
+            .join("async-error-handling.md");
+        let content = fs::read_to_string(&file).await.unwrap();
+        let reparsed = KnowledgeNote::from_markdown("async-error-handling", &content).unwrap();
+        assert_eq!(reparsed.source_facts.len(), 2, "should have 2 unique facts");
+        assert!(reparsed.source_facts.contains(&"fact-original".to_string()));
+        assert!(reparsed.source_facts.contains(&"fact-new".to_string()));
+        // updated_at must be bumped above the seeded value
+        assert!(reparsed.updated_at >= seed.updated_at);
     }
 
     #[tokio::test]

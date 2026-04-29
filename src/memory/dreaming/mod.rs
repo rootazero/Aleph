@@ -4,6 +4,7 @@
 //! Each stage implements the `DreamStage` trait and operates on a shared
 //! `DreamContext` that flows through the pipeline.
 
+pub mod distill_action;
 pub mod event_log;
 pub mod gate;
 pub mod mutation_gate;
@@ -31,6 +32,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{info, warn};
+
+// Re-export distill action enum (Phase 2 Task 14)
+pub use distill_action::DistillAction;
 
 // Re-export gate types
 pub use gate::{BlockReason, DreamGate, DreamGateConfig, GateResult};
