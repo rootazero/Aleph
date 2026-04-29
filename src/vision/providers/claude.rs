@@ -129,7 +129,7 @@ impl ClaudeVisionProvider {
 
         let resp = self
             .client
-            .post(&self.endpoint())
+            .post(self.endpoint())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&request)
