@@ -4,7 +4,7 @@
 
 **Goal:** Add a user-correction learning loop alongside the existing SkillDistill loop, delete ~850 lines of orphan engine learning code, and bundle 3 known bug fixes (D3/D4/D5).
 
-**Architecture:** Two structurally symmetric Dream stages (`SkillDistill` + new `FeedbackDistill`). Main LLM self-reports user corrections via a `flag_user_correction` tool. `NoteFact` gains `confidence`/`severity`/`source_facts` with backward-compatible serde defaults. Retrieval ranks by `embedding_sim × weight × confidence × severity_boost`.
+**Architecture:** Two structurally symmetric Dream stages (`SkillDistill` + new `FeedbackDistill`). Main LLM self-reports user corrections via a `flag_user_correction` tool. `KnowledgeNote.frontmatter` gains `confidence`/`severity`/`source_facts` with backward-compatible serde defaults. Retrieval re-ranks by `cosine × confidence × severity_boost` (Phase 2 Decision 4).
 
 **Tech Stack:** Rust 2024 edition, tokio async, serde, alephcore crate. Test runner: `cargo test -p alephcore --lib`.
 
@@ -14,49 +14,23 @@
 
 ---
 
-## Path-discovery preamble (run once before Task 1)
+## Path-discovery preamble (RESOLVED — Phase 0/1 complete; reference only)
 
-Several spec items defer exact file paths to implementation time (§9 of spec). Run these lookups ONCE at the start; record the results in your scratch buffer.
+The original preamble assumed a `NoteFact` struct that does not exist in this codebase. Phase 0 path-discovery resolved every placeholder; Phase 2 Schema Decisions (below the Phase 1 gate) document the corrections. **Subagents do NOT need to re-run these lookups** — values below are authoritative.
 
-- [ ] **P1: Locate NoteFact struct definition**
-```bash
-rg --files-with-matches "struct NoteFact" /Volumes/TBU4/Workspace/Aleph/src/memory/
-```
-Expect: `src/memory/notes/fact.rs` (or similar). Record the exact path.
+- ✅ **P1 (was: Locate `NoteFact`)** → there is no `NoteFact`. The note aggregate is `KnowledgeNote` at `src/memory/notes/note.rs`. The L1 `MemoryFact` at `src/memory/context/fact.rs` is a different layer and is NOT modified by this plan. See Phase 2 Decision 1.
+- ✅ **P2 (Dream config)** → `DreamingConfig` at `src/config/types/memory.rs` (resolved by Phase 0B / D5 commit `d4481b183`).
+- ✅ **P3 (tool registry / system prompt)** → resolve in Phase 3 Tasks 18-20 when reached.
+- ✅ **P4 (`facts_by_tag` exists?)** → no; Task 17 adds the equivalent on `NoteIndexer`.
+- ✅ **P5 (retrieval ranking location)** → `src/memory/notes/retrieval.rs`. Current `NoteRetrieval` is 45 lines, no re-rank, no `weight` field, no `recency_bonus`. Task 13 adds internal re-rank by `cosine × confidence × severity_boost` per Phase 2 Decision 4.
+- ✅ **P6 (Lint stage path)** → `src/memory/dreaming/stages/note_lint.rs` (resolved by Phase 1 / D4 commits `ad2894bcb`, `b9071ee34`).
 
-- [ ] **P2: Locate Dream config struct**
-```bash
-rg --files-with-matches "struct DreamConfig|struct DreamingConfig" /Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/
-```
-Expect: `src/memory/dreaming/config.rs` or `mod.rs`. Record path + struct name.
-
-- [ ] **P3: Locate tool registry / system prompt assembly**
-```bash
-rg "register.*tool|tool_registry|system_prompt" /Volumes/TBU4/Workspace/Aleph/src/agents/ | head -30
-```
-Record:
-  - Where `Tool` impls are registered for the main agent
-  - Where the system prompt template is assembled (likely `src/agents/rig/...`)
-
-- [ ] **P4: Confirm `NoteIndexer::facts_by_tag` does or does not exist**
-```bash
-rg "facts_by_tag|notes_by_tag|by_tag" /Volumes/TBU4/Workspace/Aleph/src/memory/notes/
-```
-If exists, reuse. If not, Task 17 adds it.
-
-- [ ] **P5: Confirm retrieval ranking function location**
-```bash
-rg "fn (rank|score|order)|note.weight" /Volumes/TBU4/Workspace/Aleph/src/memory/retrieval/ | head -30
-```
-Record the file + function that combines `embedding_sim` and `weight` into the final score.
-
-- [ ] **P6: Confirm Lint stage exists**
-```bash
-ls /Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/stages/
-```
-Expect: `lint.rs` and `skill_distill.rs` among others. If lint is named differently (`decay.rs`, `cleanup.rs`), use that instead in Task 6.
-
-Substitute every `<NOTEFACT_PATH>`, `<DREAM_CONFIG_PATH>`, `<TOOLS_REG_PATH>`, `<SYS_PROMPT_PATH>`, `<RETRIEVAL_RANK_PATH>`, `<LINT_STAGE_PATH>` placeholder below with the values found here.
+**Placeholder substitutions** (all `<...>` in legacy task bodies map to these):
+- `<NOTEFACT_PATH>` → `src/memory/notes/note.rs` (struct is `KnowledgeNote`, not `NoteFact`)
+- `<DREAM_CONFIG_PATH>` → `src/config/types/memory.rs`
+- `<RETRIEVAL_RANK_PATH>` → `src/memory/notes/retrieval.rs`
+- `<LINT_STAGE_PATH>` → `src/memory/dreaming/stages/note_lint.rs`
+- `<TOOLS_REG_PATH>` / `<SYS_PROMPT_PATH>` — resolve in Tasks 19, 20
 
 ---
 
@@ -474,28 +448,49 @@ git tag self-evolution-phase1
 
 # Phase 2 — Schema + Dedup Infrastructure
 
-Goal: NoteFact gets `confidence`/`severity`/`source_facts`; old markdown still loads; SkillDistill upgraded to 4-action contract; new `note_dedup` helper.
+Goal: `KnowledgeNote.frontmatter` gets `confidence`/`severity`/`source_facts`; old markdown still loads; SkillDistill upgraded to 4-action contract with code-injected dedup candidates.
+
+## Phase 2 Schema Decisions (Re-Brainstormed 2026-04-29)
+
+These decisions supersede the original Phase-1 plan placeholders (`NoteFact`, `NoteId`, `FactId`, `weight`, `recency_bonus`). All Phase 2 tasks below align with them.
+
+1. **Field placement** — `confidence: f32`, `severity: Severity`, `source_facts: Vec<String>` go on **`KnowledgeNote.frontmatter`** (not on `MemoryFact`). The `Frontmatter` parsing struct in `src/memory/notes/note.rs:13` gets the same three fields with `#[serde(default)]` for backward compat.
+
+2. **`DistillAction` variant decision** — Code provides top-N existing-note **candidates** via Task 12 helper *before* the LLM call. LLM picks `New`/`Strengthen`/`Supersede`/`Skip` with concrete IDs from the injected candidate set (no hallucination). **Task 12 must complete before Task 14**.
+
+3. **Dedup signal** — Embedding cosine via existing `NoteStore::vector_search` (sqlite-vec KNN at `src/memory/store/sqlite/notes.rs:628`). When no embedding provider is configured / synthesis note has no embedding, helper returns empty → distill defaults to `New`.
+
+4. **Re-ranking** — `NoteRetrieval` does internal re-rank with overfetch α=3. Formula: `final = cosine × confidence × severity_boost(severity)`. Boost mapping: Low=1.0, Med=1.2, High=1.5, Critical=2.0. Backward-compat defaults: `confidence=1.0`, `severity=Low` → `final = cosine` (no behavior change for legacy notes).
+
+**Type substitutions throughout Phase 2:**
+- `<NOTEFACT_PATH>` → `src/memory/notes/note.rs`
+- `NoteFact` → `KnowledgeNote`
+- `NoteId` → `String` (note path, e.g. `"skill/async-error-handling"`); newtype later if a real consumer demands it (YAGNI)
+- `FactId` → `String` (synthesis note path or raw memory ID)
+- `note.weight` → does not exist on `KnowledgeNote`; ranking uses `confidence × severity_boost`
+- `recency_bonus` → out of scope for Phase 2 (current `NoteRetrieval` has no recency term)
 
 ---
 
 ### Task 9: Add `Severity` enum
 
 **Files:**
-- Modify: `<NOTEFACT_PATH>` (from P1) — define `Severity` enum at the top of the file or in a sibling module
+- Modify: `src/memory/notes/note.rs` — add `Severity` enum near the top of the file (alongside `Frontmatter`)
+- Modify: `src/memory/notes/mod.rs` — re-export `Severity`
 
 - [ ] **Step 1: Write the failing test**
 
-In `<NOTEFACT_PATH>`'s `#[cfg(test)]` module:
+In `src/memory/notes/note.rs`'s `#[cfg(test)]` module:
 ```rust
 #[test]
-fn severity_default_is_med() {
+fn severity_default_is_low_for_backward_compat() {
     let s: Severity = Default::default();
-    assert_eq!(s, Severity::Med);
+    assert_eq!(s, Severity::Low);
 }
 
 #[test]
-fn severity_serde_roundtrip() {
-    for s in [Severity::Low, Severity::Med, Severity::High] {
+fn severity_serde_roundtrip_all_variants() {
+    for s in [Severity::Low, Severity::Med, Severity::High, Severity::Critical] {
         let j = serde_json::to_string(&s).unwrap();
         let back: Severity = serde_json::from_str(&j).unwrap();
         assert_eq!(s, back);
@@ -514,11 +509,19 @@ Expected: compile error / FAIL.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
-    Low,
     #[default]
+    Low,
     Med,
     High,
+    Critical,
 }
+```
+
+`Default = Low` is required so legacy notes (no `severity:` field) get `severity_boost = 1.0` and rank exactly as before. See Phase 2 Decision 4.
+
+In `src/memory/notes/mod.rs`, add to the existing `pub use note::{...}` line:
+```rust
+pub use note::{sanitize_title, KnowledgeNote, Severity};
 ```
 
 - [ ] **Step 4: Run tests — PASS**
@@ -529,99 +532,118 @@ cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib severity 2>&1 
 - [ ] **Step 5: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
-git add <NOTEFACT_PATH>
-git commit -m "memory/notes: add Severity enum"
+git add src/memory/notes/note.rs src/memory/notes/mod.rs
+git commit -m "memory/notes: add Severity enum (Low/Med/High/Critical, default Low)"
 ```
 
 ---
 
-### Task 10: Extend `NoteFact` with `confidence`/`severity`/`source_facts`
+### Task 10: Extend `KnowledgeNote` and `Frontmatter` with `confidence`/`severity`/`source_facts`
 
 **Files:**
-- Modify: `<NOTEFACT_PATH>`
+- Modify: `src/memory/notes/note.rs` — extend `Frontmatter` parsing struct AND `KnowledgeNote` aggregate
 
 - [ ] **Step 1: Write the failing roundtrip test FIRST**
 
-In `<NOTEFACT_PATH>`'s `#[cfg(test)]` module:
+In `src/memory/notes/note.rs`'s `#[cfg(test)]` module:
 ```rust
 #[test]
-fn notefact_old_json_deserializes_with_defaults() {
-    // Serialized form from BEFORE the schema change — no confidence/severity/source_facts fields
-    let old_json = r#"{
-        "id": "01HXY",
-        "category": "skill",
-        "content": "rule body",
-        "tags": ["a"],
-        "links": [],
-        "weight": 1.0,
-        "created_at": "2026-04-29T10:00:00Z",
-        "updated_at": "2026-04-29T10:00:00Z"
-    }"#;
-    let f: NoteFact = serde_json::from_str(old_json).expect("must deserialize");
-    assert!((f.confidence - 1.0).abs() < 1e-6, "old notes get confidence=1.0");
-    assert_eq!(f.severity, Severity::Med, "old notes get severity=Med");
-    assert!(f.source_facts.is_empty(), "old notes get empty source_facts");
+fn knowledge_note_old_markdown_loads_with_defaults() {
+    // Markdown without confidence/severity/source_facts in frontmatter
+    let old_md = "---\ncategory: skill\ntags: [a]\ncreated: 2026-04-29\nupdated: 2026-04-29\n---\n\n- existing fact\n";
+    let n = KnowledgeNote::from_markdown("legacy-note", old_md).expect("must parse");
+    assert!((n.confidence - 1.0).abs() < 1e-6, "old notes get confidence=1.0");
+    assert_eq!(n.severity, Severity::Low, "old notes get severity=Low");
+    assert!(n.source_facts.is_empty(), "old notes get empty source_facts");
 }
 
 #[test]
-fn notefact_roundtrip_with_new_fields() {
-    let f = NoteFact {
-        id: NoteId::from("01HXY"),
-        category: "feedback".into(),
-        content: "rule".into(),
-        tags: vec!["x".into()],
-        links: vec![],
-        weight: 1.0,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-        confidence: 0.85,
-        severity: Severity::High,
-        source_facts: vec![FactId::from("F1"), FactId::from("F2")],
-    };
-    let j = serde_json::to_string(&f).unwrap();
-    let back: NoteFact = serde_json::from_str(&j).unwrap();
-    assert_eq!(f.confidence, back.confidence);
-    assert_eq!(f.severity, back.severity);
-    assert_eq!(f.source_facts, back.source_facts);
+fn knowledge_note_new_markdown_roundtrips_new_fields() {
+    let md = "---\ncategory: skill\ntags: [x]\ncreated: 2026-04-29\nupdated: 2026-04-29\nconfidence: 0.85\nseverity: high\nsource_facts: [synthesis/learning-syn]\n---\n\n- the rule\n";
+    let n = KnowledgeNote::from_markdown("new-note", md).expect("must parse");
+    assert!((n.confidence - 0.85).abs() < 1e-6);
+    assert_eq!(n.severity, Severity::High);
+    assert_eq!(n.source_facts, vec!["synthesis/learning-syn".to_string()]);
 }
 ```
 
 - [ ] **Step 2: Run — must FAIL (fields missing)**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib notefact 2>&1 | tail -15
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
 ```
 
-- [ ] **Step 3: Add fields with serde defaults**
+- [ ] **Step 3: Add fields to `Frontmatter` AND `KnowledgeNote` with serde defaults**
 
-In the `NoteFact` struct, after the existing `updated_at` field:
+In `src/memory/notes/note.rs`, extend the `Frontmatter` struct (currently at line ~13):
 ```rust
-#[serde(default = "default_confidence")]
-pub confidence: f32,
+#[derive(Debug, Deserialize, Serialize)]
+struct Frontmatter {
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    updated: Option<String>,
+    #[serde(default = "default_confidence")]
+    confidence: f32,
+    #[serde(default)]
+    severity: Severity,
+    #[serde(default)]
+    source_facts: Vec<String>,
+}
 
-#[serde(default)]
-pub severity: Severity,
-
-#[serde(default)]
-pub source_facts: Vec<FactId>,
-```
-
-Add helper near the top of the file:
-```rust
 fn default_confidence() -> f32 { 1.0 }
 ```
 
-If `FactId` is not in scope, import it (likely `use crate::memory::raw::FactId;` — verify).
+Extend the `KnowledgeNote` struct (currently at line ~28):
+```rust
+pub struct KnowledgeNote {
+    pub title: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub facts: Vec<String>,
+    pub links: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub content_hash: String,
+    /// LLM-assigned distillation confidence; 1.0 for legacy notes.
+    pub confidence: f32,
+    /// LLM-judged importance; Severity::Low for legacy notes.
+    pub severity: Severity,
+    /// Source synthesis-note paths or raw-memory IDs that produced this note.
+    pub source_facts: Vec<String>,
+}
+```
+
+In `KnowledgeNote::from_markdown`, populate the new fields when constructing the result:
+```rust
+Ok(Self {
+    title: title.to_string(),
+    category: frontmatter.category,
+    tags: frontmatter.tags,
+    facts,
+    links,
+    created_at,
+    updated_at,
+    content_hash,
+    confidence: frontmatter.confidence,
+    severity: frontmatter.severity,
+    source_facts: frontmatter.source_facts,
+})
+```
 
 - [ ] **Step 4: Run roundtrip tests — PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib notefact 2>&1 | tail -15
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib knowledge_note 2>&1 | tail -15
 ```
 
-- [ ] **Step 5: Update every `NoteFact { ... }` literal in the codebase to either include or rely on defaults**
+- [ ] **Step 5: Update every `KnowledgeNote { ... }` literal in the codebase**
 ```bash
-rg "NoteFact \{" /Volumes/TBU4/Workspace/Aleph/src/ /Volumes/TBU4/Workspace/Aleph/tests/
+rg "KnowledgeNote \{" /Volumes/TBU4/Workspace/Aleph/src/ /Volumes/TBU4/Workspace/Aleph/tests/
 ```
-For each construction site, prefer using `..Default::default()` if the struct has `Default`, otherwise add `confidence: 1.0, severity: Severity::Med, source_facts: vec![]`.
+Each construction site needs the three new fields. For legacy callers, add `confidence: 1.0, severity: Severity::Low, source_facts: vec![]`. Notable site: `src/memory/dreaming/stages/skill_distill.rs:85` (the current `let note = KnowledgeNote { ... }` block — Task 15 will rewrite this entirely, but the build must pass in the meantime).
 
 - [ ] **Step 6: Build clean**
 ```bash
@@ -631,372 +653,432 @@ cd /Volumes/TBU4/Workspace/Aleph && cargo check -p alephcore 2>&1 | tail -10
 - [ ] **Step 7: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
-git add <NOTEFACT_PATH> src/memory/ tests/
-git commit -m "memory/notes: NoteFact gains confidence/severity/source_facts (backward-compat)"
+git add src/memory/notes/note.rs src/memory/dreaming/stages/skill_distill.rs
+git commit -m "memory/notes: KnowledgeNote gains confidence/severity/source_facts (backward-compat)"
 ```
 
 ---
 
-### Task 11: Update markdown frontmatter serialization
+### Task 11: Update `KnowledgeNote::to_markdown` to emit new frontmatter fields
 
 **Files:**
-- Modify: whatever module serializes `NoteFact` to markdown (likely `<NOTEFACT_PATH>` or sibling `markdown.rs`)
-- Locate via:
-```bash
-rg "frontmatter|---\\n" /Volumes/TBU4/Workspace/Aleph/src/memory/notes/ | head
-```
+- Modify: `src/memory/notes/note.rs` — extend `to_markdown` (currently at line ~76)
+
+The serializer in this codebase is **hand-written**, not `serde_yaml` — it builds frontmatter line-by-line. Three new lines must be appended after the existing `updated:` line.
 
 - [ ] **Step 1: Write the failing test**
+
+In `src/memory/notes/note.rs`'s `#[cfg(test)]` module:
 ```rust
 #[test]
-fn markdown_frontmatter_includes_new_fields() {
-    let f = NoteFact {
-        id: NoteId::from("01HXY"),
-        category: "feedback".into(),
-        content: "the rule body".into(),
-        tags: vec!["correction".into()],
+fn to_markdown_emits_new_frontmatter_fields_when_set() {
+    let n = KnowledgeNote {
+        title: "test".into(),
+        category: "skill".into(),
+        tags: vec!["distilled".into()],
+        facts: vec!["the rule".into()],
         links: vec![],
-        weight: 1.0,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
+        created_at: 1714377600,  // 2026-04-29 UTC
+        updated_at: 1714377600,
+        content_hash: String::new(),
         confidence: 0.85,
         severity: Severity::High,
-        source_facts: vec![FactId::from("F1")],
+        source_facts: vec!["synthesis/syn-1".into()],
     };
-    let md = note_to_markdown(&f);  // adjust to actual fn name
-    assert!(md.contains("confidence: 0.85"), "missing confidence in frontmatter:\n{}", md);
-    assert!(md.contains("severity: high"), "missing severity:\n{}", md);
-    assert!(md.contains("source_facts:"), "missing source_facts:\n{}", md);
+    let md = n.to_markdown();
+    assert!(md.contains("confidence: 0.85"), "missing confidence:\n{md}");
+    assert!(md.contains("severity: high"), "missing severity:\n{md}");
+    assert!(md.contains("source_facts:"), "missing source_facts:\n{md}");
+    assert!(md.contains("synthesis/syn-1"), "missing source ref:\n{md}");
 
-    let parsed = markdown_to_note(&md).expect("roundtrip");
-    assert_eq!(parsed.confidence, 0.85);
+    // Roundtrip
+    let parsed = KnowledgeNote::from_markdown("test", &md).expect("roundtrip");
+    assert!((parsed.confidence - 0.85).abs() < 1e-6);
     assert_eq!(parsed.severity, Severity::High);
-    assert_eq!(parsed.source_facts, vec![FactId::from("F1")]);
+    assert_eq!(parsed.source_facts, vec!["synthesis/syn-1".to_string()]);
 }
 
 #[test]
-fn markdown_frontmatter_old_format_loads_with_defaults() {
-    let old_md = "---\nid: 01HX\ncategory: skill\ncontent: foo\ntags: []\nlinks: []\nweight: 1.0\ncreated_at: 2026-04-29T00:00:00Z\nupdated_at: 2026-04-29T00:00:00Z\n---\nbody";
-    let parsed = markdown_to_note(old_md).expect("old format must parse");
+fn to_markdown_legacy_defaults_roundtrip() {
+    let n = KnowledgeNote {
+        title: "legacy".into(),
+        category: "preference".into(),
+        tags: vec![],
+        facts: vec!["fact".into()],
+        links: vec![],
+        created_at: 1714377600,
+        updated_at: 1714377600,
+        content_hash: String::new(),
+        confidence: 1.0,
+        severity: Severity::Low,
+        source_facts: vec![],
+    };
+    let md = n.to_markdown();
+    let parsed = KnowledgeNote::from_markdown("legacy", &md).unwrap();
     assert_eq!(parsed.confidence, 1.0);
-    assert_eq!(parsed.severity, Severity::Med);
+    assert_eq!(parsed.severity, Severity::Low);
     assert!(parsed.source_facts.is_empty());
 }
 ```
 
 - [ ] **Step 2: Run — must FAIL**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib markdown_frontmatter 2>&1 | tail -15
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
 ```
 
-- [ ] **Step 3: Update the serializer to emit new fields**
+- [ ] **Step 3: Update `to_markdown` to emit new fields**
 
-If serialization uses `serde_yaml` on the struct directly, this is automatic — only need to ensure the YAML serializer is using the same struct. If serialization is hand-written, add lines for the three new fields. Format:
-```yaml
-confidence: 0.85
-severity: high
-source_facts: [F1, F2]
+In `src/memory/notes/note.rs`, in the `to_markdown` function, after the `updated:` line:
+```rust
+out.push_str(&format!("confidence: {}\n", self.confidence));
+let severity_str = match self.severity {
+    Severity::Low => "low",
+    Severity::Med => "med",
+    Severity::High => "high",
+    Severity::Critical => "critical",
+};
+out.push_str(&format!("severity: {severity_str}\n"));
+if self.source_facts.is_empty() {
+    out.push_str("source_facts: []\n");
+} else {
+    out.push_str(&format!("source_facts: [{}]\n", self.source_facts.join(", ")));
+}
 ```
-
-For backward-compat, the parser must already use serde defaults from Task 10 — should "just work".
 
 - [ ] **Step 4: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib markdown_frontmatter 2>&1 | tail -15
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib to_markdown 2>&1 | tail -15
 ```
 
-- [ ] **Step 5: Manual sanity check — read a real existing note from `~/.aleph/memory/note/` and confirm parsing still works**
+- [ ] **Step 5: Manual sanity — read a real existing note from disk**
 ```bash
-ls ~/.aleph/memory/note/ 2>/dev/null && find ~/.aleph/memory/note -name "*.md" | head -1 | xargs -I{} cat {} | head -20
+find ~/.aleph -name "*.md" -path "*note*" 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null | head -20
 ```
-Then if such a note exists, write a small one-off test that loads it. (Skip if no real notes exist.)
+If a real note exists, write a one-off test that loads it via `KnowledgeNote::from_markdown` and confirms the legacy defaults apply (no panic, `confidence == 1.0`).
 
 - [ ] **Step 6: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
-git add src/memory/notes/
-git commit -m "memory/notes: markdown frontmatter serializes new fields (backward-compat)"
+git add src/memory/notes/note.rs
+git commit -m "memory/notes: to_markdown serializes new frontmatter fields (backward-compat)"
 ```
 
 ---
 
-### Task 12: Create `note_dedup::find_similar` helper
+### Task 12: Create `note_dedup::find_similar_notes` helper
 
 **Files:**
 - Create: `src/memory/notes/dedup.rs`
-- Modify: `src/memory/notes/mod.rs` — add `pub mod dedup;`
+- Modify: `src/memory/notes/mod.rs` — add `pub mod dedup;` and re-export
 
-- [ ] **Step 1: Write the failing test FIRST in the new file**
+Per Phase 2 Decision 3: the helper is a thin wrapper over the existing `NoteStore::vector_search` (sqlite-vec KNN at `src/memory/store/sqlite/notes.rs:628`). No new SQL, no new test infrastructure on `NoteIndexer`. When the caller has no embedding (no provider configured), helper returns empty.
+
+- [ ] **Step 1: Inspect existing `vector_search` signature**
+```bash
+sed -n '600,680p' /Volumes/TBU4/Workspace/Aleph/src/memory/store/sqlite/notes.rs
+```
+Record: parameter shape (`embedding: &[f32]`, `dim: u32`, `agent_id: &str`, `limit: usize`?) and return type (likely `Vec<(String, f32)>`).
+
+- [ ] **Step 2: Write the failing test FIRST in the new file**
 
 Create `src/memory/notes/dedup.rs`:
 ```rust
-//! Dedup helper for distill stages: given candidate facts, find existing
-//! notes in a category that are semantically similar (above threshold).
+//! Dedup helper for distill stages.
+//!
+//! Given a category + query embedding, returns the top-N most-similar existing
+//! notes (path + cosine score). Powers the LLM candidate-injection flow in
+//! SkillDistill / FeedbackDistill (see Phase 2 Decision 2 in the plan).
+//!
+//! Returns empty when `query_embedding` is empty or `top_n == 0`, so callers
+//! without an embedding provider degrade gracefully (LLM defaults to `New`).
 
-use crate::memory::notes::{NoteId, NoteIndexer};
-use crate::memory::raw::Fact;
-use anyhow::Result;
-use std::sync::Arc;
+use crate::error::AlephError;
+use crate::memory::notes::store::NoteStore;
 
-/// For each candidate, returns the id of the most-similar existing note in
-/// `category` whose embedding cosine similarity exceeds `threshold`, or None.
-pub async fn find_similar(
-    indexer: &NoteIndexer,
-    candidates: &[Fact],
+pub async fn find_similar_notes<S: NoteStore>(
+    store: &S,
     category: &str,
-    threshold: f32,
-) -> Result<Vec<Option<NoteId>>> {
-    let mut out = Vec::with_capacity(candidates.len());
-    for c in candidates {
-        let top = indexer
-            .nearest_in_category(category, &c.embedding, 1)
-            .await?;
-        let m = top.into_iter().next().and_then(|(id, score)| {
-            if score >= threshold { Some(id) } else { None }
-        });
-        out.push(m);
+    agent_id: &str,
+    query_embedding: &[f32],
+    top_n: usize,
+) -> Result<Vec<(String, f32)>, AlephError> {
+    if query_embedding.is_empty() || top_n == 0 {
+        return Ok(Vec::new());
     }
-    Ok(out)
+    let dim = query_embedding.len() as u32;
+    // Overfetch then category-filter, since vector_search has no category arg.
+    let raw = store
+        .vector_search(query_embedding, dim, agent_id, top_n.saturating_mul(4).max(top_n))
+        .await?;
+    let prefix = format!("{category}/");
+    let filtered: Vec<(String, f32)> = raw
+        .into_iter()
+        .filter(|(path, _)| path.starts_with(&prefix))
+        .take(top_n)
+        .collect();
+    Ok(filtered)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::store::SqliteMemoryBackend;
+    use std::sync::Arc;
+    use uuid::Uuid;
 
-    #[tokio::test]
-    async fn find_similar_returns_none_when_below_threshold() {
-        let indexer = NoteIndexer::in_memory();
-        // Existing note with embedding [1,0,0]
-        indexer.upsert_test_note("existing-1", "feedback", &[1.0, 0.0, 0.0]).await;
-
-        // Candidate with embedding [0,1,0] — orthogonal, similarity ≈ 0
-        let cand = Fact::test_with_embedding(vec![0.0, 1.0, 0.0]);
-
-        let res = find_similar(&indexer, std::slice::from_ref(&cand), "feedback", 0.5).await.unwrap();
-        assert_eq!(res, vec![None]);
+    fn test_db() -> Arc<SqliteMemoryBackend> {
+        let path = std::env::temp_dir().join(format!("test_dedup_{}", Uuid::new_v4()));
+        Arc::new(SqliteMemoryBackend::new(&path).unwrap())
     }
 
     #[tokio::test]
-    async fn find_similar_returns_id_when_above_threshold() {
-        let indexer = NoteIndexer::in_memory();
-        indexer.upsert_test_note("existing-1", "feedback", &[1.0, 0.0, 0.0]).await;
-
-        let cand = Fact::test_with_embedding(vec![0.99, 0.1, 0.0]);  // ~0.99 cosine
-
-        let res = find_similar(&indexer, std::slice::from_ref(&cand), "feedback", 0.85).await.unwrap();
-        assert_eq!(res, vec![Some(NoteId::from("existing-1"))]);
+    async fn returns_empty_when_embedding_empty() {
+        let db = test_db();
+        let res = find_similar_notes(&*db, "skill", "default", &[], 5).await.unwrap();
+        assert!(res.is_empty());
     }
 
     #[tokio::test]
-    async fn find_similar_isolates_categories() {
-        let indexer = NoteIndexer::in_memory();
-        indexer.upsert_test_note("skill-1", "skill", &[1.0, 0.0, 0.0]).await;
+    async fn returns_empty_when_top_n_zero() {
+        let db = test_db();
+        let res = find_similar_notes(&*db, "skill", "default", &[1.0_f32; 1024], 0).await.unwrap();
+        assert!(res.is_empty());
+    }
 
-        let cand = Fact::test_with_embedding(vec![1.0, 0.0, 0.0]);
+    #[tokio::test]
+    async fn filters_to_category_prefix() {
+        let db = test_db();
+        let emb = vec![1.0_f32; 1024];
+        db.upsert_embedding("skill/skill-A", "default", &emb, 1024).await.unwrap();
+        db.upsert_embedding("preference/pref-A", "default", &emb, 1024).await.unwrap();
 
-        // Searching feedback category should not find the skill note
-        let res = find_similar(&indexer, std::slice::from_ref(&cand), "feedback", 0.5).await.unwrap();
-        assert_eq!(res, vec![None]);
+        let res = find_similar_notes(&*db, "skill", "default", &emb, 5).await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, "skill/skill-A");
+    }
+
+    #[tokio::test]
+    async fn returns_top_n_sorted() {
+        let db = test_db();
+        let exact = vec![1.0_f32; 1024];
+        let mut close = vec![1.0_f32; 1024];
+        close[0] = 0.9;  // slightly less similar
+        db.upsert_embedding("skill/exact", "default", &exact, 1024).await.unwrap();
+        db.upsert_embedding("skill/close", "default", &close, 1024).await.unwrap();
+
+        let res = find_similar_notes(&*db, "skill", "default", &exact, 2).await.unwrap();
+        assert_eq!(res.len(), 2);
+        // sqlite-vec returns ascending distance / descending similarity; "exact" must come first
+        assert_eq!(res[0].0, "skill/exact");
     }
 }
 ```
 
-In `src/memory/notes/mod.rs`, add:
+In `src/memory/notes/mod.rs`, add (alphabetical):
 ```rust
 pub mod dedup;
 ```
+And on the existing `pub use` line near the top:
+```rust
+pub use dedup::find_similar_notes;
+```
 
-- [ ] **Step 2: Run — must FAIL (helpers `nearest_in_category`, `in_memory`, `upsert_test_note`, `Fact::test_with_embedding` likely missing)**
+- [ ] **Step 3: Run tests**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib dedup 2>&1 | tail -20
 ```
+If `vector_search`'s actual signature differs from the assumed shape (Step 1), adjust the helper body — do NOT modify `vector_search` itself.
 
-- [ ] **Step 3: Implement the missing helpers**
-
-In `NoteIndexer` (real production code, not test-only):
-```rust
-impl NoteIndexer {
-    pub async fn nearest_in_category(
-        &self,
-        category: &str,
-        embedding: &[f32],
-        k: usize,
-    ) -> Result<Vec<(NoteId, f32)>> {
-        // Use the existing embedding index, filtered by category
-        // Implementation depends on the existing storage backend (sqlite-vec)
-        // ...
-    }
-}
-```
-If similar method already exists (e.g. `search_in_category` or `nearest_neighbours`), wrap it instead of writing new SQL.
-
-In `NoteIndexer` test-helpers module (gated behind `#[cfg(test)]` or `cfg(feature = "test-helpers")`):
-```rust
-#[cfg(any(test, feature = "test-helpers"))]
-impl NoteIndexer {
-    pub fn in_memory() -> Self {
-        // Construct a NoteIndexer with in-memory SQLite + dummy LLM
-        // Reuse whatever pattern existing tests use
-    }
-    pub async fn upsert_test_note(&self, id: &str, cat: &str, embedding: &[f32]) {
-        // Upsert a NoteFact with content "" and the given embedding
-    }
-}
+- [ ] **Step 4: Commit**
+```bash
+cd /Volumes/TBU4/Workspace/Aleph
+git add src/memory/notes/dedup.rs src/memory/notes/mod.rs
+git commit -m "memory/notes: add find_similar_notes helper (sqlite-vec KNN wrapper)"
 ```
 
-In `Fact`:
+---
+
+### Task 13: Add internal re-rank to `NoteRetrieval` using `confidence × severity_boost`
+
+**Files:**
+- Modify: `src/memory/notes/retrieval.rs`
+
+Per Phase 2 Decision 4: `NoteRetrieval::retrieve` overfetches K×α (α=3) from sqlite-vec KNN, parses each result's frontmatter via `KnowledgeNote::from_markdown`, re-sorts by `cosine × confidence × severity_boost`, returns top-K.
+
+Current `NoteRetrieval` is 45 lines and has no re-rank — only a pure cosine pass-through. There is no `weight` field and no `recency_bonus`.
+
+- [ ] **Step 1: Write the failing test**
+
+In `src/memory/notes/retrieval.rs`'s `#[cfg(test)]` module:
 ```rust
-#[cfg(any(test, feature = "test-helpers"))]
-impl Fact {
-    pub fn test_with_embedding(emb: Vec<f32>) -> Self {
-        Self { /* defaults */, embedding: emb, ..Default::default() }
+#[test]
+fn severity_boost_table() {
+    assert!((severity_boost(Severity::Low) - 1.0).abs() < 1e-6);
+    assert!((severity_boost(Severity::Med) - 1.2).abs() < 1e-6);
+    assert!((severity_boost(Severity::High) - 1.5).abs() < 1e-6);
+    assert!((severity_boost(Severity::Critical) - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn rerank_score_legacy_defaults_match_cosine() {
+    // Legacy note: confidence=1.0, severity=Low → score = cosine × 1.0 × 1.0
+    let s = rerank_score(0.9, 1.0, Severity::Low);
+    assert!((s - 0.9).abs() < 1e-6);
+}
+
+#[test]
+fn rerank_prefers_higher_confidence() {
+    let low = rerank_score(0.9, 0.3, Severity::Med);
+    let high = rerank_score(0.9, 0.95, Severity::Med);
+    assert!(high > low);
+}
+
+#[test]
+fn rerank_boosts_higher_severity() {
+    let med = rerank_score(0.9, 1.0, Severity::Med);
+    let critical = rerank_score(0.9, 1.0, Severity::Critical);
+    assert!(critical > med);
+}
+```
+
+- [ ] **Step 2: Run — must FAIL**
+```bash
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib rerank 2>&1 | tail -15
+```
+
+- [ ] **Step 3: Add helpers and integrate into `retrieve`**
+
+In `src/memory/notes/retrieval.rs`, add at the top:
+```rust
+use crate::memory::notes::{KnowledgeNote, Severity};
+
+const RERANK_OVERFETCH: usize = 3;
+
+pub(crate) fn severity_boost(s: Severity) -> f32 {
+    match s {
+        Severity::Low => 1.0,
+        Severity::Med => 1.2,
+        Severity::High => 1.5,
+        Severity::Critical => 2.0,
     }
+}
+
+pub(crate) fn rerank_score(cosine: f32, confidence: f32, severity: Severity) -> f32 {
+    cosine * confidence * severity_boost(severity)
+}
+```
+
+Replace the body of `retrieve`:
+```rust
+pub async fn retrieve(
+    &self,
+    query: &str,
+    agent_id: &str,
+    limit: usize,
+) -> Result<Vec<NoteContent>, AlephError> {
+    let embedding = self.embedder.embed(query).await?;
+    let dim = embedding.len() as u32;
+
+    // Overfetch so re-rank by confidence/severity can promote items past the original top-K.
+    let raw_limit = limit.saturating_mul(RERANK_OVERFETCH).max(limit);
+    let results = self.store.vector_search(&embedding, dim, agent_id, raw_limit).await?;
+
+    let mut scored: Vec<NoteContent> = Vec::new();
+    for (path, cosine) in results {
+        let file_path = self.memory_dir.join(agent_id).join(format!("{path}.md"));
+        let content = match tokio::fs::read_to_string(&file_path).await {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // Parse frontmatter; legacy notes (no fields) get defaults.
+        let (confidence, severity) = match KnowledgeNote::from_markdown(&path, &content) {
+            Ok(n) => (n.confidence, n.severity),
+            Err(_) => (1.0, Severity::Low),
+        };
+        let final_score = rerank_score(cosine, confidence, severity);
+        scored.push(NoteContent { path, content, score: final_score });
+    }
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+    Ok(scored)
 }
 ```
 
 - [ ] **Step 4: Run — must PASS**
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib dedup 2>&1 | tail -10
+cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib rerank 2>&1 | tail -15
 ```
 
-- [ ] **Step 5: Commit**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph
-git add src/memory/notes/dedup.rs src/memory/notes/mod.rs src/memory/notes/indexer.rs src/memory/raw/
-git commit -m "memory/notes: add note_dedup::find_similar helper"
-```
-
----
-
-### Task 13: Update retrieval ranking to use `confidence × severity_boost`
-
-**Files:**
-- Modify: `<RETRIEVAL_RANK_PATH>` (from preamble P5)
-
-- [ ] **Step 1: Read current ranking function**
-```bash
-cat /Volumes/TBU4/Workspace/Aleph/<RETRIEVAL_RANK_PATH>
-```
-Identify the line where `score = embedding_sim * weight + recency_bonus` (or similar) is computed.
-
-- [ ] **Step 2: Write the failing test**
-
-In the same file's `#[cfg(test)]` module:
-```rust
-#[test]
-fn ranking_prefers_higher_confidence() {
-    let low_conf = make_test_scored(/*sim=*/0.9, /*weight=*/1.0, /*conf=*/0.3, Severity::Med);
-    let high_conf = make_test_scored(0.9, 1.0, 0.95, Severity::Med);
-    assert!(rank_score(&high_conf) > rank_score(&low_conf));
-}
-
-#[test]
-fn ranking_boosts_high_severity() {
-    let med = make_test_scored(0.9, 1.0, 1.0, Severity::Med);
-    let high = make_test_scored(0.9, 1.0, 1.0, Severity::High);
-    assert!(rank_score(&high) > rank_score(&med));
-}
-
-#[test]
-fn ranking_old_default_notes_match_pre_change_score() {
-    // Old notes: confidence=1.0, severity=Med (boost 1.0) — score must equal embedding_sim * weight
-    let old_style = make_test_scored(0.9, 1.0, 1.0, Severity::Med);
-    // recency_bonus assumed 0 for this test
-    assert!((rank_score(&old_style) - 0.9).abs() < 1e-6);
-}
-```
-
-`make_test_scored` and `rank_score` are helpers — define them as needed. Naming may differ; align with existing patterns in the retrieval module.
-
-- [ ] **Step 3: Run — should FAIL**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib ranking 2>&1 | tail -15
-```
-
-- [ ] **Step 4: Update the scoring function**
-
-Add a free fn in the same module:
-```rust
-fn severity_boost(s: Severity) -> f32 {
-    match s {
-        Severity::High => 1.2,
-        Severity::Med  => 1.0,
-        Severity::Low  => 0.85,
-    }
-}
-```
-
-In the existing scorer, change:
-```rust
-// before
-let score = embedding_sim * note.weight + recency_bonus;
-// after
-let score = embedding_sim * note.weight * note.confidence
-            * severity_boost(note.severity)
-            + recency_bonus;
-```
-
-- [ ] **Step 5: Run — must PASS**
-```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib ranking 2>&1 | tail -15
-```
-
-- [ ] **Step 6: Run all retrieval tests — no regression**
+- [ ] **Step 5: Run all retrieval tests — no regression**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib retrieval 2>&1 | tail -10
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
-git add <RETRIEVAL_RANK_PATH>
-git commit -m "memory/retrieval: rank by confidence × severity_boost (backward-compat for old notes)"
+git add src/memory/notes/retrieval.rs
+git commit -m "memory/retrieval: internal re-rank by confidence × severity_boost (α=3 overfetch, backward-compat)"
 ```
 
 ---
 
-### Task 14: Define `DistillAction` enum (shared by Skill + Feedback distill)
+### Task 14: Define `DistillAction` enum + `NoteIndexer::apply_distill_action`
 
 **Files:**
 - Create: `src/memory/dreaming/distill_action.rs`
-- Modify: `src/memory/dreaming/mod.rs` — `pub mod distill_action;`
+- Modify: `src/memory/dreaming/mod.rs` — `pub mod distill_action; pub use distill_action::DistillAction;`
+- Modify: `src/memory/notes/indexer.rs` — add `apply_distill_action`
+
+Per Phase 2 Decision 2: code injects candidate IDs into the LLM prompt **before** the LLM call (handled in Task 15). LLM emits a `DistillAction` referencing a candidate ID verbatim — no hallucination. `apply_distill_action` is pure plumbing: it does NOT decide which variant to take.
+
+`Strengthen` does NOT bump `confidence` — the LLM didn't re-evaluate the rule. It only appends `source_facts` and bumps `updated_at`. Confidence is set once on `New`/`Supersede`.
 
 - [ ] **Step 1: Write the failing test**
 
-In the new file:
+Create `src/memory/dreaming/distill_action.rs`:
 ```rust
 //! Shared DistillAction enum used by SkillDistill and FeedbackDistill.
+//!
+//! Code path:
+//!   1. Code calls `find_similar_notes` → top-N existing candidates
+//!   2. Code injects candidates into LLM prompt (Task 15)
+//!   3. LLM emits a DistillAction referencing a candidate ID verbatim
+//!   4. NoteIndexer::apply_distill_action executes — pure plumbing
 
-use crate::memory::notes::{NoteId, Severity};
-use crate::memory::raw::FactId;
+use crate::memory::notes::Severity;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DistillAction {
+    /// Create a brand-new note. Used when no candidate matches the synthesis insight.
     New {
-        rule: String,
-        why: String,
-        how_to_apply: String,
+        title: String,         // kebab-case filename (without .md)
+        rule: String,          // body content
         confidence: f32,
         severity: Severity,
-        source_facts: Vec<FactId>,
+        source_facts: Vec<String>,
     },
+    /// Reinforce an existing note: append source_facts and bump updated_at.
+    /// Confidence is NOT re-judged (LLM didn't re-evaluate the rule itself).
     Strengthen {
-        existing_note_id: NoteId,
-        source_facts: Vec<FactId>,
+        existing_note_path: String,  // e.g. "skill/async-error-handling"
+        source_facts: Vec<String>,
     },
+    /// Replace an old note with a new rule (LLM judged the new wording supersedes the old).
     Supersede {
-        old_note_id: NoteId,
+        old_note_path: String,
+        title: String,
         rule: String,
-        why: String,
-        how_to_apply: String,
         confidence: f32,
         severity: Severity,
-        source_facts: Vec<FactId>,
+        source_facts: Vec<String>,
     },
+    /// LLM rejected this candidate (transient noise, not actionable, low signal).
     Skip {
-        fact_id: FactId,
+        source_fact: String,
         reason: String,
     },
 }
@@ -1007,8 +1089,7 @@ mod tests {
 
     #[test]
     fn deserialize_new_action() {
-        let j = r#"{"type":"new","rule":"Always X","why":"reason","how_to_apply":"when Y",
-                    "confidence":0.9,"severity":"high","source_facts":["F1"]}"#;
+        let j = r#"{"type":"new","title":"async-err","rule":"Use ?","confidence":0.9,"severity":"high","source_facts":["F1"]}"#;
         let a: DistillAction = serde_json::from_str(j).unwrap();
         match a {
             DistillAction::New { confidence, .. } => assert!((confidence - 0.9).abs() < 1e-6),
@@ -1017,53 +1098,124 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_skip_action() {
-        let j = r#"{"type":"skip","fact_id":"F1","reason":"transient"}"#;
+    fn deserialize_strengthen_action() {
+        let j = r#"{"type":"strengthen","existing_note_path":"skill/async-err","source_facts":["F1"]}"#;
         let a: DistillAction = serde_json::from_str(j).unwrap();
-        assert!(matches!(a, DistillAction::Skip { .. }));
+        assert!(matches!(a, DistillAction::Strengthen { .. }));
     }
 
     #[test]
     fn deserialize_supersede_action() {
-        let j = r#"{"type":"supersede","old_note_id":"N1","rule":"X","why":"Y",
-                    "how_to_apply":"Z","confidence":0.8,"severity":"med","source_facts":[]}"#;
+        let j = r#"{"type":"supersede","old_note_path":"skill/old","title":"new","rule":"X","confidence":0.8,"severity":"med","source_facts":[]}"#;
         let a: DistillAction = serde_json::from_str(j).unwrap();
         assert!(matches!(a, DistillAction::Supersede { .. }));
+    }
+
+    #[test]
+    fn deserialize_skip_action() {
+        let j = r#"{"type":"skip","source_fact":"F1","reason":"transient"}"#;
+        let a: DistillAction = serde_json::from_str(j).unwrap();
+        assert!(matches!(a, DistillAction::Skip { .. }));
     }
 }
 ```
 
-- [ ] **Step 2: Run — must PASS** (it's a fresh module — defining it makes the tests pass at the same time)
+In `src/memory/dreaming/mod.rs`, add:
+```rust
+pub mod distill_action;
+pub use distill_action::DistillAction;
+```
+
+- [ ] **Step 2: Run — must PASS** (fresh module)
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib distill_action 2>&1 | tail -10
 ```
 
 - [ ] **Step 3: Add `apply_distill_action` to `NoteIndexer`**
 
-In `src/memory/notes/indexer.rs`:
+In `src/memory/notes/indexer.rs`, add:
 ```rust
+use crate::memory::dreaming::DistillAction;
+use crate::memory::notes::{KnowledgeNote, Severity};
+
 impl NoteIndexer {
-    pub async fn apply_distill_action(&self, action: DistillAction) -> Result<()> {
+    /// Execute a DistillAction. Pure plumbing — all judgment was done by the LLM.
+    pub async fn apply_distill_action(
+        &self,
+        agent_id: &str,
+        category: &str,
+        action: DistillAction,
+    ) -> Result<(), AlephError> {
         match action {
-            DistillAction::New { rule, why, how_to_apply, confidence, severity, source_facts } => {
-                self.write_note(NewNote {
-                    category: /* caller passes — actually this means action needs category */
-                    ...
-                }).await
+            DistillAction::New { title, rule, confidence, severity, source_facts } => {
+                let now = chrono::Utc::now().timestamp();
+                let note = KnowledgeNote {
+                    title,
+                    category: category.to_string(),
+                    tags: vec!["distilled".to_string()],
+                    facts: vec![rule],
+                    links: vec![],
+                    created_at: now,
+                    updated_at: now,
+                    content_hash: String::new(),
+                    confidence,
+                    severity,
+                    source_facts,
+                };
+                self.write_note(agent_id, category, &note).await?;
+                Ok(())
             }
-            DistillAction::Strengthen { existing_note_id, source_facts } => {
-                let mut note = self.get(&existing_note_id).await?;
-                note.weight = (note.weight + 0.5).min(5.0);
-                note.source_facts.extend(source_facts);
-                note.updated_at = Utc::now();
-                self.upsert(note).await
+            DistillAction::Strengthen { existing_note_path, source_facts } => {
+                let file_path = self
+                    .memory_dir()
+                    .join(agent_id)
+                    .join(format!("{existing_note_path}.md"));
+                let content = tokio::fs::read_to_string(&file_path).await
+                    .map_err(|e| AlephError::config(format!("strengthen: read {existing_note_path}: {e}")))?;
+                let title = existing_note_path
+                    .rsplit('/').next().unwrap_or(&existing_note_path);
+                let mut note = KnowledgeNote::from_markdown(title, &content)?;
+                for sf in source_facts {
+                    if !note.source_facts.contains(&sf) {
+                        note.source_facts.push(sf);
+                    }
+                }
+                note.updated_at = chrono::Utc::now().timestamp();
+                tokio::fs::write(&file_path, note.to_markdown()).await
+                    .map_err(|e| AlephError::config(format!("strengthen: write: {e}")))?;
+                let cat = existing_note_path.split_once('/').map(|(c, _)| c).unwrap_or(category);
+                self.index_file(agent_id, cat, &file_path).await?;
+                Ok(())
             }
-            DistillAction::Supersede { old_note_id, rule, why, how_to_apply, confidence, severity, source_facts } => {
-                self.delete(&old_note_id).await?;
-                self.write_note(/* same as New */).await
+            DistillAction::Supersede { old_note_path, title, rule, confidence, severity, source_facts } => {
+                let old_file = self
+                    .memory_dir()
+                    .join(agent_id)
+                    .join(format!("{old_note_path}.md"));
+                let _ = tokio::fs::remove_file(&old_file).await;
+                // Remove from index — locate the existing deletion path (likely on the NoteStore trait)
+                // and call it. If no public deletion API exists, add a private helper rather than
+                // exposing one speculatively.
+
+                let now = chrono::Utc::now().timestamp();
+                let note = KnowledgeNote {
+                    title,
+                    category: category.to_string(),
+                    tags: vec!["distilled".to_string(), "supersedes".to_string()],
+                    facts: vec![rule],
+                    links: vec![],
+                    created_at: now,
+                    updated_at: now,
+                    content_hash: String::new(),
+                    confidence,
+                    severity,
+                    source_facts,
+                };
+                self.write_note(agent_id, category, &note).await?;
+                Ok(())
             }
-            DistillAction::Skip { fact_id, reason } => {
-                tracing::debug!(?fact_id, %reason, "distill skipped fact");
+            DistillAction::Skip { source_fact, reason } => {
+                tracing::debug!(source_fact, reason, "distill skipped");
                 Ok(())
             }
         }
@@ -1071,159 +1223,162 @@ impl NoteIndexer {
 }
 ```
 
-NOTE: `DistillAction::New` doesn't carry category — the caller (SkillDistill or FeedbackDistill) knows its own category. So `apply_distill_action` should be a method that takes category as a parameter:
-```rust
-pub async fn apply_distill_action(&self, category: &str, action: DistillAction) -> Result<()>
+Discovery step: before writing the Supersede branch, locate the existing note-deletion path:
+```bash
+rg -n "delete_note|remove_note|fn delete" /Volumes/TBU4/Workspace/Aleph/src/memory/notes/ | head
 ```
+Use the existing API. Do NOT create a new `delete_note` public method speculatively (R3/R11).
 
-Add a small test:
+- [ ] **Step 4: Add a smoke test**
+
+In `src/memory/notes/indexer.rs`'s `#[cfg(test)]` module:
 ```rust
 #[tokio::test]
-async fn apply_strengthen_increases_weight() {
-    let idx = NoteIndexer::in_memory();
-    idx.upsert_test_note("N1", "feedback", &[1.0]).await;
-    let before = idx.get(&NoteId::from("N1")).await.unwrap().weight;
-    idx.apply_distill_action("feedback", DistillAction::Strengthen {
-        existing_note_id: NoteId::from("N1"),
-        source_facts: vec![FactId::from("F1")],
-    }).await.unwrap();
-    let after = idx.get(&NoteId::from("N1")).await.unwrap().weight;
-    assert!(after > before);
+async fn apply_strengthen_appends_source_facts_and_bumps_updated() {
+    // Use the existing test scaffolding pattern from indexer.rs (look for existing #[tokio::test]
+    // examples that build a temp memory_dir + SqliteMemoryBackend).
+    // 1. Create indexer with temp memory_dir
+    // 2. write_note a KnowledgeNote with one source_fact and updated_at = T0
+    // 3. apply_distill_action(Strengthen { existing_note_path: "skill/<title>", source_facts: vec!["F2".into()] })
+    // 4. read back the file via KnowledgeNote::from_markdown
+    // 5. assert source_facts == ["F1", "F2"] and updated_at > T0
 }
 ```
 
-- [ ] **Step 4: Run — must PASS**
+- [ ] **Step 5: Run — must PASS**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib apply_distill_action 2>&1 | tail -10
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
 git add src/memory/dreaming/distill_action.rs src/memory/dreaming/mod.rs src/memory/notes/indexer.rs
-git commit -m "memory/dream: shared DistillAction enum + NoteIndexer::apply_distill_action"
+git commit -m "memory/dream: shared DistillAction enum + NoteIndexer::apply_distill_action (pure plumbing)"
 ```
 
 ---
 
-### Task 15: Upgrade `SkillDistill` to 4-action contract + dedup + confidence/severity
+### Task 15: Upgrade `SkillDistill` to candidate-injection + 4-action contract
 
 **Files:**
 - Modify: `src/memory/dreaming/stages/skill_distill.rs`
 
-- [ ] **Step 1: Read current state**
-```bash
-cat /Volumes/TBU4/Workspace/Aleph/src/memory/dreaming/stages/skill_distill.rs
-```
+Per Phase 2 Decision 2: before each LLM call, code uses `find_similar_notes` (Task 12) to gather top-N existing skill candidates and injects them into the prompt. LLM picks the action variant with concrete candidate IDs from the injected set.
 
-- [ ] **Step 2: Write a failing test that exercises the new contract**
+The synthesis-note embedding for the dedup query comes from `NoteStore::get_embedding(path, agent_id)`. If `None` (no embedder configured), pass `&[]` to `find_similar_notes`, which returns empty → LLM defaults to `New`.
 
-Append to the file's tests:
+- [ ] **Step 1: Write failing tests for the new prompt builder**
+
+Replace the existing `prompt_*` and `parse_distilled_skills_*` tests in `src/memory/dreaming/stages/skill_distill.rs` (the old `DistilledSkill` flow is being deleted) with:
 ```rust
-#[tokio::test]
-async fn skill_distill_emits_new_action_with_confidence() {
-    let mut ctx = DreamContextBuilder::new()
-        .with_synthesis_note("syn-1", "Insight: Rust borrow patterns are tricky")
-        .with_llm_response_json(serde_json::json!({
-            "actions": [{
-                "type": "new",
-                "rule": "Prefer owned types when borrow checker fights you twice",
-                "why": "Synthesis insight syn-1",
-                "how_to_apply": "After 2 borrow errors, refactor to owned",
-                "confidence": 0.8,
-                "severity": "med",
-                "source_facts": ["syn-1"]
-            }]
-        }))
-        .build();
-
-    let stage = SkillDistill::new(test_config(), test_llm(&ctx));
-    stage.execute(&mut ctx).await.expect("ok");
-
-    let skills: Vec<_> = ctx.notes.list_category("skill").await.unwrap();
-    assert_eq!(skills.len(), 1);
-    assert!((skills[0].confidence - 0.8).abs() < 1e-6);
-    assert_eq!(skills[0].severity, Severity::Med);
-    assert_eq!(skills[0].source_facts, vec![FactId::from("syn-1")]);
+#[test]
+fn build_distill_prompt_with_candidates_includes_existing_block() {
+    let candidates = vec![
+        ("skill/async-error-handling".to_string(), 0.92_f32),
+        ("skill/borrow-fights".to_string(), 0.88),
+    ];
+    let prompt = build_distill_prompt_with_candidates(
+        "Synthesis: borrow checker fights are common",
+        "skill",
+        3,
+        &candidates,
+    );
+    assert!(prompt.contains("existing_candidates"), "prompt must include candidates block:\n{prompt}");
+    assert!(prompt.contains("skill/async-error-handling"), "must list candidate IDs:\n{prompt}");
+    assert!(prompt.contains("strengthen"), "prompt must teach LLM about strengthen action");
+    assert!(prompt.contains("supersede"), "prompt must teach LLM about supersede action");
+    assert!(prompt.contains("\"new\"") || prompt.contains("\"type\": \"new\""), "prompt must teach about new");
+    assert!(prompt.contains("\"skip\"") || prompt.contains("\"type\": \"skip\""), "prompt must teach about skip");
 }
 
-#[tokio::test]
-async fn skill_distill_dedup_strengthens_existing() {
-    let mut ctx = DreamContextBuilder::new()
-        .with_existing_skill("skill-A", "Prefer owned types when borrow checker fights you twice", &[1.0, 0.0])
-        .with_synthesis_note("syn-2", "Insight: borrow checker patterns")
-        .with_llm_response_json(serde_json::json!({
-            "actions": [{
-                "type": "strengthen",
-                "existing_note_id": "skill-A",
-                "source_facts": ["syn-2"]
-            }]
-        }))
-        .build();
+#[test]
+fn build_distill_prompt_with_no_candidates_still_works() {
+    let prompt = build_distill_prompt_with_candidates("text", "skill", 3, &[]);
+    assert!(prompt.contains("existing_candidates"));
+    assert!(prompt.contains("[]") || prompt.contains("(none)"));
+}
 
-    let stage = SkillDistill::new(test_config(), test_llm(&ctx));
-    stage.execute(&mut ctx).await.expect("ok");
+#[test]
+fn parse_distill_response_extracts_actions() {
+    let raw = r#"{"actions":[{"type":"new","title":"x","rule":"y","confidence":0.7,"severity":"med","source_facts":["S1"]}]}"#;
+    let actions = parse_distill_response(raw);
+    assert_eq!(actions.len(), 1);
+}
 
-    let skills = ctx.notes.list_category("skill").await.unwrap();
-    assert_eq!(skills.len(), 1, "no new note created on Strengthen");
-    let a = skills.into_iter().find(|n| n.id.to_string() == "skill-A").unwrap();
-    assert!(a.weight > 1.0, "weight increased");
-    assert!(a.source_facts.contains(&FactId::from("syn-2")));
+#[test]
+fn parse_distill_response_invalid_returns_empty() {
+    assert!(parse_distill_response("not json").is_empty());
 }
 ```
 
-- [ ] **Step 3: Run — must FAIL** (current SkillDistill emits raw note text, not actions)
+- [ ] **Step 2: Run — must FAIL** (functions don't exist yet)
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib skill_distill 2>&1 | tail -20
 ```
 
-- [ ] **Step 4: Refactor `SkillDistill::execute`**
+- [ ] **Step 3: Refactor `SkillDistill` to candidate-aware 4-action contract**
 
-Replace the current execute body:
+Delete the existing `build_distill_prompt`, `DistilledSkill`, and `parse_distilled_skills` items.
+
+Add the new prompt builder + parser:
 ```rust
-async fn execute(&self, ctx: &mut DreamContext) -> StageResult {
-    // 1. Pull synthesis notes since last run
-    let synthesis = ctx.notes.list_category_since("synthesis", self.config.lookback_window).await?;
-    if synthesis.is_empty() { return StageResult::skipped(); }
+use crate::memory::dreaming::DistillAction;
+use crate::memory::notes::find_similar_notes;
+use crate::memory::notes::store::NoteStore;
 
-    // 2. Dedup: load top-K existing skill notes most similar to each synthesis
-    let existing_skills = ctx.notes.list_category("skill").await?;
-    let existing_summaries: Vec<_> = existing_skills.iter()
-        .map(|n| serde_json::json!({
-            "id": n.id, "summary": &n.content[..n.content.len().min(200)],
-            "severity": n.severity, "confidence": n.confidence,
-        }))
-        .collect();
+const CANDIDATES_TOP_N: usize = 5;
 
-    // 3. Build prompt
-    let prompt = format!(
-        include_str!("../prompts/skill_distill.tmpl"),  // extract prompt to a template file
-        existing_summaries = serde_json::to_string(&existing_summaries)?,
-        candidates = serde_json::to_string(&synthesis_summaries(&synthesis))?,
-        max_per_cycle = self.config.skill_distill_max_per_cycle,
-    );
-
-    // 4. Call LLM
-    let raw = self.llm.complete(&prompt).await?;
-    let parsed: DistillResponse = match serde_json::from_str(&raw) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = ?e, raw_output = %raw, "skill distill LLM output invalid JSON, skipping cycle");
-            return StageResult::failed("invalid LLM JSON".into());
-        }
+pub fn build_distill_prompt_with_candidates(
+    synthesis_text: &str,
+    source_category: &str,
+    max_per_cycle: usize,
+    candidates: &[(String, f32)],
+) -> String {
+    let candidates_block = if candidates.is_empty() {
+        "[]".to_string()
+    } else {
+        let entries: Vec<String> = candidates
+            .iter()
+            .map(|(path, sim)| format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}"))
+            .collect();
+        format!("[\n{}\n]", entries.join(",\n"))
     };
-
-    // 5. Apply actions
-    for action in parsed.actions.into_iter().take(self.config.skill_distill_max_per_cycle as usize) {
-        let action = clamp_action(action);
-        ctx.notes.apply_distill_action("skill", action).await?;
-    }
-
-    StageResult::ok()
+    format!(
+        "Analyze this synthesis note from the '{source_category}' category and decide whether each insight is:\n\
+         - a NEW skill (no existing candidate covers it)\n\
+         - a STRENGTHEN of an existing candidate (same rule, more evidence)\n\
+         - a SUPERSEDE of an existing candidate (better wording / corrects it)\n\
+         - a SKIP (transient noise, not actionable)\n\n\
+         Synthesis:\n{synthesis_text}\n\n\
+         Existing skill-note candidates (you MUST reference these IDs verbatim if you choose strengthen or supersede):\n\
+         existing_candidates: {candidates_block}\n\n\
+         Emit at most {max_per_cycle} actions in this JSON shape:\n\
+         ```json\n\
+         {{\"actions\": [\n\
+           {{\"type\": \"new\", \"title\": \"kebab-case-name\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"strengthen\", \"existing_note_path\": \"<id from candidates>\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"supersede\", \"old_note_path\": \"<id from candidates>\", \"title\": \"...\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"skip\", \"source_fact\": \"...\", \"reason\": \"...\"}}\n\
+         ]}}\n\
+         ```\n\
+         Return `{{\"actions\": []}}` if nothing actionable."
+    )
 }
 
-#[derive(Deserialize)]
-struct DistillResponse { actions: Vec<DistillAction> }
+#[derive(serde::Deserialize)]
+struct DistillResponse {
+    actions: Vec<DistillAction>,
+}
+
+pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
+    let start = match text.find('{') { Some(s) => s, None => return Vec::new() };
+    let end = match text.rfind('}') { Some(e) => e, None => return Vec::new() };
+    let json_str = &text[start..=end];
+    serde_json::from_str::<DistillResponse>(json_str)
+        .map(|r| r.actions)
+        .unwrap_or_default()
+}
 
 fn clamp_action(mut a: DistillAction) -> DistillAction {
     use DistillAction::*;
@@ -1237,23 +1392,97 @@ fn clamp_action(mut a: DistillAction) -> DistillAction {
 }
 ```
 
-Extract the prompt to `src/memory/dreaming/stages/prompts/skill_distill.tmpl`. The template should match §5.3 of the spec, adapted for skill (read synthesis, write skill).
+Replace the `execute` body to:
+```rust
+async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
+    let synthesis_paths: Vec<String> = ctx
+        .notes
+        .iter()
+        .filter(|n| n.category == "synthesis")
+        .map(|n| n.path.clone())
+        .collect();
 
-- [ ] **Step 5: Run — must PASS**
+    let mut applied = 0usize;
+    let store = ctx.indexer.store();
+
+    for path in &synthesis_paths {
+        let content = match ctx.load_content(path).await {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Decision 2: code fetches top-N existing skill candidates BEFORE LLM call.
+        // Empty embedding → empty candidates → LLM defaults to New (graceful degradation).
+        let synth_embedding = store
+            .get_embedding(path, &ctx.agent_id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let candidates = find_similar_notes(
+            store,
+            "skill",
+            &ctx.agent_id,
+            &synth_embedding,
+            CANDIDATES_TOP_N,
+        )
+        .await
+        .unwrap_or_default();
+
+        let prompt = build_distill_prompt_with_candidates(&content, "skill", self.max_per_cycle, &candidates);
+        let system = "You are a skill distillation engine. Choose the right DistillAction variant per the schema. Reference candidate IDs verbatim when strengthening or superseding.";
+
+        let msgs = vec![UnifiedMessage::user(&prompt)];
+        let response = match ctx
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(system)))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(path, error = %e, "SkillDistill LLM call failed");
+                continue;
+            }
+        };
+
+        let actions = parse_distill_response(&response.text_content());
+        for action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+            match ctx
+                .indexer
+                .apply_distill_action(&ctx.agent_id, "skill", action)
+                .await
+            {
+                Ok(_) => applied += 1,
+                Err(e) => tracing::warn!(path, error = %e, "apply_distill_action failed"),
+            }
+        }
+    }
+
+    ctx.report
+        .extra
+        .insert("skill_distill_count".into(), applied.to_string());
+    tracing::info!(applied, "SkillDistill completed");
+    Ok(ctx)
+}
+```
+
+Replace the `system` prompt accordingly, and ensure `RequestPayload` / `UnifiedMessage` imports stay.
+
+- [ ] **Step 4: Run — must PASS**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph && cargo test -p alephcore --lib skill_distill 2>&1 | tail -15
 ```
 
-- [ ] **Step 6: If existing snapshot tests fail because the prompt changed**, accept the new snapshots only after eyeballing them:
+- [ ] **Step 5: Snapshot review (if any)** — old prompt snapshots will diff:
 ```bash
-cd /Volumes/TBU4/Workspace/Aleph && cargo insta review
+cd /Volumes/TBU4/Workspace/Aleph && cargo insta review 2>&1 | tail -10
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 ```bash
 cd /Volumes/TBU4/Workspace/Aleph
-git add src/memory/dreaming/
-git commit -m "memory/dream: SkillDistill emits 4-action contract with confidence/severity + dedup"
+git add src/memory/dreaming/stages/skill_distill.rs
+git commit -m "memory/dream: SkillDistill emits 4-action contract with code-injected candidates"
 ```
 
 ---
@@ -2025,8 +2254,8 @@ gh pr create --title "Aleph self-evolution: dual-loop memory learning" \
 - Adds a user-correction learning loop (FeedbackDistill stage + flag_user_correction tool) symmetric to the existing SkillDistill loop
 - Deletes ~850 lines of orphan engine learning code (TODO #1819)
 - Closes D3 (NoteType enum/string dual-track), D4 (stale wikilinks), D5 (hardcoded distill cap)
-- NoteFact gains confidence/severity/source_facts with backward-compatible serde defaults
-- Retrieval ranks by embedding × weight × confidence × severity_boost
+- KnowledgeNote.frontmatter gains confidence/severity/source_facts with backward-compatible serde defaults
+- Retrieval re-ranks by cosine × confidence × severity_boost (α=3 overfetch)
 
 ## Test plan
 
@@ -2058,7 +2287,7 @@ EOF
 | §4.1 deletes | Tasks 1, 2, 3, 4 |
 | §4.2 modifies | Tasks 5, 6, 7, 9, 10, 11, 13, 15, 17, 19, 20, 22 |
 | §4.3 new files | Tasks 12 (dedup), 18 (tool), 21 (FeedbackDistill) |
-| §5.1 NoteFact schema + defaults | Tasks 9, 10, 11 |
+| §5.1 KnowledgeNote frontmatter schema + defaults | Tasks 9, 10, 11 |
 | §5.2 raw_memory tag flow | Task 18 (writer) + Task 21 (reader) |
 | §5.3 LLM contract (4 actions) | Tasks 14, 15, 21 |
 | §5.4 system prompt section | Task 20 |
@@ -2081,9 +2310,9 @@ No "TBD"/"TODO"/"add appropriate handling"/"similar to Task N" patterns. Every c
 
 **3. Type consistency**
 
-- `NoteFact` fields `confidence: f32`, `severity: Severity`, `source_facts: Vec<FactId>` consistent across Tasks 10, 11, 13, 14, 15, 21
+- `KnowledgeNote` fields `confidence: f32`, `severity: Severity`, `source_facts: Vec<String>` consistent across Tasks 10, 11, 13, 14, 15, 21
 - `DistillAction` enum variants `New / Strengthen / Supersede / Skip` consistent in Tasks 14, 15, 21
-- `apply_distill_action(&self, category: &str, action: DistillAction)` signature consistent Tasks 14 + 15 + 21
+- `apply_distill_action(&self, agent_id: &str, category: &str, action: DistillAction)` signature consistent Tasks 14 + 15 + 21
 - `flag_user_correction` tool name consistent in Tasks 18, 19, 20, 24
 - `correction_candidate` tag spelling consistent in Tasks 18, 21, 24
 - Tool schema `FlagUserCorrectionInput { content, severity, suggested_rule }` consistent across Tasks 18, 24
