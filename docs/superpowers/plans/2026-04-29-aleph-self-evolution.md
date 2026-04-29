@@ -1516,7 +1516,105 @@ Goal: feedback signals captured via tool, distilled into `feedback/` notes, end-
 
 ---
 
-### Task 17: Add `NoteIndexer::facts_by_tag` (only if missing per P4)
+## Phase 3 Schema Decisions (2026-04-29 mid-flight re-brainstorm)
+
+The original Phase 3 task bodies referenced types/paths that don't exist in
+the codebase (`RawMemoryEntry`, `crate::memory::raw::*`, `RawMemoryEntry::builder()`,
+`InMemoryRawStore`, `tags`/`metadata` on raw_memory, etc.). A path-discovery
+sweep against the real `src/memory/store/raw_memory.rs` produced the
+following decisions. **Implementers MUST follow this section over the
+literal task-body snippets when they conflict.**
+
+### D1. How a "correction signal" is marked on raw_memory
+
+**Decision: Option B — typed `RawMemorySource::Correction` variant.**
+
+The raw_memory layer has no `tags` column. Adding one would require schema
+migration + a new query method. Instead, extend `RawMemorySource` with a new
+variant (precedent: existing `Delegation { child_agent_id }` and
+`SessionEnd { reason }` variants that carry typed payloads):
+
+```rust
+pub enum RawMemorySource {
+    // ... existing variants ...
+    Correction { severity: String, suggested_rule: Option<String> },
+}
+```
+
+`severity` is `String` (not `Severity` enum) so that `to_persisted` /
+`from_persisted` can serialize it through the existing `(token, Option<String>)`
+tuple as JSON detail — same pattern Delegation/SessionEnd already use.
+The String round-trips through Severity at the boundary (parse via
+`serde_json::from_value::<Severity>(json!(s))`).
+
+### D2. How FeedbackDistill reads correction signals
+
+**Decision: typed source + path-prefix query, no new store method.**
+
+`flag_user_correction` writes:
+```rust
+RawMemory::new(content, RawMemorySource::Correction { severity, suggested_rule })
+    .with_agent(agent_id)
+    .with_path(format!("aleph://correction/{ulid}"))
+```
+
+FeedbackDistill reads via the **already-existing** method:
+```rust
+store.get_raw_by_path_prefix("aleph://correction/", agent_id, lookback).await
+```
+
+No `facts_by_tag`, no schema migration, no new trait method. The `path`
+prefix is the index — sqlite already has it.
+
+### D3. Compression-pipeline isolation
+
+`get_unprocessed_raw_memories` is consumed by `CompressionService` and would
+race FeedbackDistill if both pulled from the same `is_processed` flag.
+Path-prefix query (D2) sidesteps this entirely — FeedbackDistill never
+touches `is_processed`. **Trade-off**: same correction will be re-presented
+to the LLM each cycle until it appears in `feedback/` candidates and the LLM
+emits `Strengthen`/`Skip`. This is acceptable: it mirrors SkillDistill
+(which also relies on the LLM as the dedup gate, Phase 2 Decision 2).
+
+### D4. Task 17 is withdrawn
+
+`facts_by_tag` is no longer needed under D2. **Skip Task 17 entirely.**
+Task 21's reader call becomes `store.get_raw_by_path_prefix(...)` directly
+on the existing `NoteStore` / `RawMemoryStore` handle from `DreamContext`.
+
+### D5. Naming/path translation table
+
+Replace plan-body placeholders with these real paths when implementing:
+
+| Plan body says | Real code uses |
+|---|---|
+| `crate::memory::raw::RawMemoryEntry` | `crate::memory::store::RawMemory` |
+| `crate::memory::raw::RawMemoryStore` | `crate::memory::store::RawMemoryStore` |
+| `crate::memory::raw::InMemoryRawStore` | **(none — use `SqliteMemoryBackend::in_memory()` like raw_memories.rs tests do)** |
+| `RawMemoryEntry::builder().tag(...).metadata(k,v).build()` | `RawMemory::new(content, RawMemorySource::Correction{...}).with_agent(...).with_path(...)` |
+| `entries[0].tags.iter().any(\|t\| t == "correction_candidate")` | `matches!(entries[0].source, RawMemorySource::Correction { .. })` |
+| `entries[0].metadata.get("source")` | `entries[0].source` (typed enum) |
+| `idx.facts_by_tag("correction_candidate", N)` | `store.get_raw_by_path_prefix("aleph://correction/", agent_id, N)` |
+| `f.metadata.get("severity")` (in FeedbackDistill view) | match the `Correction { severity, .. }` payload directly |
+| `f.metadata.get("suggested_rule")` | match the `Correction { suggested_rule, .. }` payload |
+| `agents/tools/<name>.rs` registered via `default_tools()` | `src/builtin_tools/<name>.rs` registered via the same path Aleph uses for sibling tools (find by reading how `memory_browse.rs` / `note_manage.rs` are wired) |
+
+### D6. `Severity` is reused, not redefined
+
+The Phase 2 `Severity` enum (`crate::memory::notes::Severity`) is the
+correct type for the tool input. It is `Serialize + Deserialize` already
+(Phase 2 Task 9), so no extra plumbing required.
+
+---
+
+### Task 17: ~~Add `NoteIndexer::facts_by_tag`~~ — **WITHDRAWN per D4**
+
+The path-prefix query in D2 makes this method unnecessary. Skip directly to
+Task 18.
+
+---
+
+### Task 17 (legacy body — superseded by D4, kept for diff visibility): Add `NoteIndexer::facts_by_tag` (only if missing per P4)
 
 **Files:**
 - Modify: `src/memory/notes/indexer.rs` (or wherever `NoteIndexer` lives)
