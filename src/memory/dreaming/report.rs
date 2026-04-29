@@ -27,6 +27,7 @@ pub struct DreamReport {
     pub format_fixed: u32,
     pub broken_links_found: u32,
     pub links_repaired: u32,
+    pub links_purged: u32,
     pub notes_archived: u32,
     pub notes_protected: u32,
     pub errors: Option<String>,

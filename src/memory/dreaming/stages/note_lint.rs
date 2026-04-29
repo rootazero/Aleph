@@ -38,6 +38,7 @@ impl DreamStage for NoteLintStage {
         let mut format_fixed = 0u32;
         let mut broken_links_found = 0u32;
         let mut links_repaired = 0u32;
+        let mut links_purged = 0u32;
 
         // Snapshot note list so we can iterate without borrowing ctx
         let note_paths: Vec<String> = ctx.notes.iter().map(|n| n.path.clone()).collect();
@@ -172,6 +173,7 @@ impl DreamStage for NoteLintStage {
                         .await;
 
                     ctx.note_contents.remove(path);
+                    links_purged += 1;
                     tracing::info!(
                         path,
                         purged_target = target,
@@ -242,11 +244,13 @@ impl DreamStage for NoteLintStage {
         ctx.report.format_fixed = format_fixed;
         ctx.report.broken_links_found = broken_links_found;
         ctx.report.links_repaired = links_repaired;
+        ctx.report.links_purged = links_purged;
 
         tracing::info!(
             format_fixed,
             broken_links_found,
             links_repaired,
+            links_purged,
             "NoteLint completed"
         );
 
