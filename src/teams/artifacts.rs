@@ -467,7 +467,7 @@ impl SqliteArtifactStore {
 
         let mut unblocked = Vec::new();
         for blocked_id in blocked_ids {
-            if self.all_dependencies_completed(&[blocked_id.clone()]).await? {
+            if self.all_dependencies_completed(std::slice::from_ref(&blocked_id)).await? {
                 let task = self.update_status(&blocked_id, TaskStatus::Pending).await?;
                 unblocked.push(task);
             }
