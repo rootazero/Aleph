@@ -8,6 +8,21 @@ use crate::error::AlephError;
 
 use super::wikilink::extract_wikilinks;
 
+/// LLM-judged importance of a distilled note. Used by retrieval re-ranking.
+///
+/// Default is `Low` so legacy notes (no `severity:` in frontmatter) get
+/// `severity_boost = 1.0` and rank exactly as before. See
+/// `docs/superpowers/plans/2026-04-29-aleph-self-evolution.md` Phase 2 Decision 4.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    #[default]
+    Low,
+    Med,
+    High,
+    Critical,
+}
+
 /// YAML frontmatter parsed from the top of a markdown note.
 #[derive(Debug, Deserialize, Serialize)]
 struct Frontmatter {
@@ -195,6 +210,32 @@ fn sha256_hex(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn severity_default_is_low_for_backward_compat() {
+        let s: Severity = Default::default();
+        assert_eq!(s, Severity::Low);
+    }
+
+    #[test]
+    fn severity_serde_roundtrip_all_variants() {
+        for s in [Severity::Low, Severity::Med, Severity::High, Severity::Critical] {
+            let j = serde_json::to_string(&s).unwrap();
+            let back: Severity = serde_json::from_str(&j).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn severity_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Severity::Low).unwrap(), "\"low\"");
+        assert_eq!(serde_json::to_string(&Severity::Med).unwrap(), "\"med\"");
+        assert_eq!(serde_json::to_string(&Severity::High).unwrap(), "\"high\"");
+        assert_eq!(
+            serde_json::to_string(&Severity::Critical).unwrap(),
+            "\"critical\""
+        );
+    }
 
     const SAMPLE_NOTE: &str = "\
 ---
