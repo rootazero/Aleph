@@ -65,18 +65,10 @@ pub trait SandboxAfterHook: Send + Sync + 'static {
 
 /// Compose multiple before/after hooks into a pair for use in the sandbox
 /// execution path.
+#[derive(Default)]
 pub struct SandboxHooks {
     pub before: Vec<Arc<dyn SandboxBeforeHook>>,
     pub after: Vec<Arc<dyn SandboxAfterHook>>,
-}
-
-impl Default for SandboxHooks {
-    fn default() -> Self {
-        Self {
-            before: Vec::new(),
-            after: Vec::new(),
-        }
-    }
 }
 
 impl SandboxHooks {
@@ -118,7 +110,6 @@ mod tests {
     use super::*;
     use crate::sandbox::capabilities::SandboxCapabilities;
     use crate::sandbox::command::SandboxCommand;
-    use std::process::Stdio;
 
     struct TestBeforeHook(&'static str, bool);
     #[async_trait]
@@ -183,6 +174,51 @@ mod tests {
         let ctx = SandboxHookContext::new("test_tool", &cmd);
         let result = hooks.run_before(&ctx).await;
         assert!(matches!(result, SandboxHookResult::Deny { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_before_hook_stops_at_first_deny() {
+        use crate::routing::session_key::SessionKey;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let second_ran = Arc::new(AtomicBool::new(false));
+        let second_ran_clone = second_ran.clone();
+
+        struct SecondBeforeHook {
+            flag: Arc<AtomicBool>,
+        }
+        #[async_trait]
+        impl SandboxBeforeHook for SecondBeforeHook {
+            fn name(&self) -> &'static str {
+                "second_hook"
+            }
+            async fn before(&self, _: SandboxHookContext<'_>) -> SandboxHookResult {
+                self.flag.store(true, Ordering::SeqCst);
+                SandboxHookResult::Allow
+            }
+        }
+
+        let hooks = SandboxHooks::new()
+            .with_before(Arc::new(TestBeforeHook("first_deny", false))) // denies
+            .with_before(Arc::new(SecondBeforeHook { flag: second_ran_clone })); // would set flag if called
+
+        let cmd = SandboxCommand {
+            session_id: SessionKey::ephemeral("test"),
+            program: "echo".into(),
+            args: vec!["hello".into()],
+            env: std::collections::HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities::default(),
+            timeout: None,
+        };
+        let ctx = SandboxHookContext::new("test_tool", &cmd);
+        let result = hooks.run_before(&ctx).await;
+        assert!(matches!(result, SandboxHookResult::Deny { .. }));
+        assert!(
+            !second_ran.load(Ordering::SeqCst),
+            "second hook should not have run after first hook denied"
+        );
     }
 
     #[tokio::test]
