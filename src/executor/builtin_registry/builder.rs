@@ -974,6 +974,17 @@ impl BuiltinToolRegistry {
                 crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool::new(Arc::clone(svc))
             }),
             heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
+            // Phase 3 Task 19 — flag_user_correction tool (R9: everything is a tool).
+            // Constructed inline because it only needs a memory backend, no separate
+            // service. The cast to Arc<dyn RawMemoryStore> is zero-cost (vtable lookup).
+            flag_user_correction_tool: config.memory_db.as_ref().map(|db| {
+                crate::builtin_tools::FlagUserCorrectionTool::new(
+                    db.clone() as crate::sync_primitives::Arc<
+                        dyn crate::memory::store::raw_memory::RawMemoryStore,
+                    >,
+                    "default".to_string(),
+                )
+            }),
             browser_open_tool,
             browser_click_tool,
             browser_type_tool,
@@ -1326,6 +1337,22 @@ impl BuiltinToolRegistry {
                 );
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
+        }
+
+        // Phase 3 Task 19 — flag_user_correction is exposed whenever a
+        // memory backend exists (independent of retrieval policy: this is
+        // a write-only signal, not a retrieval surface).
+        if config.memory_db.is_some() {
+            reg(
+                tools,
+                "flag_user_correction",
+                crate::builtin_tools::FlagUserCorrectionTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(
+                    crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs
+                ))
+                .unwrap_or_default(),
+            );
+            info!("Registered flag_user_correction tool in BuiltinToolRegistry");
         }
 
         // Vault store tool

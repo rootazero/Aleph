@@ -114,6 +114,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_explore_tool: Option<crate::builtin_tools::MemoryExploreTool>,
     /// Memory timeline tool instance (optional - requires StateDatabase)
     pub(crate) memory_timeline_tool: Option<crate::builtin_tools::MemoryTimelineTool>,
+    /// Phase 3 self-evolution path α — records user-correction signals into
+    /// raw_memory under aleph://correction/{id}. Optional because it requires
+    /// a memory backend (Arc<dyn RawMemoryStore>).
+    pub(crate) flag_user_correction_tool:
+        Option<crate::builtin_tools::FlagUserCorrectionTool>,
     /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
@@ -555,6 +560,14 @@ impl ToolRegistry for BuiltinToolRegistry {
             "memory_timeline" => Box::pin(async move {
                 let tool = self.memory_timeline_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("memory_timeline not available: no event store configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "flag_user_correction" => Box::pin(async move {
+                let tool = self.flag_user_correction_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "flag_user_correction not available: no memory backend configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
