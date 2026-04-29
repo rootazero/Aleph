@@ -14,7 +14,7 @@ use alephcore::memory::dreaming::strategy::DreamStrategy;
 use alephcore::memory::dreaming::validation::{
     check_duplicate_hashes, run_l1_validation, DreamValidationReport, ValidationTier,
 };
-use alephcore::config::types::memory::DreamingConfig;
+use alephcore::DreamingConfig;
 use alephcore::memory::dreaming::{DreamPipeline, DreamReport};
 
 /// Full evolution cycle: signals → select → gate → validate → log.
@@ -102,8 +102,10 @@ async fn high_growth_selects_synthesize() {
     assert_eq!(selection.strategy, DreamStrategy::Synthesize);
 
     let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
-    assert_eq!(pipeline.stages.len(), 5);
+    // Synthesize pipeline now: lint, consolidate, synthesis, skill_distill, feedback_distill, daily_digest
+    assert_eq!(pipeline.stages.len(), 6);
     assert_eq!(pipeline.stages[3].name(), "skill_distill");
+    assert_eq!(pipeline.stages[4].name(), "feedback_distill");
 }
 
 /// Mutation gate forces Conserve on merge cycle.

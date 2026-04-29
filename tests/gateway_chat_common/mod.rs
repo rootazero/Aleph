@@ -157,6 +157,7 @@ pub fn orchestrator_with_stub(runner: Arc<StubHarnessRunner>) -> Arc<Orchestrato
             brain: BrainRef::Default,
             sandbox_kind: SandboxKind::None,
             session_strategy: SessionStrategy::Fresh,
+            priority: 128,
             overrides: FlowOverrides::default(),
         }),
     );

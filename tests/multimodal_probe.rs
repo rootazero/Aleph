@@ -17,7 +17,11 @@ struct MockTranscription(String);
 
 #[async_trait]
 impl TranscriptionService for MockTranscription {
-    async fn transcribe(&self, _audio: &CachedMedia) -> anyhow::Result<TranscriptionResult> {
+    async fn transcribe(
+        &self,
+        _audio: &CachedMedia,
+        _language: Option<&str>,
+    ) -> anyhow::Result<TranscriptionResult> {
         Ok(TranscriptionResult {
             text: self.0.clone(),
             language: Some("en".to_string()),
@@ -79,10 +83,10 @@ async fn test_image_vision_fallback() {
 
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
-        ContentBlock::Text { text } => {
+        ContentBlock::Text { text, .. } => {
             assert!(
-                text.contains("description unavailable") || text.contains("no vision"),
-                "expected vision fallback text, got: {}",
+                text.contains("{{media:image:png1}}"),
+                "expected media reference placeholder for image fallback, got: {}",
                 text
             );
         }
@@ -105,7 +109,7 @@ async fn test_audio_transcription() {
 
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
-        ContentBlock::Text { text } => {
+        ContentBlock::Text { text, .. } => {
             assert!(
                 text.contains("Hello world"),
                 "expected transcript text, got: {}",
@@ -137,15 +141,10 @@ async fn test_unknown_type_placeholder() {
 
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
-        ContentBlock::Text { text } => {
+        ContentBlock::Text { text, .. } => {
             assert!(
-                text.contains("report.pdf"),
-                "should mention filename, got: {}",
-                text
-            );
-            assert!(
-                text.contains("application/pdf"),
-                "should mention MIME type, got: {}",
+                text.contains("{{media:file:pdf1}}"),
+                "expected media reference placeholder for unknown type, got: {}",
                 text
             );
         }
@@ -186,7 +185,7 @@ async fn test_mixed_image_and_audio() {
 
     // Second block: transcript text
     match &blocks[1] {
-        ContentBlock::Text { text } => {
+        ContentBlock::Text { text, .. } => {
             assert!(
                 text.contains("Transcribed audio"),
                 "expected transcript, got: {}",
@@ -218,16 +217,14 @@ async fn test_download_failure_graceful() {
 
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
-        ContentBlock::Text { text } => {
-            // Should contain the filename and some error indication
+        ContentBlock::Text { text, .. } => {
+            // MediaProcessor falls back to a media-reference placeholder rather
+            // than embedded English error text. The placeholder still carries
+            // the attachment id so downstream consumers can resolve or surface
+            // a fetch error.
             assert!(
-                text.contains("broken.jpg") || text.contains("bad-att"),
-                "should mention attachment name, got: {}",
-                text
-            );
-            assert!(
-                text.contains("error") || text.contains("Error") || text.contains("No source"),
-                "should indicate error, got: {}",
+                text.contains("{{media:image:bad-att}}"),
+                "expected media reference placeholder for download failure, got: {}",
                 text
             );
         }
@@ -243,6 +240,7 @@ async fn test_openai_multimodal_serialization() {
     let content = vec![
         ContentBlock::Text {
             text: "Describe this image".to_string(),
+            cache_control: None,
         },
         ContentBlock::Image {
             data: "aWZha2ViYXNlNjQ=".to_string(), // fake base64
@@ -258,7 +256,7 @@ async fn test_openai_multimodal_serialization() {
             assert_eq!(content.len(), 2, "should have 2 content blocks");
 
             match &content[0] {
-                ContentBlock::Text { text } => {
+                ContentBlock::Text { text, .. } => {
                     assert_eq!(text, "Describe this image");
                 }
                 other => panic!("first block should be Text, got {:?}", other),
