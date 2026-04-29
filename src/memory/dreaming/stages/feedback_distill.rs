@@ -29,6 +29,9 @@ use super::DreamStage;
 const CORRECTION_PATH_PREFIX: &str = "aleph://correction/";
 /// How many existing feedback-notes to surface as candidates per cycle.
 const FEEDBACK_CANDIDATES_TOP_N: usize = 5;
+/// Watermark namespace key on `compression_metadata`. Distinct from
+/// `CompressionService`'s keys so the two consumers don't collide.
+const WATERMARK_CONSUMER: &str = "feedback_distill";
 
 pub struct FeedbackDistillStage {
     pub max_per_cycle: usize,
@@ -55,9 +58,30 @@ impl DreamStage for FeedbackDistillStage {
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
         let store = ctx.database.clone();
 
-        // Read correction signals via path-prefix (Phase 3 Decision D2).
+        // Per-agent watermark — only re-process correction rows whose
+        // `created_at` is strictly greater than what the previous cycle
+        // committed. Missing/corrupt watermark falls back to 0 (process
+        // everything in the lookback window) so a fresh DB still works.
+        let watermark = match store.get_dream_watermark(WATERMARK_CONSUMER, &ctx.agent_id) {
+            Ok(opt) => opt.unwrap_or(0),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "FeedbackDistill: failed to read watermark; treating as 0"
+                );
+                0
+            }
+        };
+
+        // Read correction signals via path-prefix + since-filter
+        // (Phase 3 Decision D2 + watermark fix).
         let corrections = match store
-            .get_raw_by_path_prefix(CORRECTION_PATH_PREFIX, &ctx.agent_id, self.lookback)
+            .get_raw_by_path_prefix_since(
+                CORRECTION_PATH_PREFIX,
+                &ctx.agent_id,
+                watermark,
+                self.lookback,
+            )
             .await
         {
             Ok(v) => v,
@@ -66,6 +90,15 @@ impl DreamStage for FeedbackDistillStage {
                 return Ok(ctx);
             }
         };
+
+        // Idempotency: nothing new since last cycle, no-op without LLM call.
+        if corrections.is_empty() {
+            tracing::debug!(
+                watermark,
+                "FeedbackDistill: no new corrections since watermark, skipping"
+            );
+            return Ok(ctx);
+        }
 
         if corrections.len() < self.min_candidates {
             tracing::debug!(
@@ -125,6 +158,23 @@ impl DreamStage for FeedbackDistillStage {
                 Err(e) => {
                     tracing::warn!(error = %e, "FeedbackDistill apply_distill_action failed");
                 }
+            }
+        }
+
+        // LLM call succeeded (any response, even `{"actions": []}`) — the
+        // batch is consumed. Advance the watermark to the newest correction
+        // we surfaced this cycle, so the next run starts strictly after it.
+        // Failures above returned early and left the watermark untouched
+        // for retry.
+        if let Some(new_watermark) = corrections.iter().map(|c| c.created_at).max() {
+            if let Err(e) =
+                store.set_dream_watermark(WATERMARK_CONSUMER, &ctx.agent_id, new_watermark)
+            {
+                tracing::warn!(
+                    error = %e,
+                    new_watermark,
+                    "FeedbackDistill: failed to persist watermark; will reprocess next cycle"
+                );
             }
         }
 

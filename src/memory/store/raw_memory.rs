@@ -228,6 +228,30 @@ pub trait RawMemoryStore: Send + Sync {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<RawMemory>, AlephError>;
+
+    /// Same as `get_raw_by_path_prefix`, but only returns rows with
+    /// `created_at > since_created_at`. Used by stages that maintain a
+    /// per-consumer watermark (e.g. `FeedbackDistill`) to avoid re-processing
+    /// rows already distilled in a previous cycle.
+    ///
+    /// Default impl falls back to fetching the full prefix window and
+    /// filtering client-side, so in-memory test stores keep working without
+    /// a SQL change.
+    async fn get_raw_by_path_prefix_since(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        since_created_at: i64,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let all = self
+            .get_raw_by_path_prefix(path_prefix, agent_id, limit)
+            .await?;
+        Ok(all
+            .into_iter()
+            .filter(|r| r.created_at > since_created_at)
+            .collect())
+    }
 }
 
 #[cfg(test)]

@@ -203,6 +203,43 @@ impl RawMemoryStore for SqliteMemoryBackend {
         }
         Ok(results)
     }
+
+    async fn get_raw_by_path_prefix_since(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        since_created_at: i64,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let pattern = format!("{path_prefix}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE path LIKE ?1 AND agent_id = ?2 AND created_at > ?3 \
+                 ORDER BY created_at ASC \
+                 LIMIT ?4",
+            )
+            .map_err(|e| AlephError::config(format!("get_raw_by_path_prefix_since prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(
+                params![pattern, agent_id, since_created_at, limit as i64],
+                row_to_raw_memory,
+            )
+            .map_err(|e| AlephError::config(format!("get_raw_by_path_prefix_since query: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| {
+                AlephError::config(format!("get_raw_by_path_prefix_since row: {e}"))
+            })?);
+        }
+        Ok(results)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +407,52 @@ mod tests {
             "Earlier created_at should come first"
         );
         assert_eq!(results[1].content, "second");
+    }
+
+    #[tokio::test]
+    async fn get_raw_by_path_prefix_since_excludes_rows_at_or_before_watermark() {
+        let backend = make_backend();
+
+        let mut early = RawMemory::new("early".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://correction/c1")
+            .with_agent("main");
+        early.created_at = 1000;
+
+        let mut at = RawMemory::new("at".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://correction/c2")
+            .with_agent("main");
+        at.created_at = 2000;
+
+        let mut late = RawMemory::new("late".to_string(), RawMemorySource::SessionCompressed)
+            .with_path("aleph://correction/c3")
+            .with_agent("main");
+        late.created_at = 3000;
+
+        backend.insert_raw_memory(&early).await.unwrap();
+        backend.insert_raw_memory(&at).await.unwrap();
+        backend.insert_raw_memory(&late).await.unwrap();
+
+        // since_created_at = 2000 means strictly greater — only `late` qualifies.
+        let results = backend
+            .get_raw_by_path_prefix_since("aleph://correction/", "main", 2000, 10)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1, "watermark filter is strictly greater");
+        assert_eq!(results[0].content, "late");
+
+        // since_created_at = 0 (fresh DB / first cycle) sees everything.
+        let all = backend
+            .get_raw_by_path_prefix_since("aleph://correction/", "main", 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Different agent is isolated.
+        let other = backend
+            .get_raw_by_path_prefix_since("aleph://correction/", "other-agent", 0, 10)
+            .await
+            .unwrap();
+        assert!(other.is_empty());
     }
 
     #[tokio::test]
