@@ -1,18 +1,28 @@
 //! SkillDistill stage — extracts reusable skill-notes from synthesis output.
 //!
-//! Runs after NoteSynthesis in the Synthesize strategy. Reads synthesis notes
-//! produced in the current cycle and asks an LLM to extract actionable
-//! patterns as `skill`-category knowledge notes.
+//! Per Phase 2 Decision 2, this stage uses **code-injected candidates**:
+//! before each LLM call, [`find_similar_notes`] retrieves the top-N most
+//! similar existing skill-notes by cosine similarity and injects their IDs
+//! into the prompt. The LLM then emits a [`DistillAction`] referencing
+//! those IDs verbatim — no hallucination, no string-matching dedup.
+//!
+//! When no embedding is available for the synthesis note, the candidate
+//! list is empty and the LLM gracefully degrades to emitting `New` actions.
 
 use async_trait::async_trait;
 
 use crate::error::AlephError;
-use crate::memory::dreaming::DreamContext;
-use crate::memory::notes::KnowledgeNote;
+use crate::memory::dreaming::{DistillAction, DreamContext};
+use crate::memory::notes::find_similar_notes;
+use crate::memory::notes::store::NoteStore;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
 use super::DreamStage;
+
+/// Number of existing skill candidates to inject into the LLM prompt per
+/// synthesis note (Phase 2 Decision 2).
+const CANDIDATES_TOP_N: usize = 5;
 
 pub struct SkillDistillStage {
     pub max_per_cycle: usize,
@@ -33,38 +43,56 @@ impl DreamStage for SkillDistillStage {
     }
 
     async fn should_run(&self, ctx: &DreamContext) -> bool {
-        // Only run if there are synthesis notes to distill from
         ctx.notes.iter().any(|n| n.category == "synthesis")
     }
 
     async fn execute(&self, mut ctx: DreamContext) -> Result<DreamContext, AlephError> {
-        let synthesis_notes: Vec<_> = ctx
+        let synthesis_paths: Vec<String> = ctx
             .notes
             .iter()
             .filter(|n| n.category == "synthesis")
             .map(|n| n.path.clone())
             .collect();
 
-        let mut distilled_count = 0usize;
+        let mut applied = 0usize;
+        let dim_hint = ctx.embedder.dimensions() as u32;
 
-        for path in &synthesis_notes {
+        for path in &synthesis_paths {
             let content = match ctx.load_content(path).await {
                 Some(c) => c,
                 None => continue,
             };
 
-            let category = path
-                .split('/')
-                .next()
-                .map(|p| {
-                    // Extract the original category from synthesis title
-                    // e.g., "synthesis/learning-synthesis" → "learning"
-                    p.strip_suffix("-synthesis").unwrap_or(p)
-                })
-                .unwrap_or("general");
+            // Decision 2: code fetches top-N existing skill candidates BEFORE
+            // the LLM call. Empty embedding → empty candidates → LLM defaults
+            // to `New` (graceful degradation).
+            let synth_embedding = ctx
+                .indexer
+                .store()
+                .get_embedding(path, &ctx.agent_id, dim_hint)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let candidates = find_similar_notes(
+                ctx.indexer.store().as_ref(),
+                "skill",
+                &ctx.agent_id,
+                &synth_embedding,
+                CANDIDATES_TOP_N,
+            )
+            .await
+            .unwrap_or_default();
 
-            let prompt = build_distill_prompt(&content, category, self.max_per_cycle);
-            let system = "You are a skill extraction engine. Extract actionable, reusable patterns from synthesis notes. Return a JSON array.";
+            let prompt = build_distill_prompt_with_candidates(
+                &content,
+                "skill",
+                self.max_per_cycle,
+                &candidates,
+            );
+            let system = "You are a skill distillation engine. Choose the right \
+                          DistillAction variant per the schema. Reference candidate \
+                          IDs verbatim when strengthening or superseding.";
 
             let msgs = vec![UnifiedMessage::user(&prompt)];
             let response = match ctx
@@ -79,97 +107,112 @@ impl DreamStage for SkillDistillStage {
                 }
             };
 
-            let skills = parse_distilled_skills(&response.text_content());
-
-            for skill in &skills {
-                let note = KnowledgeNote {
-                    title: skill.title.clone(),
-                    category: "skill".to_string(),
-                    tags: vec!["distilled".to_string(), category.to_string()],
-                    facts: skill.facts.clone(),
-                    links: vec![format!("[[{}]]", path)],
-                    created_at: chrono::Utc::now().timestamp(),
-                    updated_at: chrono::Utc::now().timestamp(),
-                    content_hash: String::new(),
-                    ..Default::default()
-                };
-
-                match ctx.indexer.write_note(&ctx.agent_id, "skill", &note).await {
-                    Ok(_) => {
-                        distilled_count += 1;
-                        tracing::info!(title = %skill.title, "Distilled skill-note");
-                    }
+            let actions = parse_distill_response(&response.text_content());
+            for action in actions
+                .into_iter()
+                .take(self.max_per_cycle)
+                .map(clamp_action)
+            {
+                match ctx
+                    .indexer
+                    .apply_distill_action(&ctx.agent_id, "skill", &action)
+                    .await
+                {
+                    Ok(_) => applied += 1,
                     Err(e) => {
-                        tracing::warn!(title = %skill.title, error = %e, "Failed to write skill-note");
+                        tracing::warn!(path, error = %e, "apply_distill_action failed");
                     }
                 }
             }
         }
 
-        // Store distilled count in extras for the report
         ctx.report
             .extra
-            .insert("skill_distill_count".into(), distilled_count.to_string());
-
-        tracing::info!(distilled_count, "SkillDistill completed");
+            .insert("skill_distill_count".into(), applied.to_string());
+        tracing::info!(applied, "SkillDistill completed");
         Ok(ctx)
     }
 }
 
-/// Build the LLM prompt for skill extraction from synthesis content.
-pub fn build_distill_prompt(synthesis_text: &str, source_category: &str, max_per_cycle: usize) -> String {
+/// Build the LLM prompt for skill distillation with code-injected candidates.
+///
+/// `candidates` is the output of `find_similar_notes` (path + cosine similarity).
+/// The prompt instructs the LLM to choose one of four `DistillAction` variants
+/// (`new`/`strengthen`/`supersede`/`skip`) per insight and to reference
+/// candidate IDs verbatim when strengthening or superseding.
+pub fn build_distill_prompt_with_candidates(
+    synthesis_text: &str,
+    source_category: &str,
+    max_per_cycle: usize,
+    candidates: &[(String, f32)],
+) -> String {
+    let candidates_block = if candidates.is_empty() {
+        "[]".to_string()
+    } else {
+        let entries: Vec<String> = candidates
+            .iter()
+            .map(|(path, sim)| format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}"))
+            .collect();
+        format!("[\n{}\n]", entries.join(",\n"))
+    };
     format!(
-        "Analyze this synthesis note from the '{source_category}' category and extract reusable skill patterns.\n\n\
+        "Analyze this synthesis note from the '{source_category}' category and \
+         decide whether each insight is:\n\
+         - a NEW skill (no existing candidate covers it)\n\
+         - a STRENGTHEN of an existing candidate (same rule, more evidence)\n\
+         - a SUPERSEDE of an existing candidate (better wording / corrects it)\n\
+         - a SKIP (transient noise, not actionable)\n\n\
          Synthesis:\n{synthesis_text}\n\n\
-         Extract 0-{max_per_cycle} actionable skill patterns. For each, provide:\n\
-         - A kebab-case title (e.g., \"async-error-handling\")\n\
-         - 2-5 concise fact bullets (third person, actionable)\n\n\
-         Return as JSON array:\n\
+         Existing skill-note candidates (you MUST reference these IDs verbatim \
+         if you choose strengthen or supersede):\n\
+         existing_candidates: {candidates_block}\n\n\
+         Emit at most {max_per_cycle} actions in this JSON shape:\n\
          ```json\n\
-         [\n\
-           {{\"title\": \"skill-name\", \"facts\": [\"fact 1\", \"fact 2\"]}}\n\
-         ]\n\
+         {{\"actions\": [\n\
+           {{\"type\": \"new\", \"title\": \"kebab-case-name\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"strengthen\", \"existing_note_path\": \"<id from candidates>\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"supersede\", \"old_note_path\": \"<id from candidates>\", \"title\": \"...\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+           {{\"type\": \"skip\", \"source_fact\": \"...\", \"reason\": \"...\"}}\n\
+         ]}}\n\
          ```\n\
-         Return `[]` if no actionable patterns found."
+         Return `{{\"actions\": []}}` if nothing actionable."
     )
 }
 
-/// Parsed skill from LLM response.
-#[derive(Debug, Clone)]
-pub struct DistilledSkill {
-    pub title: String,
-    pub facts: Vec<String>,
+#[derive(serde::Deserialize)]
+struct DistillResponse {
+    actions: Vec<DistillAction>,
 }
 
-/// Parse LLM response into distilled skills. Tolerant of formatting issues.
-pub fn parse_distilled_skills(response: &str) -> Vec<DistilledSkill> {
-    // Try to find JSON array in response (may be wrapped in markdown code block)
-    let json_str = response
-        .find('[')
-        .and_then(|start| response.rfind(']').map(|end| &response[start..=end]))
-        .unwrap_or("[]");
-
-    let parsed: Vec<serde_json::Value> = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+/// Tolerant parser: extracts the outermost `{...}` JSON object from the LLM
+/// response text and deserializes it as `DistillResponse`. Returns empty on
+/// any parse failure.
+pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
+    let start = match text.find('{') {
+        Some(s) => s,
+        None => return Vec::new(),
     };
+    let end = match text.rfind('}') {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+    let json_str = &text[start..=end];
+    serde_json::from_str::<DistillResponse>(json_str)
+        .map(|r| r.actions)
+        .unwrap_or_default()
+}
 
-    parsed
-        .into_iter()
-        .filter_map(|v| {
-            let title = v.get("title")?.as_str()?.to_string();
-            let facts: Vec<String> = v
-                .get("facts")?
-                .as_array()?
-                .iter()
-                .filter_map(|f| f.as_str().map(String::from))
-                .collect();
-            if title.is_empty() || facts.is_empty() {
-                return None;
-            }
-            Some(DistilledSkill { title, facts })
-        })
-        .collect()
+/// Clamp `confidence` into `[0.0, 1.0]` for `New` and `Supersede` variants
+/// to defend against out-of-range values from the LLM.
+fn clamp_action(mut a: DistillAction) -> DistillAction {
+    use DistillAction::*;
+    match &mut a {
+        New { confidence, .. } | Supersede { confidence, .. } => {
+            *confidence = confidence.clamp(0.0, 1.0);
+        }
+        _ => {}
+    }
+    a
 }
 
 #[cfg(test)]
@@ -187,50 +230,89 @@ mod tests {
     }
 
     #[test]
-    fn prompt_contains_synthesis_content() {
-        let synthesis_text = "Cross-cutting theme: async patterns are preferred.";
-        let prompt = build_distill_prompt(synthesis_text, "learning", 3);
-        assert!(prompt.contains("async patterns"));
-        assert!(prompt.contains("learning"));
-        assert!(prompt.contains("skill"));
+    fn build_distill_prompt_with_candidates_includes_existing_block() {
+        let candidates = vec![
+            ("skill/async-error-handling".to_string(), 0.92_f32),
+            ("skill/borrow-fights".to_string(), 0.88),
+        ];
+        let prompt = build_distill_prompt_with_candidates(
+            "Synthesis: borrow checker fights are common",
+            "skill",
+            3,
+            &candidates,
+        );
+        assert!(
+            prompt.contains("existing_candidates"),
+            "prompt must include candidates block:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("skill/async-error-handling"),
+            "must list candidate IDs:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("strengthen"),
+            "prompt must teach LLM about strengthen action"
+        );
+        assert!(
+            prompt.contains("supersede"),
+            "prompt must teach LLM about supersede action"
+        );
+        assert!(
+            prompt.contains("\"new\"") || prompt.contains("\"type\": \"new\""),
+            "prompt must teach about new"
+        );
+        assert!(
+            prompt.contains("\"skip\"") || prompt.contains("\"type\": \"skip\""),
+            "prompt must teach about skip"
+        );
     }
 
     #[test]
-    fn prompt_uses_configured_cap() {
-        let prompt = build_distill_prompt("text", "general", 7);
-        assert!(prompt.contains("Extract 0-7"));
-        assert!(!prompt.contains("Extract 0-3"));
+    fn build_distill_prompt_with_no_candidates_still_works() {
+        let prompt = build_distill_prompt_with_candidates("text", "skill", 3, &[]);
+        assert!(prompt.contains("existing_candidates"));
+        assert!(prompt.contains("[]") || prompt.contains("(none)"));
     }
 
     #[test]
-    fn prompt_with_zero_cap_disables_extraction() {
-        let prompt = build_distill_prompt("text", "general", 0);
-        assert!(prompt.contains("Extract 0-0"));
+    fn parse_distill_response_extracts_actions() {
+        let raw = r#"{"actions":[{"type":"new","title":"x","rule":"y","confidence":0.7,"severity":"med","source_facts":["S1"]}]}"#;
+        let actions = parse_distill_response(raw);
+        assert_eq!(actions.len(), 1);
     }
 
     #[test]
-    fn parse_distilled_skills_valid_json() {
-        let response = r#"[
-            {"title": "async-error-handling", "facts": ["Always use ? for propagation", "Wrap spawned tasks in catch_unwind"]},
-            {"title": "trait-design", "facts": ["Keep traits small", "Prefer associated types over generics"]}
-        ]"#;
-        let skills = parse_distilled_skills(response);
-        assert_eq!(skills.len(), 2);
-        assert_eq!(skills[0].title, "async-error-handling");
-        assert_eq!(skills[0].facts.len(), 2);
+    fn parse_distill_response_invalid_returns_empty() {
+        assert!(parse_distill_response("not json").is_empty());
     }
 
     #[test]
-    fn parse_distilled_skills_invalid_json_returns_empty() {
-        let response = "This is not valid JSON at all.";
-        let skills = parse_distilled_skills(response);
-        assert!(skills.is_empty());
+    fn parse_distill_response_handles_markdown_fence() {
+        // LLMs often wrap JSON in ```json fences — the tolerant `{ ... }` extractor handles it.
+        let raw = "Sure, here is the result:\n\
+                   ```json\n\
+                   {\"actions\":[{\"type\":\"skip\",\"source_fact\":\"F\",\"reason\":\"noise\"}]}\n\
+                   ```";
+        let actions = parse_distill_response(raw);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], DistillAction::Skip { .. }));
     }
 
     #[test]
-    fn parse_distilled_skills_empty_array() {
-        let response = "[]";
-        let skills = parse_distilled_skills(response);
-        assert!(skills.is_empty());
+    fn clamp_action_clamps_new_confidence() {
+        let a = DistillAction::New {
+            title: "t".into(),
+            rule: "r".into(),
+            confidence: 2.5,
+            severity: crate::memory::notes::Severity::Low,
+            source_facts: vec![],
+        };
+        let clamped = clamp_action(a);
+        match clamped {
+            DistillAction::New { confidence, .. } => {
+                assert!((confidence - 1.0).abs() < 1e-6);
+            }
+            _ => panic!("variant changed"),
+        }
     }
 }
