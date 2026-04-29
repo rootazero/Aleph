@@ -16,6 +16,15 @@ pub enum RawMemorySource {
     PreCompress,
     Delegation { child_agent_id: String },
     SessionEnd { reason: SessionEndReason },
+
+    // Phase 3 self-evolution — user-correction signal written by the
+    // `flag_user_correction` tool. `severity` is a String round-tripped
+    // through `crate::memory::notes::Severity` at the boundary so this
+    // module stays free of upward dependencies.
+    Correction {
+        severity: String,
+        suggested_rule: Option<String>,
+    },
 }
 
 /// Sub-reason for `RawMemorySource::SessionEnd`.
@@ -45,6 +54,19 @@ impl RawMemorySource {
             Self::SessionEnd { reason } => (
                 "session_end",
                 Some(serde_json::json!({ "reason": reason }).to_string()),
+            ),
+            Self::Correction {
+                severity,
+                suggested_rule,
+            } => (
+                "correction",
+                Some(
+                    serde_json::json!({
+                        "severity": severity,
+                        "suggested_rule": suggested_rule,
+                    })
+                    .to_string(),
+                ),
             ),
         }
     }
@@ -79,6 +101,24 @@ impl RawMemorySource {
                     _ => SessionEndReason::Disconnect,
                 };
                 Self::SessionEnd { reason }
+            }
+            "correction" => {
+                let parsed = detail
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let severity = parsed
+                    .get("severity")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "low".to_string());
+                let suggested_rule = parsed
+                    .get("suggested_rule")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string);
+                Self::Correction {
+                    severity,
+                    suggested_rule,
+                }
             }
             _ => Self::ToolOutput,
         }
@@ -232,5 +272,43 @@ mod tests {
     fn legacy_variants_still_parse() {
         let back = RawMemorySource::from_persisted("session_compressed", None);
         assert_eq!(back, RawMemorySource::SessionCompressed);
+    }
+
+    #[test]
+    fn round_trip_correction_with_rule() {
+        let src = RawMemorySource::Correction {
+            severity: "med".into(),
+            suggested_rule: Some("never write JSDoc".into()),
+        };
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "correction");
+        let detail = detail.expect("correction carries detail JSON");
+        let back = RawMemorySource::from_persisted(token, Some(&detail));
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_correction_without_rule() {
+        let src = RawMemorySource::Correction {
+            severity: "high".into(),
+            suggested_rule: None,
+        };
+        let (token, detail) = src.to_persisted();
+        let back = RawMemorySource::from_persisted(token, detail.as_deref());
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn correction_missing_detail_falls_back_to_low() {
+        // Defensive: if a buggy writer ever emitted "correction" with no detail,
+        // we should still parse rather than panic — severity defaults to "low".
+        let back = RawMemorySource::from_persisted("correction", None);
+        assert_eq!(
+            back,
+            RawMemorySource::Correction {
+                severity: "low".into(),
+                suggested_rule: None,
+            }
+        );
     }
 }

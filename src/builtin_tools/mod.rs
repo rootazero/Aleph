@@ -47,6 +47,7 @@ pub mod cron_manage;
 pub mod desktop;
 pub mod error;
 pub mod file_ops;
+pub mod flag_user_correction;
 pub mod gateway_route;
 pub mod generation;
 pub mod heartbeat_manage;
@@ -124,6 +125,9 @@ pub use desktop::{
 };
 pub use error::ToolError;
 pub use file_ops::{FileEditTool, FileOpsArgs, FileOpsTool, FileReadTool, FileWriteTool};
+pub use flag_user_correction::{
+    FlagUserCorrectionArgs, FlagUserCorrectionOutput, FlagUserCorrectionTool,
+};
 pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,

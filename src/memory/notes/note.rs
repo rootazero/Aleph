@@ -1,6 +1,7 @@
 //! KnowledgeNote — the primary memory unit backed by a markdown file.
 
 use chrono::NaiveDate;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -13,8 +14,9 @@ use super::wikilink::extract_wikilinks;
 /// Default is `Low` so legacy notes (no `severity:` in frontmatter) get
 /// `severity_boost = 1.0` and rank exactly as before. See
 /// `docs/superpowers/plans/2026-04-29-aleph-self-evolution.md` Phase 2 Decision 4.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[schemars(rename_all = "lowercase")]
 pub enum Severity {
     #[default]
     Low,

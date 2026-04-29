@@ -28,6 +28,10 @@ pub fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
         | RawMemorySource::Transcript
         | RawMemorySource::ToolOutput
         | RawMemorySource::Attachment => None,
+        // Correction signals are consumed by FeedbackDistill via path-prefix,
+        // not by CompressionService. If one ever reaches this path defensively
+        // fall back to the generic prompt rather than synthesizing a bogus one.
+        RawMemorySource::Correction { .. } => None,
     }
 }
 
