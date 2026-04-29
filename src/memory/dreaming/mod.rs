@@ -749,5 +749,4 @@ mod tests {
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(names, vec!["note_lint", "index_refresher"]);
     }
-
 }

@@ -15,7 +15,7 @@ use crate::providers::message::UnifiedMessage;
 use super::DreamStage;
 
 pub struct SkillDistillStage {
-    pub max_per_cycle: u32,
+    pub max_per_cycle: usize,
 }
 
 impl Default for SkillDistillStage {
@@ -45,7 +45,7 @@ impl DreamStage for SkillDistillStage {
             .map(|n| n.path.clone())
             .collect();
 
-        let mut distilled_count = 0u32;
+        let mut distilled_count = 0usize;
 
         for path in &synthesis_notes {
             let content = match ctx.load_content(path).await {
@@ -116,7 +116,7 @@ impl DreamStage for SkillDistillStage {
 }
 
 /// Build the LLM prompt for skill extraction from synthesis content.
-pub fn build_distill_prompt(synthesis_text: &str, source_category: &str, max_per_cycle: u32) -> String {
+pub fn build_distill_prompt(synthesis_text: &str, source_category: &str, max_per_cycle: usize) -> String {
     format!(
         "Analyze this synthesis note from the '{source_category}' category and extract reusable skill patterns.\n\n\
          Synthesis:\n{synthesis_text}\n\n\
@@ -199,6 +199,12 @@ mod tests {
         let prompt = build_distill_prompt("text", "general", 7);
         assert!(prompt.contains("Extract 0-7"));
         assert!(!prompt.contains("Extract 0-3"));
+    }
+
+    #[test]
+    fn prompt_with_zero_cap_disables_extraction() {
+        let prompt = build_distill_prompt("text", "general", 0);
+        assert!(prompt.contains("Extract 0-0"));
     }
 
     #[test]

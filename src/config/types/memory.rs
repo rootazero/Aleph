@@ -394,7 +394,7 @@ pub struct DreamingConfig {
     /// Max skill-notes distilled from each synthesis note per dream cycle (D5).
     /// Was previously hardcoded to 3 in the SkillDistill prompt.
     #[serde(default = "default_skill_distill_max_per_cycle")]
-    pub skill_distill_max_per_cycle: u32,
+    pub skill_distill_max_per_cycle: usize,
 }
 
 impl Default for DreamingConfig {
@@ -584,7 +584,7 @@ pub fn default_synthesis_max_insights() -> usize {
     10
 }
 
-pub fn default_skill_distill_max_per_cycle() -> u32 {
+pub fn default_skill_distill_max_per_cycle() -> usize {
     3
 }
 
