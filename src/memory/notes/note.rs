@@ -146,6 +146,22 @@ impl KnowledgeNote {
         out.push_str(&format!("tags: [{}]\n", tags_yaml.join(", ")));
         out.push_str(&format!("created: {created}\n"));
         out.push_str(&format!("updated: {updated}\n"));
+        out.push_str(&format!("confidence: {}\n", self.confidence));
+        let severity_str = match self.severity {
+            Severity::Low => "low",
+            Severity::Med => "med",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        };
+        out.push_str(&format!("severity: {severity_str}\n"));
+        if self.source_facts.is_empty() {
+            out.push_str("source_facts: []\n");
+        } else {
+            out.push_str(&format!(
+                "source_facts: [{}]\n",
+                self.source_facts.join(", ")
+            ));
+        }
         out.push_str("---\n\n");
 
         for fact in &self.facts {
@@ -307,6 +323,58 @@ mod tests {
         assert_eq!(n.confidence, 1.0, "Default confidence must be 1.0 (legacy-safe)");
         assert_eq!(n.severity, Severity::Low, "Default severity must be Low (legacy-safe)");
         assert!(n.source_facts.is_empty());
+    }
+
+    #[test]
+    fn to_markdown_emits_new_frontmatter_fields_when_set() {
+        let n = KnowledgeNote {
+            title: "test".into(),
+            category: "skill".into(),
+            tags: vec!["distilled".into()],
+            facts: vec!["the rule".into()],
+            links: vec![],
+            created_at: 1714377600,
+            updated_at: 1714377600,
+            content_hash: String::new(),
+            confidence: 0.85,
+            severity: Severity::High,
+            source_facts: vec!["synthesis/syn-1".into()],
+        };
+        let md = n.to_markdown();
+        assert!(md.contains("confidence: 0.85"), "missing confidence:\n{md}");
+        assert!(md.contains("severity: high"), "missing severity:\n{md}");
+        assert!(md.contains("source_facts:"), "missing source_facts:\n{md}");
+        assert!(md.contains("synthesis/syn-1"), "missing source ref:\n{md}");
+
+        let parsed = KnowledgeNote::from_markdown("test", &md).expect("roundtrip");
+        assert!((parsed.confidence - 0.85).abs() < 1e-6);
+        assert_eq!(parsed.severity, Severity::High);
+        assert_eq!(parsed.source_facts, vec!["synthesis/syn-1".to_string()]);
+    }
+
+    #[test]
+    fn to_markdown_legacy_defaults_roundtrip() {
+        let n = KnowledgeNote {
+            title: "legacy".into(),
+            category: "preference".into(),
+            tags: vec![],
+            facts: vec!["fact".into()],
+            links: vec![],
+            created_at: 1714377600,
+            updated_at: 1714377600,
+            content_hash: String::new(),
+            confidence: 1.0,
+            severity: Severity::Low,
+            source_facts: vec![],
+        };
+        let md = n.to_markdown();
+        assert!(md.contains("confidence: 1"), "missing confidence:\n{md}");
+        assert!(md.contains("severity: low"), "missing severity:\n{md}");
+        assert!(md.contains("source_facts: []"));
+        let parsed = KnowledgeNote::from_markdown("legacy", &md).unwrap();
+        assert_eq!(parsed.confidence, 1.0);
+        assert_eq!(parsed.severity, Severity::Low);
+        assert!(parsed.source_facts.is_empty());
     }
 
     const SAMPLE_NOTE: &str = "\
