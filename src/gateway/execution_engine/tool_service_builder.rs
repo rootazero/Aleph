@@ -10,7 +10,7 @@
 //! Returned as `Arc<dyn ToolService>` for `FlowRequest.tool_service`.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::agents::subagent_tool::SubagentTool;
 use crate::tools::refresh::ToolRefreshSource;

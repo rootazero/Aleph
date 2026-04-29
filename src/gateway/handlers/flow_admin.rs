@@ -72,7 +72,7 @@ pub fn register_flow_admin_handlers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
     #[tokio::test]
     async fn reload_with_empty_user_dir_loads_only_presets() {

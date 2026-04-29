@@ -12,7 +12,7 @@
 //! The production `run_agent_loop` wraps this helper inside the provider
 //! fallback retry loop; this module is the inner per-attempt dispatch body.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;

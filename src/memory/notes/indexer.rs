@@ -48,7 +48,7 @@ pub struct IndexStats {
 pub struct NoteIndexer<S: NoteStore> {
     memory_dir: PathBuf,
     store: Arc<S>,
-    orientation: Option<std::sync::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    orientation: Option<crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
@@ -68,7 +68,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `NoteOrientation::invalidate` is called with the affected note path.
     pub fn with_orientation(
         mut self,
-        orientation: std::sync::Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
+        orientation: crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
     ) -> Self {
         self.orientation = Some(orientation);
         self
@@ -201,7 +201,12 @@ impl<S: NoteStore> NoteIndexer<S> {
 
         // Ensure parent dir exists
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await.ok();
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AlephError::ConfigError {
+                    message: format!("Failed to create parent directory {}: {e}", parent.display()),
+                    suggestion: None,
+                })?;
         }
 
         let content = note.to_markdown();

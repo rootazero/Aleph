@@ -75,7 +75,7 @@ impl TraceSink for GatewayTraceSink {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
     struct CountingHandle {
         traces: AtomicUsize,

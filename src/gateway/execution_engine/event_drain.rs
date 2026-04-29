@@ -7,7 +7,7 @@
 //! Task 4c will wire this into `run_loop.rs`; for now it is only unit-tested.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::Mutex;
 use tracing::trace;
