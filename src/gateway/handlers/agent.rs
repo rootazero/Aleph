@@ -442,10 +442,35 @@ pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
 mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
-    use crate::gateway::agent_instance::AgentInstance;
+    use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::event_emitter::EventEmitter;
     use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus as EngineRunStatus, RunState};
+    use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    use crate::gateway::session_store::SessionStore;
     use super::*;
+
+    /// Build a registry containing a "main" AgentInstance backed by a tempdir
+    /// FileSessionStore. Holds onto the TempDir so callers can keep it alive
+    /// for the duration of the test (dropping it tears down the workspace).
+    async fn registry_with_main_agent() -> (Arc<AgentRegistry>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let config = AgentInstanceConfig {
+            agent_id: "main".into(),
+            workspace: tmp.path().join("workspace"),
+            agent_dir: tmp.path().join("agent"),
+            ..AgentInstanceConfig::default()
+        };
+        let store = FileSessionStore::new(FileSessionStoreConfig {
+            base_dir: tmp.path().join("sessions"),
+            ..FileSessionStoreConfig::default()
+        })
+        .expect("FileSessionStore::new");
+        let session_store: Arc<dyn SessionStore> = Arc::new(store);
+        let instance = AgentInstance::new(config, session_store).expect("AgentInstance::new");
+        let registry = Arc::new(AgentRegistry::new());
+        registry.register(instance).await;
+        (registry, tmp)
+    }
 
     struct MockExecutionAdapter;
 
@@ -484,7 +509,7 @@ mod tests {
     async fn test_agent_run_manager() {
         let router = Arc::new(AgentRouter::new());
         let event_bus = Arc::new(GatewayEventBus::new());
-        let agent_registry = Arc::new(AgentRegistry::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
@@ -508,7 +533,7 @@ mod tests {
     async fn test_run_status() {
         let router = Arc::new(AgentRouter::new());
         let event_bus = Arc::new(GatewayEventBus::new());
-        let agent_registry = Arc::new(AgentRegistry::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
 
