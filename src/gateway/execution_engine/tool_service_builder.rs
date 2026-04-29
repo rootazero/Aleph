@@ -9,6 +9,8 @@
 //!
 //! Returned as `Arc<dyn ToolService>` for `FlowRequest.tool_service`.
 
+#![cfg(feature = "phase7_traffic_flip")]
+
 use std::collections::BTreeSet;
 use crate::sync_primitives::Arc;
 

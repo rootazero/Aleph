@@ -150,7 +150,10 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
+        #[cfg(feature = "phase7_traffic_flip")]
         let result = self.execute_via_harness(&config).await;
+        #[cfg(not(feature = "phase7_traffic_flip"))]
+        let result = self.execute_legacy(&config).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let key_findings = match &result {
@@ -208,10 +211,12 @@ impl AgentRuntime {
         result
     }
 
+    #[cfg(feature = "phase7_traffic_flip")]
     async fn execute_via_harness(
         &self,
         config: &AgentRuntimeConfig,
     ) -> Result<LoopRunResult, String> {
+        #[cfg(feature = "phase7_traffic_flip")]
         use crate::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
         // `self.child_chain` is the already-descended chain produced by the
         // caller (SubagentTool::execute calls `self.chain.child()`). The

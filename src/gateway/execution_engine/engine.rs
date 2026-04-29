@@ -513,7 +513,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs),
         ));
 
-        let result = tokio::select! {
+        #[cfg(feature = "phase7_traffic_flip")]
+        let result: Result<String, ExecutionError> = tokio::select! {
             result = self.run_agent_loop(
                 &run_id,
                 &request,
@@ -536,6 +537,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 warn!("Run {} timed out after {}s effective time", run_id, timeout_secs);
                 Err(ExecutionError::Timeout)
             }
+        };
+
+        #[cfg(not(feature = "phase7_traffic_flip"))]
+        let result: Result<String, ExecutionError> = {
+            let _ = (cancel_rx, deadline, timeout_secs);
+            Err(ExecutionError::Failed(
+                "ExecutionEngine requires phase7_traffic_flip feature".to_string(),
+            ))
         };
 
         // Update run state based on result

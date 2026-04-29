@@ -5,6 +5,8 @@
 //! by `AgentHarness`. This is a read-only adapter; it does not modify the
 //! underlying registry.
 
+#![cfg(feature = "phase7_traffic_flip")]
+
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;

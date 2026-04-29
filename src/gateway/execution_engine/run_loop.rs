@@ -128,6 +128,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ///
     /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "phase7_traffic_flip")]
     pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,

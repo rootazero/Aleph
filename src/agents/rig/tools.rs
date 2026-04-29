@@ -27,6 +27,10 @@ pub const BUILTIN_TOOLS: &[&str] = &[
 ///
 /// DEPRECATED: Use executor::builtin_registry::BuiltinToolConfig instead.
 /// This type is kept for backward compatibility.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use executor::builtin_registry::BuiltinToolConfig instead"
+)]
 #[derive(Clone, Default)]
 pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
