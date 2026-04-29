@@ -16,7 +16,10 @@ pub struct RigAgentConfig {
     pub provider: String,
     /// Model name
     pub model: String,
-    /// Temperature (0.0 - 1.0)
+    /// Temperature (0.0 - 2.0). The valid range is the *union* across all
+    /// supported providers so a config can target any of them; the actual
+    /// LLM API call is responsible for provider-specific clamping
+    /// (Anthropic accepts 0.0-1.0, OpenAI/Gemini accept 0.0-2.0).
     #[serde(default = "default_temperature", deserialize_with = "deserialize_temperature")]
     pub temperature: f32,
     /// Max tokens
@@ -39,13 +42,15 @@ pub struct RigAgentConfig {
     pub base_url: Option<String>,
 }
 
-/// Temperature must be in the valid range [0.0, 1.0].
+/// Temperature must be in [0.0, 2.0] — the union across supported
+/// providers. Provider-specific tightening (e.g. Anthropic's 0.0-1.0
+/// ceiling) is the request layer's responsibility, not the deserializer's.
 #[derive(Debug)]
 pub struct InvalidTemperatureError(f32);
 
 impl fmt::Display for InvalidTemperatureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "temperature {} is out of range [0.0, 1.0]", self.0)
+        write!(f, "temperature {} is out of range [0.0, 2.0]", self.0)
     }
 }
 
@@ -56,10 +61,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = f32::deserialize(deserializer)?;
-    if !(0.0..=1.0).contains(&value) {
+    if !(0.0..=2.0).contains(&value) {
         return Err(serde::de::Error::custom(format!(
-            "temperature {} is out of range [0.0, 1.0]",
-            value
+            "temperature {value} is out of range [0.0, 2.0]"
         )));
     }
     Ok(value)
@@ -95,5 +99,69 @@ impl Default for RigAgentConfig {
             api_key: None,
             base_url: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_temperature(temp: &str) -> Result<RigAgentConfig, toml::de::Error> {
+        let toml = format!(
+            r#"
+                provider = "openai"
+                model = "gpt-4o"
+                temperature = {temp}
+            "#
+        );
+        toml::from_str(&toml)
+    }
+
+    #[test]
+    fn deserialize_accepts_temperature_zero() {
+        let cfg = cfg_with_temperature("0.0").expect("temperature 0.0 must load");
+        assert_eq!(cfg.temperature, 0.0);
+    }
+
+    #[test]
+    fn deserialize_accepts_temperature_one() {
+        let cfg = cfg_with_temperature("1.0").expect("temperature 1.0 must load");
+        assert_eq!(cfg.temperature, 1.0);
+    }
+
+    #[test]
+    fn deserialize_accepts_openai_high_temperature() {
+        // OpenAI/Gemini accept 0.0..=2.0; the deserializer must not reject
+        // 1.5 across-the-board the way it did before.
+        let cfg = cfg_with_temperature("1.5").expect("temperature 1.5 must load for OpenAI");
+        assert_eq!(cfg.temperature, 1.5);
+    }
+
+    #[test]
+    fn deserialize_accepts_temperature_two() {
+        let cfg = cfg_with_temperature("2.0").expect("temperature 2.0 (max) must load");
+        assert_eq!(cfg.temperature, 2.0);
+    }
+
+    #[test]
+    fn deserialize_rejects_negative_temperature() {
+        let err = cfg_with_temperature("-0.1").expect_err("negative must reject");
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn deserialize_rejects_temperature_above_two() {
+        let err = cfg_with_temperature("2.1").expect_err("> 2.0 must reject");
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn deserialize_default_temperature_when_omitted() {
+        let toml = r#"
+            provider = "openai"
+            model = "gpt-4o"
+        "#;
+        let cfg: RigAgentConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.temperature, default_temperature());
     }
 }
