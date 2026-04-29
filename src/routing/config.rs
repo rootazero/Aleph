@@ -4,7 +4,19 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::identity_links::validate_identity_links;
 use super::session_key::DmScope;
+
+fn deserialize_identity_links_with_validation<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let links = HashMap::<String, Vec<String>>::deserialize(deserializer)?;
+    validate_identity_links(&links);
+    Ok(links)
+}
 
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +26,7 @@ pub struct SessionConfig {
     pub dm_scope: DmScope,
 
     /// Cross-channel identity links: canonical_name -> [channel:id, ...]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_identity_links_with_validation")]
     pub identity_links: HashMap<String, Vec<String>>,
 }
 

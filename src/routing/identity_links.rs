@@ -5,6 +5,35 @@
 
 use std::collections::HashMap;
 
+/// Validate identity links for duplicate IDs across canonical names.
+/// Logs a warning for each ID that appears in more than one canonical.
+pub fn validate_identity_links(identity_links: &HashMap<String, Vec<String>>) {
+    let mut id_to_canonicals: std::collections::HashMap<String, Vec<&str>> = HashMap::new();
+
+    for (canonical, ids) in identity_links.iter() {
+        for id in ids {
+            let id_lower = id.trim().to_lowercase();
+            if id_lower.is_empty() {
+                continue;
+            }
+            id_to_canonicals
+                .entry(id_lower.clone())
+                .or_default()
+                .push(canonical.as_str());
+        }
+    }
+
+    for (id, canonicals) in id_to_canonicals {
+        if canonicals.len() > 1 {
+            tracing::warn!(
+                id,
+                canonicals = ?canonicals,
+                "identity link ID appears under multiple canonical names; first match wins at runtime"
+            );
+        }
+    }
+}
+
 /// Resolve a peer ID to its canonical identity via identity links.
 ///
 /// Checks both bare peer ID and channel-scoped peer ID.
@@ -125,5 +154,18 @@ mod tests {
     fn test_resolve_empty_links() {
         let links = HashMap::new();
         assert_eq!(resolve_linked_peer_id(&links, "telegram", "123"), None);
+    }
+
+    #[test]
+    fn test_duplicate_id_across_canonicals_picks_first() {
+        // When two canonicals share the same ID, the first one in sorted order wins.
+        // Sorting by canonical name makes resolution deterministic.
+        let mut links = HashMap::new();
+        links.insert("alice".to_string(), vec!["telegram:123".to_string()]);
+        links.insert("bob".to_string(), vec!["telegram:123".to_string()]); // duplicate ID
+
+        let result = resolve_linked_peer_id(&links, "telegram", "123");
+        // alice < bob alphabetically, so alice is returned
+        assert_eq!(result, Some("alice".to_string()));
     }
 }
