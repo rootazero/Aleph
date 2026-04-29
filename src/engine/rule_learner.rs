@@ -1,4 +1,5 @@
 //! Rule Learner - ML-based L2 Rule Generation
+#![allow(unused)]
 //!
 //! This module implements machine learning-based rule generation for the L2 routing layer.
 //! It learns from successful L3 executions and automatically generates L2 routing rules.
@@ -34,6 +35,8 @@
 //! }
 //! ```
 
+// TODO(#1819): Integrate LearningAgent with agent loop to enable automatic rule learning.
+#[allow(dead_code)]
 use super::classifier::{ActionClass, NaiveBayesClassifier};
 use super::feature_extractor::{FeatureExtractor, FeatureVector};
 use super::reflex_layer::KeywordRule;

@@ -1,4 +1,5 @@
 //! Learning Agent - Agent Loop Integration for Automatic Rule Learning
+#![allow(unused)]
 //!
 //! This module integrates the RuleLearner with the Agent Loop, enabling automatic
 //! learning from L3 executions. It monitors execution events, extracts patterns,
@@ -36,6 +37,9 @@
 //! agent.generate_and_deploy_rules().await;
 //! ```
 
+// TODO(#1819): Integrate LearningAgent with agent loop to enable automatic rule learning.
+// This module is fully implemented but not yet wired up. Remove #[allow] when integrated.
+#[allow(unused)]
 use super::reflex_layer::ReflexLayer;
 use super::rule_learner::{LearnerStats, RuleLearner};
 use super::AtomicAction;
@@ -46,7 +50,6 @@ use crate::sync_primitives::Arc;
 use crate::tools::runtime::ToolResult;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
