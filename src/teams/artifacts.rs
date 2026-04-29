@@ -345,6 +345,18 @@ impl ArtifactStore for SqliteArtifactStore {
         )
         .map_err(db_err)?;
 
+        // Mirror blocked_by into the junction table so complete_task can
+        // resolve dependents without parsing JSON. kanban::add_dependency
+        // populates this for incremental edits; create_artifact must do the
+        // same for the bulk-insert path or unblocking is silently broken.
+        for dep in &input.blocked_by {
+            conn.execute(
+                "INSERT OR IGNORE INTO task_artifact_dependencies (artifact_id, depends_on) VALUES (?1, ?2)",
+                params![id, dep],
+            )
+            .map_err(db_err)?;
+        }
+
         Ok(TaskArtifact {
             id,
             task_id: input.task_id,
@@ -460,15 +472,35 @@ impl SqliteArtifactStore {
                     "SELECT artifact_id FROM task_artifact_dependencies WHERE depends_on = ?1",
                 )
                 .map_err(db_err)?;
-            let query = stmt.query_map(params![artifact_id], |row| row.get(0));
-            let rows = query.map_err(db_err)?;
-            let collected = rows.collect::<rusqlite::Result<Vec<String>>>();
-            collected.map_err(db_err)?
+            let rows = stmt
+                .query_map(params![artifact_id], |row| row.get(0))
+                .map_err(db_err)?;
+            rows.collect::<rusqlite::Result<Vec<String>>>().map_err(db_err)?
         };
 
         let mut unblocked = Vec::new();
         for blocked_id in blocked_ids {
-            if self.all_dependencies_completed(std::slice::from_ref(&blocked_id)).await? {
+            // Look up this dependent's own dependencies, then check whether
+            // they are *all* completed. The previous implementation passed
+            // `blocked_id` itself to `all_dependencies_completed`, which
+            // checks artifact status — i.e. it asked "is the blocked
+            // artifact completed?" instead of "are its dependencies?". The
+            // answer was always false for an item still in Blocked state,
+            // so unblocking never fired.
+            let deps: Vec<String> = {
+                let conn = self.conn.lock().await;
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT depends_on FROM task_artifact_dependencies WHERE artifact_id = ?1",
+                    )
+                    .map_err(db_err)?;
+                let rows = stmt
+                    .query_map(params![&blocked_id], |row| row.get(0))
+                    .map_err(db_err)?;
+                rows.collect::<rusqlite::Result<Vec<String>>>().map_err(db_err)?
+            };
+
+            if self.all_dependencies_completed(&deps).await? {
                 let task = self.update_status(&blocked_id, TaskStatus::Pending).await?;
                 unblocked.push(task);
             }
@@ -637,7 +669,7 @@ mod tests {
             .await
             .unwrap();
         assert!(store.all_dependencies_completed(&[]).await.unwrap());
-        assert!(store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+        assert!(store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
     }
 
     #[tokio::test]
@@ -673,9 +705,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+        assert!(store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
         store.update_status(&dep.id, TaskStatus::Pending).await.unwrap();
-        assert!(!store.all_dependencies_completed(&[artifact.id.clone()]).await.unwrap());
+        assert!(!store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
     }
 
     #[tokio::test]
