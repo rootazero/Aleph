@@ -91,6 +91,17 @@ pub struct FlowRequest {
     pub agent_id: AgentId,
     pub input: FlowInput,
     pub channel: Option<String>,
+    /// Client-supplied routing hint for session affinity. When `session_strategy`
+    /// resolves to `Reuse`, the hint is passed through; otherwise a fresh key is
+    /// generated.
+    ///
+    /// # Cross-user collision warning
+    /// Hints must be unique per user context. If two concurrent requests from
+    /// different users share the same hint value, the Gateway's orchestrator will
+    /// treat them as conflicting sessions (`FlowError::SessionConflict`), causing
+    /// one request to be rejected. In multi-user deployments, namespace hints with
+    /// a user-scoped prefix (e.g. `user:{user_id}:session:{hint}`) or rely on
+    /// `parent_session` for isolation rather than bare hints.
     pub session_hint: Option<String>,
     pub parent_session: Option<String>,
     pub depth: u8,
