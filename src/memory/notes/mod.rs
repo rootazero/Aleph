@@ -4,6 +4,7 @@
 //! tags, bullet-point facts, and `[[wikilinks]]` to other notes.
 //! SQLite is a rebuildable index; the markdown files are the source of truth.
 
+pub mod dedup;
 pub mod extractor;
 pub mod indexer;
 mod note;
@@ -13,6 +14,7 @@ pub mod search_result;
 pub mod store;
 mod wikilink;
 
+pub use dedup::find_similar_notes;
 pub use indexer::{IndexStats, NoteIndexer, CATEGORY_DIRS};
 pub use note::{sanitize_title, KnowledgeNote, Severity};
 pub use retrieval::{NoteContent, NoteRetrieval};
