@@ -178,6 +178,7 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_001_000,
             content_hash: format!("hash_{title}"),
+            ..Default::default()
         }
     }
 

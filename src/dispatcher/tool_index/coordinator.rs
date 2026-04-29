@@ -229,6 +229,7 @@ impl ToolIndexCoordinator {
             created_at: now,
             updated_at: now,
             content_hash: String::new(), // will be computed on write
+            ..Default::default()
         };
 
         // Write note file + update notes_index
@@ -420,6 +421,7 @@ impl ToolIndexCoordinator {
                         created_at: entry.created_at,
                         updated_at: entry.updated_at,
                         content_hash: entry.content_hash.clone(),
+                        ..Default::default()
                     }
                 })
             } else {
@@ -432,6 +434,7 @@ impl ToolIndexCoordinator {
                     created_at: entry.created_at,
                     updated_at: entry.updated_at,
                     content_hash: entry.content_hash.clone(),
+                    ..Default::default()
                 }
             };
 
@@ -473,6 +476,7 @@ impl ToolIndexCoordinator {
                 created_at: entry.created_at,
                 updated_at: entry.updated_at,
                 content_hash: entry.content_hash.clone(),
+                ..Default::default()
             })
         } else {
             KnowledgeNote {
@@ -484,6 +488,7 @@ impl ToolIndexCoordinator {
                 created_at: entry.created_at,
                 updated_at: entry.updated_at,
                 content_hash: entry.content_hash.clone(),
+                ..Default::default()
             }
         };
 

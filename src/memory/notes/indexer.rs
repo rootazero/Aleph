@@ -12,7 +12,7 @@ use tokio::fs;
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
-use crate::memory::notes::{sanitize_title, KnowledgeNote};
+use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
 pub const CATEGORY_DIRS: &[&str] = &[
@@ -277,6 +277,9 @@ impl<S: NoteStore> NoteIndexer<S> {
                 created_at: chrono::Utc::now().timestamp(),
                 updated_at: chrono::Utc::now().timestamp(),
                 content_hash: String::new(),
+                confidence: 1.0,
+                severity: Severity::Low,
+                source_facts: Vec::new(),
             }
         };
 
@@ -572,6 +575,7 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
             content_hash: String::new(),
+            ..Default::default()
         };
 
         let path = indexer.write_note(AGENT, "other", &note).await.unwrap();
@@ -781,6 +785,7 @@ mod reference_hook_tests {
             created_at: 0,
             updated_at: 0,
             content_hash: String::new(),
+            ..Default::default()
         };
         indexer
             .write_note("default", "learning", &note)
@@ -812,6 +817,7 @@ mod reference_hook_tests {
             created_at: 0,
             updated_at: 0,
             content_hash: String::new(),
+            ..Default::default()
         };
         indexer
             .write_note("default", "learning", &note)

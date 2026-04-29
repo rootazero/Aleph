@@ -71,6 +71,7 @@ impl MemoryCommandHandler {
                     created_at: now,
                     updated_at: now,
                     content_hash: String::new(),
+                    ..Default::default()
                 };
                 let path = indexer.write_note(&fact.agent, category, &note).await;
                 match path {

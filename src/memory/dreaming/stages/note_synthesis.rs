@@ -104,6 +104,7 @@ impl DreamStage for NoteSynthesisStage {
                 created_at: chrono::Utc::now().timestamp(),
                 updated_at: chrono::Utc::now().timestamp(),
                 content_hash: String::new(),
+                ..Default::default()
             };
 
             // Ensure the synthesis directory exists (not in CATEGORY_DIRS, create manually)

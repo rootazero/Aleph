@@ -91,6 +91,7 @@ impl DreamStage for SkillDistillStage {
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
+                    ..Default::default()
                 };
 
                 match ctx.indexer.write_note(&ctx.agent_id, "skill", &note).await {

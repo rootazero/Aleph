@@ -151,6 +151,7 @@ mod resolve_tests {
             created_at: 0,
             updated_at: 0,
             content_hash: format!("h_{title}"),
+            ..Default::default()
         }
     }
 

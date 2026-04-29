@@ -34,6 +34,16 @@ struct Frontmatter {
     created: Option<String>,
     #[serde(default)]
     updated: Option<String>,
+    #[serde(default = "default_confidence")]
+    confidence: f32,
+    #[serde(default)]
+    severity: Severity,
+    #[serde(default)]
+    source_facts: Vec<String>,
+}
+
+fn default_confidence() -> f32 {
+    1.0
 }
 
 /// A knowledge note — the primary memory unit.
@@ -57,6 +67,33 @@ pub struct KnowledgeNote {
     pub updated_at: i64,
     /// SHA-256 hex digest of the full file content
     pub content_hash: String,
+    /// LLM-assigned distillation confidence; 1.0 for legacy notes (no
+    /// `confidence:` in frontmatter). Used by retrieval re-rank.
+    pub confidence: f32,
+    /// LLM-judged importance; `Severity::Low` for legacy notes. Used by
+    /// retrieval re-rank.
+    pub severity: Severity,
+    /// Source synthesis-note paths or raw-memory IDs that produced this note.
+    /// Empty for hand-authored / legacy notes.
+    pub source_facts: Vec<String>,
+}
+
+impl Default for KnowledgeNote {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            category: String::new(),
+            tags: Vec::new(),
+            facts: Vec::new(),
+            links: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+            content_hash: String::new(),
+            confidence: 1.0,
+            severity: Severity::Low,
+            source_facts: Vec::new(),
+        }
+    }
 }
 
 impl KnowledgeNote {
@@ -84,6 +121,9 @@ impl KnowledgeNote {
             created_at,
             updated_at,
             content_hash,
+            confidence: frontmatter.confidence,
+            severity: frontmatter.severity,
+            source_facts: frontmatter.source_facts,
         })
     }
 
@@ -235,6 +275,38 @@ mod tests {
             serde_json::to_string(&Severity::Critical).unwrap(),
             "\"critical\""
         );
+    }
+
+    #[test]
+    fn knowledge_note_old_markdown_loads_with_defaults() {
+        let old_md = "---\ncategory: skill\ntags: [a]\ncreated: 2026-04-29\nupdated: 2026-04-29\n---\n\n- existing fact\n";
+        let n = KnowledgeNote::from_markdown("legacy-note", old_md).expect("must parse");
+        assert!(
+            (n.confidence - 1.0).abs() < 1e-6,
+            "old notes get confidence=1.0"
+        );
+        assert_eq!(n.severity, Severity::Low, "old notes get severity=Low");
+        assert!(n.source_facts.is_empty(), "old notes get empty source_facts");
+    }
+
+    #[test]
+    fn knowledge_note_new_markdown_roundtrips_new_fields() {
+        let md = "---\ncategory: skill\ntags: [x]\ncreated: 2026-04-29\nupdated: 2026-04-29\nconfidence: 0.85\nseverity: high\nsource_facts: [synthesis/learning-syn]\n---\n\n- the rule\n";
+        let n = KnowledgeNote::from_markdown("new-note", md).expect("must parse");
+        assert!((n.confidence - 0.85).abs() < 1e-6);
+        assert_eq!(n.severity, Severity::High);
+        assert_eq!(
+            n.source_facts,
+            vec!["synthesis/learning-syn".to_string()]
+        );
+    }
+
+    #[test]
+    fn knowledge_note_default_has_legacy_safe_values() {
+        let n = KnowledgeNote::default();
+        assert_eq!(n.confidence, 1.0, "Default confidence must be 1.0 (legacy-safe)");
+        assert_eq!(n.severity, Severity::Low, "Default severity must be Low (legacy-safe)");
+        assert!(n.source_facts.is_empty());
     }
 
     const SAMPLE_NOTE: &str = "\

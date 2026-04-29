@@ -208,6 +208,9 @@ impl DefaultQueryFiler {
             created_at: now,
             updated_at: now,
             content_hash: String::new(),
+            confidence: 1.0,
+            severity: crate::memory::notes::Severity::Low,
+            source_facts: Vec::new(),
         };
 
         self.indexer.write_note(agent_id, "query", &note).await?;

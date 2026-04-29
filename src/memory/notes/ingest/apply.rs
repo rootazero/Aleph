@@ -100,6 +100,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
+                    ..Default::default()
                 };
                 let summary_trimmed: String = summary.chars().take(120).collect();
                 if !summary_trimmed.is_empty() {
@@ -211,6 +212,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             created_at: chrono::Utc::now().timestamp(),
             updated_at: chrono::Utc::now().timestamp(),
             content_hash: String::new(),
+            ..Default::default()
         })
     }
 

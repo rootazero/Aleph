@@ -797,6 +797,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             content_hash: format!("hash_{title}"),
+            ..Default::default()
         }
     }
 

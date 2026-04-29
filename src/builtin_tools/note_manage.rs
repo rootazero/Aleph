@@ -202,6 +202,7 @@ impl NoteManageTool {
             created_at: now,
             updated_at: now,
             content_hash: String::new(),
+            ..Default::default()
         };
 
         // If content is provided, treat each line starting with "- " as a fact,
