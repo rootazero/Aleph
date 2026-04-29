@@ -215,7 +215,7 @@ impl StreamingToolExecutor {
         // Phase 2: await all in-flight concurrent tasks.
         for handle in in_flight {
             match handle.await {
-                Ok((idx, mut outcome)) => {
+                Ok((idx, outcome)) => {
                     // Check cascade policy: if a side-effecting tool failed,
                     // cancel all remaining siblings in this batch.
                     if outcome.outcome.is_error {
