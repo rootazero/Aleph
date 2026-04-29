@@ -8,8 +8,30 @@ use std::path::PathBuf;
 
 use crate::error::AlephError;
 use crate::memory::notes::store::NoteStore;
+use crate::memory::notes::{KnowledgeNote, Severity};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+
+/// Overfetch factor — KNN returns K×α candidates so re-rank by confidence/severity
+/// can promote items past the original top-K. See Phase 2 Decision 4.
+const RERANK_OVERFETCH: usize = 3;
+
+/// Boost factor applied to a note's cosine similarity based on its LLM-judged severity.
+/// Legacy notes (severity=Low) get boost 1.0 → no behavior change.
+pub(crate) fn severity_boost(s: Severity) -> f32 {
+    match s {
+        Severity::Low => 1.0,
+        Severity::Med => 1.2,
+        Severity::High => 1.5,
+        Severity::Critical => 2.0,
+    }
+}
+
+/// Final ranking score: `cosine × confidence × severity_boost`.
+/// Legacy defaults (confidence=1.0, severity=Low) yield score = cosine.
+pub(crate) fn rerank_score(cosine: f32, confidence: f32, severity: Severity) -> f32 {
+    cosine * confidence * severity_boost(severity)
+}
 
 /// A single note retrieved by vector similarity search.
 #[derive(Debug, Clone)]
@@ -39,6 +61,12 @@ impl<S: NoteStore> NoteRetrieval<S> {
     }
 
     /// Retrieve the top `limit` notes most similar to `query` for the given agent.
+    ///
+    /// Internally overfetches `limit × RERANK_OVERFETCH` candidates from the KNN, then
+    /// re-ranks by `cosine × confidence × severity_boost(severity)` (Phase 2 Decision 4).
+    /// Legacy notes (no `confidence` / `severity` in frontmatter) get defaults
+    /// `confidence=1.0`, `severity=Low` so their final score equals their cosine score —
+    /// zero behavior change for pre-self-evolution notes.
     pub async fn retrieve(
         &self,
         query: &str,
@@ -49,28 +77,42 @@ impl<S: NoteStore> NoteRetrieval<S> {
         let embedding = self.embedder.embed(query).await?;
         let dim = embedding.len() as u32;
 
-        // 2. Vector search in notes_vec
+        // 2. Vector search — overfetch so re-rank can promote items past the original top-K
+        let raw_limit = limit.saturating_mul(RERANK_OVERFETCH).max(limit);
         let results = self
             .store
-            .vector_search(&embedding, dim, agent_id, limit)
+            .vector_search(&embedding, dim, agent_id, raw_limit)
             .await?;
 
-        // 3. Read markdown files for top-K paths
-        let mut notes = Vec::new();
-        for (path, score) in results {
+        // 3. Read markdown, parse frontmatter, compute final re-rank score
+        let mut scored: Vec<NoteContent> = Vec::new();
+        for (path, cosine) in results {
             let file_path = self.memory_dir.join(agent_id).join(format!("{path}.md"));
             let content = match tokio::fs::read_to_string(&file_path).await {
                 Ok(c) => c,
                 Err(_) => continue, // file missing on disk — skip gracefully
             };
-            notes.push(NoteContent {
+            // Legacy notes (or unparseable frontmatter) fall back to (1.0, Low) → score == cosine.
+            let (confidence, severity) = match KnowledgeNote::from_markdown(&path, &content) {
+                Ok(n) => (n.confidence, n.severity),
+                Err(_) => (1.0, Severity::Low),
+            };
+            let final_score = rerank_score(cosine, confidence, severity);
+            scored.push(NoteContent {
                 path,
                 content,
-                score,
+                score: final_score,
             });
         }
 
-        Ok(notes)
+        // 4. Sort by descending final score and trim to requested limit
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(limit);
+        Ok(scored)
     }
 }
 
@@ -83,6 +125,37 @@ mod tests {
     use uuid::Uuid;
 
     const AGENT: &str = "default";
+
+    // ─── re-rank pure-function tests (Phase 2 Decision 4) ──────────────────
+
+    #[test]
+    fn severity_boost_table() {
+        assert!((severity_boost(Severity::Low) - 1.0).abs() < 1e-6);
+        assert!((severity_boost(Severity::Med) - 1.2).abs() < 1e-6);
+        assert!((severity_boost(Severity::High) - 1.5).abs() < 1e-6);
+        assert!((severity_boost(Severity::Critical) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rerank_score_legacy_defaults_match_cosine() {
+        // Legacy note: confidence=1.0, severity=Low → score == cosine
+        let s = rerank_score(0.9, 1.0, Severity::Low);
+        assert!((s - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rerank_prefers_higher_confidence() {
+        let low = rerank_score(0.9, 0.3, Severity::Med);
+        let high = rerank_score(0.9, 0.95, Severity::Med);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn rerank_boosts_higher_severity() {
+        let med = rerank_score(0.9, 1.0, Severity::Med);
+        let critical = rerank_score(0.9, 1.0, Severity::Critical);
+        assert!(critical > med);
+    }
 
     fn create_test_db() -> Arc<SqliteMemoryBackend> {
         let temp_dir = std::env::temp_dir();
