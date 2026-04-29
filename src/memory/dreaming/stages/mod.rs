@@ -1,6 +1,7 @@
 //! Dream pipeline stages: trait definition and stage implementations.
 
 pub mod daily_digest;
+pub mod feedback_distill;
 pub mod index_refresher;
 pub mod note_consolidate;
 pub mod note_decay;
@@ -11,6 +12,7 @@ pub mod skill_distill;
 pub mod types;
 
 pub use daily_digest::DailyDigestStage;
+pub use feedback_distill::FeedbackDistillStage;
 pub use index_refresher::IndexRefresherStage;
 pub use note_consolidate::NoteConsolidateStage;
 pub use note_decay::NoteDecayStage;

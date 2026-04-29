@@ -146,6 +146,15 @@ impl DreamPipeline {
                 Box::new(stages::SkillDistillStage {
                     max_per_cycle: dreaming_cfg.skill_distill_max_per_cycle,
                 }),
+                // Phase 3: distill user-correction signals into feedback notes.
+                // Runs after SkillDistill so a single dream cycle can pick up
+                // both implicit (synthesis-derived) and explicit (correction)
+                // learnings.
+                Box::new(stages::FeedbackDistillStage {
+                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
+                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
+                    lookback: dreaming_cfg.feedback_lookback,
+                }),
                 Box::new(stages::DailyDigestStage),
             ],
             DreamStrategy::Conserve => vec![
@@ -741,9 +750,22 @@ mod tests {
                 "note_consolidate",
                 "note_synthesis",
                 "skill_distill",
+                "feedback_distill",
                 "daily_digest"
             ]
         );
+    }
+
+    #[test]
+    fn pipeline_synthesize_runs_feedback_after_skill_distill() {
+        // Phase 3: ensure FeedbackDistill is scheduled directly after
+        // SkillDistill so a single dream cycle can pick up both.
+        let cfg = crate::config::types::memory::DreamingConfig::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg);
+        let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
+        let skill_pos = names.iter().position(|n| *n == "skill_distill").unwrap();
+        let feedback_pos = names.iter().position(|n| *n == "feedback_distill").unwrap();
+        assert_eq!(feedback_pos, skill_pos + 1);
     }
 
     #[test]

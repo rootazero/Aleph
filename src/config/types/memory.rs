@@ -395,6 +395,17 @@ pub struct DreamingConfig {
     /// Was previously hardcoded to 3 in the SkillDistill prompt.
     #[serde(default = "default_skill_distill_max_per_cycle")]
     pub skill_distill_max_per_cycle: usize,
+    /// Max feedback-notes emitted per FeedbackDistill cycle (Phase 3).
+    #[serde(default = "default_feedback_distill_max_per_cycle")]
+    pub feedback_distill_max_per_cycle: usize,
+    /// Minimum number of correction signals required before FeedbackDistill
+    /// will spend an LLM call. Below this, the stage is a no-op.
+    #[serde(default = "default_feedback_distill_min_candidates")]
+    pub feedback_distill_min_candidates: usize,
+    /// How many of the most recent correction signals FeedbackDistill considers
+    /// per cycle. Larger = more context per LLM call but more tokens.
+    #[serde(default = "default_feedback_lookback")]
+    pub feedback_lookback: usize,
 }
 
 impl Default for DreamingConfig {
@@ -411,6 +422,9 @@ impl Default for DreamingConfig {
             synthesis_min_cluster_size: default_synthesis_min_cluster_size(),
             synthesis_max_insights: default_synthesis_max_insights(),
             skill_distill_max_per_cycle: default_skill_distill_max_per_cycle(),
+            feedback_distill_max_per_cycle: default_feedback_distill_max_per_cycle(),
+            feedback_distill_min_candidates: default_feedback_distill_min_candidates(),
+            feedback_lookback: default_feedback_lookback(),
         }
     }
 }
@@ -586,6 +600,18 @@ pub fn default_synthesis_max_insights() -> usize {
 
 pub fn default_skill_distill_max_per_cycle() -> usize {
     3
+}
+
+pub fn default_feedback_distill_max_per_cycle() -> usize {
+    3
+}
+
+pub fn default_feedback_distill_min_candidates() -> usize {
+    3
+}
+
+pub fn default_feedback_lookback() -> usize {
+    50
 }
 
 // Memory decay defaults
