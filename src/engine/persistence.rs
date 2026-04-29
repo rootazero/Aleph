@@ -3,36 +3,11 @@
 //! This module provides persistence for learned rules, patterns, and classifier state.
 //! It enables the system to save and load learning data across sessions.
 //!
-//! # Architecture
-//!
-//! ```text
-//! RuleLearner → Persistence → SQLite Database
-//!     ↓             ↓              ↓
-//!  Patterns      Save/Load      Storage
-//! ```
-//!
 //! # Storage Format
 //!
 //! - **learned_patterns**: User input patterns and their associated actions
 //! - **classifier_state**: Naive Bayes classifier parameters (priors, likelihoods)
 //! - **rule_metadata**: Rule generation metadata (confidence, hit rate, etc.)
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use alephcore::engine::{Persistence, RuleLearner};
-//!
-//! let persistence = Persistence::new("./data/learned_rules.db").await?;
-//! let learner = RuleLearner::new();
-//!
-//! // Load previously learned patterns
-//! persistence.load_learner(&learner).await?;
-//!
-//! // ... learning happens ...
-//!
-//! // Save learned patterns
-//! persistence.save_learner(&learner).await?;
-//! ```
 
 use super::{AtomicAction, NaiveBayesClassifier};
 use crate::sync_primitives::Arc;

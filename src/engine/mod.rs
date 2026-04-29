@@ -14,7 +14,6 @@ mod classifier;
 mod conflict_detector;
 #[allow(dead_code)]
 mod feature_extractor;
-mod learning_agent;
 mod patch;
 #[allow(dead_code)]
 mod performance_optimizer;
@@ -22,7 +21,6 @@ mod performance_optimizer;
 mod persistence;
 mod reflex_bench;
 mod reflex_layer;
-mod rule_learner;
 
 // NOTE: Disabled — AtomicEngine types have been removed. Tests need rewrite.
 #[cfg(all(test, feature = "disabled-tests"))]
