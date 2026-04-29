@@ -44,4 +44,4 @@ pub(crate) use patch::PatchApplier;
 pub use performance_optimizer::CacheStats;
 pub use persistence::Persistence;
 pub use reflex_layer::ActionType;
-pub(crate) use reflex_layer::{ParamExtractor, ReflexLayer};
+pub(crate) use reflex_layer::ReflexLayer;
