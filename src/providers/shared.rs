@@ -3,7 +3,7 @@
 /// This module contains common helper functions used across multiple provider
 /// implementations to reduce code duplication.
 use crate::config::ProviderConfig;
-use crate::core::MediaAttachment;
+use crate::core::{MediaAttachment, MediaType};
 
 /// Separate attachments into images and documents.
 ///
@@ -13,11 +13,11 @@ pub(crate) fn separate_attachments(
 ) -> (Vec<&MediaAttachment>, Vec<&MediaAttachment>) {
     let images: Vec<_> = attachments
         .iter()
-        .filter(|a| a.media_type == "image")
+        .filter(|a| a.media_type == MediaType::Image)
         .collect();
     let documents: Vec<_> = attachments
         .iter()
-        .filter(|a| a.media_type == "document")
+        .filter(|a| a.media_type == MediaType::Document)
         .collect();
     (images, documents)
 }
@@ -88,8 +88,13 @@ mod tests {
         filename: Option<&str>,
         data: &str,
     ) -> MediaAttachment {
+        use crate::core::ContentEncoding;
         MediaAttachment {
-            media_type: media_type.to_string(),
+            media_type: if media_type == "image" {
+                MediaType::Image
+            } else {
+                MediaType::Document
+            },
             mime_type: if media_type == "image" {
                 "image/png".to_string()
             } else {
@@ -97,9 +102,9 @@ mod tests {
             },
             data: data.to_string(),
             encoding: if media_type == "image" {
-                "base64".to_string()
+                ContentEncoding::Base64
             } else {
-                "utf8".to_string()
+                ContentEncoding::Utf8
             },
             filename: filename.map(|s| s.to_string()),
             size_bytes: data.len() as u64,
