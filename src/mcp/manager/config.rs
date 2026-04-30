@@ -228,15 +228,18 @@ fn expand_env_var(s: &str) -> Option<String> {
     // Static regex compiled once, reused on every call
     static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let re = ENV_VAR_RE.get_or_init(|| {
-        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("hardcoded regex is valid")
+        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+            .unwrap_or_else(|_| unreachable!("hardcoded regex is valid"))
     });
 
     let mut result = s.to_string();
     let mut found = false;
 
     for caps in re.captures_iter(s) {
-        let full_match = caps.get(0).unwrap().as_str();
-        let var_name = caps.get(1).unwrap().as_str();
+        let (full_match, var_name) = match (caps.get(0), caps.get(1)) {
+            (Some(m), Some(v)) => (m.as_str(), v.as_str()),
+            _ => continue,
+        };
 
         if let Ok(value) = std::env::var(var_name) {
             result = result.replace(full_match, &value);

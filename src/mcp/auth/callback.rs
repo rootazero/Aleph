@@ -184,13 +184,15 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
     }
 
     // Parse query parameters
-    let query_start = path.find('?');
-    if query_start.is_none() {
-        send_error_response(&mut stream, 400, "Missing query parameters").await;
-        return None;
-    }
+    let query_start = match path.find('?') {
+        Some(idx) => idx,
+        None => {
+            send_error_response(&mut stream, 400, "Missing query parameters").await;
+            return None;
+        }
+    };
 
-    let query = &path[query_start.unwrap() + 1..];
+    let query = &path[query_start + 1..];
     let params: std::collections::HashMap<&str, &str> = query
         .split('&')
         .filter_map(|p| {
