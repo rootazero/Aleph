@@ -2,8 +2,6 @@
 //!
 //! Parses code fence spans from text for safe break point detection
 //! during block chunking. Ensures we never split inside a code block.
-//!
-//! Reference: Moltbot src/markdown/fences.ts
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -16,22 +14,33 @@ static FENCE_REGEX: LazyLock<Regex> =
 /// A span representing a code fence block in text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceSpan {
-    /// Character offset of the opening fence line start
+    /// Byte offset of the opening fence line start.
     pub start: usize,
-    /// Character offset after the closing fence line (or text end if unclosed)
+    /// Byte offset after the closing fence line (or text end if unclosed).
     pub end: usize,
-    /// The full opening line (e.g., "```rust")
-    pub open_line: String,
-    /// Just the fence marker (e.g., "```" or "~~~~")
+    /// Just the fence marker (e.g., "```" or "~~~~").
     pub marker: String,
-    /// Leading indentation (0-3 spaces)
+    /// Leading indentation (0-3 spaces).
     pub indent: String,
-    /// Language tag if present (e.g., "rust", "javascript")
+    /// Language tag if present (e.g., "rust", "javascript").
     pub language: Option<String>,
 }
 
+/// Internal state for a fence that has been opened but not yet closed.
+#[derive(Debug, Clone)]
+struct OpenFence {
+    start: usize,
+    marker: String,
+    indent: String,
+    language: Option<String>,
+}
+
 impl FenceSpan {
-    /// Check if a character index falls inside this fence span.
+    /// Check if a byte index falls strictly inside this fence span.
+    ///
+    /// Returns `true` if `index` is strictly between `start` and `end`
+    /// (exclusive on both boundaries). Boundary positions themselves are
+    /// considered outside the fence, making them safe split points.
     pub fn contains(&self, index: usize) -> bool {
         index > self.start && index < self.end
     }
@@ -76,7 +85,7 @@ pub struct FenceSplit {
 /// ```
 pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
     let mut spans = Vec::new();
-    let mut current_fence: Option<(usize, String, String, String, Option<String>)> = None;
+    let mut current_fence: Option<OpenFence> = None;
     let mut offset = 0;
 
     for line in text.lines() {
@@ -90,25 +99,23 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
             let marker = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             let info = caps.get(3).map(|m| m.as_str().trim()).unwrap_or("");
 
-            if let Some((start, open_line, open_marker, open_indent, language)) = &current_fence {
-                // Check if this closes the current fence
+            if let Some(open) = &current_fence {
+                // Check if this closes the current fence.
                 // Closing fence must:
                 // 1. Use same character type (` or ~)
                 // 2. Have marker length >= opening marker length
                 // 3. Have no info string (just marker)
-                let same_char = marker.chars().next() == open_marker.chars().next();
-                let long_enough = marker.len() >= open_marker.len();
+                let same_char = marker.chars().next() == open.marker.chars().next();
+                let long_enough = marker.len() >= open.marker.len();
                 let no_info = info.is_empty();
 
                 if same_char && long_enough && no_info {
-                    // Close the fence
                     spans.push(FenceSpan {
-                        start: *start,
+                        start: open.start,
                         end: line_end,
-                        open_line: open_line.clone(),
-                        marker: open_marker.clone(),
-                        indent: open_indent.clone(),
-                        language: language.clone(),
+                        marker: open.marker.clone(),
+                        indent: open.indent.clone(),
+                        language: open.language.clone(),
                     });
                     current_fence = None;
                 }
@@ -121,18 +128,16 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
                     Some(info.split_whitespace().next().unwrap_or(info).to_string())
                 };
 
-                current_fence = Some((
-                    line_start,
-                    line.to_string(),
-                    marker.to_string(),
-                    indent.to_string(),
+                current_fence = Some(OpenFence {
+                    start: line_start,
+                    marker: marker.to_string(),
+                    indent: indent.to_string(),
                     language,
-                ));
+                });
             }
         }
 
         // Move offset past line and line terminator (\n or \r\n)
-        // Check if there's a \r\n sequence (the \r comes before the \n that lines() split on)
         offset = if text.as_bytes().get(line_end) == Some(&b'\r')
             && text.as_bytes().get(line_end + 1) == Some(&b'\n')
         {
@@ -145,14 +150,13 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
     }
 
     // Handle unclosed fence (extends to end of text)
-    if let Some((start, open_line, marker, indent, language)) = current_fence {
+    if let Some(open) = current_fence {
         spans.push(FenceSpan {
-            start,
+            start: open.start,
             end: text.len(),
-            open_line,
-            marker,
-            indent,
-            language,
+            marker: open.marker,
+            indent: open.indent,
+            language: open.language,
         });
     }
 
@@ -317,7 +321,6 @@ mod tests {
         let span = FenceSpan {
             start: 0,
             end: 100,
-            open_line: "```typescript".to_string(),
             marker: "```".to_string(),
             indent: "".to_string(),
             language: Some("typescript".to_string()),
