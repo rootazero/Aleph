@@ -44,7 +44,7 @@ impl IdCardRule {
             .is_some_and(|region| VALID_REGIONS.contains(&region))
     }
 
-    /// Validate birth date (digits 6-13, YYYYMMDD)
+    /// Validate birth date (digits 6-13, YYYYMMDD) with exact month/day limits.
     fn is_valid_date(id: &str) -> bool {
         let year: u32 = match id.get(6..10).and_then(|s| s.parse().ok()) {
             Some(y) => y,
@@ -59,7 +59,21 @@ impl IdCardRule {
             None => return false,
         };
 
-        (1900..=2100).contains(&year) && (1..=12).contains(&month) && (1..=31).contains(&day)
+        if !(1900..=2100).contains(&year) || !(1..=12).contains(&month) || day == 0 {
+            return false;
+        }
+
+        let max_day = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+                if is_leap { 29 } else { 28 }
+            }
+            _ => return false,
+        };
+
+        day <= max_day
     }
 
     /// Validate ISO 7064 MOD 11-2 checksum
@@ -204,6 +218,27 @@ mod tests {
     fn test_no_match_invalid_date() {
         // Month 13 is invalid
         let matches = rule().detect("ID: 110101199013011234");
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_invalid_day_for_month() {
+        // April has 30 days, so 31st is invalid
+        let matches = rule().detect("ID: 110101199004311234");
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_feb_30() {
+        // February never has 30 days
+        let matches = rule().detect("ID: 110101199002301234");
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn test_no_match_feb_29_non_leap() {
+        // 2021 is not a leap year, Feb 29 is invalid
+        let matches = rule().detect("ID: 110101202102291234");
         assert_eq!(matches.len(), 0);
     }
 }

@@ -2,6 +2,52 @@
 
 use regex::Regex;
 use std::collections::HashSet;
+use std::sync::OnceLock;
+
+static SYSTEM_EMAIL_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+
+fn system_email_patterns() -> &'static Vec<Regex> {
+    SYSTEM_EMAIL_PATTERNS.get_or_init(|| {
+        vec![
+            Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
+            Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
+            Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
+            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b")
+                .expect("valid regex literal"),
+            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$")
+                .expect("valid regex literal"),
+        ]
+    })
+}
+
+fn test_phones() -> HashSet<String> {
+    [
+        "13800138000",
+        "18888888888",
+        "13900001111",
+        "13800000000",
+        "15800000000",
+        "18900000000",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+fn local_ips() -> HashSet<String> {
+    [
+        "127.0.0.1",
+        "0.0.0.0",
+        "localhost",
+        "192.168.0.1",
+        "192.168.1.1",
+        "10.0.0.1",
+        "172.16.0.1",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
 
 /// Allowlist of known non-PII values
 pub struct PiiAllowlist {
@@ -15,45 +61,10 @@ pub struct PiiAllowlist {
 
 impl Default for PiiAllowlist {
     fn default() -> Self {
-        let test_phones: HashSet<String> = [
-            "13800138000",
-            "18888888888",
-            "13900001111",
-            "13800000000",
-            "15800000000",
-            "18900000000",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-        let system_email_patterns = vec![
-            Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
-            Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
-            Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
-            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b")
-                .expect("valid regex literal"),
-            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$")
-                .expect("valid regex literal"),
-        ];
-
-        let local_ips: HashSet<String> = [
-            "127.0.0.1",
-            "0.0.0.0",
-            "localhost",
-            "192.168.0.1",
-            "192.168.1.1",
-            "10.0.0.1",
-            "172.16.0.1",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
         Self {
-            test_phones,
-            system_email_patterns,
-            local_ips,
+            test_phones: test_phones(),
+            system_email_patterns: system_email_patterns().clone(),
+            local_ips: local_ips(),
         }
     }
 }

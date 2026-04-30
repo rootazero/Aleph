@@ -104,6 +104,7 @@ impl PiiEngine {
     pub fn reload(config: PrivacyConfig) {
         if let Some(engine) = PII_ENGINE.get() {
             let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
+            guard.rules = crate::pii::rules::build_rules(&config.custom_rules);
             guard.config = config;
         }
     }
@@ -273,7 +274,11 @@ impl PiiEngine {
     }
 }
 
-/// Remove overlapping matches, keeping the one encountered first (rules are ordered by severity)
+/// Remove overlapping matches, keeping the one with the larger start offset.
+///
+/// Callers must sort matches by `start` descending before calling this function
+/// so that higher-severity matches (which are processed first by the engine)
+/// win when two matches overlap.
 fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
     if matches.len() <= 1 {
         return matches;
@@ -412,5 +417,37 @@ mod tests {
         assert!(engine.is_platform_excluded(None, "ollama"));
         assert!(engine.is_platform_excluded(Some("telegram"), "local-llm"));
         assert!(!engine.is_platform_excluded(Some("telegram"), "anthropic"));
+    }
+
+    #[test]
+    fn test_reload_updates_rules() {
+        let initial_config = PrivacyConfig::default();
+        PiiEngine::init(initial_config);
+
+        let mut new_config = PrivacyConfig::default();
+        new_config.custom_rules.push(crate::config::types::CustomPiiRule {
+            name: "test_token".to_string(),
+            pattern: r"TK-[0-9]{4}".to_string(),
+            placeholder: "[TK]".to_string(),
+            severity: crate::config::types::CustomPiiSeverity::High,
+            action: PiiAction::Block,
+        });
+
+        PiiEngine::reload(new_config);
+
+        let engine = PiiEngine::global().unwrap();
+        let guard = engine.read().unwrap();
+        let result = guard.filter("Token: TK-1234");
+        assert_eq!(result.blocked_count, 1);
+        assert!(result.text.contains("[TK]"));
+    }
+
+    #[test]
+    fn test_dedup_overlapping_prefers_higher_severity() {
+        // Phone (High) and ID card (Critical) overlap — Critical should win.
+        // 11010119900307002X is a valid ID card.
+        // The digits "1990030700" also match the phone pattern.
+        let result = engine().filter("ID: 11010119900307002X");
+        assert!(result.text.contains("[ID_CARD]"));
     }
 }

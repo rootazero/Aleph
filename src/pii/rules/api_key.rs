@@ -18,7 +18,7 @@ fn api_key_regex() -> &'static Regex {
                 sk-[a-zA-Z0-9\-_]{20,}           # OpenAI / Anthropic style
                 | ghp_[a-zA-Z0-9]{36,}            # GitHub Personal Access Token
                 | gho_[a-zA-Z0-9]{36,}            # GitHub OAuth
-                | github_pat_[a-zA-Z0-9_]{82}     # GitHub Fine-grained PAT
+                | github_pat_[a-zA-Z0-9_]{40,}    # GitHub Fine-grained PAT
                 | AKIA[A-Z0-9]{16}                # AWS Access Key ID
                 | xox[bpras]-[a-zA-Z0-9\-]{10,}  # Slack tokens
                 | tvly-[a-zA-Z0-9\-_]{20,}        # Tavily
