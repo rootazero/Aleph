@@ -27,6 +27,9 @@ pub enum ToolError {
     #[error("tool {name} transport error: {cause}")]
     Transport { name: String, cause: String },
 
+    #[error("duplicate tool name: {name}")]
+    Duplicate { name: String },
+
     #[error("{0}")]
     Other(String),
 }

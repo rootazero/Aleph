@@ -32,7 +32,7 @@ impl ToolRegistry {
     pub fn register(&self, name: String, handler: Arc<dyn ToolHandler>) -> Result<(), ToolError> {
         let current = self.inner.load();
         if current.contains_key(&name) {
-            return Err(ToolError::Other(format!("duplicate tool name: {name}")));
+            return Err(ToolError::Duplicate { name: name.clone() });
         }
         let mut next = (**current).clone();
         let source = handler.definition().source.clone();
@@ -130,7 +130,7 @@ mod tests {
         let reg = ToolRegistry::new();
         reg.register("dup".into(), fake("dup")).unwrap();
         let err = reg.register("dup".into(), fake("dup")).unwrap_err();
-        assert!(matches!(err, ToolError::Other(msg) if msg.contains("dup")));
+        assert!(matches!(err, ToolError::Duplicate { name } if name == "dup"));
     }
 
     #[test]

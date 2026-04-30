@@ -128,6 +128,7 @@ mod tests {
             | ToolError::Execution { .. }
             | ToolError::Timeout { .. }
             | ToolError::Transport { .. }
+            | ToolError::Duplicate { .. }
             | ToolError::Other(_) => panic!("expected NotFound, got {err:?}"),
         }
     }

@@ -629,11 +629,12 @@ fn validate_input_fast(schema: &Value, input: &Value) -> Result<(), String> {
         return Err("expected JSON object".into());
     }
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-        let obj = input.as_object().unwrap();
-        for field in required {
-            if let Some(name) = field.as_str() {
-                if !obj.contains_key(name) {
-                    return Err(format!("missing required field: {name}"));
+        if let Some(obj) = input.as_object() {
+            for field in required {
+                if let Some(name) = field.as_str() {
+                    if !obj.contains_key(name) {
+                        return Err(format!("missing required field: {name}"));
+                    }
                 }
             }
         }
