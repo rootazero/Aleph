@@ -64,7 +64,8 @@ impl SkillManifest {
     /// Save manifest to disk.
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
         let path = skills_dir.join("manifest.json");
-        let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        let content =
+            serde_json::to_string_pretty(self).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         std::fs::write(&path, content)?;
         debug!(path = %path.display(), "Saved skills manifest");
         Ok(())
@@ -87,9 +88,12 @@ impl SkillManifest {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_dir())
-                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
                 .collect(),
-            Err(_) => return,
+            Err(e) => {
+                warn!(error = %e, "Failed to read skills directory");
+                return;
+            }
         };
 
         // Add missing directories as Local
