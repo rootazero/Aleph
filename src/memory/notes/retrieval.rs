@@ -18,12 +18,17 @@ const RERANK_OVERFETCH: usize = 3;
 
 /// Boost factor applied to a note's cosine similarity based on its LLM-judged severity.
 /// Legacy notes (severity=Low) get boost 1.0 → no behavior change.
+///
+/// Boost range is intentionally narrow ([1.0, 1.20]) so semantic relevance (cosine)
+/// and distillation confidence remain the dominant ranking signals. A wider range
+/// (e.g. 2.0× for Critical) lets a low-confidence Critical note outrank a
+/// semantically-closer Low/Med note — the opposite of what re-ranking should do.
 pub(crate) fn severity_boost(s: Severity) -> f32 {
     match s {
         Severity::Low => 1.0,
-        Severity::Med => 1.2,
-        Severity::High => 1.5,
-        Severity::Critical => 2.0,
+        Severity::Med => 1.05,
+        Severity::High => 1.10,
+        Severity::Critical => 1.20,
     }
 }
 
@@ -131,9 +136,35 @@ mod tests {
     #[test]
     fn severity_boost_table() {
         assert!((severity_boost(Severity::Low) - 1.0).abs() < 1e-6);
-        assert!((severity_boost(Severity::Med) - 1.2).abs() < 1e-6);
-        assert!((severity_boost(Severity::High) - 1.5).abs() < 1e-6);
-        assert!((severity_boost(Severity::Critical) - 2.0).abs() < 1e-6);
+        assert!((severity_boost(Severity::Med) - 1.05).abs() < 1e-6);
+        assert!((severity_boost(Severity::High) - 1.10).abs() < 1e-6);
+        assert!((severity_boost(Severity::Critical) - 1.20).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rerank_low_high_confidence_beats_critical_low_confidence() {
+        // Same cosine: a high-confidence Low-severity note must outrank a
+        // half-confidence Critical-severity note. Otherwise Critical's boost
+        // dominates and low-confidence Critical wins on tie cosine — exactly
+        // the failure mode this dampened boost prevents.
+        let low_strong = rerank_score(0.8, 1.0, Severity::Low);
+        let critical_weak = rerank_score(0.8, 0.5, Severity::Critical);
+        assert!(
+            low_strong > critical_weak,
+            "low/conf=1.0 ({low_strong}) should beat critical/conf=0.5 ({critical_weak})"
+        );
+    }
+
+    #[test]
+    fn rerank_higher_cosine_beats_severity_within_30_percent() {
+        // Cosine gap of 25% should not be flipped by Critical's boost
+        // (max boost ratio is 1.20, so any cosine gap > ~17% wins).
+        let close_low = rerank_score(0.95, 1.0, Severity::Low);
+        let far_critical = rerank_score(0.70, 1.0, Severity::Critical);
+        assert!(
+            close_low > far_critical,
+            "cosine=0.95 Low ({close_low}) should beat cosine=0.70 Critical ({far_critical})"
+        );
     }
 
     #[test]
