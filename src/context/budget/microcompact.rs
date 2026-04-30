@@ -27,9 +27,11 @@ fn simple_hash(s: &str) -> u64 {
     hash
 }
 
-/// Tracks the newest index and content hash for a given key hash.
+/// Tracks the newest index for a given key hash.
+///
+/// The key already contains the content hash, so we only need to track
+/// the newest occurrence index for deduplication.
 struct CacheEntry {
-    content_hash: u64,
     newest_index: usize,
 }
 
@@ -80,7 +82,6 @@ impl PreflightStage for MicrocompactStage {
                 let key = (simple_hash(name), content_hash);
 
                 let entry = cache.entry(key).or_insert(CacheEntry {
-                    content_hash,
                     newest_index: idx,
                 });
 
@@ -109,7 +110,7 @@ impl PreflightStage for MicrocompactStage {
             let key = (simple_hash(&name), content_hash);
 
             if let Some(entry) = cache.get(&key) {
-                if content_hash == entry.content_hash && idx < entry.newest_index {
+                if idx < entry.newest_index {
                     let old_tokens = estimate_tokens_smart(&content);
                     let replacement = format!(
                         "[cached: {name} result, {old_tokens} tokens, same content appears later]"
