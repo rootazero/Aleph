@@ -124,8 +124,28 @@ impl ToolIndexCoordinator {
     fn now_timestamp() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .expect("system clock is before UNIX epoch")
             .as_secs() as i64
+    }
+
+    /// Build a fallback KnowledgeNote when markdown parsing fails or file is missing.
+    fn build_fallback_note(
+        filename: &str,
+        created_at: i64,
+        updated_at: i64,
+        content_hash: &str,
+    ) -> KnowledgeNote {
+        KnowledgeNote {
+            title: filename.to_string(),
+            category: TOOL_CATEGORY.to_string(),
+            tags: vec![],
+            facts: vec![],
+            links: vec![],
+            created_at,
+            updated_at,
+            content_hash: content_hash.to_string(),
+            ..Default::default()
+        }
     }
 
     /// Reconstruct a `MemoryFact`-compatible struct from a note.
@@ -410,32 +430,22 @@ impl ToolIndexCoordinator {
                 .join(TOOL_CATEGORY)
                 .join(format!("{}.md", entry.filename));
 
-            let note = if let Ok(md) = tokio::fs::read_to_string(&file_path).await {
-                KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| {
-                    KnowledgeNote {
-                        title: entry.filename.clone(),
-                        category: TOOL_CATEGORY.to_string(),
-                        tags: vec![],
-                        facts: vec![],
-                        links: vec![],
-                        created_at: entry.created_at,
-                        updated_at: entry.updated_at,
-                        content_hash: entry.content_hash.clone(),
-                        ..Default::default()
-                    }
-                })
-            } else {
-                KnowledgeNote {
-                    title: entry.filename.clone(),
-                    category: TOOL_CATEGORY.to_string(),
-                    tags: vec![],
-                    facts: vec![],
-                    links: vec![],
-                    created_at: entry.created_at,
-                    updated_at: entry.updated_at,
-                    content_hash: entry.content_hash.clone(),
-                    ..Default::default()
-                }
+            let note = match tokio::fs::read_to_string(&file_path).await {
+                Ok(md) => match KnowledgeNote::from_markdown(&entry.filename, &md) {
+                    Ok(note) => note,
+                    Err(_) => Self::build_fallback_note(
+                        &entry.filename,
+                        entry.created_at,
+                        entry.updated_at,
+                        &entry.content_hash,
+                    ),
+                },
+                Err(_) => Self::build_fallback_note(
+                    &entry.filename,
+                    entry.created_at,
+                    entry.updated_at,
+                    &entry.content_hash,
+                ),
             };
 
             // Default confidence: assume L1 (0.75) unless we can parse it from content
@@ -466,30 +476,22 @@ impl ToolIndexCoordinator {
             .join(TOOL_CATEGORY)
             .join(format!("{}.md", entry.filename));
 
-        let note = if let Ok(md) = tokio::fs::read_to_string(&file_path).await {
-            KnowledgeNote::from_markdown(&entry.filename, &md).unwrap_or_else(|_| KnowledgeNote {
-                title: entry.filename.clone(),
-                category: TOOL_CATEGORY.to_string(),
-                tags: vec![],
-                facts: vec![],
-                links: vec![],
-                created_at: entry.created_at,
-                updated_at: entry.updated_at,
-                content_hash: entry.content_hash.clone(),
-                ..Default::default()
-            })
-        } else {
-            KnowledgeNote {
-                title: entry.filename.clone(),
-                category: TOOL_CATEGORY.to_string(),
-                tags: vec![],
-                facts: vec![],
-                links: vec![],
-                created_at: entry.created_at,
-                updated_at: entry.updated_at,
-                content_hash: entry.content_hash.clone(),
-                ..Default::default()
-            }
+        let note = match tokio::fs::read_to_string(&file_path).await {
+            Ok(md) => match KnowledgeNote::from_markdown(&entry.filename, &md) {
+                Ok(note) => note,
+                Err(_) => Self::build_fallback_note(
+                    &entry.filename,
+                    entry.created_at,
+                    entry.updated_at,
+                    &entry.content_hash,
+                ),
+            },
+            Err(_) => Self::build_fallback_note(
+                &entry.filename,
+                entry.created_at,
+                entry.updated_at,
+                &entry.content_hash,
+            ),
         };
 
         // Infer confidence from content: L0 content contains "sandboxed" style structured meta

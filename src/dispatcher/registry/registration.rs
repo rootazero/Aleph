@@ -222,7 +222,7 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(voice_cmd)
             .await;
 
-        info!("Registered 11 builtin tools (2 generate_* + 2 skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)");
+        info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
