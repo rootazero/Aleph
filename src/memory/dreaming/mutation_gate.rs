@@ -139,8 +139,7 @@ impl MutationGate {
                 .cloned()
                 .collect();
 
-            if !intersection.is_empty() {
-                let pair = intersection.into_iter().next().unwrap();
+            if let Some(pair) = intersection.into_iter().next() {
                 return Some(format!(
                     "merge cycle: ({}, {}) repeated {} consecutive cycles",
                     pair.0, pair.1, MERGE_CYCLE_THRESHOLD
