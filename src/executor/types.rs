@@ -307,7 +307,7 @@ impl TaskExecutionResult {
 ///
 /// Provides contextual information that may affect how execution
 /// is performed, such as the current application or window.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExecutionContext {
     /// Current application context (e.g., "Safari", "VSCode")
     pub app_context: Option<String>,
@@ -320,6 +320,12 @@ pub struct ExecutionContext {
 
     /// Whether to stream the response (defaults to true)
     pub stream: bool,
+}
+
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ExecutionContext {
@@ -756,8 +762,11 @@ mod tests {
     fn test_execution_context_default() {
         let ctx = ExecutionContext::default();
 
-        // Default should NOT stream (different from new())
-        assert!(!ctx.stream);
+        // Default should match new() — stream for optimal UX
+        assert!(ctx.stream);
+        assert!(ctx.app_context.is_none());
+        assert!(ctx.window_title.is_none());
+        assert!(ctx.session_id.is_none());
     }
 
     #[test]

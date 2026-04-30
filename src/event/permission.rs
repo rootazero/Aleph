@@ -52,13 +52,12 @@ impl PermissionRequest {
         permission: impl Into<String>,
         patterns: Vec<String>,
     ) -> Self {
-        let patterns_clone = patterns.clone();
         Self {
             id: id.into(),
             session_id: session_id.into(),
             permission: permission.into(),
+            always_patterns: patterns.clone(),
             patterns,
-            always_patterns: patterns_clone,
             metadata: HashMap::new(),
             tool_call: None,
         }

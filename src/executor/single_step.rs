@@ -51,16 +51,13 @@ use aleph_protocol::IdentityContext;
 ///
 /// This function extracts the base tool name for registry lookup.
 fn normalize_tool_name(tool_name: &str) -> String {
-    // Check for colon separator (e.g., "file_ops:mkdir")
-    if let Some((base, _)) = tool_name.split_once(':') {
-        return base.to_string();
-    }
-    // Check for dot separator (e.g., "file_ops.write")
-    if let Some((base, _)) = tool_name.split_once('.') {
-        return base.to_string();
-    }
-    // No separator found, return as-is
-    tool_name.to_string()
+    // Split on the first separator (colon or dot) and return the base name.
+    // Handles formats like "file_ops:mkdir", "file_ops.write", or "file_ops:mkdir:extra".
+    tool_name
+        .split_once(':')
+        .or_else(|| tool_name.split_once('.'))
+        .map(|(base, _)| base.to_string())
+        .unwrap_or_else(|| tool_name.to_string())
 }
 
 /// Configuration for single-step executor
@@ -237,6 +234,21 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             "Executing tool call"
         );
 
+        // Check if tool exists using normalized name before cache lookup
+        // to avoid wasting cache work on unknown tools
+        if self.tool_registry.get_tool(&normalized_tool_name).is_none() {
+            return ActionResult::ToolResults {
+                results: vec![ToolCallResult {
+                    call_id: String::new(),
+                    tool_name: tool_name.to_string(),
+                    result: SingleToolResult::Error {
+                        error: format!("Tool not found: {}", tool_name),
+                        retryable: false,
+                    },
+                }],
+            };
+        }
+
         // Try to lookup result from cache
         if let Some(cached_result) = self
             .result_cache
@@ -249,20 +261,6 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
                 duration_ms, "Tool result returned from cache"
             );
             return cached_result;
-        }
-
-        // Check if tool exists using normalized name
-        if self.tool_registry.get_tool(&normalized_tool_name).is_none() {
-            return ActionResult::ToolResults {
-                results: vec![ToolCallResult {
-                    call_id: String::new(),
-                    tool_name: tool_name.to_string(),
-                    result: SingleToolResult::Error {
-                        error: format!("Tool not found: {}", tool_name),
-                        retryable: false,
-                    },
-                }],
-            };
         }
 
         // Execute with timeout using normalized tool name

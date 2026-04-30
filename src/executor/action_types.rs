@@ -87,7 +87,8 @@ impl Action {
         match self {
             Action::ToolCalls { calls } => {
                 if let Some(req) = calls.first() {
-                    serde_json::to_string(&req.arguments).unwrap_or_default()
+                    serde_json::to_string(&req.arguments)
+                        .unwrap_or_else(|_| "<unserializable arguments>".to_string())
                 } else {
                     String::new()
                 }

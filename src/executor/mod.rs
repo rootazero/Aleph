@@ -30,14 +30,10 @@
 
 pub mod action_types;
 mod builtin_registry;
-#[allow(dead_code)]
 mod cache_config;
-#[allow(dead_code)]
 mod cache_store;
 mod exec_security_gate;
-#[allow(dead_code)]
 mod single_step;
-#[allow(dead_code)]
 mod types;
 
 pub use builtin_registry::{

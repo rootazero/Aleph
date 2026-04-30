@@ -67,26 +67,41 @@ impl ToolResultCache {
         }
 
         let key = ToolCallCacheKey::new(tool_name.to_string(), arguments);
-        let mut cache = self.cache.write().await;
 
-        if let Some(cached) = cache.get_mut(&key) {
-            // Check TTL
-            if cached.cached_at.elapsed() > self.config.ttl() {
-                cache.pop(&key); // Expired
-                return None;
+        // Use peek with read lock for concurrent lookups (does not update LRU order).
+        // If hit and not expired, upgrade to write lock to update hit count and LRU order.
+        let maybe_hit = {
+            let cache = self.cache.read().await;
+            cache.peek(&key).and_then(|cached| {
+                if cached.cached_at.elapsed() <= self.config.ttl() {
+                    Some(cached.result.clone())
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(result) = maybe_hit {
+            // Upgrade to write lock to update LRU order and hit count
+            let mut cache = self.cache.write().await;
+            if let Some(cached) = cache.get_mut(&key) {
+                cached.hit_count += 1;
+                tracing::debug!(
+                    tool_name = tool_name,
+                    hit_count = cached.hit_count,
+                    age_secs = cached.cached_at.elapsed().as_secs(),
+                    "Tool result cache HIT"
+                );
             }
+            return Some(result);
+        }
 
-            // Update hit count
-            cached.hit_count += 1;
-
-            tracing::debug!(
-                tool_name = tool_name,
-                hit_count = cached.hit_count,
-                age_secs = cached.cached_at.elapsed().as_secs(),
-                "Tool result cache HIT"
-            );
-
-            return Some(cached.result.clone());
+        // Not found or expired — evict if expired
+        let mut cache = self.cache.write().await;
+        if let Some(cached) = cache.peek(&key) {
+            if cached.cached_at.elapsed() > self.config.ttl() {
+                cache.pop(&key);
+            }
         }
 
         tracing::debug!(tool_name = tool_name, "Tool result cache MISS");

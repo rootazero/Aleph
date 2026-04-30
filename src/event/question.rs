@@ -44,11 +44,11 @@ pub struct QuestionInfo {
     #[serde(default)]
     pub multiple: bool,
     /// Whether to allow custom text input (default: true)
-    #[serde(default = "default_true")]
+    #[serde(default = "default_custom_enabled")]
     pub custom: bool,
 }
 
-fn default_true() -> bool {
+fn default_custom_enabled() -> bool {
     true
 }
 

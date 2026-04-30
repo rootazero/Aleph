@@ -56,6 +56,19 @@ pub struct EventFilter {
     pub event_types: Vec<EventType>,
 }
 
+fn add_to_option_set(target: &mut Option<HashSet<String>>, value: &str) {
+    match target {
+        Some(ids) => {
+            ids.insert(value.to_string());
+        }
+        None => {
+            let mut set = HashSet::new();
+            set.insert(value.to_string());
+            *target = Some(set);
+        }
+    }
+}
+
 impl EventFilter {
     /// Create a new filter with specified event types.
     ///
@@ -95,16 +108,7 @@ impl EventFilter {
     ///
     /// * `session_id` - The session ID to include
     pub fn with_session(mut self, session_id: &str) -> Self {
-        match &mut self.session_ids {
-            Some(ids) => {
-                ids.insert(session_id.to_string());
-            }
-            None => {
-                let mut set = HashSet::new();
-                set.insert(session_id.to_string());
-                self.session_ids = Some(set);
-            }
-        }
+        add_to_option_set(&mut self.session_ids, session_id);
         self
     }
 
@@ -127,16 +131,7 @@ impl EventFilter {
     ///
     /// * `agent_id` - The agent ID to include
     pub fn with_agent(mut self, agent_id: &str) -> Self {
-        match &mut self.agent_ids {
-            Some(ids) => {
-                ids.insert(agent_id.to_string());
-            }
-            None => {
-                let mut set = HashSet::new();
-                set.insert(agent_id.to_string());
-                self.agent_ids = Some(set);
-            }
-        }
+        add_to_option_set(&mut self.agent_ids, agent_id);
         self
     }
 

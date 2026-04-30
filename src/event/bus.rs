@@ -155,6 +155,37 @@ impl EventBus {
         self.global_bus.is_some()
     }
 
+    /// Store event in history with batched trimming.
+    async fn store_in_history(&self, timestamped: &TimestampedEvent) {
+        let mut history = self.history.write().await;
+        history.push(timestamped.clone());
+
+        // Batch trim: when exceeding max, trim down to 80% to amortize cost
+        if history.len() > self.config.max_history_size {
+            let target_size = self.config.max_history_size * 8 / 10;
+            let drain_count = history.len() - target_size;
+            history.drain(0..drain_count);
+            debug!(drain_count, "Trimmed event history");
+        }
+    }
+
+    /// Broadcast event to GlobalBus if connected.
+    async fn broadcast_to_global(&self, event: AlephEvent) {
+        if let Some(global_bus) = self.global_bus {
+            let agent_id = self.agent_id.as_deref().unwrap_or("");
+            let session_id = self.session_id.as_deref().unwrap_or("");
+
+            trace!(
+                agent_id,
+                session_id,
+                event_type = ?event.event_type(),
+                "Auto-broadcasting to GlobalBus"
+            );
+
+            global_bus.broadcast(agent_id, session_id, event).await;
+        }
+    }
+
     /// Publish an event to all subscribers
     ///
     /// Returns the number of active subscribers that received the event.
@@ -171,36 +202,8 @@ impl EventBus {
             "Publishing event"
         );
 
-        // Store in history if enabled
-        if self.config.enable_history {
-            let mut history = self.history.write().await;
-            history.push(timestamped.clone());
-
-            // Trim history if too large
-            if history.len() > self.config.max_history_size {
-                let drain_count = history.len() - self.config.max_history_size;
-                history.drain(0..drain_count);
-                debug!(drain_count, "Trimmed event history");
-            }
-        }
-
-        // Broadcast to GlobalBus if connected
-        if let Some(global_bus) = self.global_bus {
-            let agent_id = self.agent_id.as_deref().unwrap_or("");
-            let session_id = self.session_id.as_deref().unwrap_or("");
-
-            trace!(
-                agent_id,
-                session_id,
-                event_type = ?event.event_type(),
-                "Auto-broadcasting to GlobalBus"
-            );
-
-            global_bus.broadcast(agent_id, session_id, event).await;
-        }
-
-        // Send to subscribers
-        match self.sender.send(timestamped) {
+        // Send to local subscribers first (lower latency)
+        let subscriber_count = match self.sender.send(timestamped.clone()) {
             Ok(count) => {
                 trace!(subscriber_count = count, "Event delivered");
                 count
@@ -210,7 +213,17 @@ impl EventBus {
                 trace!("No subscribers for event");
                 0
             }
+        };
+
+        // Store in history if enabled
+        if self.config.enable_history {
+            self.store_in_history(&timestamped).await;
         }
+
+        // Broadcast to GlobalBus if connected (after local delivery)
+        self.broadcast_to_global(event).await;
+
+        subscriber_count
     }
 
     /// Subscribe to all events
@@ -441,7 +454,8 @@ mod tests {
         }
 
         let history = bus.history().await;
-        assert_eq!(history.len(), 5);
+        // Batch trimming reduces to 80% of max_size to amortize O(n) drain cost
+        assert_eq!(history.len(), 4);
     }
 
     // ========================================================================

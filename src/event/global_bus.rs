@@ -278,12 +278,22 @@ impl GlobalBus {
             trace!("No broadcast receivers: {}", e);
         }
 
-        // Notify callback-based subscribers
-        let subscriptions = self.subscriptions.read().await;
-        for subscription in subscriptions.values() {
-            if subscription.filter.matches(&global_event) {
-                (subscription.callback)(global_event.clone());
-            }
+        // Collect matching callbacks and execute them asynchronously
+        // to avoid blocking the async runtime if a callback performs I/O
+        let callbacks = {
+            let subscriptions = self.subscriptions.read().await;
+            subscriptions
+                .values()
+                .filter(|sub| sub.filter.matches(&global_event))
+                .map(|sub| Arc::clone(&sub.callback))
+                .collect::<Vec<_>>()
+        };
+
+        for callback in callbacks {
+            let event = global_event.clone();
+            tokio::spawn(async move {
+                callback(event);
+            });
         }
     }
 
@@ -311,9 +321,11 @@ impl GlobalBus {
             callback: Arc::new(callback),
         };
 
-        // Use blocking write since this is called from sync context
-        // In async context, use subscribe_async instead
-        let mut subscriptions = self.subscriptions.blocking_write();
+        // Use block_in_place to safely acquire the write lock from any context.
+        // This prevents panics when called from an async runtime while still
+        // allowing use from synchronous code.
+        let mut subscriptions =
+            tokio::task::block_in_place(|| self.subscriptions.blocking_write());
         subscriptions.insert(id.clone(), subscription);
 
         debug!(subscription_id = %id, "Added global event subscription");

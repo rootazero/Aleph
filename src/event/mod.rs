@@ -47,6 +47,8 @@ pub use types::{
     SubAgentRequest,
     SubAgentResult,
     TaskPlan,
+    // Team events
+    TeamMessageEvent,
     TimestampedEvent,
     // Token usage
     TokenUsage,
@@ -59,8 +61,6 @@ pub use types::{
     // User interaction
     UserQuestion,
     UserResponse,
-    // Team events
-    TeamMessageEvent,
 };
 
 // Permission system events
