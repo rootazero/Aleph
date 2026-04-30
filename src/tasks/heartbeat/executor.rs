@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tracing::{error, info, warn};
@@ -140,7 +140,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             timeout_secs: Some(timeout_secs),
             metadata,
             attachments: Vec::new(),
-            pending_media: Arc::new(Mutex::new(Vec::new())),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
 
         // Silent execution — no user-facing events

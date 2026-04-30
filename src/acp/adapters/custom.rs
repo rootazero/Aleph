@@ -10,8 +10,9 @@ use tokio::process::Command;
 use tracing::{debug, error};
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
+use crate::acp::output_format::OutputFormat;
 use crate::acp::session::AdapterConfig;
-use crate::config::types::acp::{AcpAdapterEntry, OutputFormatSerde};
+use crate::config::types::acp::AcpAdapterEntry;
 use crate::error::{AlephError, Result};
 
 /// ACP harness built from user-provided `AcpAdapterEntry` configuration.
@@ -123,20 +124,6 @@ impl AcpAdapter for CustomAcpAdapter {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-
-        match &self.config.output_format {
-            OutputFormatSerde::PlainText => Ok(stdout.trim().to_string()),
-            OutputFormatSerde::Json { field } => {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    if let Some(value) = json.get(field).and_then(|v| v.as_str()) {
-                        return Ok(value.to_string());
-                    }
-                    // Field not found or not a string — return full JSON
-                    return Ok(json.to_string());
-                }
-                // Not valid JSON — return raw text
-                Ok(stdout.trim().to_string())
-            }
-        }
+        Ok(OutputFormat::from(&self.config.output_format).parse(&stdout))
     }
 }

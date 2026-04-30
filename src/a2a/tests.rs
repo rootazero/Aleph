@@ -659,13 +659,13 @@ impl AiProvider for MockRoutingProvider {
 
 /// Mock AgentResolver returning a configurable list of agents.
 struct MockAgentResolver {
-    agents: crate::sync_primitives::Mutex<Vec<RegisteredAgent>>,
+    agents: tokio::sync::Mutex<Vec<RegisteredAgent>>,
 }
 
 impl MockAgentResolver {
     fn new(agents: Vec<RegisteredAgent>) -> Self {
         Self {
-            agents: crate::sync_primitives::Mutex::new(agents),
+            agents: tokio::sync::Mutex::new(agents),
         }
     }
 }
@@ -695,7 +695,7 @@ impl AgentResolver for MockAgentResolver {
     }
 
     async fn list_agents(&self) -> crate::a2a::port::task_manager::A2AResult<Vec<RegisteredAgent>> {
-        let agents = self.agents.lock().unwrap_or_else(|e| e.into_inner());
+        let agents = self.agents.lock().await;
         Ok(agents.clone())
     }
 

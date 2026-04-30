@@ -29,7 +29,7 @@ pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
     client_pool: Arc<A2AClientPool>,
     /// Cached lowercased agent/skill names for sync can_handle matching
-    cached_names: crate::sync_primitives::RwLock<Vec<String>>,
+    cached_names: tokio::sync::RwLock<Vec<String>>,
     /// Optional writer for raw memory delegation hooks (Spec 1 G2).
     /// When set, `execute` will write a `RawMemory(Delegation{child_agent_id})`
     /// row before returning a successful result.
@@ -45,7 +45,7 @@ impl A2ASubAgent {
         Self {
             smart_router,
             client_pool,
-            cached_names: crate::sync_primitives::RwLock::new(Vec::new()),
+            cached_names: tokio::sync::RwLock::new(Vec::new()),
             raw_memory_writer: None,
             capture_registry: None,
         }
@@ -103,7 +103,7 @@ impl A2ASubAgent {
                 }
             }
             tracing::debug!(count = names.len(), "Refreshed A2A agent name cache");
-            let mut cache = self.cached_names.write().unwrap_or_else(|e| e.into_inner());
+            let mut cache = self.cached_names.write().await;
             *cache = names;
         } else {
             tracing::warn!("Failed to list agents from SmartRouter for name cache");
@@ -205,7 +205,10 @@ impl SubAgent for A2ASubAgent {
         }
 
         // Priority 2: Check if prompt mentions any cached agent/skill name
-        let names = self.cached_names.read().unwrap_or_else(|e| e.into_inner());
+        let names = match self.cached_names.try_read() {
+            Ok(names) => names,
+            Err(_) => return false,
+        };
         if names.is_empty() {
             return false;
         }
@@ -312,18 +315,16 @@ mod tests {
     use super::*;
     use crate::a2a::domain::*;
     use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
-    use crate::sync_primitives::Mutex;
-
     // --- Mock AgentResolver for SmartRouter ---
 
     struct MockResolver {
-        agents: Mutex<Vec<RegisteredAgent>>,
+        agents: tokio::sync::Mutex<Vec<RegisteredAgent>>,
     }
 
     impl MockResolver {
         fn new(agents: Vec<RegisteredAgent>) -> Self {
             Self {
-                agents: Mutex::new(agents),
+                agents: tokio::sync::Mutex::new(agents),
             }
         }
     }
@@ -348,7 +349,7 @@ mod tests {
         }
 
         async fn list_agents(&self) -> A2AResult<Vec<RegisteredAgent>> {
-            let agents = self.agents.lock().unwrap_or_else(|e| e.into_inner());
+            let agents = self.agents.lock().await;
             Ok(agents.clone())
         }
 
@@ -553,12 +554,12 @@ mod spec1_tests {
     use std::sync::Arc;
 
     #[derive(Default)]
-    struct FakeWriter(crate::sync_primitives::Mutex<Vec<RawMemory>>);
+    struct FakeWriter(tokio::sync::Mutex<Vec<RawMemory>>);
 
     #[async_trait::async_trait]
     impl RawMemoryStore for FakeWriter {
         async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError> {
-            self.0.lock().unwrap().push(raw.clone());
+            self.0.lock().await.push(raw.clone());
             Ok(())
         }
 
@@ -605,7 +606,7 @@ mod spec1_tests {
         // Fire-and-forget: let the spawned task complete.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let captured = fake.0.lock().unwrap();
+        let captured = fake.0.lock().await;
         assert_eq!(captured.len(), 1, "expected exactly one RawMemory row");
 
         let row = &captured[0];
@@ -651,7 +652,7 @@ mod spec1_tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let captured = fake.0.lock().unwrap();
+        let captured = fake.0.lock().await;
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].agent_id, "parent-agent-007");
     }

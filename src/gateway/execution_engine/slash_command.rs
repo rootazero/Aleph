@@ -171,10 +171,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 count = items.len(),
                                 "Fast-path: extracted _media from tool output"
                             );
-                            let mut pending = request
-                                .pending_media
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
+                            let mut pending = request.pending_media.lock().await;
                             let remaining = crate::gateway::media::MAX_MEDIA_PER_RUN
                                 .saturating_sub(pending.len());
                             pending.extend(items.into_iter().take(remaining));

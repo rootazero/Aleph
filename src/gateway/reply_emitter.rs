@@ -806,14 +806,9 @@ impl ReplyEmitter {
 
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
     async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
-        let pending_count = self
-            .pending_media
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len();
+        let pending_count = self.pending_media.lock().await.len();
         debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
-        let media_items =
-            std::mem::take(&mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner()));
+        let media_items = std::mem::take(&mut *self.pending_media.lock().await);
         if media_items.is_empty() {
             return vec![];
         }
@@ -1710,7 +1705,7 @@ mod tests {
             registry,
             route.clone(),
             "run-123".to_string(),
-            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.run_id(), "run-123");
@@ -1738,7 +1733,7 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
-            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -1754,7 +1749,7 @@ mod tests {
             registry,
             route,
             "run-789".to_string(),
-            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         assert_eq!(emitter.next_seq(), 0);
@@ -1771,7 +1766,7 @@ mod tests {
             registry,
             route,
             "run-test".to_string(),
-            Arc::new(Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
         );
 
         emitter.buffer.lock().await.push_str("Hello ");

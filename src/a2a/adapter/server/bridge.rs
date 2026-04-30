@@ -57,7 +57,7 @@ impl AgentLoopBridge {
             timeout_secs: None,
             metadata: HashMap::new(),
             attachments: Vec::new(),
-            pending_media: Arc::new(crate::sync_primitives::Mutex::new(Vec::new())),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -277,7 +277,6 @@ impl A2AMessageHandler for AgentLoopBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Mutex;
 
     use crate::a2a::adapter::server::StreamHub;
     use crate::a2a::adapter::server::TaskStore;
@@ -290,26 +289,26 @@ mod tests {
     /// Mock execution adapter that tracks calls
     struct MockExecutionAdapter {
         should_fail: bool,
-        calls: Mutex<Vec<String>>,
+        calls: tokio::sync::Mutex<Vec<String>>,
     }
 
     impl MockExecutionAdapter {
         fn succeeding() -> Self {
             Self {
                 should_fail: false,
-                calls: Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn failing() -> Self {
             Self {
                 should_fail: true,
-                calls: Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
             }
         }
 
-        fn call_count(&self) -> usize {
-            self.calls.lock().unwrap_or_else(|e| e.into_inner()).len()
+        async fn call_count(&self) -> usize {
+            self.calls.lock().await.len()
         }
     }
 
@@ -323,7 +322,7 @@ mod tests {
         ) -> Result<(), ExecutionError> {
             self.calls
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .await
                 .push(request.run_id);
             if self.should_fail {
                 Err(ExecutionError::Failed("Mock execution failure".to_string()))
@@ -493,7 +492,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(adapter_arc.call_count(), 1);
+        assert_eq!(adapter_arc.call_count().await, 1);
     }
 
     #[tokio::test]

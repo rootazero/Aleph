@@ -8,51 +8,10 @@ use tokio::process::Command;
 use tracing::{debug, error};
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
+use crate::acp::output_format::OutputFormat;
 use crate::acp::session::{AcpSession, AdapterConfig};
-use crate::config::types::acp::{AcpAdapterEntry, OutputFormatSerde};
+use crate::config::types::acp::AcpAdapterEntry;
 use crate::error::{AlephError, Result};
-
-/// How to parse stdout from a oneshot harness.
-#[derive(Debug, Clone)]
-pub enum OutputFormat {
-    /// Return stdout as-is (trimmed).
-    PlainText,
-    /// Parse stdout as JSON and extract a specific field.
-    /// Falls back to full JSON string if field missing, then raw text if not JSON.
-    JsonField { field: String },
-}
-
-impl OutputFormat {
-    /// Parse stdout according to the format specification.
-    fn parse(&self, stdout: &str) -> String {
-        let trimmed = stdout.trim();
-        match self {
-            OutputFormat::PlainText => trimmed.to_string(),
-            OutputFormat::JsonField { field } => {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(value) = json.get(field).and_then(|v| v.as_str()) {
-                        return value.to_string();
-                    }
-                    // Field not found or not a string — return full JSON
-                    return json.to_string();
-                }
-                // Not valid JSON — return raw text
-                trimmed.to_string()
-            }
-        }
-    }
-}
-
-impl From<&OutputFormatSerde> for OutputFormat {
-    fn from(fmt: &OutputFormatSerde) -> Self {
-        match fmt {
-            OutputFormatSerde::PlainText => OutputFormat::PlainText,
-            OutputFormatSerde::Json { field } => OutputFormat::JsonField {
-                field: field.clone(),
-            },
-        }
-    }
-}
 
 /// Generic ACP harness built from configuration.
 ///
@@ -215,6 +174,7 @@ impl AcpAdapter for GenericAcpAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::acp::OutputFormatSerde;
 
     #[test]
     fn test_output_format_plain_text() {

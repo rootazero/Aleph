@@ -313,7 +313,7 @@ pub async fn handle(
     }
 
     let run_id = uuid::Uuid::new_v4().to_string();
-    let pending_media: PendingMedia = Arc::new(Mutex::new(Vec::new()));
+    let pending_media: PendingMedia = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
     let run_request = RunRequest {
         run_id: run_id.clone(),

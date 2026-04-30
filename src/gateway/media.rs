@@ -1,6 +1,6 @@
 //! Media attachment types for the `_media` tool output convention.
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ pub struct MediaItem {
 }
 
 /// Shared media buffer between StreamCallback and ReplyEmitter.
-pub type PendingMedia = Arc<Mutex<Vec<MediaItem>>>;
+pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
 
 /// Maximum number of media items allowed per run.
 pub const MAX_MEDIA_PER_RUN: usize = 10;

@@ -178,19 +178,18 @@ fn extract_quoted_name(text: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::a2a::domain::*;
-    use crate::sync_primitives::Mutex;
     use chrono::Utc;
 
     // --- Mock AgentResolver ---
 
     struct MockResolver {
-        agents: Mutex<Vec<RegisteredAgent>>,
+        agents: tokio::sync::Mutex<Vec<RegisteredAgent>>,
     }
 
     impl MockResolver {
         fn new(agents: Vec<RegisteredAgent>) -> Self {
             Self {
-                agents: Mutex::new(agents),
+                agents: tokio::sync::Mutex::new(agents),
             }
         }
     }
@@ -215,7 +214,7 @@ mod tests {
         }
 
         async fn list_agents(&self) -> A2AResult<Vec<RegisteredAgent>> {
-            let agents = self.agents.lock().unwrap_or_else(|e| e.into_inner());
+            let agents = self.agents.lock().await;
             Ok(agents.clone())
         }
 

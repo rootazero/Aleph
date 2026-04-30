@@ -11,6 +11,8 @@ use tracing::{debug, warn};
 use crate::acp::protocol::{AcpRequest, AcpResponse};
 use crate::error::{AlephError, Result};
 
+const MAX_NOTIFICATIONS: usize = 1024;
+
 /// NDJSON stdio transport for communicating with an ACP child process.
 ///
 /// Reads newline-delimited JSON from the child's stdout in a background task
@@ -132,6 +134,11 @@ impl StdioTransport {
                             return Ok((resp, notifications));
                         }
                         // Otherwise it's a notification or response for a different id
+                        if notifications.len() >= MAX_NOTIFICATIONS {
+                            return Err(AlephError::tool(
+                                "ACP notification buffer overflow: too many out-of-band messages"
+                            ));
+                        }
                         notifications.push(resp);
                     }
                     Some(Err(e)) => return Err(e),

@@ -2,7 +2,7 @@
 //!
 //! RPC handlers for agent operations: run, wait, cancel, status.
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -202,7 +202,7 @@ impl AgentRunManager {
             timeout_secs: None,
             metadata,
             attachments: vec![],
-            pending_media: Arc::new(Mutex::new(Vec::new())),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
 
         let emitter: Arc<dyn EventEmitter + Send + Sync> =

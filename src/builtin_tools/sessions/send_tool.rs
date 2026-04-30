@@ -21,7 +21,7 @@
 //! };
 //! ```
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
@@ -323,7 +323,7 @@ impl SessionsSendTool {
             },
             metadata: HashMap::new(),
             attachments: Vec::new(),
-            pending_media: Arc::new(Mutex::new(Vec::new())),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
 
         // Get execution adapter
@@ -401,7 +401,7 @@ impl SessionsSendTool {
                                 timeout_secs: Some(args.timeout_seconds as u64),
                                 metadata: HashMap::new(),
                                 attachments: Vec::new(),
-                                pending_media: Arc::new(Mutex::new(Vec::new())),
+                                pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                             };
                             let continue_emitter: Arc<
                                 dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,

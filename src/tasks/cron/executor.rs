@@ -15,7 +15,7 @@ use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::reply_emitter::sanitize_llm_output;
 use crate::gateway::router::SessionKey;
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 use crate::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
 };
@@ -99,7 +99,7 @@ async fn execute_cron_job(
         timeout_secs,
         metadata,
         attachments: Vec::new(),
-        pending_media: Arc::new(Mutex::new(Vec::new())),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
     };
 
     let collector = Arc::new(CollectingEventEmitter::new());
