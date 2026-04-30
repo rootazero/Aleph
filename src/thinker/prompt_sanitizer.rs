@@ -124,24 +124,26 @@ fn strip_injection_markers(value: &str) -> String {
 
     let mut result = value.to_string();
 
-    // Case-insensitive removal — loop until no more markers are found.
-    let mut prev = String::new();
-    while prev != result {
-        prev = result.clone();
-        for marker in CI_MARKERS {
-            // Use to_ascii_lowercase() instead of to_lowercase() to preserve byte positions.
-            // to_lowercase() can change byte lengths for some Unicode chars (e.g., Turkish İ → iU+0307),
-            // causing byte offsets in `lower` to differ from `result`, leading to panics.
-            // All CI_MARKERS are ASCII-only, so ASCII-only lowercasing is sufficient.
-            let lower = result.to_ascii_lowercase();
-            if let Some(pos) = lower.find(*marker) {
-                let (head, tail) = (
-                    result.get(..pos).unwrap_or_default(),
-                    result.get(pos + marker.len()..).unwrap_or_default(),
-                );
-                result = format!("{}{}", head, tail);
-            }
+    // Case-insensitive removal — collect all marker positions from the
+    // lowercase version, then remove them in reverse order so indices stay
+    // valid.  This avoids the O(n²) string-copy loop and the repeated
+    // `to_ascii_lowercase()` calls of the previous implementation.
+    let lower = result.to_ascii_lowercase();
+    let mut removals: Vec<(usize, usize)> = Vec::new();
+    for marker in CI_MARKERS {
+        let mut pos = 0;
+        while let Some(found) = lower[pos..].find(*marker) {
+            let start = pos + found;
+            let end = start + marker.len();
+            removals.push((start, end));
+            pos = end;
         }
+    }
+
+    // Sort by start position and remove in reverse to keep indices stable.
+    removals.sort_by_key(|(start, _)| *start);
+    for (start, end) in removals.iter().rev() {
+        result.replace_range(*start..*end, "");
     }
 
     // Case-sensitive removal

@@ -208,7 +208,8 @@ impl MemoryContextProvider {
         assembler_config: AssemblerConfig,
         config: MemoryContextConfig,
     ) -> Self {
-        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
+        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|e| {
+            tracing::warn!("Failed to resolve note memory directory: {e}, using temp dir fallback");
             std::env::temp_dir()
                 .join("aleph")
                 .join("memory")
@@ -222,14 +223,20 @@ impl MemoryContextProvider {
         let snapshot_dir = SnapshotReader::default_path()
             .map(|_| {
                 dirs::home_dir()
-                    .unwrap_or_else(std::env::temp_dir)
+                    .unwrap_or_else(|| {
+                        tracing::warn!("HOME directory not available for session snapshots, using temp dir");
+                        std::env::temp_dir()
+                    })
                     .join(".aleph/data/sessions")
             })
             .unwrap_or_else(|| {
                 memory_dir
                     .parent()
                     .map(|p| p.join("sessions"))
-                    .unwrap_or(memory_dir.clone())
+                    .unwrap_or_else(|| {
+                        tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
+                        memory_dir.clone()
+                    })
             });
         let snapshots = Arc::new(SnapshotReader::new(snapshot_dir));
         let profile = UserProfileLoader::new(memory_dir);

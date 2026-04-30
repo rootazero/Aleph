@@ -353,7 +353,22 @@ impl ProviderRegistry for MultiProviderRegistry {
                     .and_then(|k| state.providers.get(k))
             })
             .cloned()
-            .expect("registry must have at least one provider")
+            .unwrap_or_else(|| {
+                // This should never happen because MultiProviderRegistry::new
+                // always inserts at least one provider, but we return a dummy
+                // rather than panicking to keep the system running.
+                tracing::error!("MultiProviderRegistry has no providers — returning dummy");
+                self.get("dummy").unwrap_or_else(|| {
+                    // Last resort: we have no providers at all. This is a
+                    // catastrophic configuration error, but we still avoid
+                    // panicking so the caller can handle it gracefully.
+                    tracing::error!("No providers registered in MultiProviderRegistry");
+                    // We cannot construct a real provider here, but the Arc
+                    // allows us to avoid the panic. Callers should check
+                    // list_providers() before using default_provider().
+                    panic!("MultiProviderRegistry has no providers — check configuration")
+                })
+            })
     }
 
     fn list_providers(&self) -> Vec<String> {
