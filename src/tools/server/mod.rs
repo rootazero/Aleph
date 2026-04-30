@@ -95,14 +95,13 @@ impl AlephToolServer {
     ///     .tool(WebFetchTool::new());
     /// ```
     pub fn tool(self, tool: impl AlephToolDyn + 'static) -> Self {
-        // Safe: we own self exclusively at construction time — no contention possible.
-        let mut tools = self
-            .tools
-            .try_write()
-            .expect("BUG: RwLock contention during builder construction");
         let name = tool.name().to_string();
-        tools.insert(name, Arc::new(tool));
-        drop(tools);
+        let tool_arc = Arc::new(tool);
+        let tools = self.tools.clone();
+        futures::executor::block_on(async move {
+            let mut guard = tools.write().await;
+            guard.insert(name, tool_arc);
+        });
         self
     }
 
@@ -114,14 +113,13 @@ impl AlephToolServer {
     /// let server = AlephToolServer::new().tool_boxed(tool);
     /// ```
     pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
-        // Safe: we own self exclusively at construction time — no contention possible.
-        let mut tools = self
-            .tools
-            .try_write()
-            .expect("BUG: RwLock contention during builder construction");
         let name = tool.name().to_string();
-        tools.insert(name, Arc::from(tool));
-        drop(tools);
+        let tool_arc = Arc::from(tool);
+        let tools = self.tools.clone();
+        futures::executor::block_on(async move {
+            let mut guard = tools.write().await;
+            guard.insert(name, tool_arc);
+        });
         self
     }
 

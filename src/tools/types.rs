@@ -2,8 +2,10 @@
 //!
 //! Type definitions for tool repair and update operations.
 
+use serde::{Deserialize, Serialize};
+
 /// Information about a tool name repair that was performed
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolRepairInfo {
     /// The original tool name that was requested
     pub original_name: String,
@@ -14,7 +16,8 @@ pub struct ToolRepairInfo {
 }
 
 /// Types of tool name repairs
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolRepairType {
     /// Converted to lowercase (e.g., "Search" -> "search")
     CaseInsensitive,
@@ -32,7 +35,7 @@ impl ToolRepairInfo {
 }
 
 /// Information about a tool update/replacement operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUpdateInfo {
     /// The tool name that was updated
     pub tool_name: String,

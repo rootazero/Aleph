@@ -77,7 +77,13 @@ impl<T: McpTransportTrait + 'static> LoopTool for McpToolAdapter<T> {
             Ok(output) => {
                 // Wrap MCP tool output with external content boundary markers to guard
                 // against prompt injection from untrusted MCP server responses.
-                let raw = serde_json::to_string(&output).unwrap_or_default();
+                let raw = match serde_json::to_string(&output) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to serialize MCP tool output");
+                        format!("<serialization error: {}>", e)
+                    }
+                };
                 let wrapped = wrap_external_content(
                     &raw,
                     ContentSource::McpTool {
