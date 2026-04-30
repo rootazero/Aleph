@@ -167,13 +167,13 @@ impl McpResourceManager {
     /// * `server` - The server name
     /// * `uri` - The resource URI to subscribe to
     pub async fn subscribe(&self, server: &str, uri: &str) -> Result<()> {
-        // TODO: Implement resources/subscribe
-        tracing::debug!(
-            server = %server,
-            uri = %uri,
-            "Resource subscription (stub - not yet implemented)"
-        );
-        Ok(())
+        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+            uri.to_string()
+        } else {
+            format!("{}:{}", server, uri)
+        };
+
+        self.client.subscribe_resource(server, &full_uri).await
     }
 
     /// Unsubscribe from resource updates
@@ -183,13 +183,13 @@ impl McpResourceManager {
     /// * `server` - The server name
     /// * `uri` - The resource URI to unsubscribe from
     pub async fn unsubscribe(&self, server: &str, uri: &str) -> Result<()> {
-        // TODO: Implement resources/unsubscribe
-        tracing::debug!(
-            server = %server,
-            uri = %uri,
-            "Resource unsubscription (stub - not yet implemented)"
-        );
-        Ok(())
+        let full_uri = if uri.starts_with(&format!("{}:", server)) {
+            uri.to_string()
+        } else {
+            format!("{}:{}", server, uri)
+        };
+
+        self.client.unsubscribe_resource(server, &full_uri).await
     }
 }
 

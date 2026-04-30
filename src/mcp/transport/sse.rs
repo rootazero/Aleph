@@ -90,10 +90,11 @@ pub struct SseTransport {
     client: Client,
     /// Connection state
     alive: Arc<RwLock<bool>>,
-    /// Notification handler
-    notification_handler: Arc<RwLock<Option<NotificationCallback>>>,
+    /// Notification handler (std::sync::Mutex wrapped in Arc so the spawned
+    /// SSE listener task can access it without block_in_place)
+    notification_handler: Arc<std::sync::Mutex<Option<NotificationCallback>>>,
     /// Handler for server-initiated requests (sampling, etc.)
-    request_handler: Arc<TokioMutex<Option<RequestCallback>>>,
+    request_handler: Arc<std::sync::Mutex<Option<RequestCallback>>>,
     /// Shutdown signal sender
     shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
 }
@@ -121,8 +122,8 @@ impl SseTransport {
             config,
             client,
             alive: Arc::new(RwLock::new(true)),
-            notification_handler: Arc::new(RwLock::new(None)),
-            request_handler: Arc::new(TokioMutex::new(None)),
+            notification_handler: Arc::new(std::sync::Mutex::new(None)),
+            request_handler: Arc::new(std::sync::Mutex::new(None)),
             shutdown_tx: RwLock::new(None),
         })
     }
@@ -215,8 +216,8 @@ impl SseTransport {
         client: &Client,
         url: &str,
         headers: &HashMap<String, String>,
-        notification_handler: &Arc<RwLock<Option<NotificationCallback>>>,
-        request_handler: &Arc<TokioMutex<Option<RequestCallback>>>,
+        notification_handler: &Arc<std::sync::Mutex<Option<NotificationCallback>>>,
+        request_handler: &Arc<std::sync::Mutex<Option<RequestCallback>>>,
         server_name: &str,
     ) -> Result<()> {
         // Build request with headers
@@ -262,8 +263,8 @@ impl SseTransport {
     /// Handle a parsed SSE event
     async fn handle_sse_event(
         event: SseEvent,
-        notification_handler: &Arc<RwLock<Option<NotificationCallback>>>,
-        request_handler: &Arc<TokioMutex<Option<RequestCallback>>>,
+        notification_handler: &Arc<std::sync::Mutex<Option<NotificationCallback>>>,
+        request_handler: &Arc<std::sync::Mutex<Option<RequestCallback>>>,
         server_name: &str,
     ) {
         match event {
@@ -281,7 +282,8 @@ impl SseTransport {
                     params: notif.params,
                 };
 
-                if let Some(ref handler) = *notification_handler.read().await {
+                let handler = notification_handler.lock().unwrap();
+                if let Some(ref handler) = *handler {
                     handler(json_notif);
                 }
             }
@@ -294,7 +296,8 @@ impl SseTransport {
                 );
 
                 // Handle server-initiated requests like sampling/createMessage
-                if let Some(ref handler) = *request_handler.lock().await {
+                let handler = request_handler.lock().unwrap();
+                if let Some(ref handler) = *handler {
                     handler(req.id, &req.method, req.params);
                 } else {
                     tracing::warn!(
@@ -446,27 +449,16 @@ impl McpTransport for SseTransport {
             "Setting SSE notification handler"
         );
 
-        // Use try_write — this should always succeed since set_notification_handler
-        // is called during setup before start_event_listener spawns background tasks.
-        // If it fails (unexpected contention), block synchronously since this is a
-        // short critical section and the handler MUST be set before events arrive.
-        match self.notification_handler.try_write() {
-            Ok(mut h) => {
-                *h = Some(handler);
-            }
-            Err(_) => {
-                // Fallback: block on the lock. This is acceptable because
-                // set_notification_handler is only called during initialization.
-                let notification_handler = Arc::clone(&self.notification_handler);
-                tokio::task::block_in_place(|| {
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async {
-                        let mut h = notification_handler.write().await;
-                        *h = Some(handler);
-                    });
-                });
-            }
-        }
+        let mut h = self.notification_handler.lock().unwrap();
+        *h = Some(handler);
+    }
+
+    async fn send_sampling_response(
+        &self,
+        request_id: u64,
+        result: serde_json::Value,
+    ) -> Result<()> {
+        self.send_response(request_id, result).await
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -485,24 +477,8 @@ impl SseTransport {
             "Setting SSE request handler"
         );
 
-        // Install synchronously — mirrors set_notification_handler pattern.
-        // The handler MUST be set before start_event_listener spawns background
-        // tasks, otherwise server-initiated requests are silently dropped.
-        match self.request_handler.try_lock() {
-            Ok(mut h) => {
-                *h = Some(handler);
-            }
-            Err(_) => {
-                let request_handler = Arc::clone(&self.request_handler);
-                tokio::task::block_in_place(|| {
-                    let rt = tokio::runtime::Handle::current();
-                    rt.block_on(async {
-                        let mut h = request_handler.lock().await;
-                        *h = Some(handler);
-                    });
-                });
-            }
-        }
+        let mut h = self.request_handler.lock().unwrap();
+        *h = Some(handler);
     }
 
     /// Send a response to a server-initiated request

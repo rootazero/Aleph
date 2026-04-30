@@ -348,6 +348,26 @@ impl McpClient {
         Err(AlephError::NotFound(format!("Resource not found: {}", uri)))
     }
 
+    /// Subscribe to resource updates from a specific server
+    pub async fn subscribe_resource(&self, server: &str, uri: &str) -> Result<()> {
+        let servers = self.external_servers.read().await;
+        if let Some(connection) = servers.get(server) {
+            connection.subscribe_resource(uri).await
+        } else {
+            Err(AlephError::NotFound(format!("Server not found: {}", server)))
+        }
+    }
+
+    /// Unsubscribe from resource updates on a specific server
+    pub async fn unsubscribe_resource(&self, server: &str, uri: &str) -> Result<()> {
+        let servers = self.external_servers.read().await;
+        if let Some(connection) = servers.get(server) {
+            connection.unsubscribe_resource(uri).await
+        } else {
+            Err(AlephError::NotFound(format!("Server not found: {}", server)))
+        }
+    }
+
     /// Get a prompt by name with optional arguments
     ///
     /// The name should include the server prefix (e.g., "server_name:prompt_name")
@@ -492,14 +512,14 @@ impl McpClient {
     pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
         let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(300));
 
-        let transport: Box<dyn McpTransport> = match config.transport {
+        let transport: Arc<dyn McpTransport> = match config.transport {
             TransportPreference::Http => {
                 tracing::info!(
                     server = %config.name,
                     url = %config.url,
                     "Connecting to remote MCP server via HTTP"
                 );
-                Box::new(HttpTransport::new(
+                Arc::new(HttpTransport::new(
                     &config.name,
                     HttpTransportConfig {
                         url: config.url.clone(),
@@ -514,24 +534,26 @@ impl McpClient {
                     url = %config.url,
                     "Connecting to remote MCP server via SSE"
                 );
-                let transport = SseTransport::new(
+                let transport = Arc::new(SseTransport::new(
                     &config.name,
                     SseTransportConfig {
                         url: config.url.clone(),
                         headers: config.headers.clone(),
                         timeout,
                     },
-                )?;
+                )?);
 
                 // Set up sampling request handler for server-initiated sampling/createMessage
                 let sampling_handler = Arc::clone(&self.sampling_handler);
                 let server_name = config.name.clone();
+                let transport_for_handler = Arc::clone(&transport);
                 transport.set_request_handler(Box::new(move |request_id, method, params| {
                     if method == "sampling/createMessage" {
                         let handler = Arc::clone(&sampling_handler);
                         let server = server_name.clone();
                         let params_value = params.unwrap_or(serde_json::Value::Null);
                         let rid = request_id.clone();
+                        let transport = Arc::clone(&transport_for_handler);
 
                         tokio::spawn(async move {
                             tracing::debug!(
@@ -550,8 +572,28 @@ impl McpClient {
                                         request_id = %rid,
                                         "Sampling request completed successfully"
                                     );
-                                    // TODO: Send response back to server via transport
-                                    let _ = response;
+                                    if let Some(id) = rid.as_u64() {
+                                        match serde_json::to_value(&response) {
+                                            Ok(result) => {
+                                                if let Err(e) = transport.send_sampling_response(id, result).await {
+                                                    tracing::error!(
+                                                        server = %server,
+                                                        request_id = %id,
+                                                        error = %e,
+                                                        "Failed to send sampling response"
+                                                    );
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    server = %server,
+                                                    request_id = %id,
+                                                    error = %e,
+                                                    "Failed to serialize sampling response"
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!(
@@ -574,7 +616,7 @@ impl McpClient {
 
                 // Start the SSE event listener for server-initiated notifications
                 transport.start_event_listener().await?;
-                Box::new(transport)
+                transport
             }
             TransportPreference::Auto => {
                 // Default to HTTP (most common and simpler)
@@ -584,7 +626,7 @@ impl McpClient {
                     url = %config.url,
                     "Connecting to remote MCP server via HTTP (auto-selected)"
                 );
-                Box::new(HttpTransport::new(
+                Arc::new(HttpTransport::new(
                     &config.name,
                     HttpTransportConfig {
                         url: config.url.clone(),

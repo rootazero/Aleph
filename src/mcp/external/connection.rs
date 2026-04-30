@@ -12,6 +12,7 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
 use crate::mcp::transport::{McpTransport, StdioTransport};
+use crate::sync_primitives::Arc;
 use crate::mcp::types::McpTool;
 
 /// Default timeout for the entire MCP server connection process
@@ -40,7 +41,7 @@ pub struct McpServerConnection {
     /// Server name
     name: String,
     /// Transport layer (trait object for flexibility)
-    transport: Box<dyn McpTransport>,
+    transport: Arc<dyn McpTransport>,
     /// Request ID generator
     id_gen: IdGenerator,
     /// Server capabilities (after initialize)
@@ -116,7 +117,7 @@ impl McpServerConnection {
             transport = transport.with_timeout(t);
         }
 
-        Self::with_transport(name, Box::new(transport)).await
+        Self::with_transport(name, Arc::new(transport)).await
     }
 
     /// Create a connection with a custom transport
@@ -126,16 +127,16 @@ impl McpServerConnection {
     ///
     /// # Arguments
     /// * `name` - Server name for identification
-    /// * `transport` - A boxed transport implementing `McpTransport`
+    /// * `transport` - An `Arc`-wrapped transport implementing `McpTransport`
     ///
     /// # Example
     /// ```ignore
     /// let http_transport = HttpTransport::new("https://mcp.example.com").await?;
-    /// let conn = McpServerConnection::with_transport("remote-server", Box::new(http_transport)).await?;
+    /// let conn = McpServerConnection::with_transport("remote-server", Arc::new(http_transport)).await?;
     /// ```
     pub async fn with_transport(
         name: impl Into<String>,
-        transport: Box<dyn McpTransport>,
+        transport: Arc<dyn McpTransport>,
     ) -> Result<Self> {
         let name = name.into();
         let conn = Self {
@@ -575,6 +576,62 @@ impl McpServerConnection {
         } else {
             Ok(crate::mcp::resources::ResourceContent::Text(String::new()))
         }
+    }
+
+    /// Subscribe to resource updates
+    pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
+        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
+
+        let params = serde_json::json!({ "uri": resource_uri });
+        let request = JsonRpcRequest::with_params(
+            self.id_gen.next(),
+            "resources/subscribe",
+            params,
+        );
+
+        tracing::debug!(
+            server = %self.name,
+            uri = %resource_uri,
+            "Subscribing to resource"
+        );
+
+        let response = self.transport.send_request(&request).await?;
+        response.into_result().map_err(|e| {
+            AlephError::IoError(format!(
+                "resources/subscribe '{}' on '{}' failed: {}",
+                resource_uri, self.name, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// Unsubscribe from resource updates
+    pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
+        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
+
+        let params = serde_json::json!({ "uri": resource_uri });
+        let request = JsonRpcRequest::with_params(
+            self.id_gen.next(),
+            "resources/unsubscribe",
+            params,
+        );
+
+        tracing::debug!(
+            server = %self.name,
+            uri = %resource_uri,
+            "Unsubscribing from resource"
+        );
+
+        let response = self.transport.send_request(&request).await?;
+        response.into_result().map_err(|e| {
+            AlephError::IoError(format!(
+                "resources/unsubscribe '{}' on '{}' failed: {}",
+                resource_uri, self.name, e
+            ))
+        })?;
+
+        Ok(())
     }
 
     /// Get a prompt by name with optional arguments

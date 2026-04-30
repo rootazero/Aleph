@@ -95,6 +95,20 @@ pub trait McpTransport: Send + Sync + std::any::Any {
         // Transports that support notifications should override this
     }
 
+    /// Send a response to a server-initiated sampling request.
+    ///
+    /// Only transports that support bidirectional communication (like SSE)
+    /// need to implement this. The default returns an error.
+    async fn send_sampling_response(
+        &self,
+        _request_id: u64,
+        _result: serde_json::Value,
+    ) -> Result<()> {
+        Err(crate::error::AlephError::IoError(
+            "Transport does not support server-initiated request responses".to_string(),
+        ))
+    }
+
     /// Get a reference to the transport as Any for downcasting
     ///
     /// This enables type-specific operations on transports when needed,
