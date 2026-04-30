@@ -45,15 +45,12 @@ pub struct AgentHarness {
 
 impl AgentHarness {
     pub fn new(deps: HarnessDeps) -> Self {
-        let stall_tracker = deps
-            .stall_config
-            .as_ref()
-            .map(|config| {
-                crate::harness::stall::StallTracker::new(
-                    config.clone(),
-                    tokio_util::sync::CancellationToken::new(),
-                )
-            });
+        let stall_tracker = deps.stall_config.as_ref().map(|config| {
+            crate::harness::stall::StallTracker::new(
+                config.clone(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+        });
         Self {
             deps,
             stall_tracker,
@@ -64,13 +61,13 @@ impl AgentHarness {
     /// `true` if a budget directive forced an early exit during this run.
     /// Cleared by [`AgentHarness::reset_hit_limit`] before a fresh run.
     pub fn hit_limit(&self) -> bool {
-        self.hit_limit.load(Ordering::SeqCst)
+        self.hit_limit.load(Ordering::Relaxed)
     }
 
     /// Reset the hit_limit flag. Called before a fresh session drive so a
     /// previous run's budget trip does not leak into the next outcome.
     pub fn reset_hit_limit(&self) {
-        self.hit_limit.store(false, Ordering::SeqCst);
+        self.hit_limit.store(false, Ordering::Relaxed);
     }
 
     /// Convenience: wrap this harness as an `Arc<dyn SessionDriver>` so it
@@ -79,18 +76,193 @@ impl AgentHarness {
         std::sync::Arc::new(self)
     }
 
+    /// Max consecutive stop-hook vetos before the harness gives up and
+    /// forces Done. Prevents infinite loops when a hook permanently blocks.
+    const MAX_STOP_HOOK_VETOS: usize = 10;
+
+    /// Internal turn execution with pre-computed counters to avoid O(n²)
+    /// event-log scans in the outer loop.
+    ///
+    /// Returns `(TurnState, tool_calls_executed, is_stop_hook_veto)`.
+    async fn run_turn_internal(
+        &self,
+        session_id: &SessionId,
+        callback: &mut dyn HarnessCallback,
+        iterations: usize,
+        tool_calls_made: usize,
+    ) -> Result<(TurnState, usize, bool), HarnessError> {
+        // Hold a sleep-inhibit assertion for the duration of this turn so a long
+        // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
+        // automatically when this scope exits, releasing the IOPMAssertion.
+        let _sleep_guard = self.deps.power.as_ref().and_then(|power| {
+            match power.inhibit_sleep("Aleph agent loop") {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    tracing::debug!(target: "power", "sleep inhibitor unavailable: {e}");
+                    None
+                }
+            }
+        });
+
+        // Kick off a throttled skill prefetch scan before the LLM call. The
+        // scan runs in a background task; its result surfaces on the next
+        // turn rather than blocking this one.
+        if let Some(prefetcher) = self.deps.skill_prefetcher.as_ref() {
+            let _ = prefetcher.start_scan();
+        }
+
+        // 1. Fetch full event log and compute the tail boundary.
+        let events = self.deps.session.get_events(session_id, None, None).await?;
+        let tail_start = tail_start_index(&events);
+
+        // 2. Build the LLM request. `build_prompt` has access to the full log
+        //    so it can reconstruct the preceding assistant tool_use turn and
+        //    resolve tool names for tool_result messages.
+        let mut messages = build_prompt(&events, tail_start);
+
+        // 2a. Task-10 budget check: evaluate context pressure before issuing
+        // the LLM call. `FinalReply` forces a terminal turn with no tools.
+        let budget_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
+            let mut guard = budget.lock().await;
+            Some(guard.before_turn(&messages, "", &[]))
+        } else {
+            None
+        };
+
+        // 2b. Compact when directive calls for it and a compactor is wired.
+        if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
+            if let Some(compactor) = self.deps.context_compactor.as_ref() {
+                // `fresh_tail = 0` lets the compactor fall back to its own
+                // config default (matches Task 6 spec).
+                if let Err(e) = compactor.compact(&mut messages, 0, None).await {
+                    tracing::warn!(
+                        ?session_id,
+                        ?e,
+                        "context compactor failed; continuing with uncompacted messages",
+                    );
+                }
+            }
+        }
+
+        // 2c. `FinalReply` directive — record hit_limit and short-circuit to
+        // Done without calling the LLM or running tools. The last assistant
+        // message already on the session log is the final text.
+        if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
+            self.hit_limit.store(true, Ordering::Relaxed);
+            callback.on_complete_via_harness();
+            return Ok((TurnState::Done, 0, false));
+        }
+
+        // 2d. Fetch tool definitions from the tool service and convert to
+        // dispatcher format so the LLM sees available tools.
+        let tool_defs = self.deps.tools.list().await;
+        let dispatcher_tools: Vec<crate::dispatcher::ToolDefinition> = tool_defs
+            .into_iter()
+            .map(|def| crate::dispatcher::ToolDefinition {
+                name: def.name,
+                description: def.description,
+                parameters: def.input_schema,
+                requires_confirmation: false,
+                category: crate::dispatcher::ToolCategory::Builtin,
+                llm_context: None,
+                strict: false,
+            })
+            .collect();
+        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
+        {
+            None
+        } else {
+            Some(&dispatcher_tools)
+        };
+
+        let payload = match self.deps.system_prompt.as_deref() {
+            Some(sp) => RequestPayload::new(&messages)
+                .with_system(Some(sp))
+                .with_tools(tools_ref),
+            None => RequestPayload::new(&messages).with_tools(tools_ref),
+        };
+
+        // 3. Call the LLM.
+        let response = self.deps.llm.process(payload).await?;
+
+        // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
+        let turn_id = current_turn_id(&events);
+        let text = response.text_content();
+        if !text.is_empty() {
+            // Non-streaming LLM layer emits one chunk per turn; the callback
+            // shape permits finer chunking once `process_stream` is wired.
+            callback.on_delta(&text);
+        }
+        let blocks = tool_use_blocks(&response.tool_calls);
+        let assistant_event = SessionEvent::AssistantMessage {
+            turn_id,
+            content: MessageContent {
+                text: text.clone(),
+                blocks,
+            },
+            at: now_ms(),
+        };
+        self.deps
+            .session
+            .emit_event(session_id, assistant_event)
+            .await?;
+
+        // 5. If the LLM produced tool_calls, run the Act phase; otherwise
+        //    evaluate stop hooks before declaring Done.
+        if response.tool_calls.is_empty() {
+            // Task-10: let stop hooks veto the stop. A blocking verdict
+            // forces one more Continue turn so the model can react.
+            let block = self
+                .evaluate_stop_hooks(iterations, tool_calls_made, Some(text))
+                .await;
+            if let Some(reason) = block {
+                tracing::info!(
+                    ?session_id,
+                    reason = %reason,
+                    "stop hook vetoed; forcing continue",
+                );
+                // Inject the block reason as a user turn so the model sees it
+                // and has a chance to act. Matches loop_core semantics.
+                let new_turn = uuid::Uuid::new_v4();
+                let block_event = SessionEvent::UserMessage {
+                    turn_id: new_turn,
+                    content: MessageContent {
+                        text: format!("[stop-hook veto] {reason}"),
+                        blocks: Vec::new(),
+                    },
+                    at: now_ms(),
+                };
+                self.deps
+                    .session
+                    .emit_event(session_id, block_event)
+                    .await?;
+                return Ok((TurnState::Continue, 0, true));
+            }
+            Ok((TurnState::Done, 0, false))
+        } else {
+            let executed = self
+                .act(session_id, turn_id, response.tool_calls, callback)
+                .await?;
+            Ok((TurnState::Continue, executed, false))
+        }
+    }
+
     /// Act phase: execute each tool_call sequentially, emitting a
     /// `ToolCallRequested` event before every call and either a `ToolResult`
     /// or `ToolError` event after. A failure short-circuits the rest of the
     /// batch and surfaces as `HarnessError::Tool`.
+    ///
+    /// Returns the number of tool calls that were actually executed (not
+    /// skipped due to a prior error).
     async fn act(
         &self,
         session_id: &SessionId,
         turn_id: TurnId,
         tool_calls: Vec<NativeToolCall>,
         callback: &mut dyn HarnessCallback,
-    ) -> Result<(), HarnessError> {
+    ) -> Result<usize, HarnessError> {
         let mut first_error: Option<ToolError> = None;
+        let mut executed_count: usize = 0;
 
         for call in tool_calls {
             callback.on_tool_call(&call.name);
@@ -123,6 +295,7 @@ impl AgentHarness {
 
             match self.deps.tools.execute(&call.name, call.arguments).await {
                 Ok(output) => {
+                    executed_count = executed_count.saturating_add(1);
                     let result_event = SessionEvent::ToolResult {
                         turn_id,
                         call_id: call.id,
@@ -135,11 +308,6 @@ impl AgentHarness {
                         .await?;
                 }
                 Err(e) => {
-                    // Attempt to persist ToolError; log but do NOT shadow the
-                    // original tool failure if the session write itself fails.
-                    // Using `?` here would convert a `SessionError` into
-                    // `HarnessError::Session` and hide the underlying tool
-                    // error from the caller.
                     let error_event = SessionEvent::ToolError {
                         turn_id,
                         call_id: call.id.clone(),
@@ -164,7 +332,7 @@ impl AgentHarness {
         if let Some(e) = first_error {
             return Err(HarnessError::Tool(e));
         }
-        Ok(())
+        Ok(executed_count)
     }
 
     /// Evaluate stop hooks and return the blocking reason if any hook
@@ -245,10 +413,7 @@ impl crate::session::SessionDriver for AgentHarness {
                     crate::error::AlephError::provider(format!("harness session error: {sess_err}"))
                 }
                 HarnessError::Stalled { elapsed } => {
-                    crate::error::AlephError::provider(format!(
-                        "agent stalled after {:?}",
-                        elapsed
-                    ))
+                    crate::error::AlephError::provider(format!("agent stalled after {:?}", elapsed))
                 }
             })
     }
@@ -269,6 +434,8 @@ impl Harness for AgentHarness {
     ) -> Result<(), HarnessError> {
         let cap = self.deps.max_iterations;
         let mut iterations: usize = 0;
+        let mut tool_calls_made: usize = 0;
+        let mut stop_hook_veto_count: usize = 0;
         loop {
             if cancel.is_cancelled() {
                 return Err(HarnessError::Cancelled);
@@ -279,21 +446,39 @@ impl Harness for AgentHarness {
                     return Err(HarnessError::Stalled { elapsed });
                 }
             }
-            match self.run_turn(session_id, callback).await? {
-                TurnState::Continue => {
+            match self
+                .run_turn_internal(session_id, callback, iterations, tool_calls_made)
+                .await?
+            {
+                (TurnState::Continue, executed, is_veto) => {
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
                     iterations = iterations.saturating_add(1);
+                    tool_calls_made = tool_calls_made.saturating_add(executed);
+                    if is_veto {
+                        stop_hook_veto_count = stop_hook_veto_count.saturating_add(1);
+                        if stop_hook_veto_count >= Self::MAX_STOP_HOOK_VETOS {
+                            tracing::warn!(
+                                ?session_id,
+                                max_vetos = Self::MAX_STOP_HOOK_VETOS,
+                                "stop-hook veto limit reached; forcing Done to prevent infinite loop",
+                            );
+                            callback.on_complete();
+                            return Ok(());
+                        }
+                    } else {
+                        stop_hook_veto_count = 0;
+                    }
                     if let Some(limit) = cap {
                         if iterations >= limit {
-                            self.hit_limit.store(true, Ordering::SeqCst);
+                            self.hit_limit.store(true, Ordering::Relaxed);
                             callback.on_complete();
                             return Ok(());
                         }
                     }
                 }
-                TurnState::Done => {
+                (TurnState::Done, _, _) => {
                     callback.on_complete();
                     return Ok(());
                 }
@@ -301,166 +486,19 @@ impl Harness for AgentHarness {
         }
     }
 
+    /// Trait-required entry point. Computes counters from the event log so
+    /// standalone callers (e.g. unit tests) don't need to pre-compute them.
     async fn run_turn(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
     ) -> Result<TurnState, HarnessError> {
-        // Hold a sleep-inhibit assertion for the duration of this turn so a long
-        // Think→Act cycle does not get cut off by macOS idle sleep. Drop happens
-        // automatically when this scope exits, releasing the IOPMAssertion.
-        let _sleep_guard = self.deps.power.as_ref().and_then(|power| {
-            match power.inhibit_sleep("Aleph agent loop") {
-                Ok(g) => Some(g),
-                Err(e) => {
-                    tracing::debug!(target: "power", "sleep inhibitor unavailable: {e}");
-                    None
-                }
-            }
-        });
-
-        // Kick off a throttled skill prefetch scan before the LLM call. The
-        // scan runs in a background task; its result surfaces on the next
-        // turn rather than blocking this one.
-        if let Some(prefetcher) = self.deps.skill_prefetcher.as_ref() {
-            let _ = prefetcher.start_scan();
-        }
-
-        // 1. Fetch full event log and compute the tail boundary.
         let events = self.deps.session.get_events(session_id, None, None).await?;
-        let tail_start = tail_start_index(&events);
-
-        // 2. Build the LLM request. `build_prompt` has access to the full log
-        //    so it can reconstruct the preceding assistant tool_use turn and
-        //    resolve tool names for tool_result messages.
-        let mut messages = build_prompt(&events, tail_start);
-
-        // 2a. Task-10 budget check: evaluate context pressure before issuing
-        // the LLM call. `FinalReply` forces a terminal turn with no tools.
-        let budget_directive = if let Some(budget) = self.deps.context_budget.as_ref() {
-            let mut guard = budget.lock().await;
-            Some(guard.before_turn(&messages, "", &[]))
-        } else {
-            None
-        };
-
-        // 2b. Compact when directive calls for it and a compactor is wired.
-        if matches!(budget_directive, Some(LoopDirective::CompactAndContinue)) {
-            if let Some(compactor) = self.deps.context_compactor.as_ref() {
-                // `fresh_tail = 0` lets the compactor fall back to its own
-                // config default (matches Task 6 spec).
-                if let Err(e) = compactor.compact(&mut messages, 0, None).await {
-                    tracing::warn!(
-                        ?session_id,
-                        ?e,
-                        "context compactor failed; continuing with uncompacted messages",
-                    );
-                }
-            }
-        }
-
-        // 2c. `FinalReply` directive — record hit_limit and short-circuit to
-        // Done without calling the LLM or running tools. The last assistant
-        // message already on the session log is the final text.
-        if matches!(budget_directive, Some(LoopDirective::FinalReply)) {
-            self.hit_limit.store(true, Ordering::SeqCst);
-            callback.on_complete_via_harness();
-            return Ok(TurnState::Done);
-        }
-
-        // 2d. Fetch tool definitions from the tool service and convert to
-        // dispatcher format so the LLM sees available tools.
-        let tool_defs = self.deps.tools.list().await;
-        let dispatcher_tools: Vec<crate::dispatcher::ToolDefinition> = tool_defs
-            .into_iter()
-            .map(|def| crate::dispatcher::ToolDefinition {
-                name: def.name,
-                description: def.description,
-                parameters: def.input_schema,
-                requires_confirmation: false,
-                category: crate::dispatcher::ToolCategory::Builtin,
-                llm_context: None,
-                strict: false,
-            })
-            .collect();
-        let tools_ref: Option<&[crate::dispatcher::ToolDefinition]> = if dispatcher_tools.is_empty()
-        {
-            None
-        } else {
-            Some(&dispatcher_tools)
-        };
-
-        let payload = match self.deps.system_prompt.as_deref() {
-            Some(sp) => RequestPayload::new(&messages)
-                .with_system(Some(sp))
-                .with_tools(tools_ref),
-            None => RequestPayload::new(&messages).with_tools(tools_ref),
-        };
-
-        // 3. Call the LLM.
-        let response = self.deps.llm.process(payload).await?;
-
-        // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
-        let turn_id = current_turn_id(&events);
-        let text = response.text_content();
-        if !text.is_empty() {
-            // Non-streaming LLM layer emits one chunk per turn; the callback
-            // shape permits finer chunking once `process_stream` is wired.
-            callback.on_delta(&text);
-        }
-        let blocks = tool_use_blocks(&response.tool_calls);
-        let assistant_event = SessionEvent::AssistantMessage {
-            turn_id,
-            content: MessageContent {
-                text: text.clone(),
-                blocks,
-            },
-            at: now_ms(),
-        };
-        self.deps
-            .session
-            .emit_event(session_id, assistant_event)
-            .await?;
-
-        // 5. If the LLM produced tool_calls, run the Act phase; otherwise
-        //    evaluate stop hooks before declaring Done.
-        if response.tool_calls.is_empty() {
-            // Task-10: let stop hooks veto the stop. A blocking verdict
-            // forces one more Continue turn so the model can react.
-            let iterations = count_assistant_messages(&events).saturating_add(1);
-            let tool_calls_made = count_tool_calls(&events);
-            let block = self
-                .evaluate_stop_hooks(iterations, tool_calls_made, Some(text))
-                .await;
-            if let Some(reason) = block {
-                tracing::info!(
-                    ?session_id,
-                    reason = %reason,
-                    "stop hook vetoed; forcing continue",
-                );
-                // Inject the block reason as a user turn so the model sees it
-                // and has a chance to act. Matches loop_core semantics.
-                let new_turn = uuid::Uuid::new_v4();
-                let block_event = SessionEvent::UserMessage {
-                    turn_id: new_turn,
-                    content: MessageContent {
-                        text: format!("[stop-hook veto] {reason}"),
-                        blocks: Vec::new(),
-                    },
-                    at: now_ms(),
-                };
-                self.deps
-                    .session
-                    .emit_event(session_id, block_event)
-                    .await?;
-                return Ok(TurnState::Continue);
-            }
-            Ok(TurnState::Done)
-        } else {
-            self.act(session_id, turn_id, response.tool_calls, callback)
-                .await?;
-            Ok(TurnState::Continue)
-        }
+        let iterations = count_assistant_messages(&events).saturating_add(1);
+        let tool_calls_made = count_tool_calls(&events);
+        self.run_turn_internal(session_id, callback, iterations, tool_calls_made)
+            .await
+            .map(|(state, _, _)| state)
     }
 }
 
