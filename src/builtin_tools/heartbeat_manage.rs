@@ -64,7 +64,7 @@ impl AlephTool for HeartbeatListTool {
         let tasks = service.list_tasks().await;
         let count = tasks.len();
         Ok(HeartbeatListOutput {
-            message: format!("共 {} 个心跳监控任务", count),
+            message: format!("{} heartbeat monitoring tasks", count),
             tasks,
         })
     }
@@ -158,8 +158,8 @@ impl AlephTool for HeartbeatCreateTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            r#"heartbeat_create(name="Gmail 未读检查", probe_tool_name="gmail_unread_count", interval_ms=300000, probe_trigger_condition={"greater_than":{"threshold":0}})"#.to_string(),
-            r#"heartbeat_create(name="服务器监控", probe_tool_name="server_health_check", interval_ms=60000, probe_trigger_condition={"contains":{"text":"error"}})"#.to_string(),
+            r#"heartbeat_create(name="Gmail unread check", probe_tool_name="gmail_unread_count", interval_ms=300000, probe_trigger_condition={"greater_than":{"threshold":0}})"#.to_string(),
+            r#"heartbeat_create(name="Server health monitor", probe_tool_name="server_health_check", interval_ms=60000, probe_trigger_condition={"contains":{"text":"error"}})"#.to_string(),
         ])
     }
 
@@ -187,7 +187,7 @@ impl AlephTool for HeartbeatCreateTool {
         info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");
 
         Ok(HeartbeatCreateOutput {
-            message: format!("心跳监控任务 '{}' 已创建 (ID: {})", args.name, id),
+            message: format!("Heartbeat task '{}' created (ID: {})", args.name, id),
             task_id: id,
         })
     }
@@ -272,7 +272,7 @@ impl AlephTool for HeartbeatUpdateTool {
         info!(task_id = %args.id, "Heartbeat task updated via tool");
 
         Ok(HeartbeatUpdateOutput {
-            message: format!("心跳监控任务 {} 已更新", args.id),
+            message: format!("Heartbeat task {} updated", args.id),
             task_id: args.id,
         })
     }
@@ -328,7 +328,7 @@ impl AlephTool for HeartbeatDeleteTool {
         info!(task_id = %args.id, "Heartbeat task deleted via tool");
 
         Ok(HeartbeatDeleteOutput {
-            message: format!("心跳监控任务 {} 已删除", args.id),
+            message: format!("Heartbeat task {} deleted", args.id),
             task_id: args.id,
         })
     }
@@ -384,9 +384,9 @@ impl AlephTool for HeartbeatToggleTool {
             crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {}", e))
         })?;
 
-        let state_str = if enabled { "启用" } else { "禁用" };
+        let state_str = if enabled { "enabled" } else { "disabled" };
         Ok(HeartbeatToggleOutput {
-            message: format!("心跳监控任务 {} 已{}", args.id, state_str),
+            message: format!("Heartbeat task {} {}", args.id, state_str),
             task_id: args.id,
             enabled,
         })

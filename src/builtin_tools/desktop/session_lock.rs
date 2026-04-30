@@ -190,7 +190,15 @@ impl Drop for ComputerUseLock {
 fn is_pid_alive(pid: u32) -> bool {
     // SAFETY: kill(pid, 0) sends no signal; it only checks process existence.
     let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    ret == 0
+    if ret == 0 {
+        return true;
+    }
+    // kill returned -1; check errno to distinguish "no such process" from other errors.
+    // ESRCH  = process definitely does not exist → treat as dead.
+    // EPERM  = process may exist but we lack permission → conservative: treat as alive.
+    // EINVAL = invalid PID → treat as dead.
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    errno != libc::ESRCH && errno != libc::EINVAL
 }
 
 #[cfg(windows)]

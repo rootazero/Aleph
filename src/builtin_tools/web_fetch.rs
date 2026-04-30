@@ -9,6 +9,7 @@ use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
@@ -35,6 +36,40 @@ pub enum Extractor {
     /// CSS selector-based fallback
     Selector,
 }
+
+// ---------------------------------------------------------------------------
+// Pre-compiled regexes for HTML cleaning (compiled once, reused forever)
+// ---------------------------------------------------------------------------
+
+static RE_COMMENTS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").expect("valid regex"));
+static RE_SCRIPT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").expect("valid regex"));
+static RE_STYLE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").expect("valid regex"));
+static RE_NOSCRIPT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").expect("valid regex"));
+static RE_HIDDEN_ATTR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").expect("valid regex")
+});
+static RE_ARIA_HIDDEN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
+        .expect("valid regex")
+});
+static RE_DISPLAY_NONE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?si)<[^>]+\sstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["'][^>]*>.*?</[^>]+>"#,
+    )
+    .expect("valid regex")
+});
+static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?si)<[^>]+\sclass\s*=\s*["'][^"']*(?:sr-only|visually-hidden|d-none|screen-reader-only)[^"']*["'][^>]*>.*?</[^>]+>"#,
+    )
+    .expect("valid regex")
+});
+static RE_STRIP_TAGS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
 
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -322,39 +357,24 @@ impl WebFetchTool {
         let cleaned: String = html.chars().filter(|c| !zero_width.contains(c)).collect();
 
         // 2. Remove HTML comments
-        let re_comments = Regex::new(r"(?s)<!--.*?-->").unwrap();
-        let cleaned = re_comments.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_COMMENTS.replace_all(&cleaned, "").to_string();
 
         // 3. Remove <script>, <style>, <noscript> blocks with their content.
-        // The regex crate does not support backreferences, so use three separate patterns.
-        let re_script = Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").unwrap();
-        let cleaned = re_script.replace_all(&cleaned, "").to_string();
-        let re_style = Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").unwrap();
-        let cleaned = re_style.replace_all(&cleaned, "").to_string();
-        let re_noscript = Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").unwrap();
-        let cleaned = re_noscript.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_SCRIPT.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_STYLE.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_NOSCRIPT.replace_all(&cleaned, "").to_string();
 
         // 4. Remove elements with hidden attribute
-        let re_hidden_attr = Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").unwrap();
-        let cleaned = re_hidden_attr.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_HIDDEN_ATTR.replace_all(&cleaned, "").to_string();
 
         // 5. Remove elements with aria-hidden="true"
-        let re_aria =
-            Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#).unwrap();
-        let cleaned = re_aria.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_ARIA_HIDDEN.replace_all(&cleaned, "").to_string();
 
         // 6. Remove elements with display:none or visibility:hidden in style attribute
-        let re_display_none =
-            Regex::new(r#"(?si)<[^>]+\sstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["'][^>]*>.*?</[^>]+>"#)
-                .unwrap();
-        let cleaned = re_display_none.replace_all(&cleaned, "").to_string();
+        let cleaned = RE_DISPLAY_NONE.replace_all(&cleaned, "").to_string();
 
         // 7. Remove elements with screen-reader / visually-hidden CSS classes
-        let re_sr_classes = Regex::new(
-            r#"(?si)<[^>]+\sclass\s*=\s*["'][^"']*(?:sr-only|visually-hidden|d-none|screen-reader-only)[^"']*["'][^>]*>.*?</[^>]+>"#,
-        )
-        .unwrap();
-        re_sr_classes.replace_all(&cleaned, "").to_string()
+        RE_SR_CLASSES.replace_all(&cleaned, "").to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -387,8 +407,7 @@ impl WebFetchTool {
 
     /// Strip HTML tags from a string using a simple regex, leaving plain text.
     fn strip_tags(&self, html: &str) -> String {
-        let re = Regex::new(r"<[^>]+>").unwrap();
-        let text = re.replace_all(html, " ").to_string();
+        let text = RE_STRIP_TAGS.replace_all(html, " ").to_string();
         self.clean_text(&text)
     }
 

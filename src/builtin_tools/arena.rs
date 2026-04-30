@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::arena::{ArenaId, ArenaManager, ArenaManifest};
+use crate::arena::{AgentId, ArenaId, ArenaManager, ArenaManifest};
 use crate::error::Result;
 use crate::sync_primitives::{Arc, RwLock};
 use crate::tools::AlephTool;
@@ -92,7 +92,9 @@ impl AlephTool for ArenaCreateTool {
         )
         .map_err(crate::error::AlephError::other)?;
 
-        let mut manager = self.manager.write().unwrap_or_else(|e| e.into_inner());
+        let mut manager = self.manager.write().map_err(|e| {
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+        })?;
         let (arena_id, _handles) = manager
             .create_arena(manifest)
             .map_err(crate::error::AlephError::other)?;
@@ -184,26 +186,30 @@ impl AlephTool for ArenaQueryTool {
         );
 
         let arena_id = ArenaId::from_string(&args.arena_id);
-        let manager = self.manager.read().unwrap_or_else(|e| e.into_inner());
+        let manager = self.manager.read().map_err(|e| {
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+        })?;
 
         if let Some(ref agent_id_str) = args.agent_id {
             // Use handle-based query with permission checks
+            let agent_id = AgentId::from_string(agent_id_str.clone());
             let handle = manager
-                .get_handle(&arena_id, agent_id_str)
+                .get_handle(&arena_id, &agent_id)
                 .map_err(crate::error::AlephError::other)?;
 
             let (_, goal, active_agents, completed_steps, total_steps, _) =
                 handle.snapshot_for_context();
 
             let mut slot_summaries: Vec<SlotSummary> = Vec::new();
-            for agent in &active_agents {
-                let artifacts = handle.list_artifacts(agent).unwrap_or_default();
+            for agent_str in &active_agents {
+                let agent = AgentId::from_string(agent_str.clone());
+                let artifacts = handle.list_artifacts(&agent).unwrap_or_default();
                 let slot_status = handle
-                    .slot_status(agent)
+                    .slot_status(&agent)
                     .map(|s| format!("{:?}", s))
                     .unwrap_or_else(|| "Idle".to_string());
                 slot_summaries.push(SlotSummary {
-                    agent_id: agent.clone(),
+                    agent_id: agent.as_str().to_string(),
                     status: slot_status,
                     artifact_count: artifacts.len(),
                 });
@@ -333,7 +339,9 @@ impl AlephTool for ArenaSettleTool {
         );
 
         let arena_id = ArenaId::from_string(&args.arena_id);
-        let mut manager = self.manager.write().unwrap_or_else(|e| e.into_inner());
+        let mut manager = self.manager.write().map_err(|e| {
+            crate::error::AlephError::other(format!("Arena manager lock poisoned: {}", e))
+        })?;
 
         let (report, facts) = manager
             .settle_with_facts(&arena_id)
@@ -344,7 +352,7 @@ impl AlephTool for ArenaSettleTool {
             .map(|f| FactSummary {
                 confidence: f.confidence(),
                 content: f.content,
-                source_agent: f.source_agent,
+                source_agent: f.source_agent.to_string(),
                 tags: f.tags,
             })
             .collect();

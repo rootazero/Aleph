@@ -132,7 +132,9 @@ pub fn check_and_resolve_path(
         // For non-existent paths, canonicalize the longest existing ancestor
         // then append remaining components. This prevents symlink-based traversal
         // that pure component normalization would miss.
-        safe_normalize(&expanded)
+        safe_normalize(&expanded).map_err(|e| {
+            ToolError::Execution(format!("Failed to normalize non-existent path: {}", e))
+        })?
     };
 
     info!(canonical = %canonical.display(), "check_path: canonical path");
@@ -173,7 +175,11 @@ pub fn check_and_resolve_path(
 /// Normalize a non-existent path by canonicalizing the longest existing ancestor,
 /// then appending the remaining components. This prevents symlink-based path traversal
 /// that pure component-level normalization would miss.
-fn safe_normalize(path: &Path) -> PathBuf {
+///
+/// Returns an error if the longest existing ancestor cannot be canonicalized
+/// (e.g., due to permission issues), ensuring we never return an uncanonicalized
+/// path that could bypass security checks.
+fn safe_normalize(path: &Path) -> Result<PathBuf, String> {
     let mut existing = path.to_path_buf();
     let mut remaining = Vec::new();
     while !existing.exists() {
@@ -184,7 +190,9 @@ fn safe_normalize(path: &Path) -> PathBuf {
             break;
         }
     }
-    let mut result = existing.canonicalize().unwrap_or(existing);
+    let mut result = existing
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize ancestor '{}': {}", existing.display(), e))?;
     for component in remaining.into_iter().rev() {
         if component == ".." {
             result.pop();
@@ -192,5 +200,5 @@ fn safe_normalize(path: &Path) -> PathBuf {
             result.push(component);
         }
     }
-    result
+    Ok(result)
 }
