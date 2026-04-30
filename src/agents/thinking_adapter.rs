@@ -251,15 +251,26 @@ impl ThinkingAdapter {
     ///
     /// Automatically dispatches to the appropriate provider adapter.
     pub fn to_provider_params(config: &ThinkingConfig) -> Option<Value> {
-        let provider_lower = config.provider.to_lowercase();
-
-        match provider_lower.as_str() {
-            "claude" | "anthropic" => Self::to_anthropic_params(config),
-            "openai" => Self::to_openai_params(config),
-            "gemini" | "google" => Self::to_gemini_params(config),
-            "deepseek" => Self::to_deepseek_params(config),
-            "doubao" | "volcengine" | "ark" => Self::to_doubao_params(config),
-            "moonshot" | "kimi" => Self::to_moonshot_params(config),
+        match config.provider.as_str() {
+            p if p.eq_ignore_ascii_case("claude")
+                | p.eq_ignore_ascii_case("anthropic") =>
+            {
+                Self::to_anthropic_params(config)
+            }
+            p if p.eq_ignore_ascii_case("openai") => Self::to_openai_params(config),
+            p if p.eq_ignore_ascii_case("gemini") | p.eq_ignore_ascii_case("google") => {
+                Self::to_gemini_params(config)
+            }
+            p if p.eq_ignore_ascii_case("deepseek") => Self::to_deepseek_params(config),
+            p if p.eq_ignore_ascii_case("doubao")
+                | p.eq_ignore_ascii_case("volcengine")
+                | p.eq_ignore_ascii_case("ark") =>
+            {
+                Self::to_doubao_params(config)
+            }
+            p if p.eq_ignore_ascii_case("moonshot") | p.eq_ignore_ascii_case("kimi") => {
+                Self::to_moonshot_params(config)
+            }
             _ => None, // Unknown provider, no thinking params
         }
     }
@@ -280,33 +291,39 @@ impl ThinkingAdapter {
 
     /// Check if provider supports thinking level control
     pub fn supports_thinking_control(provider: &str) -> bool {
-        let provider_lower = provider.to_lowercase();
-        matches!(
-            provider_lower.as_str(),
-            "claude"
-                | "anthropic"
-                | "openai"
-                | "gemini"
-                | "google"
-                | "deepseek"
-                | "doubao"
-                | "volcengine"
-                | "ark"
-                | "moonshot"
-                | "kimi"
-        )
+        provider.eq_ignore_ascii_case("claude")
+            || provider.eq_ignore_ascii_case("anthropic")
+            || provider.eq_ignore_ascii_case("openai")
+            || provider.eq_ignore_ascii_case("gemini")
+            || provider.eq_ignore_ascii_case("google")
+            || provider.eq_ignore_ascii_case("deepseek")
+            || provider.eq_ignore_ascii_case("doubao")
+            || provider.eq_ignore_ascii_case("volcengine")
+            || provider.eq_ignore_ascii_case("ark")
+            || provider.eq_ignore_ascii_case("moonshot")
+            || provider.eq_ignore_ascii_case("kimi")
     }
 
     /// Get the parameter key used by the provider for thinking control
     pub fn get_thinking_param_key(provider: &str) -> Option<&'static str> {
-        let provider_lower = provider.to_lowercase();
-        match provider_lower.as_str() {
-            "claude" | "anthropic" => Some("thinking"),
-            "openai" => Some("reasoning_effort"),
-            "gemini" | "google" => Some("thinking_config"),
-            "deepseek" => Some("enable_thinking"),
-            "doubao" | "volcengine" | "ark" => Some("enable_reasoning"),
-            "moonshot" | "kimi" => Some("use_thinking"),
+        match provider {
+            p if p.eq_ignore_ascii_case("claude") || p.eq_ignore_ascii_case("anthropic") => {
+                Some("thinking")
+            }
+            p if p.eq_ignore_ascii_case("openai") => Some("reasoning_effort"),
+            p if p.eq_ignore_ascii_case("gemini") || p.eq_ignore_ascii_case("google") => {
+                Some("thinking_config")
+            }
+            p if p.eq_ignore_ascii_case("deepseek") => Some("enable_thinking"),
+            p if p.eq_ignore_ascii_case("doubao")
+                || p.eq_ignore_ascii_case("volcengine")
+                || p.eq_ignore_ascii_case("ark") =>
+            {
+                Some("enable_reasoning")
+            }
+            p if p.eq_ignore_ascii_case("moonshot") || p.eq_ignore_ascii_case("kimi") => {
+                Some("use_thinking")
+            }
             _ => None,
         }
     }
