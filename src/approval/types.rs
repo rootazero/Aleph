@@ -27,7 +27,8 @@ pub enum ActionType {
 }
 
 /// The result of an approval policy check.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
 pub enum ApprovalDecision {
     /// Action is allowed without user interaction.
     Allow,
@@ -50,6 +51,7 @@ pub enum DefaultDecision {
 }
 
 /// A request submitted to the approval system for authorization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionRequest {
     /// What kind of action is being requested.
     pub action_type: ActionType,

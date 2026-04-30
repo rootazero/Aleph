@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::policy::ApprovalPolicy;
 use super::types::{ActionRequest, ActionType, ApprovalDecision, DefaultDecision};
@@ -100,27 +100,42 @@ pub fn matches_glob(value: &str, pattern: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Pre-compile a list of [`PolicyRule`]s into `(ActionType, Regex)` pairs.
+/// A compiled policy rule, pairing the original glob pattern with its regex.
+#[derive(Debug, Clone)]
+struct CompiledRule {
+    /// Original glob pattern (used for logging and audit messages).
+    pattern: String,
+    /// Compiled regex for matching.
+    regex: regex::Regex,
+}
+
+/// Pre-compile a list of [`PolicyRule`]s into a map keyed by [`ActionType`].
 ///
-/// Rules whose patterns fail to compile are silently skipped (with a warning).
-fn compile_rules(rules: &[PolicyRule]) -> Vec<(ActionType, regex::Regex)> {
-    rules
-        .iter()
-        .filter_map(|rule| {
-            let regex_str = glob_to_regex_str(&rule.pattern);
-            match regex::Regex::new(&regex_str) {
-                Ok(re) => Some((rule.action_type.clone(), re)),
-                Err(e) => {
-                    tracing::warn!(
-                        pattern = %rule.pattern,
-                        error = %e,
-                        "Failed to compile glob pattern; skipping rule"
-                    );
-                    None
-                }
+/// Rules whose patterns fail to compile are skipped with a warning.
+fn compile_rules_grouped(rules: &[PolicyRule]) -> HashMap<ActionType, Vec<CompiledRule>> {
+    let mut grouped: HashMap<ActionType, Vec<CompiledRule>> = HashMap::new();
+    for rule in rules {
+        let regex_str = glob_to_regex_str(&rule.pattern);
+        match regex::Regex::new(&regex_str) {
+            Ok(regex) => {
+                grouped
+                    .entry(rule.action_type.clone())
+                    .or_default()
+                    .push(CompiledRule {
+                        pattern: rule.pattern.clone(),
+                        regex,
+                    });
             }
-        })
-        .collect()
+            Err(e) => {
+                tracing::warn!(
+                    pattern = %rule.pattern,
+                    error = %e,
+                    "Failed to compile glob pattern; skipping rule"
+                );
+            }
+        }
+    }
+    grouped
 }
 
 // ---------------------------------------------------------------------------
@@ -136,29 +151,35 @@ fn compile_rules(rules: &[PolicyRule]) -> Vec<(ActionType, regex::Regex)> {
 /// 4. If no default is configured → `Ask`
 pub struct ConfigApprovalPolicy {
     config: PolicyConfig,
-    blocklist_compiled: Vec<(ActionType, regex::Regex)>,
-    allowlist_compiled: Vec<(ActionType, regex::Regex)>,
+    blocklist_by_type: HashMap<ActionType, Vec<CompiledRule>>,
+    allowlist_by_type: HashMap<ActionType, Vec<CompiledRule>>,
 }
 
 impl ConfigApprovalPolicy {
     /// Create a new policy from an explicit [`PolicyConfig`].
     pub fn new(config: PolicyConfig) -> Self {
-        let blocklist_compiled = compile_rules(&config.blocklist);
-        let allowlist_compiled = compile_rules(&config.allowlist);
+        let blocklist_by_type = compile_rules_grouped(&config.blocklist);
+        let allowlist_by_type = compile_rules_grouped(&config.allowlist);
         Self {
             config,
-            blocklist_compiled,
-            allowlist_compiled,
+            blocklist_by_type,
+            allowlist_by_type,
         }
     }
 
     /// Load the policy from `~/.aleph/approval-policy.json`.
     ///
     /// If the file does not exist or cannot be parsed, a sensible default
-    /// policy is returned instead (with a debug-level log message).
+    /// policy is returned instead.
     pub fn load() -> Self {
-        let path = Self::config_path();
+        Self::load_from(Self::config_path())
+    }
 
+    /// Load the policy from the given path.
+    ///
+    /// If the file does not exist or cannot be parsed, a sensible default
+    /// policy is returned instead.
+    pub fn load_from(path: PathBuf) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<PolicyConfig>(&contents) {
                 Ok(config) => {
@@ -166,7 +187,7 @@ impl ConfigApprovalPolicy {
                     Self::new(config)
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         "Failed to parse approval policy at {}: {}. Using defaults.",
                         path.display(),
                         e
@@ -174,9 +195,16 @@ impl ConfigApprovalPolicy {
                     Self::default()
                 }
             },
-            Err(e) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
-                    "Approval policy file not found at {}: {}. Using defaults.",
+                    "Approval policy file not found at {}. Using defaults.",
+                    path.display()
+                );
+                Self::default()
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to read approval policy at {}: {}. Using defaults.",
                     path.display(),
                     e
                 );
@@ -189,8 +217,8 @@ impl ConfigApprovalPolicy {
     fn config_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| {
-                warn!("Cannot determine home directory; approval policy will use /tmp fallback");
-                PathBuf::from("/tmp")
+                warn!("Cannot determine home directory; approval policy will use temp dir fallback");
+                std::env::temp_dir()
             })
             .join(".aleph")
             .join("approval-policy.json")
@@ -231,31 +259,35 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
         let action = &request.action_type;
         let target = &request.target;
 
-        // 1. Blocklist takes priority (pre-compiled regexes)
-        for (rule_action, re) in &self.blocklist_compiled {
-            if rule_action == action && re.is_match(target) {
-                debug!(
-                    action = ?action,
-                    target = %target,
-                    pattern = %re,
-                    "Blocked by blocklist rule"
-                );
-                return ApprovalDecision::Deny {
-                    reason: format!("Blocked by policy rule: {}", re),
-                };
+        // 1. Blocklist takes priority (pre-compiled regexes, grouped by ActionType)
+        if let Some(rules) = self.blocklist_by_type.get(action) {
+            for rule in rules {
+                if rule.regex.is_match(target) {
+                    debug!(
+                        action = ?action,
+                        target = %target,
+                        pattern = %rule.pattern,
+                        "Blocked by blocklist rule"
+                    );
+                    return ApprovalDecision::Deny {
+                        reason: format!("Blocked by policy rule: {}", rule.pattern),
+                    };
+                }
             }
         }
 
-        // 2. Allowlist overrides defaults (pre-compiled regexes)
-        for (rule_action, re) in &self.allowlist_compiled {
-            if rule_action == action && re.is_match(target) {
-                debug!(
-                    action = ?action,
-                    target = %target,
-                    pattern = %re,
-                    "Allowed by allowlist rule"
-                );
-                return ApprovalDecision::Allow;
+        // 2. Allowlist overrides defaults (pre-compiled regexes, grouped by ActionType)
+        if let Some(rules) = self.allowlist_by_type.get(action) {
+            for rule in rules {
+                if rule.regex.is_match(target) {
+                    debug!(
+                        action = ?action,
+                        target = %target,
+                        pattern = %rule.pattern,
+                        "Allowed by allowlist rule"
+                    );
+                    return ApprovalDecision::Allow;
+                }
             }
         }
 
@@ -285,7 +317,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
     }
 
     async fn record(&self, request: &ActionRequest, decision: &ApprovalDecision) {
-        debug!(
+        info!(
             action = ?request.action_type,
             target = %request.target,
             agent = %request.agent_id,

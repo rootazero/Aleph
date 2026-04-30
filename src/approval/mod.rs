@@ -236,9 +236,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_missing_file_returns_default() {
-        // ConfigApprovalPolicy::load() should not panic when the file is missing.
-        // It falls back to default which allows browser navigate/click/type.
-        let policy = ConfigApprovalPolicy::load();
+        // Use a path in a temp directory that does not exist.
+        let temp_path = std::env::temp_dir().join("aleph-test-approval-nonexistent");
+        let policy = ConfigApprovalPolicy::load_from(temp_path.join("policy.json"));
 
         let req = make_request(ActionType::BrowserNavigate, "https://example.com");
         assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
