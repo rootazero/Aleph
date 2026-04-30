@@ -52,26 +52,11 @@ impl ToolQuery {
             .cloned()
             .collect();
 
-        // Sort by source priority: Builtin > Native > MCP > Skill
+        // Sort by source priority: Builtin > Native > Custom > MCP > Plugin > Skill
         presets.sort_by(|a, b| {
-            let priority_a = match &a.source {
-                ToolSource::Builtin => 0,
-                ToolSource::Native => 1,
-                ToolSource::Mcp { .. } => 2,
-                ToolSource::Plugin { .. } => 3,
-                ToolSource::Skill { .. } => 4,
-                ToolSource::Custom { .. } => 5,
-            };
-            let priority_b = match &b.source {
-                ToolSource::Builtin => 0,
-                ToolSource::Native => 1,
-                ToolSource::Mcp { .. } => 2,
-                ToolSource::Plugin { .. } => 3,
-                ToolSource::Skill { .. } => 4,
-                ToolSource::Custom { .. } => 5,
-            };
-            priority_a
-                .cmp(&priority_b)
+            a.source
+                .display_priority()
+                .cmp(&b.source.display_priority())
                 .then(a.sort_order.cmp(&b.sort_order))
                 .then(a.name.cmp(&b.name))
         });
@@ -271,26 +256,9 @@ impl ToolQuery {
 
         // Sort by source priority, then sort_order, then name
         result.sort_by(|a, b| {
-            // Sort order: Builtin > Native > Custom > MCP > Plugin > Skill
-            let priority_a = match &a.source {
-                ToolSource::Builtin => 0,
-                ToolSource::Native => 1,
-                ToolSource::Custom { .. } => 2,
-                ToolSource::Mcp { .. } => 3,
-                ToolSource::Plugin { .. } => 4,
-                ToolSource::Skill { .. } => 5,
-            };
-            let priority_b = match &b.source {
-                ToolSource::Builtin => 0,
-                ToolSource::Native => 1,
-                ToolSource::Custom { .. } => 2,
-                ToolSource::Mcp { .. } => 3,
-                ToolSource::Plugin { .. } => 4,
-                ToolSource::Skill { .. } => 5,
-            };
-
-            priority_a
-                .cmp(&priority_b)
+            a.source
+                .display_priority()
+                .cmp(&b.source.display_priority())
                 .then(a.sort_order.cmp(&b.sort_order))
                 .then(a.name.cmp(&b.name))
         });

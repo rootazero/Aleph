@@ -2,7 +2,9 @@
 //!
 //! Methods for managing tool state and performing bulk operations.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::RoutingRuleConfig;
@@ -205,28 +207,36 @@ impl ToolState {
         mcp_tools: &[(String, Vec<McpToolInfo>)],
         skills: &[SkillInfo],
         rules: &[RoutingRuleConfig],
-        registrar: &ToolRegistrar,
-        conflict_resolver: &ConflictResolver,
+        _registrar: &ToolRegistrar,
+        _conflict_resolver: &ConflictResolver,
     ) {
-        self.clear().await;
+        // Build the new registry in a temporary map so the main storage
+        // never sees an empty or partially-populated state.
+        let temp_storage = Arc::new(RwLock::new(HashMap::new()));
+        let temp_registrar = ToolRegistrar::new(Arc::clone(&temp_storage));
+        let temp_resolver = ConflictResolver::new(Arc::clone(&temp_storage));
 
         // 1. Builtin commands first (currently no-op in AI-first mode)
-        registrar.register_builtin_tools(conflict_resolver).await;
+        temp_registrar.register_builtin_tools(&temp_resolver).await;
 
         // 2. External MCP tools
         for (server_name, tools) in mcp_tools {
-            registrar
-                .register_mcp_tools(tools, server_name, false, conflict_resolver)
+            temp_registrar
+                .register_mcp_tools(tools, server_name, false, &temp_resolver)
                 .await;
         }
 
         // 3. Skills
-        registrar.register_skills(skills, conflict_resolver).await;
+        temp_registrar.register_skills(skills, &temp_resolver).await;
 
         // 4. Custom commands from user config
-        registrar.register_custom_commands(rules).await;
+        temp_registrar.register_custom_commands(rules).await;
 
-        let count = self.tools.read().await.len();
-        info!("Tool registry refreshed: {} total tools", count);
+        // Atomically swap — no empty-window
+        let new_tools: Vec<UnifiedTool> = {
+            let map = temp_storage.read().await;
+            map.values().cloned().collect()
+        };
+        self.refresh_atomic(new_tools).await;
     }
 }

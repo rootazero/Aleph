@@ -189,18 +189,7 @@ impl ConflictResolver {
                         existing.name = new_name.clone();
                         existing.display_name = format!("{} (renamed)", new_name);
 
-                        let new_id = match &existing.source {
-                            ToolSource::Native => format!("native:{}", new_name),
-                            ToolSource::Builtin => format!("builtin:{}", new_name),
-                            ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
-                            ToolSource::Skill { id } => format!("skill:{}", id),
-                            ToolSource::Custom { rule_index } => {
-                                format!("custom:{}:{}", rule_index, new_name)
-                            }
-                            ToolSource::Plugin { plugin_id } => {
-                                format!("plugin:{}:{}", plugin_id, new_name)
-                            }
-                        };
+                        let new_id = existing.source.format_tool_id(&new_name);
 
                         debug!(
                             "Tool conflict resolved: '{}' renamed to '{}' (priority system)",
@@ -227,18 +216,7 @@ impl ConflictResolver {
                     tool.display_name = format!("{} ({})", new_name, tool.source.label());
 
                     // Update tool ID
-                    tool.id = match &tool.source {
-                        ToolSource::Native => format!("native:{}", new_name),
-                        ToolSource::Builtin => format!("builtin:{}", new_name),
-                        ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
-                        ToolSource::Skill { id } => format!("skill:{}", id),
-                        ToolSource::Custom { rule_index } => {
-                            format!("custom:{}:{}", rule_index, new_name)
-                        }
-                        ToolSource::Plugin { plugin_id } => {
-                            format!("plugin:{}:{}", plugin_id, new_name)
-                        }
-                    };
+                    tool.id = tool.source.format_tool_id(&new_name);
 
                     debug!(
                         "Tool conflict resolved: '{}' renamed to '{}' (existing '{}' has priority)",

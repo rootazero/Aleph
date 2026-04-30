@@ -208,6 +208,34 @@ impl ToolSource {
     pub fn is_plugin(&self) -> bool {
         matches!(self, ToolSource::Plugin { .. })
     }
+
+    /// Display priority for UI sorting (lower = first).
+    ///
+    /// Order: Builtin (0) > Native (1) > Custom (2) > Mcp (3) > Plugin (4) > Skill (5).
+    pub fn display_priority(&self) -> u8 {
+        match self {
+            ToolSource::Builtin => 0,
+            ToolSource::Native => 1,
+            ToolSource::Custom { .. } => 2,
+            ToolSource::Mcp { .. } => 3,
+            ToolSource::Plugin { .. } => 4,
+            ToolSource::Skill { .. } => 5,
+        }
+    }
+
+    /// Format a tool ID for this source type.
+    ///
+    /// E.g. `ToolSource::Mcp { server: "fs" }.format_tool_id("read_file")` → `"mcp:fs:read_file"`.
+    pub fn format_tool_id(&self, name: &str) -> String {
+        match self {
+            ToolSource::Native => format!("native:{name}"),
+            ToolSource::Builtin => format!("builtin:{name}"),
+            ToolSource::Mcp { server } => format!("mcp:{server}:{name}"),
+            ToolSource::Skill { id } => format!("skill:{id}"),
+            ToolSource::Custom { rule_index } => format!("custom:{rule_index}:{name}"),
+            ToolSource::Plugin { plugin_id } => format!("plugin:{plugin_id}:{name}"),
+        }
+    }
 }
 
 // =============================================================================
