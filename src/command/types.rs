@@ -30,13 +30,16 @@ impl CommandType {
         }
     }
 
-    /// Parse from string (for config files)
+    /// Parse from string (for config files, case-insensitive)
     pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "action" => Some(CommandType::Action),
-            "prompt" => Some(CommandType::Prompt),
-            "namespace" => Some(CommandType::Namespace),
-            _ => None,
+        if s.eq_ignore_ascii_case("action") {
+            Some(CommandType::Action)
+        } else if s.eq_ignore_ascii_case("prompt") {
+            Some(CommandType::Prompt)
+        } else if s.eq_ignore_ascii_case("namespace") {
+            Some(CommandType::Namespace)
+        } else {
+            None
         }
     }
 
@@ -102,11 +105,10 @@ impl CommandNode {
         description: impl Into<String>,
         node_type: CommandType,
     ) -> Self {
-        let node_type_copy = node_type;
         Self {
             key: key.into(),
             description: description.into(),
-            icon: node_type_copy.default_icon().to_string(),
+            icon: node_type.default_icon().to_string(),
             hint: None,
             node_type,
             has_children: false, // Flat namespace: no children

@@ -74,8 +74,14 @@ impl CommandParser {
     /// Parse user input as a slash command (async)
     ///
     /// Returns `Some(ParsedCommand)` if the input matches a registered command.
+    /// Only processes inputs starting with '/'.
     pub async fn parse_async(&self, input: &str) -> Option<ParsedCommand> {
-        let resolved = self.tool_registry.resolve_command(input).await?;
+        let trimmed = input.trim();
+        if !trimmed.starts_with('/') {
+            return None;
+        }
+
+        let resolved = self.tool_registry.resolve_command(trimmed).await?;
 
         let source_type = ToolSourceType::from(&resolved.tool.source);
         let context = tool_to_command_context(&resolved.tool);
@@ -94,13 +100,8 @@ impl CommandParser {
     /// Uses `tokio::task::block_in_place` — only safe when called from
     /// within an async context on a multi-threaded runtime.
     pub fn parse(&self, input: &str) -> Option<ParsedCommand> {
-        let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
-            return None;
-        }
-
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.parse_async(trimmed))
+            tokio::runtime::Handle::current().block_on(self.parse_async(input))
         })
     }
 

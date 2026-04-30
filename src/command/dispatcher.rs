@@ -28,8 +28,8 @@ impl CommandDispatcher {
     }
 
     /// Register a handler for a command name
-    pub fn register(&mut self, name: impl Into<String>, handler: Box<dyn DirectHandler>) {
-        self.handlers.insert(name.into(), handler);
+    pub fn register(&mut self, name: impl Into<String>, handler: impl DirectHandler + 'static) {
+        self.handlers.insert(name.into(), Box::new(handler));
     }
 
     /// Execute a direct command by name
@@ -79,9 +79,9 @@ mod tests {
         let mut dispatcher = CommandDispatcher::new();
         dispatcher.register(
             "help",
-            Box::new(MockHandler {
+            MockHandler {
                 response: "Help output".to_string(),
-            }),
+            },
         );
 
         let result = dispatcher.execute("help", None).await;
@@ -94,9 +94,9 @@ mod tests {
         let mut dispatcher = CommandDispatcher::new();
         dispatcher.register(
             "echo",
-            Box::new(MockHandler {
+            MockHandler {
                 response: "Echo".to_string(),
-            }),
+            },
         );
 
         let result = dispatcher.execute("echo", Some("hello")).await;
@@ -117,9 +117,9 @@ mod tests {
         let mut dispatcher = CommandDispatcher::new();
         dispatcher.register(
             "help",
-            Box::new(MockHandler {
+            MockHandler {
                 response: "Help".to_string(),
-            }),
+            },
         );
 
         assert!(dispatcher.has_handler("help"));
