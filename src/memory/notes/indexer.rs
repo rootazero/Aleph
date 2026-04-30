@@ -211,12 +211,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         }
 
         let content = note.to_markdown();
-        fs::write(&path, &content)
-            .await
-            .map_err(|e| AlephError::ConfigError {
-                message: format!("Failed to write {:?}: {e}", path),
-                suggestion: None,
-            })?;
+        atomic_write_file(&path, &content).await?;
 
         // Sync to SQLite immediately so callers don't have to wait for full_rebuild.
         let reparsed = KnowledgeNote::from_markdown(&safe_title, &content)
@@ -465,12 +460,7 @@ impl<S: NoteStore> NoteIndexer<S> {
         note.updated_at = chrono::Utc::now().timestamp();
         let md = note.to_markdown();
         note.content_hash = sha2_hash(&md);
-        fs::write(&file_path, &md)
-            .await
-            .map_err(|e| AlephError::ConfigError {
-                message: format!("merge write {file_path:?}: {e}"),
-                suggestion: None,
-            })?;
+        atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, cat).await?;
         self.notify_orientation(agent_id, cat, &safe_title);
         Ok(())
@@ -580,8 +570,28 @@ impl<S: NoteStore> NoteIndexer<S> {
                     .join(agent_id)
                     .join(old_cat)
                     .join(format!("{safe_old}.md"));
+                if old_cat != category {
+                    // Stages must validate `old_note_path` against their
+                    // candidate set before getting here (see `referenced_path`
+                    // in distill_action.rs). A cross-category supersede
+                    // arriving here is either a legitimate user intent or a
+                    // bypassed validation — either way it deserves visibility.
+                    tracing::warn!(
+                        old_path = %old_note_path,
+                        old_cat,
+                        new_cat = category,
+                        "Supersede crosses category boundary"
+                    );
+                }
                 if old_file.exists() {
-                    let _ = fs::remove_file(&old_file).await;
+                    fs::remove_file(&old_file).await.map_err(|e| {
+                        AlephError::ConfigError {
+                            message: format!(
+                                "Supersede: failed to remove old file {old_file:?}: {e}"
+                            ),
+                            suggestion: None,
+                        }
+                    })?;
                 }
                 self.store.remove_note_index(old_note_path, agent_id).await?;
                 self.notify_orientation(agent_id, old_cat, &safe_old);
@@ -622,6 +632,34 @@ fn sha2_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Write `content` to `path` atomically — write to `<path>.tmp` first, then
+/// rename. POSIX rename is atomic within a single filesystem, so readers
+/// either see the old file or the new file but never a partial write.
+///
+/// Pairs with the write-then-index sequence in `write_note` /
+/// `merge_source_facts_into_note`: if downstream `index_note` errors, the
+/// renamed file is fully on disk and `full_rebuild` reconciles SQLite from
+/// disk on next startup. Without atomic rename, a crash mid-`fs::write`
+/// would leave a truncated file that re-parses incorrectly on rebuild.
+async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    fs::write(&tmp, content)
+        .await
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("Failed to write {tmp:?}: {e}"),
+            suggestion: None,
+        })?;
+    fs::rename(&tmp, path)
+        .await
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("Failed to rename {tmp:?} -> {path:?}: {e}"),
+            suggestion: None,
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]

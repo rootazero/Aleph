@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 
 use crate::error::AlephError;
+use crate::memory::dreaming::distill_action::referenced_path;
 use crate::memory::dreaming::{DistillAction, DreamContext};
 use crate::memory::notes::find_similar_notes;
 use crate::memory::notes::store::NoteStore;
@@ -108,10 +109,25 @@ impl DreamStage for SkillDistillStage {
             };
 
             let actions = parse_distill_response(&response.text_content());
+            let candidate_set: std::collections::HashSet<&str> =
+                candidates.iter().map(|(p, _)| p.as_str()).collect();
             for action in actions
                 .into_iter()
                 .take(self.max_per_cycle)
                 .map(clamp_action)
+                .filter(|a| {
+                    if let Some(p) = referenced_path(a) {
+                        if !candidate_set.contains(p) {
+                            tracing::warn!(
+                                path = p,
+                                "SkillDistill: action references non-candidate path; \
+                                 dropping to prevent cross-category mutation"
+                            );
+                            return false;
+                        }
+                    }
+                    true
+                })
             {
                 match ctx
                     .indexer

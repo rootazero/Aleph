@@ -48,6 +48,24 @@ pub enum DistillAction {
     },
 }
 
+/// Path this action references in the existing note set, if any.
+///
+/// `New` and `Skip` do not reference an existing note. `Strengthen` and
+/// `Supersede` both name an existing path that *must* come from the candidate
+/// list the LLM was shown — otherwise a hallucinated path could trigger
+/// cross-category file deletion (Supersede) or merge into the wrong note
+/// (Strengthen). Stages use this helper to drop actions whose target is not
+/// in the candidate set before invoking `apply_distill_action`.
+pub fn referenced_path(action: &DistillAction) -> Option<&str> {
+    match action {
+        DistillAction::Strengthen {
+            existing_note_path, ..
+        } => Some(existing_note_path),
+        DistillAction::Supersede { old_note_path, .. } => Some(old_note_path),
+        DistillAction::New { .. } | DistillAction::Skip { .. } => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +106,44 @@ mod tests {
         let j = r#"{"type":"skip","source_fact":"F1","reason":"transient"}"#;
         let a: DistillAction = serde_json::from_str(j).unwrap();
         assert!(matches!(a, DistillAction::Skip { .. }));
+    }
+
+    #[test]
+    fn referenced_path_extracts_strengthen_target() {
+        let a = DistillAction::Strengthen {
+            existing_note_path: "skill/async-error".into(),
+            source_facts: vec![],
+        };
+        assert_eq!(referenced_path(&a), Some("skill/async-error"));
+    }
+
+    #[test]
+    fn referenced_path_extracts_supersede_target() {
+        let a = DistillAction::Supersede {
+            old_note_path: "feedback/typo".into(),
+            title: "fix".into(),
+            rule: "x".into(),
+            confidence: 0.8,
+            severity: Severity::Med,
+            source_facts: vec![],
+        };
+        assert_eq!(referenced_path(&a), Some("feedback/typo"));
+    }
+
+    #[test]
+    fn referenced_path_is_none_for_new_and_skip() {
+        let n = DistillAction::New {
+            title: "x".into(),
+            rule: "x".into(),
+            confidence: 1.0,
+            severity: Severity::Low,
+            source_facts: vec![],
+        };
+        let s = DistillAction::Skip {
+            source_fact: "x".into(),
+            reason: "x".into(),
+        };
+        assert_eq!(referenced_path(&n), None);
+        assert_eq!(referenced_path(&s), None);
     }
 }
