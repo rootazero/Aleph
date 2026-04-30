@@ -104,8 +104,8 @@ impl QuestionGroup {
         Self {
             id: id.to_string(),
             prompt: prompt.to_string(),
+            default_index: if options.is_empty() { None } else { Some(0) },
             options,
-            default_index: Some(0), // Default to first option
         }
     }
 
@@ -140,13 +140,14 @@ pub struct ClarificationRequest {
 impl ClarificationRequest {
     /// Create a select-type clarification request
     pub fn select(id: &str, prompt: &str, options: Vec<ClarificationOption>) -> Self {
+        let has_options = !options.is_empty();
         Self {
             id: id.to_string(),
             prompt: prompt.to_string(),
             clarification_type: ClarificationType::Select,
             options: Some(options),
             groups: None,
-            default_value: Some("0".to_string()), // Default to first option
+            default_value: if has_options { Some("0".to_string()) } else { None },
             placeholder: None,
             source: None,
         }
@@ -271,6 +272,10 @@ impl ClarificationResult {
     }
 
     /// Create a multi-group result
+    ///
+    /// The result type is `Selected` since multi-group answers represent
+    /// a selection of options across multiple question groups.
+    /// Use `get_group_answers()` to retrieve the individual group selections.
     ///
     /// Example:
     /// ```rust

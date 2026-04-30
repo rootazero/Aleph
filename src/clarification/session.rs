@@ -107,7 +107,7 @@ impl PendingClarification {
     /// # Arguments
     ///
     /// * `prompt` - The prompt text to display to user
-    /// * `options` - Options for select-type clarification
+    /// * `options` - Options for select-type clarification (empty = text type)
     pub fn to_request(
         &self,
         prompt: &str,
@@ -120,6 +120,21 @@ impl PendingClarification {
             ClarificationRequest::select(&self.session_id, prompt, options)
                 .with_source(&format!("intent:{}", self.intent_type))
         }
+    }
+
+    /// Convert to a multi-group ClarificationRequest for UI display
+    ///
+    /// # Arguments
+    ///
+    /// * `prompt` - The prompt text to display to user
+    /// * `groups` - Question groups for multi-group clarification
+    pub fn to_multi_group_request(
+        &self,
+        prompt: &str,
+        groups: Vec<super::QuestionGroup>,
+    ) -> super::ClarificationRequest {
+        super::ClarificationRequest::multi_group(&self.session_id, prompt, groups)
+            .with_source(&format!("intent:{}", self.intent_type))
     }
 }
 
@@ -216,9 +231,19 @@ impl ClarificationManager {
         {
             let mut sessions = self.sessions.write().await;
 
-            // Enforce max sessions limit by removing oldest if needed
-            while sessions.len() >= self.config.max_sessions {
-                if let Some(oldest_id) = self.find_oldest_session(&sessions) {
+            // Enforce max sessions limit by removing expired first, then oldest active
+            while self.config.max_sessions > 0 && sessions.len() >= self.config.max_sessions {
+                let expired_ids: Vec<String> = sessions
+                    .iter()
+                    .filter(|(_, s)| s.is_expired())
+                    .map(|(id, _)| id.clone())
+                    .collect();
+
+                if !expired_ids.is_empty() {
+                    for id in expired_ids {
+                        sessions.remove(&id);
+                    }
+                } else if let Some(oldest_id) = self.find_oldest_active_session(&sessions) {
                     sessions.remove(&oldest_id);
                 } else {
                     break;
@@ -233,16 +258,18 @@ impl ClarificationManager {
 
     /// Get a session by ID
     ///
-    /// Returns None if session doesn't exist or has expired
+    /// Returns None if session doesn't exist or has expired.
+    /// Expired sessions are removed from storage on access.
     pub async fn get_session(&self, session_id: &str) -> Option<PendingClarification> {
-        let sessions = self.sessions.read().await;
-        sessions.get(session_id).and_then(|s| {
-            if s.is_expired() {
+        let mut sessions = self.sessions.write().await;
+        match sessions.get(session_id) {
+            Some(s) if !s.is_expired() => Some(s.clone()),
+            Some(_) => {
+                sessions.remove(session_id);
                 None
-            } else {
-                Some(s.clone())
             }
-        })
+            None => None,
+        }
     }
 
     /// Complete and remove a session
@@ -278,13 +305,14 @@ impl ClarificationManager {
         sessions.values().filter(|s| !s.is_expired()).count()
     }
 
-    /// Find the oldest session by creation time
-    fn find_oldest_session(
+    /// Find the oldest non-expired session by creation time
+    fn find_oldest_active_session(
         &self,
         sessions: &HashMap<String, PendingClarification>,
     ) -> Option<String> {
         sessions
             .iter()
+            .filter(|(_, s)| !s.is_expired())
             .min_by_key(|(_, s)| s.created_at)
             .map(|(id, _)| id.clone())
     }
