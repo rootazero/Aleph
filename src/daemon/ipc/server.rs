@@ -72,9 +72,7 @@ impl IpcServer {
                 Err(e) => {
                     let error =
                         JsonRpcError::new(Value::Null, PARSE_ERROR, format!("Parse error: {}", e));
-                    serde_json::to_string(&error).unwrap_or_else(|e| {
-                        format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-                    })
+                    Self::serialize_response(&error)
                 }
             };
 
@@ -99,9 +97,7 @@ impl IpcServer {
                     METHOD_NOT_FOUND,
                     format!("Method not found: {}", request.method),
                 );
-                serde_json::to_string(&error).unwrap_or_else(|e| {
-                        format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-                    })
+                Self::serialize_response(&error)
             }
         };
 
@@ -116,24 +112,29 @@ impl IpcServer {
         });
 
         let response = JsonRpcResponse::new(id, result);
-        serde_json::to_string(&response).unwrap_or_else(|e| {
-                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-            })
+        Self::serialize_response(&response)
     }
 
     async fn handle_ping(id: Value) -> String {
         let response = JsonRpcResponse::new(id, serde_json::json!({"pong": true}));
-        serde_json::to_string(&response).unwrap_or_else(|e| {
-                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-            })
+        Self::serialize_response(&response)
+    }
+
+    /// Serialize a JSON-RPC response, with a hardcoded fallback for the
+    /// pathological case where serialization itself fails.
+    fn serialize_response<T: serde::Serialize>(value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_else(|e| {
+            format!(
+                r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#,
+                e
+            )
+        })
     }
 
     async fn handle_shutdown(id: Value) -> String {
         // Send response first, then initiate shutdown
         let response = JsonRpcResponse::new(id, serde_json::json!({"shutting_down": true}));
-        let reply = serde_json::to_string(&response).unwrap_or_else(|e| {
-                format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
-            });
+        let reply = Self::serialize_response(&response);
 
         // Schedule graceful shutdown after response is sent.
         // Use a short delay to allow the response to be flushed to the client.

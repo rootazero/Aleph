@@ -81,7 +81,12 @@ impl LaunchdService {
         soft_limits.insert(
             "MemoryLimit".to_string(),
             Value::Integer(Integer::from(
-                i64::try_from(config.soft_mem_limit).unwrap_or(i64::MAX),
+                i64::try_from(config.soft_mem_limit).map_err(|_| {
+                    DaemonError::Config(format!(
+                        "soft_mem_limit ({}) exceeds maximum i64 value",
+                        config.soft_mem_limit
+                    ))
+                })?,
             )),
         );
         dict.insert(
@@ -93,7 +98,12 @@ impl LaunchdService {
         hard_limits.insert(
             "MemoryLimit".to_string(),
             Value::Integer(Integer::from(
-                i64::try_from(config.hard_mem_limit).unwrap_or(i64::MAX),
+                i64::try_from(config.hard_mem_limit).map_err(|_| {
+                    DaemonError::Config(format!(
+                        "hard_mem_limit ({}) exceeds maximum i64 value",
+                        config.hard_mem_limit
+                    ))
+                })?,
             )),
         );
         dict.insert(

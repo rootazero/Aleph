@@ -92,7 +92,9 @@ impl PendingAction {
         use sha2::{Digest, Sha256};
 
         let mut hasher = Sha256::new();
-        hasher.update(format!("{:?}{}", self.action_type, self.created_at));
+        let action_json = serde_json::to_string(&self.action_type)
+            .unwrap_or_else(|_| format!("{:?}", self.action_type));
+        hasher.update(format!("{}{}", action_json, self.created_at));
         let result = hasher.finalize();
 
         // Take first 16 characters of hex string (safe: hex is always ASCII)
