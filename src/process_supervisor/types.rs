@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 /// PTY terminal size configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PtySize {
     pub rows: u16,
     pub cols: u16,
@@ -58,7 +58,7 @@ impl SupervisorConfig {
 }
 
 /// Supervisor event types.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupervisorEvent {
     /// Received output line.
     Output(String),

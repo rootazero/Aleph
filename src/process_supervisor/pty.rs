@@ -88,11 +88,11 @@ impl ClaudeSupervisor {
         let reader = pair
             .master
             .try_clone_reader()
-            .map_err(|e| SupervisorError::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| SupervisorError::Io(std::io::Error::other(format!("failed to clone PTY reader: {}", e))))?;
         let writer = pair
             .master
             .take_writer()
-            .map_err(|e| SupervisorError::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| SupervisorError::Io(std::io::Error::other(format!("failed to take PTY writer: {}", e))))?;
 
         self.master = Some(pair.master);
         self.writer = Some(writer);
@@ -122,7 +122,10 @@ impl ClaudeSupervisor {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::debug!("PTY read error: {}", e);
+                        break;
+                    }
                 }
             }
             running.store(false, Ordering::Release);
@@ -151,18 +154,24 @@ impl ClaudeSupervisor {
 
     /// Write a line (appends newline) to the supervised process.
     pub fn writeln(&mut self, input: &str) -> Result<(), SupervisorError> {
-        self.write(&format!("{}\n", input))
+        self.write(input)?;
+        self.write("\n")
     }
 }
 
 /// Strip ANSI escape sequences from text.
+///
+/// Returns the original text if stripping produces invalid UTF-8.
 fn strip_ansi(text: &str) -> String {
     let bytes = text.as_bytes();
     let stripped = strip_ansi_escapes::strip(bytes);
-    String::from_utf8_lossy(&stripped).to_string()
+    String::from_utf8(stripped).unwrap_or_else(|_| text.to_string())
 }
 
 /// Detect semantic events from cleaned output text.
+///
+/// Uses heuristic string matching — patterns may need adjustment for
+/// different CLI tool versions or localization.
 fn detect_event(text: &str) -> SupervisorEvent {
     // Approval request detection
     if text.contains("Do you want to run") || text.contains("Allow this command") {
