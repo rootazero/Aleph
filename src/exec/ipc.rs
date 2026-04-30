@@ -7,7 +7,7 @@ use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};
 
 use hmac::{Hmac, Mac};
-use rand::RngCore;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
@@ -187,7 +187,7 @@ impl IpcServer {
 
         // Step 1: Send challenge
         let mut nonce = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut nonce);
+        OsRng.fill_bytes(&mut nonce);
         let nonce_hex = hex::encode(nonce);
 
         let challenge = IpcMessage::Challenge {

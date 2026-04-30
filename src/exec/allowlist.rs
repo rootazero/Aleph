@@ -18,6 +18,16 @@ pub fn match_allowlist<'a>(
 fn matches_entry(entry: &AllowlistEntry, resolution: &CommandResolution) -> bool {
     let pattern = &entry.pattern;
 
+    // Reject empty patterns
+    if pattern.is_empty() {
+        return false;
+    }
+
+    // Reject patterns with path traversal attempts
+    if pattern.contains("..") || pattern.contains("./") || pattern.contains(".\\") {
+        return false;
+    }
+
     // Exact executable name match (e.g., "git")
     if !pattern.contains('/') && !pattern.contains('*') {
         return resolution.executable_name.eq_ignore_ascii_case(pattern);

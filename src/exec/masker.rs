@@ -1,9 +1,13 @@
 use crate::exec::secret_patterns::secret_masker_patterns;
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
-static SECRET_PATTERNS: Lazy<Vec<(regex::Regex, &'static str)>> =
-    Lazy::new(|| secret_masker_patterns().into_iter().map(|p| (p.regex, p.replacement)).collect());
+static SECRET_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
+    secret_masker_patterns()
+        .into_iter()
+        .map(|p| (p.regex, p.replacement))
+        .collect()
+});
 
 /// SecretMasker for redacting sensitive information.
 #[derive(Debug, Clone, Default)]

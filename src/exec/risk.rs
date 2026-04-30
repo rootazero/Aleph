@@ -6,8 +6,8 @@
 //! - Caution: Allowed but logged (npm install, docker run)
 //! - Safe: Silent pass (ls, cat, echo)
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
 /// Risk level for a command
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -40,7 +40,7 @@ impl RiskLevel {
 }
 
 /// Blocked command patterns - NEVER execute these
-pub static BLOCKED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+pub static BLOCKED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // rm -rf / or rm -rf /* (catastrophic delete)
         Regex::new(r"rm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)*(/|/\*)(\s|$)").unwrap(),
@@ -64,7 +64,7 @@ pub static BLOCKED_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 });
 
 /// Danger command patterns - require approval
-pub static DANGER_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+pub static DANGER_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // rm with force/recursive flags
         Regex::new(r"^rm\s+").unwrap(),
@@ -102,7 +102,7 @@ pub static DANGER_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 });
 
 /// Safe command patterns - auto-allow (read-only)
-pub static SAFE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+pub static SAFE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // File listing and info
         Regex::new(r"^(ls|ll|la|dir)(\s+|$)").unwrap(),

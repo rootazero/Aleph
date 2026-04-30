@@ -147,7 +147,9 @@ mod tests {
     #[test]
     fn masker_patterns_detect_openai_key() {
         for p in secret_masker_patterns() {
-            if p.regex.is_match("sk-abcdefghijklmnopqrstuvwxyz123456789012345678") {
+            if p.regex
+                .is_match("sk-abcdefghijklmnopqrstuvwxyz123456789012345678")
+            {
                 return;
             }
         }
@@ -158,8 +160,14 @@ mod tests {
     fn openai_pattern_in_both() {
         let masker = secret_masker_patterns();
         let leak_assets = leak_detector_assets();
-        let openai = leak_assets.patterns.iter().find(|p| p.name == "openai_key").unwrap();
-        let found = masker.iter().any(|mp| mp.regex.as_str() == openai.regex.as_str());
+        let openai = leak_assets
+            .patterns
+            .iter()
+            .find(|p| p.name == "openai_key")
+            .unwrap();
+        let found = masker
+            .iter()
+            .any(|mp| mp.regex.as_str() == openai.regex.as_str());
         assert!(found, "openai_key regex should be identical in both");
     }
 
@@ -167,8 +175,14 @@ mod tests {
     fn github_token_pattern_in_both() {
         let masker = secret_masker_patterns();
         let leak_assets = leak_detector_assets();
-        let github = leak_assets.patterns.iter().find(|p| p.name == "github_token").unwrap();
-        let found = masker.iter().any(|mp| mp.regex.as_str() == github.regex.as_str());
+        let github = leak_assets
+            .patterns
+            .iter()
+            .find(|p| p.name == "github_token")
+            .unwrap();
+        let found = masker
+            .iter()
+            .any(|mp| mp.regex.as_str() == github.regex.as_str());
         assert!(found, "github_token regex should be identical in both");
     }
 }

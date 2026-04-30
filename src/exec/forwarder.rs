@@ -97,8 +97,14 @@ impl ExecApprovalForwarder {
 
         // Check session filter
         if let Some(ref pattern) = self.config.session_filter {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                if !re.is_match(&record.session_key) {
+            match regex::Regex::new(pattern) {
+                Ok(re) => {
+                    if !re.is_match(&record.session_key) {
+                        return false;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid session_filter regex '{}': {}", pattern, e);
                     return false;
                 }
             }

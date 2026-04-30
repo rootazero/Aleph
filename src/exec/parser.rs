@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 /// Characters that indicate unsafe command constructs
 const DISALLOWED_CHARS: &[char] = &['`', '\n', '\r'];
 
-/// Check for subshell substitution patterns outside of quoted strings.
-/// Detects `$(...)` which can be used to inject arbitrary commands.
+/// Check for subshell substitution and process substitution patterns outside of quoted strings.
+/// Detects `$(...)`, `<(...)`, and `>(...)` which can be used to inject arbitrary commands.
 fn contains_unquoted_subshell(command: &str) -> bool {
     let mut in_single = false;
     let mut in_double = false;
@@ -36,9 +36,12 @@ fn contains_unquoted_subshell(command: &str) -> bool {
             '"' if !in_single => {
                 in_double = !in_double;
             }
-            '(' if prev == '$' && !in_single => {
-                // $( found outside single quotes — subshell substitution
-                return true;
+            '(' if !in_single => {
+                // $( — subshell substitution
+                // <( or >( — process substitution (executes arbitrary commands)
+                if prev == '$' || prev == '<' || prev == '>' {
+                    return true;
+                }
             }
             _ => {}
         }
@@ -58,9 +61,9 @@ pub fn analyze_shell_command(
         return CommandAnalysis::error("command contains disallowed characters");
     }
 
-    // Check for $() subshell substitution
+    // Check for subshell substitution $(...) and process substitution <(...) >(...)
     if contains_unquoted_subshell(command) {
-        return CommandAnalysis::error("subshell substitution $() is not allowed");
+        return CommandAnalysis::error("subshell or process substitution is not allowed");
     }
 
     // Split by chain operators (&&, ||, ;)
@@ -317,7 +320,16 @@ fn resolve_executable(
         .cloned()
         .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
 
-    for dir in actual_path.split(':') {
+    #[cfg(unix)]
+    let path_sep = ':';
+    #[cfg(windows)]
+    let path_sep = ';';
+    #[cfg(not(any(unix, windows)))]
+    let path_sep = ':';
+    for dir in actual_path.split(path_sep) {
+        if dir.is_empty() {
+            continue;
+        }
         let path = PathBuf::from(dir).join(executable);
         if path.exists() {
             return CommandResolution::found(executable, path);
@@ -467,5 +479,47 @@ mod tests {
         assert!(contains_unquoted_subshell(r#"echo "$(unsafe)""#));
         assert!(!contains_unquoted_subshell("echo $HOME"));
         assert!(!contains_unquoted_subshell("echo ${HOME}"));
+    }
+
+    #[test]
+    fn test_process_substitution_blocked() {
+        let analysis = analyze_shell_command("cat <(echo pwned)", None, None);
+        assert!(!analysis.ok);
+        assert!(
+            analysis
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("process substitution")
+                || analysis
+                    .reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("subshell or process substitution")
+        );
+    }
+
+    #[test]
+    fn test_output_process_substitution_blocked() {
+        let analysis = analyze_shell_command("tee >(echo pwned)", None, None);
+        assert!(!analysis.ok);
+        assert!(
+            analysis
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("process substitution")
+                || analysis
+                    .reason
+                    .as_deref()
+                    .unwrap()
+                    .contains("subshell or process substitution")
+        );
+    }
+
+    #[test]
+    fn test_process_substitution_in_single_quotes_allowed() {
+        let analysis = analyze_shell_command("echo '<(safe)'", None, None);
+        assert!(analysis.ok);
     }
 }

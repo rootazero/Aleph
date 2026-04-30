@@ -57,7 +57,8 @@ fn is_tag_character(c: char) -> bool {
 /// Returns true if the character is a confusable homoglyph that could disguise
 /// ASCII letters in shell commands (e.g., Cyrillic 'а' looks like ASCII 'a').
 fn is_confusable_homoglyph(c: char) -> bool {
-    matches!(c,
+    matches!(
+        c,
         // Cyrillic letters that look like ASCII (homoglyph attack)
         '\u{0430}' // а — Cyrillic small letter a
         | '\u{0435}' // е — Cyrillic small letter ie
