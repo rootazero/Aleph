@@ -174,10 +174,9 @@ impl InitializationCoordinator {
                     }
                 }
                 InitPhase::Database => {
-                    // SQLite creates a directory, not a single file
-                    let db_path = self.config_dir.join("memory.lance");
+                    let db_path = self.config_dir.join("memory.db");
                     if db_path.exists() {
-                        if let Err(e) = tokio::fs::remove_dir_all(&db_path).await {
+                        if let Err(e) = tokio::fs::remove_file(&db_path).await {
                             warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
                         }
                     }
@@ -336,10 +335,9 @@ impl InitializationCoordinator {
 
         // Initialize and validate skills system
         let system = SkillSystem::new();
-        if let Err(e) = system.init(vec![skills_dir.clone()]).await {
-            // Non-fatal: just warn if skills can't be loaded
-            warn!(error = %e, "Failed to initialize skill system");
-        }
+        system.init(vec![skills_dir.clone()]).await.map_err(|e| {
+            InitError::new("skills", format!("Failed to initialize skill system: {}", e))
+        })?;
 
         let skill_count = system.list_skills().await.len();
         info!(skill_count = skill_count, "Skills directory initialized");

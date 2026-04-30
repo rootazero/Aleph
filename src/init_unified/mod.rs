@@ -3,9 +3,8 @@
 //! Handles first-time setup including:
 //! - Directory structure creation
 //! - Default configuration generation
-//! - Embedding model download
 //! - Memory database initialization
-//! - Runtime installation (ffmpeg, yt-dlp, uv, fnm)
+//! - Runtime ledger setup
 //! - Built-in skills installation
 
 mod coordinator;

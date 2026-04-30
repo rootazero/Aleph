@@ -1,9 +1,10 @@
 //! Initialization error types
 
-use std::fmt;
+use thiserror::Error;
 
 /// Error during initialization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
+#[error("[{phase}] {message}")]
 pub struct InitError {
     /// Which phase failed
     pub phase: String,
@@ -30,11 +31,3 @@ impl InitError {
         }
     }
 }
-
-impl fmt::Display for InitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}", self.phase, self.message)
-    }
-}
-
-impl std::error::Error for InitError {}
