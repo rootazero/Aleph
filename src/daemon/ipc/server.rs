@@ -143,6 +143,9 @@ impl IpcServer {
             // Send SIGTERM to self for graceful shutdown via the signal handler
             #[cfg(unix)]
             {
+                // SAFETY: getpid() always returns a valid PID for the current process,
+                // and SIGTERM is a standard signal that the daemon's signal handler
+                // is already set up to receive for graceful shutdown.
                 unsafe {
                     libc::kill(libc::getpid(), libc::SIGTERM);
                 }

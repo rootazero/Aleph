@@ -26,7 +26,7 @@ pub struct DaemonConfig {
 fn default_socket_path() -> String {
     dirs::home_dir()
         .map(|h| h.join(".aleph/daemon.sock").to_string_lossy().to_string())
-        .unwrap_or_else(|| "~/.aleph/daemon.sock".to_string())
+        .unwrap_or("~/.aleph/daemon.sock".to_string())
 }
 
 fn default_binary_path() -> PathBuf {
