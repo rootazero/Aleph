@@ -38,11 +38,7 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     /// Create a new RetryConfig with custom values.
-    pub fn new(
-        base_delay: Duration,
-        max_delay: Duration,
-        max_attempts: u32,
-    ) -> Self {
+    pub fn new(base_delay: Duration, max_delay: Duration, max_attempts: u32) -> Self {
         Self {
             base_delay,
             max_delay,
@@ -178,7 +174,7 @@ mod tests {
     #[test]
     fn test_retry_config_custom() {
         let config = RetryConfig::new(
-            Duration::from_secs(5),   // base_delay = 5s
+            Duration::from_secs(5),  // base_delay = 5s
             Duration::from_secs(60), // max_delay = 60s
             3,                       // max_attempts = 3
         );

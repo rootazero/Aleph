@@ -26,9 +26,9 @@ pub use flow_spec::{
     SandboxKind, SessionStrategy,
 };
 pub use harness_bridge::AgentHarnessRunner;
+pub use metrics::{FlowMetrics, OrchestratorMetrics};
 pub use resolver::{RoutingOverrides, MAX_FLOW_DEPTH};
 pub use retry::{compute_retry_delay, should_retry, RetryConfig};
-pub use metrics::{FlowMetrics, OrchestratorMetrics};
 pub use sandbox_factory::{
     build_sandbox_factory, DenyAllSandbox, SandboxFactory, WorkspaceBuilder,
 };

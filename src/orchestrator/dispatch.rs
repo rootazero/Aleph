@@ -137,9 +137,9 @@ impl std::fmt::Debug for FlowRequest {
     }
 }
 
-/// Hardcoded broadcast channel buffer size. This caps the number of queued
-/// flow-stream events before the sender (harness) blocks. If the receiver
-/// (Gateway) falls behind, the harness loop will stall at the next `send`.
+/// Hardcoded broadcast channel buffer size. Each receiver gets its own
+/// circular buffer of this capacity; old messages are overwritten when a
+/// receiver falls behind. The sender never blocks.
 /// 256 is a deliberate balance: large enough for bursts of rapid tool calls,
 /// small enough to bound memory overhead per active flow.
 const CHANNEL_BUFFER_SIZE: usize = 256;
@@ -250,7 +250,17 @@ impl Orchestrator {
         // Step 5: brain pick deferred to HarnessRunner (ProviderRegistry lives there).
 
         // Step 6: sandbox provision.
-        let sandbox = (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key)?;
+        let sandbox = match (self.sandbox_factory)(spec.sandbox_kind, &session_res.session_key) {
+            Ok(sb) => sb,
+            Err(e) => {
+                let mut guard = self
+                    .active_sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                guard.remove(&session_res.session_key);
+                return Err(e);
+            }
+        };
 
         // Step 7: spawn harness, plumbing events + completion + cancel.
         let (event_tx, event_rx) = broadcast::channel::<FlowStreamEvent>(CHANNEL_BUFFER_SIZE);

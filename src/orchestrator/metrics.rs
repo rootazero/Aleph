@@ -7,14 +7,14 @@ use std::time::{Duration, Instant};
 /// Metrics collected by the orchestrator during flow execution.
 #[derive(Debug, Default)]
 pub struct OrchestratorMetrics {
-    pub flows_started: AtomicU64,
-    pub flows_completed: AtomicU64,
-    pub flows_failed: AtomicU64,
-    pub flows_cancelled: AtomicU64,
-    pub flows_stalled: AtomicU64,
-    pub total_retries: AtomicU64,
-    pub total_turns: AtomicU64,
-    pub active_flows: AtomicU64,
+    flows_started: AtomicU64,
+    flows_completed: AtomicU64,
+    flows_failed: AtomicU64,
+    flows_cancelled: AtomicU64,
+    flows_stalled: AtomicU64,
+    total_retries: AtomicU64,
+    total_turns: AtomicU64,
+    active_flows: AtomicU64,
 }
 
 impl OrchestratorMetrics {
@@ -31,22 +31,37 @@ impl OrchestratorMetrics {
 
     pub fn record_flow_completed(&self) {
         self.flows_completed.fetch_add(1, Ordering::Relaxed);
-        self.active_flows.fetch_sub(1, Ordering::Relaxed);
+        Self::saturating_fetch_sub(&self.active_flows, 1);
     }
 
     pub fn record_flow_failed(&self) {
         self.flows_failed.fetch_add(1, Ordering::Relaxed);
-        self.active_flows.fetch_sub(1, Ordering::Relaxed);
+        Self::saturating_fetch_sub(&self.active_flows, 1);
     }
 
     pub fn record_flow_cancelled(&self) {
         self.flows_cancelled.fetch_add(1, Ordering::Relaxed);
-        self.active_flows.fetch_sub(1, Ordering::Relaxed);
+        Self::saturating_fetch_sub(&self.active_flows, 1);
     }
 
     pub fn record_flow_stalled(&self) {
         self.flows_stalled.fetch_add(1, Ordering::Relaxed);
-        self.active_flows.fetch_sub(1, Ordering::Relaxed);
+        Self::saturating_fetch_sub(&self.active_flows, 1);
+    }
+
+    /// Atomically subtract `val` from `atomic`, saturating at zero instead of
+    /// underflowing. Uses a compare-exchange loop so the operation is lock-free.
+    fn saturating_fetch_sub(atomic: &AtomicU64, val: u64) {
+        loop {
+            let current = atomic.load(Ordering::Relaxed);
+            let new = current.saturating_sub(val);
+            if atomic
+                .compare_exchange_weak(current, new, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
     }
 
     pub fn record_retry(&self) {
@@ -92,11 +107,11 @@ impl OrchestratorMetrics {
 /// Per-flow metrics tracker.
 #[derive(Debug)]
 pub struct FlowMetrics {
-    pub flow_id: Arc<str>,
-    pub started_at: Instant,
-    pub turns: AtomicU64,
-    pub retries: AtomicU64,
-    pub last_activity: AtomicU64,
+    flow_id: Arc<str>,
+    started_at: Instant,
+    turns: AtomicU64,
+    retries: AtomicU64,
+    last_activity: AtomicU64,
 }
 
 impl FlowMetrics {
@@ -115,26 +130,28 @@ impl FlowMetrics {
     }
 
     pub fn record_turn(&self) {
-        self.turns.fetch_add(1, Ordering::SeqCst);
+        // Relaxed is sufficient: these are independent counters where atomicity
+        // is the only requirement, not sequential consistency across threads.
+        self.turns.fetch_add(1, Ordering::Relaxed);
         self.last_activity.store(
             std::time::UNIX_EPOCH
                 .elapsed()
                 .unwrap_or_default()
                 .as_secs(),
-            Ordering::SeqCst,
+            Ordering::Relaxed,
         );
     }
 
     pub fn record_retry(&self) {
-        self.retries.fetch_add(1, Ordering::SeqCst);
+        self.retries.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn turns(&self) -> u64 {
-        self.turns.load(Ordering::SeqCst)
+        self.turns.load(Ordering::Relaxed)
     }
 
     pub fn retries(&self) -> u64 {
-        self.retries.load(Ordering::SeqCst)
+        self.retries.load(Ordering::Relaxed)
     }
 }
 

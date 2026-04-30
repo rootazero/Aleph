@@ -35,5 +35,9 @@ async fn factory_for_none_returns_deny_all() {
         panic!("Workspace builder should not be invoked for SandboxKind::None")
     }));
     let sb = factory(SandboxKind::None, "sess-abc").expect("deny-all");
-    assert!(sb.execute(mk_test_cmd("ls", &[])).await.is_err());
+    let err = sb.execute(mk_test_cmd("ls", &[])).await.unwrap_err();
+    assert!(
+        matches!(err, crate::sandbox::SandboxError::CapabilityDenied { .. }),
+        "expected CapabilityDenied, got {err:?}"
+    );
 }

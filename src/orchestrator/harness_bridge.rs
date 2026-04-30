@@ -58,6 +58,10 @@ pub struct AgentHarnessRunner {
     pub context_budget: Option<Arc<Mutex<ContextBudget>>>,
     pub context_compactor: Option<Arc<ContextCompactor>>,
     pub skill_prefetcher: Option<Arc<SkillPrefetcher>>,
+
+    /// Platform-specific power-management capability. Injected at boot so the
+    /// core never directly imports platform crates (R1: Brain–Limb separation).
+    pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
 }
 
 #[async_trait]
@@ -116,26 +120,7 @@ impl HarnessRunner for AgentHarnessRunner {
         let tools = tool_service_override.unwrap_or_else(|| self.tool_service.clone());
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
-        let power: Option<std::sync::Arc<dyn aleph_desktop::traits::PowerCapability>> = {
-            #[cfg(target_os = "macos")]
-            {
-                Some(std::sync::Arc::new(aleph_desktop_macos::MacosPower::new()))
-            }
-            #[cfg(target_os = "linux")]
-            {
-                Some(std::sync::Arc::new(aleph_desktop_linux::LinuxPower::new()))
-            }
-            #[cfg(target_os = "windows")]
-            {
-                Some(std::sync::Arc::new(
-                    aleph_desktop_windows::WindowsPower::new(),
-                ))
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            {
-                None
-            }
-        };
+        let power = self.power.clone();
         let deps = HarnessDeps {
             session: self.session_service.clone(),
             tools,
@@ -360,29 +345,30 @@ async fn seed_session(
 ) -> Result<(), FlowError> {
     match input {
         FlowInput::Prompt(text) => {
-            emit_user(
+            emit_message(
                 service,
                 session_id,
                 MessageContent {
                     text,
                     blocks: Vec::new(),
                 },
+                true,
             )
             .await?;
         }
         FlowInput::Messages(msgs) => {
             for content in msgs {
-                emit_user(service, session_id, content).await?;
+                emit_message(service, session_id, content, true).await?;
             }
         }
         FlowInput::History { turns, prompt } => {
             for turn in turns {
                 match turn {
                     FlowHistoryTurn::User(content) => {
-                        emit_user(service, session_id, content).await?;
+                        emit_message(service, session_id, content, true).await?;
                     }
                     FlowHistoryTurn::Assistant(content) => {
-                        emit_assistant(service, session_id, content).await?;
+                        emit_message(service, session_id, content, false).await?;
                     }
                 }
             }
@@ -417,46 +403,34 @@ async fn seed_session(
         }
         FlowInput::Multimodal(msgs) => {
             for content in msgs {
-                emit_user(service, session_id, content).await?;
+                emit_message(service, session_id, content, true).await?;
             }
         }
     }
     Ok(())
 }
 
-async fn emit_user(
+async fn emit_message(
     service: &dyn SessionService,
     session_id: &SessionId,
     content: MessageContent,
+    is_user: bool,
 ) -> Result<(), FlowError> {
+    let event = if is_user {
+        SessionEvent::UserMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content,
+            at: now_ms(),
+        }
+    } else {
+        SessionEvent::AssistantMessage {
+            turn_id: uuid::Uuid::new_v4(),
+            content,
+            at: now_ms(),
+        }
+    };
     service
-        .emit_event(
-            session_id,
-            SessionEvent::UserMessage {
-                turn_id: uuid::Uuid::new_v4(),
-                content,
-                at: now_ms(),
-            },
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))
-}
-
-async fn emit_assistant(
-    service: &dyn SessionService,
-    session_id: &SessionId,
-    content: MessageContent,
-) -> Result<(), FlowError> {
-    service
-        .emit_event(
-            session_id,
-            SessionEvent::AssistantMessage {
-                turn_id: uuid::Uuid::new_v4(),
-                content,
-                at: now_ms(),
-            },
-        )
+        .emit_event(session_id, event)
         .await
         .map(|_| ())
         .map_err(|e| FlowError::Internal(format!("session seed: {e}")))

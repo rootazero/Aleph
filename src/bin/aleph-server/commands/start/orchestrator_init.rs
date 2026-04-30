@@ -72,6 +72,28 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // phases can inject real instances without touching this boot path again.
     let stop_hooks = build_stop_hooks(stop_hook_configs);
 
+    // Platform-specific power-management capability.
+    // Constructed here in the binary boot path so the core orchestrator
+    // never directly imports platform crates (R1: Brain–Limb separation).
+    let power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>> = {
+        #[cfg(target_os = "macos")]
+        {
+            Some(Arc::new(aleph_desktop_macos::MacosPower::new()))
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Some(Arc::new(aleph_desktop_linux::LinuxPower::new()))
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Some(Arc::new(aleph_desktop_windows::WindowsPower::new()))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            None
+        }
+    };
+
     let harness = Arc::new(AgentHarnessRunner {
         agent_registry: agent_registry.clone(),
         session_service: session_service.clone(),
@@ -82,6 +104,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         context_budget: None,
         context_compactor: None,
         skill_prefetcher: None,
+        power,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

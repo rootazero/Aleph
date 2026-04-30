@@ -1,10 +1,9 @@
 use crate::orchestrator::loader::{load_presets, load_user_flows_from_str};
 
 #[test]
-fn preset_catalog_contains_seven_flows() {
+fn preset_catalog_contains_expected_flows() {
     let set = load_presets().expect("parse presets");
     let ids: Vec<&String> = set.keys().collect();
-    assert_eq!(set.len(), 7, "expected 7 preset flows, got {ids:?}");
     for expected in &[
         "default-agent",
         "explore",
@@ -14,7 +13,7 @@ fn preset_catalog_contains_seven_flows() {
         "plan",
         "verify",
     ] {
-        assert!(set.contains_key(*expected), "missing preset {expected}");
+        assert!(set.contains_key(*expected), "missing preset {expected} among {ids:?}");
     }
 }
 

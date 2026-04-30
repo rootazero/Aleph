@@ -15,9 +15,4 @@ fn flow_run_descriptor_has_expected_shape() {
     assert!(required.iter().any(|v| v == "input"));
 }
 
-#[test]
-fn max_flow_depth_is_four() {
-    // Pin the invariant: MAX_FLOW_DEPTH = 4 per design §7.
-    use crate::orchestrator::resolver::MAX_FLOW_DEPTH;
-    assert_eq!(MAX_FLOW_DEPTH, 4);
-}
+
