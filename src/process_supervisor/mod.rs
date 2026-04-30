@@ -12,6 +12,6 @@ pub mod pty;
 #[allow(dead_code)]
 pub mod types;
 
-// NOTE: Disabled — ClaudeSupervisor types have been removed. Tests need rewrite.
-#[cfg(all(test, feature = "disabled-tests"))]
+// Integration tests using real PTY processes. May be flaky in constrained CI environments.
+#[cfg(test)]
 mod tests;

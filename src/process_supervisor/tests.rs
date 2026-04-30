@@ -1,7 +1,8 @@
 //! Integration tests for PtySupervisor.
 //!
 //! These tests use real PTY processes to verify the supervisor works correctly.
-use crate::process_supervisor::{ClaudeSupervisor, SupervisorConfig, SupervisorEvent};
+use crate::process_supervisor::pty::ClaudeSupervisor;
+use crate::process_supervisor::types::{SupervisorConfig, SupervisorEvent};
 use std::time::Duration;
 
 /// Test spawning a simple echo command.
@@ -9,7 +10,8 @@ use std::time::Duration;
 fn test_spawn_echo() {
     let config = SupervisorConfig::new("/tmp")
         .with_command("echo")
-        .with_args(vec!["Hello from PTY".to_string()]);
+        .with_args(vec!["Hello from PTY".to_string()])
+        .expect("valid args");
 
     let mut supervisor = ClaudeSupervisor::new(config);
     let mut rx = supervisor.spawn().expect("Failed to spawn");
@@ -44,7 +46,10 @@ fn test_spawn_echo() {
 /// Test writing input to a cat process.
 #[test]
 fn test_write_to_cat() {
-    let config = SupervisorConfig::new("/tmp").with_command("cat");
+    let config = SupervisorConfig::new("/tmp")
+        .with_command("cat")
+        .with_args(vec![])
+        .expect("valid args");
 
     let mut supervisor = ClaudeSupervisor::new(config);
     let mut rx = supervisor.spawn().expect("Failed to spawn");
@@ -88,7 +93,8 @@ fn test_write_to_cat() {
 fn test_is_running_state() {
     let config = SupervisorConfig::new("/tmp")
         .with_command("echo")
-        .with_args(vec!["quick".to_string()]);
+        .with_args(vec!["quick".to_string()])
+        .expect("valid args");
 
     let mut supervisor = ClaudeSupervisor::new(config);
     assert!(

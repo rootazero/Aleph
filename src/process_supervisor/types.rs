@@ -29,7 +29,12 @@ pub struct SupervisorConfig {
     pub command: String,
     /// Command arguments.
     pub args: Vec<String>,
+    /// Custom secret masking patterns (regex, replacement).
+    pub custom_secret_patterns: Vec<(String, String)>,
 }
+
+/// Characters disallowed in command arguments to prevent shell injection.
+const ARGUMENT_FORBIDDEN_CHARS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '<', '>', '\n'];
 
 impl SupervisorConfig {
     pub fn new(workspace: impl Into<PathBuf>) -> Self {
@@ -38,6 +43,7 @@ impl SupervisorConfig {
             pty_size: PtySize::default(),
             command: "claude".to_string(),
             args: vec![],
+            custom_secret_patterns: vec![],
         }
     }
 
@@ -46,13 +52,34 @@ impl SupervisorConfig {
         self
     }
 
-    pub fn with_args(mut self, args: Vec<String>) -> Self {
+    /// Set command arguments. Rejects strings containing shell metacharacters
+    /// to mitigate command injection risks.
+    pub fn with_args(mut self, args: Vec<String>) -> Result<Self, SupervisorError> {
+        for arg in &args {
+            if let Some(ch) = arg.chars().find(|c| ARGUMENT_FORBIDDEN_CHARS.contains(c)) {
+                return Err(SupervisorError::InvalidArgument(format!(
+                    "argument contains forbidden character '{}': {}",
+                    ch, arg
+                )));
+            }
+        }
         self.args = args;
-        self
+        Ok(self)
     }
 
     pub fn with_pty_size(mut self, rows: u16, cols: u16) -> Self {
         self.pty_size = PtySize { rows, cols };
+        self
+    }
+
+    /// Add a custom secret masking pattern.
+    pub fn with_secret_pattern(
+        mut self,
+        regex: impl Into<String>,
+        replacement: impl Into<String>,
+    ) -> Self {
+        self.custom_secret_patterns
+            .push((regex.into(), replacement.into()));
         self
     }
 }
@@ -85,4 +112,6 @@ pub enum SupervisorError {
     NotRunning,
     #[error("Write failed: {0}")]
     WriteFailed(String),
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }
