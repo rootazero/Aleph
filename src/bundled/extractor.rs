@@ -218,13 +218,20 @@ fn prune_stale_entries(dir: &Dir, target: &Path) -> std::io::Result<()> {
 }
 
 /// Extract contents of a Dir (files + subdirs) into target path.
+///
+/// Uses atomic writes (temp file + rename) to avoid partial files
+/// if the process crashes during extraction.
 fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
     for file in dir.files() {
         let Some(name) = file.path().file_name() else {
             warn!(path = ?file.path(), "Bundled file has no file_name, skipping");
             continue;
         };
-        std::fs::write(target.join(name), file.contents())?;
+        let dest = target.join(name);
+        // Atomic write: write to temp file, then rename
+        let tmp = target.join(format!(".{}.tmp", name.to_string_lossy()));
+        std::fs::write(&tmp, file.contents())?;
+        std::fs::rename(&tmp, &dest)?;
     }
 
     for subdir in dir.dirs() {
