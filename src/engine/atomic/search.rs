@@ -137,7 +137,8 @@ impl SearchOpsHandler {
             if let Ok(content) = tokio::fs::read_to_string(file).await {
                 for (line_num, line) in content.lines().enumerate() {
                     // Simple fuzzy matching: check if text appears as substring (case-insensitive)
-                    // TODO: Implement proper fuzzy matching algorithm (e.g., Levenshtein distance)
+                    // FIXME: Replace with proper fuzzy matching (e.g., Levenshtein distance)
+                    //        Current implementation is just substring matching, not true fuzzy.
                     let similarity = if line.to_lowercase().contains(&text.to_lowercase()) {
                         1.0
                     } else {

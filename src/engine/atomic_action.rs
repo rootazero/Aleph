@@ -127,59 +127,51 @@ impl AtomicAction {
     pub fn from_tool_name(name: &str) -> Option<AtomicAction> {
         match name {
             // Shell execution
-            "bash" | "shell" | "run_script" => {
-                Some(AtomicAction::Bash { command: String::new(), cwd: None })
-            }
+            "bash" | "shell" | "run_script" => Some(AtomicAction::Bash {
+                command: String::new(),
+                cwd: None,
+            }),
             // File read
-            "file_read" | "read_file" | "read" => {
-                Some(AtomicAction::Read { path: String::new(), range: None })
-            }
+            "file_read" | "read_file" | "read" => Some(AtomicAction::Read {
+                path: String::new(),
+                range: None,
+            }),
             // File write
-            "file_write" | "write_file" | "write" => {
-                Some(AtomicAction::Write {
-                    path: String::new(),
-                    content: String::new(),
-                    mode: WriteMode::Overwrite,
-                })
-            }
+            "file_write" | "write_file" | "write" => Some(AtomicAction::Write {
+                path: String::new(),
+                content: String::new(),
+                mode: WriteMode::Overwrite,
+            }),
             // File edit (patch-based)
-            "file_edit" | "edit_file" | "edit" => {
-                Some(AtomicAction::Edit {
-                    path: String::new(),
-                    patches: Vec::new(),
-                })
-            }
+            "file_edit" | "edit_file" | "edit" => Some(AtomicAction::Edit {
+                path: String::new(),
+                patches: Vec::new(),
+            }),
             // Search
-            "search" | "grep" | "search_files" | "find" => {
-                Some(AtomicAction::Search {
-                    pattern: SearchPattern::Regex {
-                        pattern: String::new(),
-                    },
-                    scope: SearchScope::Workspace,
-                    filters: Vec::new(),
-                })
-            }
+            "search" | "grep" | "search_files" | "find" => Some(AtomicAction::Search {
+                pattern: SearchPattern::Regex {
+                    pattern: String::new(),
+                },
+                scope: SearchScope::Workspace,
+                filters: Vec::new(),
+            }),
             // Batch replace
-            "batch" | "replace" | "replace_in_file" => {
-                Some(AtomicAction::Replace {
-                    search: Box::new(SearchPattern::Regex {
-                        pattern: String::new(),
-                    }),
-                    replacement: String::new(),
-                    scope: SearchScope::Workspace,
-                    preview: false,
-                    dry_run: false,
-                })
-            }
+            "batch" | "replace" | "replace_in_file" => Some(AtomicAction::Replace {
+                search: Box::new(SearchPattern::Regex {
+                    pattern: String::new(),
+                }),
+                replacement: String::new(),
+                scope: SearchScope::Workspace,
+                preview: false,
+                dry_run: false,
+            }),
             // Move
-            "move_file" | "move" | "rename" => {
-                Some(AtomicAction::Move {
-                    source: PathBuf::new(),
-                    destination: PathBuf::new(),
-                    update_imports: false,
-                    create_parent: false,
-                })
-            }
+            "move_file" | "move" | "rename" => Some(AtomicAction::Move {
+                source: PathBuf::new(),
+                destination: PathBuf::new(),
+                update_imports: false,
+                create_parent: false,
+            }),
             _ => None,
         }
     }

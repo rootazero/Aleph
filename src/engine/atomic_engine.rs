@@ -162,10 +162,9 @@ impl AtomicEngine {
 
     /// Learn from successful L3 routing to populate L1 cache
     pub async fn learn_from_success(&self, query: String, action: AtomicAction) {
-        // Use write lock since learn_from_success mutates internal state (exact_cache).
-        // Using read lock would be semantically misleading and fragile if DashMap
-        // were ever replaced with a non-concurrent map.
-        let reflex = self.reflex.write().await;
+        // ReflexLayer::learn_from_success uses DashMap (lock-free concurrent map),
+        // so a read lock is sufficient here. DashMap handles its own synchronization.
+        let reflex = self.reflex.read().await;
         reflex.learn_from_success(&query, action);
     }
 

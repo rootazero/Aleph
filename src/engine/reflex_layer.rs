@@ -229,7 +229,7 @@ impl ReflexLayer {
     /// Learn from successful L3 reasoning
     pub fn learn_from_success(&self, input: &str, action: AtomicAction) {
         // Only cache simple, deterministic inputs
-        if input.len() < 100 && !input.contains("复杂") && !input.contains("complex") {
+        if input.len() < 100 && !input.contains("complex") {
             info!(input = %input, action = ?action, "Learning new L1 rule");
             self.exact_cache.insert(input.to_string(), action);
         }
