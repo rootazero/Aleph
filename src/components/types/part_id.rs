@@ -1,8 +1,16 @@
 //! Part ID trait and update types for UI message flow
 
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::parts::SessionPart;
+
+fn hash_suffix(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Trait for getting unique part ID
 pub trait PartId {
@@ -13,15 +21,34 @@ pub trait PartId {
 impl PartId for SessionPart {
     fn part_id(&self) -> String {
         match self {
-            SessionPart::UserInput(p) => format!("user_input_{}", p.timestamp),
-            SessionPart::AiResponse(p) => format!("ai_response_{}", p.timestamp),
+            SessionPart::UserInput(p) => {
+                format!("user_input_{}_{:x}", p.timestamp, hash_suffix(&p.text))
+            }
+            SessionPart::AiResponse(p) => {
+                format!("ai_response_{}_{:x}", p.timestamp, hash_suffix(&p.content))
+            }
             SessionPart::ToolCall(p) => p.id.clone(),
-            SessionPart::Reasoning(p) => format!("reasoning_{}", p.timestamp),
+            SessionPart::Reasoning(p) => {
+                format!("reasoning_{}_{:x}", p.timestamp, hash_suffix(&p.content))
+            }
             SessionPart::PlanCreated(p) => p.plan_id.clone(),
-            SessionPart::SubAgentCall(p) => format!("subagent_{}", p.agent_id),
-            SessionPart::Summary(p) => format!("summary_{}", p.compacted_at),
-            SessionPart::CompactionMarker(p) => format!("compaction_marker_{}", p.timestamp),
-            SessionPart::SystemReminder(p) => format!("reminder_{}", p.timestamp),
+            SessionPart::SubAgentCall(p) => {
+                format!("subagent_{}_{:x}", p.agent_id, hash_suffix(&p.prompt))
+            }
+            SessionPart::Summary(p) => {
+                format!("summary_{}_{:x}", p.compacted_at, hash_suffix(&p.content))
+            }
+            SessionPart::CompactionMarker(p) => {
+                let trigger = if p.auto { "auto" } else { "manual" };
+                format!(
+                    "compaction_marker_{}_{:x}",
+                    p.timestamp,
+                    hash_suffix(trigger)
+                )
+            }
+            SessionPart::SystemReminder(p) => {
+                format!("reminder_{}_{:x}", p.timestamp, hash_suffix(&p.content))
+            }
             SessionPart::StepStart(p) => format!("step_start_{}", p.step_id),
             SessionPart::StepFinish(p) => format!("step_finish_{}", p.step_id),
             SessionPart::Snapshot(p) => p.snapshot_id.clone(),

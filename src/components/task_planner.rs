@@ -117,7 +117,7 @@ impl TaskPlanner {
         let desc_lower = description.to_lowercase();
 
         // Search operations
-        if desc_lower.contains("search")
+        if self.has_word(&desc_lower, "search")
             || description.contains("搜索")
             || description.contains("查找")
         {
@@ -125,26 +125,26 @@ impl TaskPlanner {
         }
 
         // Delete operations
-        if desc_lower.contains("delete")
-            || desc_lower.contains("remove")
+        if self.has_word(&desc_lower, "delete")
+            || self.has_word(&desc_lower, "remove")
             || description.contains("删除")
         {
             return "file_delete".to_string();
         }
 
         // Copy operations
-        if desc_lower.contains("copy") || description.contains("复制") {
+        if self.has_word(&desc_lower, "copy") || description.contains("复制") {
             return "file_copy".to_string();
         }
 
         // Move operations
-        if desc_lower.contains("move") || description.contains("移动") {
+        if self.has_word(&desc_lower, "move") || description.contains("移动") {
             return "file_move".to_string();
         }
 
         // Create/Write operations
-        if desc_lower.contains("create")
-            || desc_lower.contains("write")
+        if self.has_word(&desc_lower, "create")
+            || self.has_word(&desc_lower, "write")
             || description.contains("创建")
             || description.contains("新建")
         {
@@ -152,8 +152,8 @@ impl TaskPlanner {
         }
 
         // Read operations
-        if desc_lower.contains("read")
-            || desc_lower.contains("open")
+        if self.has_word(&desc_lower, "read")
+            || self.has_word(&desc_lower, "open")
             || description.contains("读取")
             || description.contains("打开")
         {
@@ -161,8 +161,8 @@ impl TaskPlanner {
         }
 
         // Web fetch/download operations
-        if desc_lower.contains("fetch")
-            || desc_lower.contains("download")
+        if self.has_word(&desc_lower, "fetch")
+            || self.has_word(&desc_lower, "download")
             || description.contains("下载")
             || description.contains("获取")
         {
@@ -171,6 +171,11 @@ impl TaskPlanner {
 
         // Default to chat for unrecognized operations
         "chat".to_string()
+    }
+
+    fn has_word(&self, text: &str, word: &str) -> bool {
+        text.split(|c: char| !c.is_alphabetic())
+            .any(|w| w == word)
     }
 
     /// Extract parameters from step description
@@ -185,12 +190,16 @@ impl TaskPlanner {
         });
 
         // Try to extract quoted strings (potential file paths or arguments)
-        let quoted_strings: Vec<&str> = description
-            .split('"')
-            .enumerate()
-            .filter(|(i, _)| i % 2 == 1)
-            .map(|(_, s)| s)
-            .collect();
+        let quote_parts: Vec<&str> = description.split('"').collect();
+        let mut quoted_strings = Vec::new();
+        for i in (1..quote_parts.len()).step_by(2) {
+            if i + 1 < quote_parts.len() {
+                let content = quote_parts[i].trim();
+                if !content.is_empty() {
+                    quoted_strings.push(content);
+                }
+            }
+        }
 
         if !quoted_strings.is_empty() {
             params["arguments"] = serde_json::json!(quoted_strings);
@@ -453,6 +462,15 @@ mod tests {
         assert_eq!(planner.infer_tool("help me understand this"), "chat");
         assert_eq!(planner.infer_tool("what is the weather"), "chat");
         assert_eq!(planner.infer_tool("解释这段代码"), "chat");
+    }
+
+    #[test]
+    fn test_infer_tool_no_substring_match() {
+        let planner = TaskPlanner::new();
+
+        assert_eq!(planner.infer_tool("recreate the scene"), "chat");
+        assert_eq!(planner.infer_tool("bake some bread"), "chat");
+        assert_eq!(planner.infer_tool("remove the file"), "file_delete");
     }
 
     // ========================================================================

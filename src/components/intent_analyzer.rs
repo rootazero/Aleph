@@ -202,26 +202,42 @@ impl IntentAnalyzer {
     }
 }
 
-/// Split string by keyword case-insensitively
+/// Split string by keyword case-insensitively, preserving original casing.
 fn split_by_keyword_case_insensitive(text: &str, keyword: &str) -> Vec<String> {
-    let text_lower = text.to_lowercase();
     let keyword_lower = keyword.to_lowercase();
 
     let mut result = Vec::new();
     let mut start = 0;
 
-    for (idx, _) in text_lower.match_indices(&keyword_lower) {
-        if idx > start {
-            let segment = text_lower[start..idx].trim();
-            if !segment.is_empty() {
-                result.push(segment.to_string());
-            }
-        }
-        start = idx + keyword_lower.len();
+    let text_chars: Vec<char> = text.chars().collect();
+    let keyword_chars: Vec<char> = keyword_lower.chars().collect();
+
+    if keyword_chars.is_empty() || keyword_chars.len() > text_chars.len() {
+        return vec![text.to_string()];
     }
 
-    if start < text_lower.len() {
-        let segment = text_lower[start..].trim();
+    let mut i = 0;
+    let max_i = text_chars.len().saturating_sub(keyword_chars.len());
+    while i <= max_i {
+        let substring: String = text_chars[i..i + keyword_chars.len()].iter().collect();
+        if substring.to_lowercase() == keyword_lower {
+            if i > start {
+                let segment: String = text_chars[start..i].iter().collect();
+                let segment = segment.trim();
+                if !segment.is_empty() {
+                    result.push(segment.to_string());
+                }
+            }
+            start = i + keyword_chars.len();
+            i = start;
+            continue;
+        }
+        i += 1;
+    }
+
+    if start < text_chars.len() {
+        let segment: String = text_chars[start..].iter().collect();
+        let segment = segment.trim();
         if !segment.is_empty() {
             result.push(segment.to_string());
         }
@@ -458,5 +474,10 @@ mod tests {
         let result = split_by_keyword_case_insensitive("no keyword here", "then");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "no keyword here");
+
+        let result = split_by_keyword_case_insensitive("Open File THEN Save It", "then");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "Open File");
+        assert_eq!(result[1], "Save It");
     }
 }

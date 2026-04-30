@@ -140,13 +140,13 @@ fn test_part_id_trait() {
     assert_eq!(plan.part_id(), "plan-456");
     assert_eq!(plan.type_name(), "plan_created");
 
-    // Test UserInputPart ID (uses timestamp)
+    // Test UserInputPart ID (uses timestamp with hash suffix for uniqueness)
     let input = SessionPart::UserInput(UserInputPart {
         text: "Hello".to_string(),
         context: None,
         timestamp: 3000,
     });
-    assert_eq!(input.part_id(), "user_input_3000");
+    assert!(input.part_id().starts_with("user_input_3000_"));
     assert_eq!(input.type_name(), "user_input");
 }
 
