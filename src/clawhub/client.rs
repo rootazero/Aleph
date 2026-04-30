@@ -6,9 +6,17 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Client;
 use tracing::{debug, warn};
+
+/// Percent-encode set for URL path segments.
+/// Keeps unreserved characters (`-`, `_`, `.`, `~`) unencoded per RFC 3986.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 use crate::error::{AlephError, Result};
 
@@ -18,10 +26,10 @@ const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Percent-encode a slug for use in URL path segments.
-/// Encodes everything except alphanumerics, `-`, `_`, `.`, and `/` (slug separator).
+/// Encodes everything except alphanumerics, `-`, `_`, `.`, `~`, and `/` (slug separator).
 fn encode_slug_path(slug: &str) -> String {
     slug.split('/')
-        .map(|segment| utf8_percent_encode(segment, NON_ALPHANUMERIC).to_string())
+        .map(|segment| utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string())
         .collect::<Vec<_>>()
         .join("/")
 }
@@ -53,7 +61,10 @@ impl ClawHubClient {
             .timeout(REQUEST_TIMEOUT)
             .user_agent(ua)
             .build()
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to build reqwest client with custom config: {}", e);
+                Client::new()
+            });
 
         Self {
             base_url: url.trim_end_matches('/').to_string(),
@@ -307,7 +318,8 @@ mod tests {
 
     #[test]
     fn test_default_client() {
-        let client = ClawHubClient::new();
+        // Use with_registry directly to avoid env var dependency
+        let client = ClawHubClient::with_registry("https://clawhub.ai");
         assert_eq!(client.base_url, "https://clawhub.ai");
     }
 
