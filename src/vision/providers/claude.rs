@@ -6,8 +6,8 @@ use base64::Engine;
 use reqwest::Client;
 
 use crate::providers::anthropic::{
-    ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
-    MessagesResponse, SystemBlock,
+    ContentBlock, ImageSource, Message, MessageContent, MessagesRequest, MessagesResponse,
+    SystemBlock,
 };
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
@@ -41,7 +41,6 @@ impl ClaudeVisionProvider {
     }
 
     /// Create a new provider with a custom base URL (for testing).
-    #[allow(dead_code)]
     pub fn with_base_url(
         api_key: impl Into<String>,
         model: impl Into<String>,
@@ -94,9 +93,13 @@ impl ClaudeVisionProvider {
                     },
                 })
             }
-            ImageInput::Url { .. } => Err(VisionError::ImageError(
-                "URL images not yet supported".into(),
-            )),
+            ImageInput::Url { url } => Ok(ContentBlock::Image {
+                source: ImageSource {
+                    source_type: "url".to_string(),
+                    media_type: "image/jpeg".to_string(),
+                    data: url.clone(),
+                },
+            }),
         }
     }
 
@@ -140,7 +143,10 @@ impl ClaudeVisionProvider {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(VisionError::ProviderError(format!("API {}: {}", status, body)));
+            return Err(VisionError::ProviderError(format!(
+                "API {}: {}",
+                status, body
+            )));
         }
 
         let response = resp
@@ -170,9 +176,7 @@ impl VisionProvider for ClaudeVisionProvider {
         let text_block = ContentBlock::Text {
             text: prompt.to_string(),
         };
-        let description = self
-            .call_api(vec![image_block, text_block], None)
-            .await?;
+        let description = self.call_api(vec![image_block, text_block], None).await?;
         Ok(VisionResult {
             description,
             elements: Vec::new(),
@@ -194,7 +198,10 @@ impl VisionProvider for ClaudeVisionProvider {
                 confidence: 0.9,
             })
             .collect();
-        Ok(OcrResult { full_text: text, lines })
+        Ok(OcrResult {
+            full_text: text,
+            lines,
+        })
     }
 
     fn capabilities(&self) -> VisionCapabilities {

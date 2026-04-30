@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Errors that can occur during vision operations.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum VisionError {
     /// No vision provider has been configured or registered.
     #[error("No vision provider configured")]
@@ -22,4 +22,8 @@ pub enum VisionError {
     /// The provided image format is not supported.
     #[error("Unsupported image format: {0}")]
     UnsupportedFormat(String),
+
+    /// No provider supports the requested capability.
+    #[error("No provider supports {0}")]
+    UnsupportedCapability(String),
 }

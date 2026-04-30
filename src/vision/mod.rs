@@ -45,7 +45,8 @@ impl VisionPipeline {
     ///
     /// Tries each provider in order. Returns the first successful result, or
     /// the last error if every provider fails. Returns [`VisionError::NoProvider`]
-    /// when the pipeline is empty.
+    /// when the pipeline is empty, or [`VisionError::UnsupportedCapability`] when
+    /// no registered provider supports image understanding.
     pub async fn understand_image(
         &self,
         image: &ImageInput,
@@ -56,10 +57,13 @@ impl VisionPipeline {
         }
 
         let mut last_err = VisionError::NoProvider;
+        let mut any_capable = false;
+
         for provider in &self.providers {
             if !provider.capabilities().image_understanding {
                 continue;
             }
+            any_capable = true;
             match provider.understand_image(image, prompt).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
@@ -73,6 +77,10 @@ impl VisionPipeline {
             }
         }
 
+        if !any_capable {
+            return Err(VisionError::UnsupportedCapability("image_understanding".to_string()));
+        }
+
         Err(last_err)
     }
 
@@ -80,17 +88,21 @@ impl VisionPipeline {
     ///
     /// Tries each provider in order. Returns the first successful result, or
     /// the last error if every provider fails. Returns [`VisionError::NoProvider`]
-    /// when the pipeline is empty.
+    /// when the pipeline is empty, or [`VisionError::UnsupportedCapability`] when
+    /// no registered provider supports OCR.
     pub async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
         if self.providers.is_empty() {
             return Err(VisionError::NoProvider);
         }
 
         let mut last_err = VisionError::NoProvider;
+        let mut any_capable = false;
+
         for provider in &self.providers {
             if !provider.capabilities().ocr {
                 continue;
             }
+            any_capable = true;
             match provider.ocr(image).await {
                 Ok(result) => return Ok(result),
                 Err(e) => {
@@ -102,6 +114,10 @@ impl VisionPipeline {
                     last_err = e;
                 }
             }
+        }
+
+        if !any_capable {
+            return Err(VisionError::UnsupportedCapability("ocr".to_string()));
         }
 
         Err(last_err)
@@ -286,6 +302,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, VisionError::ProviderError(_)));
+    }
+
+    #[tokio::test]
+    async fn no_provider_supports_capability_returns_unsupported() {
+        let mut pipeline = VisionPipeline::new();
+        pipeline.add_provider(Box::new(SuccessProvider {
+            tag: "ocr-only",
+            caps: VisionCapabilities {
+                image_understanding: false,
+                ocr: true,
+                object_detection: false,
+            },
+        }));
+
+        let err = pipeline
+            .understand_image(&sample_image(), "test")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VisionError::UnsupportedCapability(_)));
+        assert!(err.to_string().contains("image_understanding"));
+
+        // Test OCR unsupported
+        let mut pipeline = VisionPipeline::new();
+        pipeline.add_provider(Box::new(SuccessProvider {
+            tag: "vision-only",
+            caps: VisionCapabilities {
+                image_understanding: true,
+                ocr: false,
+                object_detection: false,
+            },
+        }));
+
+        let err = pipeline.ocr(&sample_image()).await.unwrap_err();
+        assert!(matches!(err, VisionError::UnsupportedCapability(_)));
+        assert!(err.to_string().contains("ocr"));
     }
 
     #[tokio::test]

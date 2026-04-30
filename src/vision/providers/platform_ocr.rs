@@ -61,7 +61,7 @@ impl PlatformOcrProvider {
                     e
                 ))
             }),
-            ImageInput::Url { url } => Err(VisionError::ProviderError(format!(
+            ImageInput::Url { url } => Err(VisionError::ImageError(format!(
                 "Platform OCR does not support URL images directly: {url}"
             ))),
         }
@@ -199,7 +199,7 @@ mod tests {
             url: "https://example.com/img.png".to_string(),
         };
         let err = PlatformOcrProvider::resolve_png_bytes(&image).unwrap_err();
-        assert!(matches!(err, VisionError::ProviderError(_)));
+        assert!(matches!(err, VisionError::ImageError(_)));
     }
 
     #[test]
