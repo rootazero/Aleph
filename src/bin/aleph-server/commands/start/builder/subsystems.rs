@@ -203,17 +203,25 @@ pub(in crate::commands::start) async fn initialize_channels(
     let state_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
         use alephcore::utils::paths::get_data_dir;
 
-        let db_path = get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-            .join("state.db");
-
-        match alephcore::resilience::StateDatabase::new(db_path) {
-            Ok(db) => Some(Arc::new(db)),
+        match get_data_dir() {
+            Ok(dir) => {
+                let db_path = dir.join("state.db");
+                match alephcore::resilience::StateDatabase::new(db_path) {
+                    Ok(db) => Some(Arc::new(db)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to open state.db for channel persistence: {}. \
+                             Offset tracking and pairing persistence disabled.",
+                            e
+                        );
+                        None
+                    }
+                }
+            }
             Err(e) => {
                 tracing::warn!(
-                    "Failed to open state.db for channel persistence: {}. \
-                     Offset tracking and pairing persistence disabled.",
-                    e
+                    error = %e,
+                    "Failed to resolve data directory; offset tracking and pairing persistence disabled"
                 );
                 None
             }

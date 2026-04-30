@@ -54,9 +54,9 @@ impl RiskLevel {
 }
 
 /// Get default database path
-fn get_audit_db_path() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".aleph").join("approval_audit.db")
+fn get_audit_db_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    Ok(home.join(".aleph").join("approval_audit.db"))
 }
 
 /// Format timestamp as human-readable string
@@ -70,7 +70,7 @@ fn format_timestamp(timestamp: i64) -> String {
 
 /// Handle audit tools command - list all tools with risk scores
 pub async fn handle_audit_tools() -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = get_audit_db_path();
+    let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {
         println!(
@@ -126,14 +126,14 @@ pub async fn handle_audit_tool(
     tool_name: &str,
     limit: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = get_audit_db_path();
+    let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {
-        eprintln!(
-            "Error: No audit data found. Database does not exist at: {}",
+        return Err(format!(
+            "No audit data found. Database does not exist at: {}",
             db_path.display()
-        );
-        std::process::exit(1);
+        )
+        .into());
     }
 
     let storage = ApprovalAuditStorage::new(&db_path).await?;
@@ -193,7 +193,7 @@ pub async fn handle_audit_tool(
 
 /// Handle audit escalations command - show all escalation events
 pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = get_audit_db_path();
+    let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {
         println!(
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_get_audit_db_path() {
-        let path = get_audit_db_path();
+        let path = get_audit_db_path().unwrap();
         assert!(path.to_string_lossy().contains(".aleph"));
         assert!(path.to_string_lossy().contains("approval_audit.db"));
     }

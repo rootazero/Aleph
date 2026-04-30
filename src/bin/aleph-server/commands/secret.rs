@@ -8,7 +8,6 @@ use std::io::Write;
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
 use alephcore::utils::paths;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::SecretAction;
@@ -46,16 +45,15 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
 /// Build a SharedTokenManager and load the existing token from DB.
 /// Returns an error if no token exists (server must be started at least once).
 fn open_token_manager() -> Result<SharedTokenManager, Box<dyn Error>> {
-    let security_store_path =
-        paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
+    let security_store_path = paths::get_security_db_path()
+        .map_err(|e| format!("Failed to resolve security DB path: {}", e))?;
     let security_store = Arc::new(
         SecurityStore::open(&security_store_path)
             .map_err(|e| format!("Failed to open security store: {}", e))?,
     );
 
-    let data_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".aleph/data");
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let data_dir = home.join(".aleph/data");
     let vault_path = data_dir.join("secrets.vault");
 
     let manager = SharedTokenManager::new(security_store, vault_path);
@@ -135,8 +133,7 @@ fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
     if deleted {
         println!("Deleted secret '{}'", name);
     } else {
-        eprintln!("Secret '{}' not found", name);
-        std::process::exit(1);
+        return Err(format!("Secret '{}' not found", name).into());
     }
     Ok(())
 }
@@ -154,8 +151,7 @@ fn handle_secret_verify(name: String) -> Result<(), Box<dyn Error>> {
             );
         }
         Ok(None) => {
-            eprintln!("Secret '{}' not found", name);
-            std::process::exit(1);
+            return Err(format!("Secret '{}' not found", name).into());
         }
         Err(e) => {
             return Err(format!("Failed to verify secret: {}", e).into());

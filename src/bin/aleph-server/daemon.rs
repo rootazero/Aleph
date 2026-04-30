@@ -80,8 +80,12 @@ pub fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Erro
     // Write our PID so the user can identify which process holds the lock
     use std::io::Write;
     let mut f = &file;
-    let _ = f.write_all(format!("{}\n", std::process::id()).as_bytes());
-    let _ = f.flush();
+    if let Err(e) = f.write_all(format!("{}\n", std::process::id()).as_bytes()) {
+        tracing::warn!(error = %e, "Failed to write PID to lock file");
+    }
+    if let Err(e) = f.flush() {
+        tracing::warn!(error = %e, "Failed to flush lock file");
+    }
 
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {

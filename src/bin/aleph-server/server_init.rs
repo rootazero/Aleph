@@ -28,12 +28,20 @@ pub async fn serve_webchat(
         .append_index_html_on_directories(true)
         .fallback(ServeFile::new(&index_path));
 
-    // Build router with CORS headers for development
+    // Build router with restricted CORS for self-hosted deployment
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()
             .allow_origin(tower_http::cors::Any)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any),
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::HEAD,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::ACCEPT,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+            ]),
     );
 
     // Create listener

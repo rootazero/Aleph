@@ -14,7 +14,7 @@ use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
-    GatewayConfig as FullGatewayConfig, SessionManager, SessionManagerConfig,
+    GatewayConfig as FullGatewayConfig, SessionManager,
 };
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::tasks::cron::executor::build_cron_executor_fn;
@@ -209,20 +209,10 @@ async fn initialize_session_store(
                 Ok(sm) => sm,
                 Err(e) => {
                     eprintln!(
-                        "Warning: Failed to initialize SQLite session store: {}. Using temp storage.",
+                        "Error: Failed to initialize SQLite session store: {}. Sessions are required.",
                         e
                     );
-                    let temp_path = std::env::temp_dir().join("aleph_sessions.db");
-                    match SessionManager::new(SessionManagerConfig {
-                        db_path: temp_path,
-                        ..Default::default()
-                    }) {
-                        Ok(sm) => sm,
-                        Err(e2) => {
-                            eprintln!("Error: Could not create fallback session store: {}", e2);
-                            std::process::exit(1);
-                        }
-                    }
+                    std::process::exit(1);
                 }
             };
             if !daemon {
@@ -607,8 +597,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Initialize memory backend (SQLite + sqlite-vec)
     let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> = {
-        let data_dir = alephcore::utils::paths::get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
+        let data_dir = match alephcore::utils::paths::get_data_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("Error: Failed to resolve data directory: {}. Memory backend requires a persistent directory.", e);
+                std::process::exit(1);
+            }
+        };
         let db_path = data_dir.join("memory.db");
 
         // Notify user if old LanceDB data directory exists
@@ -898,21 +893,29 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         drop(app_cfg);
 
         if hb_config.enabled {
-            let data_dir = alephcore::utils::paths::get_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
-            let hb_db_path = data_dir.join("heartbeat.db");
-
-            match HeartbeatStore::open(&hb_db_path) {
-                Ok(store) => {
-                    let svc = HeartbeatService::new(store, hb_config);
-                    let shared: SharedHeartbeatService = Arc::new(tokio::sync::Mutex::new(svc));
-                    register_heartbeat_handlers(&mut server, &shared, args.daemon);
-                    Some(shared)
+            match alephcore::utils::paths::get_data_dir() {
+                Ok(dir) => {
+                    let hb_db_path = dir.join("heartbeat.db");
+                    match HeartbeatStore::open(&hb_db_path) {
+                        Ok(store) => {
+                            let svc = HeartbeatService::new(store, hb_config);
+                            let shared: SharedHeartbeatService = Arc::new(tokio::sync::Mutex::new(svc));
+                            register_heartbeat_handlers(&mut server, &shared, args.daemon);
+                            Some(shared)
+                        }
+                        Err(e) => {
+                            if !args.daemon {
+                                eprintln!("Warning: Failed to initialize heartbeat service: {}. Heartbeat disabled.", e);
+                            }
+                            None
+                        }
+                    }
                 }
                 Err(e) => {
                     if !args.daemon {
-                        eprintln!("Warning: Failed to initialize heartbeat service: {}. Heartbeat disabled.", e);
+                        eprintln!("Warning: Failed to resolve data directory: {}. Heartbeat disabled.", e);
                     }
+                    tracing::warn!(error = %e, "Failed to resolve data directory; heartbeat disabled");
                     None
                 }
             }
@@ -928,12 +931,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Construct NoteOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
     // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
     // MemoryContextProvider, and the builtin tool registry.
-    let note_memory_dir = alephcore::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-        std::env::temp_dir()
-            .join("aleph")
-            .join("memory")
-            .join("note")
-    });
+    let note_memory_dir = match alephcore::utils::paths::get_note_memory_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error: Failed to resolve note memory directory: {}. Note storage requires a persistent directory.", e);
+            std::process::exit(1);
+        }
+    };
     let wiki: std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation> = {
         use alephcore::memory::notes::orientation::FsNoteOrientation;
         std::sync::Arc::new(FsNoteOrientation::new(
@@ -1404,27 +1408,40 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore
             // connection to avoid lock contention). Falls back to a no-op engine on failure.
             let dedup_engine: Arc<DedupEngine> = {
-                let data_dir = alephcore::utils::paths::get_data_dir()
-                    .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
-                let hb_db_path = data_dir.join("heartbeat.db");
-                match rusqlite::Connection::open(&hb_db_path) {
-                    Ok(conn) => {
-                        // Schema should already exist (created by HeartbeatStore::open above),
-                        // but we call init here defensively.
-                        let _ = init_dedup_schema(&conn);
-                        let dedup_conn = Arc::new(tokio::sync::Mutex::new(conn));
-                        Arc::new(DedupEngine::new(
-                            hb_state.config.dedup.clone(),
-                            dedup_conn,
-                            agent_result.embedder.clone(),
-                        ))
-                    }
+                let data_dir_opt = match alephcore::utils::paths::get_data_dir() {
+                    Ok(dir) => Some(dir),
                     Err(e) => {
                         if !args.daemon {
-                            eprintln!("Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled.");
+                            eprintln!("Warning: Failed to resolve data directory for heartbeat DB ({e}), dedup disabled.");
                         }
-                        Arc::new(DedupEngine::noop(hb_state.config.dedup.clone()))
+                        tracing::warn!(error = %e, "Failed to resolve data directory; DedupEngine disabled");
+                        None
                     }
+                };
+                match data_dir_opt {
+                    Some(data_dir) => {
+                        let hb_db_path = data_dir.join("heartbeat.db");
+                        match rusqlite::Connection::open(&hb_db_path) {
+                            Ok(conn) => {
+                                // Schema should already exist (created by HeartbeatStore::open above),
+                                // but we call init here defensively.
+                                let _ = init_dedup_schema(&conn);
+                                let dedup_conn = Arc::new(tokio::sync::Mutex::new(conn));
+                                Arc::new(DedupEngine::new(
+                                    hb_state.config.dedup.clone(),
+                                    dedup_conn,
+                                    agent_result.embedder.clone(),
+                                ))
+                            }
+                            Err(e) => {
+                                if !args.daemon {
+                                    eprintln!("Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled.");
+                                }
+                                Arc::new(DedupEngine::noop(hb_state.config.dedup.clone()))
+                            }
+                        }
+                    }
+                    None => Arc::new(DedupEngine::noop(hb_state.config.dedup.clone())),
                 }
             };
 

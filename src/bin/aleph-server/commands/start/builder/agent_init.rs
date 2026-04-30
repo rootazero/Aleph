@@ -121,27 +121,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
         use alephcore::utils::paths::get_data_dir;
 
-        let db_path = get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-            .join("coord.db");
-
-        match rusqlite::Connection::open(&db_path) {
-            Ok(conn) => {
-                let store = Arc::new(SqliteCoordTaskStore::new(conn));
-                // Run schema migration synchronously-ish via block_in_place
-                let store_clone = store.clone();
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(store_clone.migrate())
-                }) {
-                    Ok(()) => {
-                        if !daemon {
-                            println!("  Coord task store initialized (SQLite)");
+        match get_data_dir() {
+            Ok(dir) => {
+                let db_path = dir.join("coord.db");
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        let store = Arc::new(SqliteCoordTaskStore::new(conn));
+                        // Run schema migration synchronously-ish via block_in_place
+                        let store_clone = store.clone();
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(store_clone.migrate())
+                        }) {
+                            Ok(()) => {
+                                if !daemon {
+                                    println!("  Coord task store initialized (SQLite)");
+                                }
+                                Some(store as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>)
+                            }
+                            Err(e) => {
+                                if !daemon {
+                                    eprintln!("Warning: Coord task store migration failed: {}. Task coordination tools disabled.", e);
+                                }
+                                None
+                            }
                         }
-                        Some(store as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>)
                     }
                     Err(e) => {
                         if !daemon {
-                            eprintln!("Warning: Coord task store migration failed: {}. Task coordination tools disabled.", e);
+                            eprintln!(
+                                "Warning: Failed to open coord.db: {}. Task coordination tools disabled.",
+                                e
+                            );
                         }
                         None
                     }
@@ -150,10 +160,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             Err(e) => {
                 if !daemon {
                     eprintln!(
-                        "Warning: Failed to open coord.db: {}. Task coordination tools disabled.",
+                        "Warning: Failed to resolve data directory: {}. Task coordination tools disabled.",
                         e
                     );
                 }
+                tracing::warn!(error = %e, "Failed to resolve data directory; task coordination tools disabled");
                 None
             }
         }
@@ -164,34 +175,44 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::teams::SqliteTeamStore;
         use alephcore::utils::paths::get_data_dir;
 
-        let db_path = get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-            .join("teams.db");
-
-        match rusqlite::Connection::open(&db_path) {
-            Ok(conn) => {
-                // Enable WAL mode + busy timeout for concurrent access to teams.db
-                if let Err(e) =
-                    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-                {
-                    if !daemon {
-                        eprintln!("Warning: Failed to set WAL mode for team store: {e}");
-                    }
-                }
-                let store = Arc::new(SqliteTeamStore::new(conn));
-                let store_clone = Arc::clone(&store);
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(store_clone.migrate())
-                }) {
-                    Ok(()) => {
-                        if !daemon {
-                            println!("  Team store initialized (SQLite)");
+        match get_data_dir() {
+            Ok(dir) => {
+                let db_path = dir.join("teams.db");
+                match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        // Enable WAL mode + busy timeout for concurrent access to teams.db
+                        if let Err(e) =
+                            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+                        {
+                            if !daemon {
+                                eprintln!("Warning: Failed to set WAL mode for team store: {e}");
+                            }
                         }
-                        Some(store as Arc<dyn alephcore::teams::TeamStore>)
+                        let store = Arc::new(SqliteTeamStore::new(conn));
+                        let store_clone = Arc::clone(&store);
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(store_clone.migrate())
+                        }) {
+                            Ok(()) => {
+                                if !daemon {
+                                    println!("  Team store initialized (SQLite)");
+                                }
+                                Some(store as Arc<dyn alephcore::teams::TeamStore>)
+                            }
+                            Err(e) => {
+                                if !daemon {
+                                    eprintln!("Warning: Team store migration failed: {}. Team management tools disabled.", e);
+                                }
+                                None
+                            }
+                        }
                     }
                     Err(e) => {
                         if !daemon {
-                            eprintln!("Warning: Team store migration failed: {}. Team management tools disabled.", e);
+                            eprintln!(
+                                "Warning: Failed to open teams.db: {}. Team management tools disabled.",
+                                e
+                            );
                         }
                         None
                     }
@@ -200,10 +221,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             Err(e) => {
                 if !daemon {
                     eprintln!(
-                        "Warning: Failed to open teams.db: {}. Team management tools disabled.",
+                        "Warning: Failed to resolve data directory: {}. Team management tools disabled.",
                         e
                     );
                 }
+                tracing::warn!(error = %e, "Failed to resolve data directory; team management tools disabled");
                 None
             }
         }
@@ -224,37 +246,79 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::teams::sessions::SqliteSessionStore;
         use alephcore::utils::paths::get_data_dir;
 
-        let db_path = get_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-            .join("teams.db");
+        match get_data_dir() {
+            Ok(dir) => {
+                let db_path = dir.join("teams.db");
 
-        // Helper: open connection, create store, migrate. Returns None on failure.
-        macro_rules! init_store {
-            ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
-                match rusqlite::Connection::open(&$db) {
-                    Ok(conn) => {
-                        // Enable WAL mode + busy timeout for concurrent access to teams.db
-                        if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
-                            if !daemon {
-                                eprintln!("Warning: Failed to set WAL mode for {}: {}", $label, e);
-                            }
-                        }
-                        let store = Arc::new($store_ty::new(conn));
-                        let sc = Arc::clone(&store);
-                        match tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(sc.migrate())
-                        }) {
-                            Ok(()) => {
-                                if !daemon {
-                                    println!("  {} initialized (SQLite)", $label);
+                // Helper: open connection, create store, migrate. Returns None on failure.
+                macro_rules! init_store {
+                    ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
+                        match rusqlite::Connection::open(&$db) {
+                            Ok(conn) => {
+                                // Enable WAL mode + busy timeout for concurrent access to teams.db
+                                if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
+                                    if !daemon {
+                                        eprintln!("Warning: Failed to set WAL mode for {}: {}", $label, e);
+                                    }
                                 }
-                                Some(store as Arc<$trait_ty>)
+                                let store = Arc::new($store_ty::new(conn));
+                                let sc = Arc::clone(&store);
+                                match tokio::task::block_in_place(|| {
+                                    tokio::runtime::Handle::current().block_on(sc.migrate())
+                                }) {
+                                    Ok(()) => {
+                                        if !daemon {
+                                            println!("  {} initialized (SQLite)", $label);
+                                        }
+                                        Some(store as Arc<$trait_ty>)
+                                    }
+                                    Err(e) => {
+                                        if !daemon {
+                                            eprintln!(
+                                                "Warning: {} migration failed: {}. Related tools disabled.",
+                                                $label, e
+                                            );
+                                        }
+                                        None
+                                    }
+                                }
                             }
                             Err(e) => {
                                 if !daemon {
                                     eprintln!(
-                                        "Warning: {} migration failed: {}. Related tools disabled.",
+                                        "Warning: Failed to open teams.db for {}: {}. Related tools disabled.",
                                         $label, e
+                                    );
+                                }
+                                None
+                            }
+                        }
+                    }};
+                }
+
+                let artifact_store: Option<Arc<SqliteArtifactStore>> = match rusqlite::Connection::open(&db_path) {
+                    Ok(conn) => {
+                        if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
+                            if !daemon {
+                                eprintln!("Warning: Failed to set WAL mode for Artifact store: {}", e);
+                            }
+                        }
+                        let store = Arc::new(SqliteArtifactStore::new(conn));
+                        let store_concrete = store.clone();
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(store_concrete.migrate())
+                        }) {
+                            Ok(()) => {
+                                if !daemon {
+                                    println!("  Artifact store initialized (SQLite)");
+                                }
+                                Some(store as Arc<SqliteArtifactStore>)
+                            }
+                            Err(e) => {
+                                if !daemon {
+                                    eprintln!(
+                                        "Warning: Artifact store migration failed: {}. Related tools disabled.",
+                                        e
                                     );
                                 }
                                 None
@@ -264,76 +328,45 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     Err(e) => {
                         if !daemon {
                             eprintln!(
-                                "Warning: Failed to open teams.db for {}: {}. Related tools disabled.",
-                                $label, e
-                            );
-                        }
-                        None
-                    }
-                }
-            }};
-        }
-
-        // Construct artifact store manually to retain concrete type for KanbanAutoUnblocker
-        let artifact_store: Option<Arc<SqliteArtifactStore>> = match rusqlite::Connection::open(&db_path) {
-            Ok(conn) => {
-                if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
-                    if !daemon {
-                        eprintln!("Warning: Failed to set WAL mode for Artifact store: {}", e);
-                    }
-                }
-                let store = Arc::new(SqliteArtifactStore::new(conn));
-                let store_concrete = store.clone();
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(store_concrete.migrate())
-                }) {
-                    Ok(()) => {
-                        if !daemon {
-                            println!("  Artifact store initialized (SQLite)");
-                        }
-                        Some(store as Arc<SqliteArtifactStore>)
-                    }
-                    Err(e) => {
-                        if !daemon {
-                            eprintln!(
-                                "Warning: Artifact store migration failed: {}. Related tools disabled.",
+                                "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
                                 e
                             );
                         }
                         None
                     }
-                }
+                };
+                let ev = init_store!(
+                    SqliteEventLogStore,
+                    dyn alephcore::teams::events::EventLogStore,
+                    "Event log store",
+                    db_path
+                );
+                let m = init_store!(
+                    SqliteMessageStore,
+                    dyn alephcore::teams::messages::MessageStore,
+                    "Message store",
+                    db_path
+                );
+                let s = init_store!(
+                    SqliteSessionStore,
+                    dyn alephcore::teams::sessions::SessionStore,
+                    "Session store",
+                    db_path
+                );
+                let artifact_store_trait: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>> = artifact_store.as_ref().map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
+                (artifact_store_trait, ev, m, s)
             }
             Err(e) => {
                 if !daemon {
                     eprintln!(
-                        "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
+                        "Warning: Failed to resolve data directory: {}. Team sub-stores disabled.",
                         e
                     );
                 }
-                None
+                tracing::warn!(error = %e, "Failed to resolve data directory; team sub-stores disabled");
+                (None, None, None, None)
             }
-        };
-        let ev = init_store!(
-            SqliteEventLogStore,
-            dyn alephcore::teams::events::EventLogStore,
-            "Event log store",
-            db_path
-        );
-        let m = init_store!(
-            SqliteMessageStore,
-            dyn alephcore::teams::messages::MessageStore,
-            "Message store",
-            db_path
-        );
-        let s = init_store!(
-            SqliteSessionStore,
-            dyn alephcore::teams::sessions::SessionStore,
-            "Session store",
-            db_path
-        );
-        let artifact_store_trait: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>> = artifact_store.as_ref().map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
-        (artifact_store_trait, ev, m, s)
+        }
     };
 
     // Build higher-level team components from the stores above.
@@ -800,19 +833,28 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         > = {
             use alephcore::memory::notes::profile::synthesizer::FsProfileSynthesizer;
             let prov = provider_registry.default_provider();
-            let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
-                alephcore::utils::paths::get_note_memory_dir()
-                    .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
-            });
-            let mut synth = FsProfileSynthesizer::new(note_dir, prov);
-            if let Some(ref wiki) = orientation {
-                synth = synth.with_orientation(wiki.clone());
-            }
-            synth = synth.with_config(&app_config.memory.profile);
-            Some(std::sync::Arc::new(synth)
-                as std::sync::Arc<
-                    dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer,
-                >)
+            let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
+                Some(dir)
+            } else {
+                match alephcore::utils::paths::get_note_memory_dir() {
+                    Ok(dir) => Some(dir),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to resolve note memory directory; profile synthesizer disabled");
+                        None
+                    }
+                }
+            };
+            note_dir_opt.map(|note_dir| {
+                let mut synth = FsProfileSynthesizer::new(note_dir, prov);
+                if let Some(ref wiki) = orientation {
+                    synth = synth.with_orientation(wiki.clone());
+                }
+                synth = synth.with_config(&app_config.memory.profile);
+                std::sync::Arc::new(synth)
+                    as std::sync::Arc<
+                        dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer,
+                    >
+            })
         };
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
@@ -1004,24 +1046,39 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 use alephcore::memory::notes::query_filer::{DefaultQueryFiler, QueryFiler};
                 use alephcore::memory::notes::NoteIndexer;
 
-                let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
-                    alephcore::utils::paths::get_note_memory_dir()
-                        .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
-                });
-                let indexer_arc =
-                    std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
-                let query_filer: std::sync::Arc<dyn QueryFiler> =
-                    std::sync::Arc::new(DefaultQueryFiler {
-                        store: memory_db.clone(),
-                        indexer: indexer_arc,
-                        provider: prov.clone(),
-                        orientation: orientation.clone(),
-                        memory_dir: note_dir,
-                        config: app_config.memory.query_filer.clone(),
-                    });
-                tool_registry.set_query_filer(query_filer);
-                if !daemon {
-                    println!("  query_filer: DefaultQueryFiler wired into memory_reflect");
+                let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
+                    Some(dir)
+                } else {
+                    match alephcore::utils::paths::get_note_memory_dir() {
+                        Ok(dir) => Some(dir),
+                        Err(e) => {
+                            if !daemon {
+                                eprintln!(
+                                    "Warning: Failed to resolve note memory directory: {}. Query filer disabled.",
+                                    e
+                                );
+                            }
+                            tracing::warn!(error = %e, "Failed to resolve note memory directory; query filer disabled");
+                            None
+                        }
+                    }
+                };
+                if let Some(note_dir) = note_dir_opt {
+                    let indexer_arc =
+                        std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
+                    let query_filer: std::sync::Arc<dyn QueryFiler> =
+                        std::sync::Arc::new(DefaultQueryFiler {
+                            store: memory_db.clone(),
+                            indexer: indexer_arc,
+                            provider: prov.clone(),
+                            orientation: orientation.clone(),
+                            memory_dir: note_dir,
+                            config: app_config.memory.query_filer.clone(),
+                        });
+                    tool_registry.set_query_filer(query_filer);
+                    if !daemon {
+                        println!("  query_filer: DefaultQueryFiler wired into memory_reflect");
+                    }
                 }
             } else if !daemon {
                 println!("  query_filer: skipped (no AI provider available)");
@@ -1108,19 +1165,30 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
             use alephcore::utils::paths::get_data_dir;
 
-            let db_path = get_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
-                .join("state.db");
-
-            match alephcore::resilience::StateDatabase::new(db_path) {
-                Ok(db) => Some(Arc::new(db)),
+            match get_data_dir() {
+                Ok(dir) => {
+                    let db_path = dir.join("state.db");
+                    match alephcore::resilience::StateDatabase::new(db_path) {
+                        Ok(db) => Some(Arc::new(db)),
+                        Err(e) => {
+                            if !daemon {
+                                eprintln!(
+                                    "Warning: Failed to open state.db: {}. Replay trace persistence disabled.",
+                                    e
+                                );
+                            }
+                            None
+                        }
+                    }
+                }
                 Err(e) => {
                     if !daemon {
                         eprintln!(
-                            "Warning: Failed to open state.db: {}. Replay trace persistence disabled.",
+                            "Warning: Failed to resolve data directory: {}. Replay trace persistence disabled.",
                             e
                         );
                     }
+                    tracing::warn!(error = %e, "Failed to resolve data directory; replay trace persistence disabled");
                     None
                 }
             }
@@ -1172,26 +1240,43 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         preview_char_cap: cfg.related_preview_char_cap,
                         total_byte_cap: cfg.related_total_byte_cap,
                     };
-                    let note_dir = note_memory_dir.clone().unwrap_or_else(|| {
-                        alephcore::utils::paths::get_note_memory_dir()
-                            .unwrap_or_else(|_| std::env::temp_dir().join("aleph/memory/note"))
-                    });
-                    let indexer =
-                        std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
-                    Some(std::sync::Arc::new(DefaultCompoundIngestor {
-                        store: memory_db.clone(),
-                        indexer,
-                        provider: prov.clone(),
-                        embedder: emb.clone(),
-                        orientation: orientation.clone(),
-                        memory_dir: note_dir,
-                        budget,
-                    }))
+                    let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
+                        Some(dir)
+                    } else {
+                        match alephcore::utils::paths::get_note_memory_dir() {
+                            Ok(dir) => Some(dir),
+                            Err(e) => {
+                                if !daemon {
+                                    eprintln!(
+                                        "Warning: Failed to resolve note memory directory: {}. Compound ingestor disabled.",
+                                        e
+                                    );
+                                }
+                                tracing::warn!(error = %e, "Failed to resolve note memory directory; compound ingestor disabled");
+                                None
+                            }
+                        }
+                    };
+                    if let Some(note_dir) = note_dir_opt {
+                        let indexer =
+                            std::sync::Arc::new(NoteIndexer::new(note_dir.clone(), memory_db.clone()));
+                        Some(std::sync::Arc::new(DefaultCompoundIngestor {
+                            store: memory_db.clone(),
+                            indexer,
+                            provider: prov.clone(),
+                            embedder: emb.clone(),
+                            orientation: orientation.clone(),
+                            memory_dir: note_dir,
+                            budget,
+                        }))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
 
-                super::init_compression_service(
+                Some(super::init_compression_service(
                     memory_db,
                     prov.clone(),
                     emb.clone(),
@@ -1200,8 +1285,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     command_handler.clone(),
                     compound_ingestor,
                     profile_synth.clone(),
-                )
-            })
+                ))
+            }).flatten()
         } else {
             None
         };
