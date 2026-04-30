@@ -15,15 +15,15 @@ static FENCE_REGEX: LazyLock<Regex> =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceSpan {
     /// Byte offset of the opening fence line start.
-    pub start: usize,
+    pub(crate) start: usize,
     /// Byte offset after the closing fence line (or text end if unclosed).
-    pub end: usize,
+    pub(crate) end: usize,
     /// Just the fence marker (e.g., "```" or "~~~~").
-    pub marker: String,
+    pub(crate) marker: String,
     /// Leading indentation (0-3 spaces).
-    pub indent: String,
+    pub(crate) indent: String,
     /// Language tag if present (e.g., "rust", "javascript").
-    pub language: Option<String>,
+    pub(crate) language: Option<String>,
 }
 
 /// Internal state for a fence that has been opened but not yet closed.
@@ -362,5 +362,75 @@ mod tests {
         assert_eq!(spans.len(), 1);
         // Should extract just first word as language
         assert_eq!(spans[0].language, Some("rust,ignore".to_string()));
+    }
+
+    #[test]
+    fn test_parse_empty_fence_body() {
+        // Opening marker immediately followed by closing marker
+        let text = "```\n```";
+        let spans = parse_fence_spans(text);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start, 0);
+        assert_eq!(spans[0].end, text.len());
+        assert_eq!(spans[0].language, None);
+    }
+
+    #[test]
+    fn test_get_fence_split_none() {
+        let text = "Hello\n```rust\ncode\n```\nWorld";
+        let spans = parse_fence_spans(text);
+        let span = &spans[0];
+
+        // Before fence - should return None
+        assert!(get_fence_split(&spans, 3).is_none());
+        // After fence - should return None
+        assert!(get_fence_split(&spans, span.end + 1).is_none());
+        // At exact fence boundary (start) - should return None
+        assert!(get_fence_split(&spans, span.start).is_none());
+        // At exact fence boundary (end) - should return None
+        assert!(get_fence_split(&spans, span.end).is_none());
+    }
+
+    #[test]
+    fn test_unicode_byte_offsets() {
+        // Multi-byte UTF-8 characters before and inside fence
+        let text = "Hello 🦀\n```rust\nfn main() {}\n```\nWorld 🌍";
+        let spans = parse_fence_spans(text);
+
+        assert_eq!(spans.len(), 1);
+        // "Hello 🦀" = 10 bytes (🦀 is 4 bytes), plus \n = 1 byte
+        // So fence starts at byte offset 11
+        assert_eq!(spans[0].start, 11);
+        // Verify byte indexing is consistent
+        assert!(spans[0].contains(spans[0].start + 1));
+        assert!(!spans[0].contains(spans[0].start));
+    }
+
+    #[test]
+    fn test_fence_boundary_conditions() {
+        let text = "ab\n```rust\ncode\n```\ncd";
+        let spans = parse_fence_spans(text);
+        let span = &spans[0];
+
+        // Boundary positions are NOT inside fence (exclusive bounds)
+        assert!(!span.contains(span.start));
+        assert!(!span.contains(span.end));
+
+        // One byte inside boundaries IS inside fence
+        assert!(span.contains(span.start + 1));
+        assert!(span.contains(span.end - 1));
+
+        // Outside boundaries is NOT inside fence
+        assert!(!span.contains(span.start - 1));
+        assert!(!span.contains(span.end + 1));
+    }
+
+    #[test]
+    fn test_fence_split_none_outside_all_fences() {
+        let text = "no fences here at all";
+        let spans = parse_fence_spans(text);
+        assert!(spans.is_empty());
+        assert!(get_fence_split(&spans, 5).is_none());
     }
 }
