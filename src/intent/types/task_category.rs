@@ -1,10 +1,12 @@
 //! Task category definitions for executable task classification.
 
+use serde::{Deserialize, Serialize};
+
 /// Categories of executable tasks
 ///
 /// Used by the intent classifier to determine which tools to inject
 /// and which prompt guidelines to use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskCategory {
     /// General task (explicit /agent command, category TBD)
     General,
@@ -101,6 +103,12 @@ impl TaskCategory {
     }
 }
 
+impl std::fmt::Display for TaskCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,8 +128,23 @@ mod tests {
             "document_generation"
         );
         assert_eq!(TaskCategory::ImageGeneration.as_str(), "image_generation");
+        assert_eq!(TaskCategory::VideoGeneration.as_str(), "video_generation");
+        assert_eq!(TaskCategory::AudioGeneration.as_str(), "audio_generation");
+        assert_eq!(TaskCategory::SpeechGeneration.as_str(), "speech_generation");
         assert_eq!(TaskCategory::WebSearch.as_str(), "web_search");
+        assert_eq!(TaskCategory::WebFetch.as_str(), "web_fetch");
+        assert_eq!(TaskCategory::SystemInfo.as_str(), "system_info");
+        assert_eq!(TaskCategory::MediaDownload.as_str(), "media_download");
+        assert_eq!(TaskCategory::TextProcessing.as_str(), "text_processing");
         assert_eq!(TaskCategory::DataProcess.as_str(), "data_process");
+    }
+
+    #[test]
+    fn test_task_category_display_trait() {
+        assert_eq!(format!("{}", TaskCategory::General), "general");
+        assert_eq!(format!("{}", TaskCategory::FileOperation), "file_operation");
+        assert_eq!(format!("{}", TaskCategory::ImageGeneration), "image_generation");
+        assert_eq!(format!("{}", TaskCategory::WebSearch), "web_search");
     }
 
     #[test]

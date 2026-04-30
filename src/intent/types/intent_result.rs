@@ -26,6 +26,12 @@ impl DirectToolSource {
     }
 }
 
+impl std::fmt::Display for DirectToolSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Which detection layer resolved the intent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectionLayer {
@@ -36,6 +42,16 @@ pub enum DetectionLayer {
     /// L4 — fallback default (conversation)
     #[default]
     L4Default,
+}
+
+impl std::fmt::Display for DetectionLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::L2 => f.write_str("L2"),
+            Self::L3 => f.write_str("L3"),
+            Self::L4Default => f.write_str("L4Default"),
+        }
+    }
 }
 
 /// Metadata attached to an `Execute` intent.
@@ -167,5 +183,42 @@ mod tests {
         assert!(meta.detected_url.is_none());
         assert!(meta.context_hint.is_none());
         assert!(meta.keyword_tag.is_none());
+    }
+
+    #[test]
+    fn intent_result_layer() {
+        let execute = IntentResult::Execute {
+            confidence: 0.85,
+            metadata: ExecuteMetadata::default_with_layer(DetectionLayer::L2),
+        };
+        assert_eq!(execute.layer(), Some(DetectionLayer::L2));
+
+        let direct = IntentResult::DirectTool {
+            tool_id: "test".to_string(),
+            args: None,
+            source: DirectToolSource::Custom,
+        };
+        assert_eq!(direct.layer(), None);
+
+        let converse = IntentResult::Converse { confidence: 0.5 };
+        assert_eq!(converse.layer(), None);
+
+        let abort = IntentResult::Abort;
+        assert_eq!(abort.layer(), None);
+    }
+
+    #[test]
+    fn direct_tool_source_display() {
+        assert_eq!(format!("{}", DirectToolSource::SlashCommand), "slash_command");
+        assert_eq!(format!("{}", DirectToolSource::Skill), "skill");
+        assert_eq!(format!("{}", DirectToolSource::Mcp), "mcp");
+        assert_eq!(format!("{}", DirectToolSource::Custom), "custom");
+    }
+
+    #[test]
+    fn detection_layer_display() {
+        assert_eq!(format!("{}", DetectionLayer::L2), "L2");
+        assert_eq!(format!("{}", DetectionLayer::L3), "L3");
+        assert_eq!(format!("{}", DetectionLayer::L4Default), "L4Default");
     }
 }
