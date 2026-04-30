@@ -148,7 +148,7 @@ impl KnowledgeNote {
         out.push_str(&format!("tags: [{}]\n", tags_yaml.join(", ")));
         out.push_str(&format!("created: {created}\n"));
         out.push_str(&format!("updated: {updated}\n"));
-        out.push_str(&format!("confidence: {}\n", self.confidence));
+        out.push_str(&format!("confidence: {:.4}\n", self.confidence));
         let severity_str = match self.severity {
             Severity::Low => "low",
             Severity::Med => "med",
