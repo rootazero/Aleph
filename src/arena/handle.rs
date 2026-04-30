@@ -13,6 +13,12 @@ use super::types::*;
 ///
 /// Each participant holds its own `ArenaHandle` which checks permissions
 /// before forwarding operations to the shared arena behind `Arc<RwLock<>>`.
+///
+/// # Note on Lock Poisoning
+/// All operations use `RwLock::{read,write}().unwrap_or_else(|e| e.into_inner())`.
+/// This silently recovers from poisoned locks by taking the underlying value.
+/// If a thread panicked while holding the lock, the data may be in an
+/// inconsistent state. Callers should ensure arena operations do not panic.
 pub struct ArenaHandle {
     arena: Arc<RwLock<SharedArena>>,
     agent_id: AgentId,

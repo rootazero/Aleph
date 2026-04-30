@@ -342,9 +342,9 @@ impl AlephTool for ArenaSettleTool {
         let fact_summaries: Vec<FactSummary> = facts
             .into_iter()
             .map(|f| FactSummary {
+                confidence: f.confidence(),
                 content: f.content,
                 source_agent: f.source_agent,
-                confidence: f.confidence,
                 tags: f.tags,
             })
             .collect();

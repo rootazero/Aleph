@@ -135,7 +135,7 @@ pub async fn handle_settle(
                     json!({
                         "content": f.content,
                         "source_agent": f.source_agent,
-                        "confidence": f.confidence,
+                        "confidence": f.confidence(),
                         "tags": f.tags,
                     })
                 })

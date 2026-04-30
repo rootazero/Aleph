@@ -303,13 +303,13 @@ mod tests {
 
         // Add a fact via a handle
         let handle_a = handles.get("agent-a").unwrap();
-        let fact = SharedFact {
-            content: "Important discovery".to_string(),
-            source_agent: "agent-a".to_string(),
-            confidence: 0.9,
-            tags: vec!["test".to_string()],
-            created_at: Utc::now(),
-        };
+        let fact = SharedFact::new(
+            "Important discovery".to_string(),
+            "agent-a".to_string(),
+            0.9,
+            vec!["test".to_string()],
+        )
+        .unwrap();
         handle_a.add_shared_fact(fact).unwrap();
 
         // Settle the arena (settle_with_facts handles Active → Settling internally)

@@ -75,13 +75,13 @@ fn peer_collaboration_full_lifecycle() {
         .unwrap();
 
     // 4. Researcher adds SharedFact ("Report identifies 3 critical risks")
-    let fact = SharedFact {
-        content: "Report identifies 3 critical risks".to_string(),
-        source_agent: "researcher".to_string(),
-        confidence: 0.95,
-        tags: vec!["risk-analysis".to_string()],
-        created_at: Utc::now(),
-    };
+    let fact = SharedFact::new(
+        "Report identifies 3 critical risks".to_string(),
+        "researcher".to_string(),
+        0.95,
+        vec!["risk-analysis".to_string()],
+    )
+    .unwrap();
     researcher_handle.add_shared_fact(fact).unwrap();
 
     // 5. Coordinator reads researcher and coder slots, verifies 1 artifact each
@@ -165,13 +165,13 @@ fn pipeline_collaboration_full_lifecycle() {
         .unwrap();
 
     // 3. Translator adds SharedFact ("Term mapping: quantum → 量子 (quantum)")
-    let fact = SharedFact {
-        content: "Term mapping: quantum → 量子".to_string(),
-        source_agent: "translator".to_string(),
-        confidence: 1.0,
-        tags: vec!["terminology".to_string()],
-        created_at: Utc::now(),
-    };
+    let fact = SharedFact::new(
+        "Term mapping: quantum → 量子".to_string(),
+        "translator".to_string(),
+        1.0,
+        vec!["terminology".to_string()],
+    )
+    .unwrap();
     translator_handle.add_shared_fact(fact).unwrap();
 
     // 4. Polisher reads translator's slot, verifies 1 artifact
