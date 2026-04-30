@@ -218,13 +218,23 @@ impl SkillSystem {
 
     /// Register skills from external sources (plugins, markdown).
     pub async fn register_external(&self, manifests: Vec<SkillManifest>) {
+        let mut registry = self.inner.registry.write().await;
+
+        // Only emit events for manifests that were actually accepted by the registry
+        // (higher priority sources replace lower ones; equal priority rejects newcomers).
         let events: Vec<SkillSystemEvent> = manifests
-            .iter()
-            .map(|m| SkillSystemEvent::loaded(m.id().as_str(), m.name()))
+            .into_iter()
+            .filter_map(|m| {
+                let id = m.id().as_str().to_string();
+                let name = m.name().to_string();
+                if registry.register(m) {
+                    Some(SkillSystemEvent::loaded(id, name))
+                } else {
+                    None
+                }
+            })
             .collect();
 
-        let mut registry = self.inner.registry.write().await;
-        registry.register_all(manifests);
         drop(registry);
 
         for event in events {
@@ -346,22 +356,24 @@ impl SkillSystem {
 
     // --- Private helpers ---
 
-    /// Scan all registered directories, repopulate the registry, and rebuild the snapshot.
+    /// Scan all registered directories, atomically replace the registry, and rebuild the snapshot.
     async fn rescan_dirs(&self) {
         let dirs = self.inner.skill_dirs.read().await.clone();
 
-        let mut registry = self.inner.registry.write().await;
-        registry.clear();
-
+        // Build a fresh registry so we can swap atomically — never expose an empty registry.
+        let mut new_registry = SkillRegistry::new();
         for dir in &dirs {
             if dir.exists() {
                 let source = guess_source(dir);
                 let manifests = scan_directory(dir, source);
-                registry.register_all(manifests);
+                new_registry.register_all(manifests);
             }
         }
 
+        let mut registry = self.inner.registry.write().await;
+        *registry = new_registry;
         drop(registry);
+
         self.rebuild_snapshot().await;
     }
 

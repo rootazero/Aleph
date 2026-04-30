@@ -155,7 +155,8 @@ pub fn parse_skill_content(
             "tool" => PromptScope::Tool,
             "standalone" => PromptScope::Standalone,
             "disabled" => PromptScope::Disabled,
-            _ => PromptScope::System,
+            // Unknown scopes default to Disabled so they never leak into prompts.
+            _ => PromptScope::Disabled,
         };
         manifest.set_scope(scope);
     }

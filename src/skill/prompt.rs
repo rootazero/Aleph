@@ -1,6 +1,7 @@
 //! XML prompt builder — generates `<available_skills>` XML for system prompt injection.
 
 use crate::domain::skill::SkillManifest;
+use crate::thinker::xml_util::escape_xml;
 
 /// Deferred loading guidance appended after skill index in system prompts.
 /// Tells the LLM to call `skill_read` before executing a skill.
@@ -50,8 +51,6 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
     buf.push_str("</available_skills>");
     buf
 }
-
-use crate::thinker::xml_util::escape_xml;
 
 #[cfg(test)]
 mod tests {
