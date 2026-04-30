@@ -31,7 +31,7 @@ impl Lane {
     /// Get the default priority for this lane
     ///
     /// Higher values indicate higher priority.
-    pub fn default_priority(&self) -> u8 {
+    pub fn default_priority(&self) -> i8 {
         match self {
             Lane::Main => 10,
             Lane::Nested => 8,

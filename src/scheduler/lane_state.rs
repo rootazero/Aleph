@@ -18,7 +18,7 @@ impl QueuedRun {
     pub fn new(run_id: String) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .expect("system clock before UNIX epoch")
             .as_millis() as i64;
 
         Self {

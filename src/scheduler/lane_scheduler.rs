@@ -86,7 +86,7 @@ impl LaneScheduler {
         if let Some(state) = self.lanes.get(&lane) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
+                .expect("system clock before UNIX epoch")
                 .as_millis() as i64;
             self.wait_tracker.track_enqueue(&run_id, lane, now).await;
             state.enqueue(run_id).await;
@@ -152,6 +152,11 @@ impl LaneScheduler {
 
                         // Mark as running; permits are held by the ScheduleGuard
                         state.mark_running(run_id.clone()).await;
+                        // SAFETY: We intentionally forget the SemaphorePermits so their
+                        // Drop impl (which would release the permits) does not run.
+                        // The ScheduleGuard takes ownership of permit release via its
+                        // own Drop impl, ensuring permits are always released exactly
+                        // once even if the caller panics.
                         std::mem::forget(global_permit);
                         std::mem::forget(lane_permit);
 
@@ -193,14 +198,11 @@ impl LaneScheduler {
         self.recursion_tracker.remove(run_id).await;
     }
 
-
     /// Check if a parent run can spawn a child without exceeding recursion depth
     ///
     /// Returns Ok(()) if the spawn is allowed, or an error if the depth limit would be exceeded.
     pub async fn check_recursion_depth(&self, parent_run_id: &str) -> crate::error::Result<()> {
-        self.recursion_tracker
-            .can_spawn(parent_run_id, self.config.max_recursion_depth)
-            .await
+        self.recursion_tracker.can_spawn(parent_run_id).await
     }
 
     /// Record a parent-child spawn relationship for recursion tracking
@@ -314,9 +316,13 @@ mod tests {
 
         // Enqueue to different lanes
         let _ = scheduler.enqueue("cron-1".to_string(), Lane::Cron).await;
-        let _ = scheduler.enqueue("subagent-1".to_string(), Lane::Subagent).await;
+        let _ = scheduler
+            .enqueue("subagent-1".to_string(), Lane::Subagent)
+            .await;
         let _ = scheduler.enqueue("main-1".to_string(), Lane::Main).await;
-        let _ = scheduler.enqueue("nested-1".to_string(), Lane::Nested).await;
+        let _ = scheduler
+            .enqueue("nested-1".to_string(), Lane::Nested)
+            .await;
 
         // Should schedule in priority order: Main (10) > Nested (8) > Subagent (5) > Cron (0)
         let scheduled1 = scheduler.try_schedule_next().await;

@@ -54,13 +54,13 @@ impl RecursionTracker {
     }
 
     /// Check if a parent can spawn a child without exceeding max depth
-    pub async fn can_spawn(&self, parent_run_id: &str, max_depth: usize) -> Result<()> {
+    pub async fn can_spawn(&self, parent_run_id: &str) -> Result<()> {
         let current_depth = self.get_depth(parent_run_id).await;
 
-        if current_depth >= max_depth {
+        if current_depth >= self.max_depth {
             return Err(AlephError::config(format!(
                 "Recursion depth limit reached for run '{}': {} >= {}",
-                parent_run_id, current_depth, max_depth
+                parent_run_id, current_depth, self.max_depth
             )));
         }
 
@@ -86,13 +86,13 @@ mod tests {
         assert_eq!(tracker.get_depth("parent-1").await, 0);
 
         // Track first spawn
-        assert!(tracker.can_spawn("parent-1", 5).await.is_ok());
+        assert!(tracker.can_spawn("parent-1").await.is_ok());
         tracker.track_spawn("parent-1", "child-1").await;
 
         assert_eq!(tracker.get_depth("child-1").await, 1);
 
         // Track second level spawn
-        assert!(tracker.can_spawn("child-1", 5).await.is_ok());
+        assert!(tracker.can_spawn("child-1").await.is_ok());
         tracker.track_spawn("child-1", "child-2").await;
 
         assert_eq!(tracker.get_depth("child-2").await, 2);
@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(tracker.get_depth("p3").await, 3);
 
         // Should not be able to spawn from p3
-        let result = tracker.can_spawn("p3", 3).await;
+        let result = tracker.can_spawn("p3").await;
         assert!(result.is_err());
     }
 
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(tracker.get_depth("p5").await, 5);
 
         // Should still be able to spawn from p5 (depth 5 < max 10)
-        assert!(tracker.can_spawn("p5", 10).await.is_ok());
+        assert!(tracker.can_spawn("p5").await.is_ok());
     }
 
     #[tokio::test]
@@ -177,11 +177,11 @@ mod tests {
         tracker.track_spawn("p1", "p2").await;
 
         // p2 is at depth 2, should be able to spawn one more level
-        assert!(tracker.can_spawn("p2", 3).await.is_ok());
+        assert!(tracker.can_spawn("p2").await.is_ok());
 
         tracker.track_spawn("p2", "p3").await;
 
         // p3 is at depth 3 (at limit), cannot spawn more
-        assert!(tracker.can_spawn("p3", 3).await.is_err());
+        assert!(tracker.can_spawn("p3").await.is_err());
     }
 }
