@@ -167,7 +167,14 @@ impl GroupChatExecutor {
 
         // Step 3: Parse the coordinator plan, fallback on failure
         let plan = parse_coordinator_plan(&coordinator_raw)
-            .unwrap_or_else(|_| build_fallback_plan(&session.participants));
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    error = %e,
+                    "coordinator plan parse failed, using fallback"
+                );
+                build_fallback_plan(&session.participants)
+            });
 
         // Step 3b: Optionally include coordinator plan as a visible message
         let mut messages = Vec::new();
