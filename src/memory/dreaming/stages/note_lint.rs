@@ -83,6 +83,23 @@ impl DreamStage for NoteLintStage {
         // ---------------------------------------------------------------
         // 2. Broken link detection and repair
         // ---------------------------------------------------------------
+        // Hoist list_notes ONCE per stage entry. The previous per-target
+        // re-fetch let a snapshot taken between target N's check and
+        // target N+1's purge see different state — concurrent ingest could
+        // create the missing target between iterations and the second
+        // snapshot would still report it missing in target N+1's view.
+        // A single snapshot keeps fuzzy-match decisions consistent across
+        // all targets in this stage execution.
+        let all_notes_snapshot = match ctx.indexer.store().list_notes(&ctx.agent_id).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "NoteLint: list_notes failed; skipping link repair phase");
+                // Phase 1 results still apply; the repair phase is skipped.
+                ctx.report.format_fixed = format_fixed;
+                return Ok(ctx);
+            }
+        };
+
         for path in &note_paths {
             let (category, filename) = match path.split_once('/') {
                 Some(pair) => pair,
@@ -127,22 +144,33 @@ impl DreamStage for NoteLintStage {
                 // Broken link detected
                 broken_links_found += 1;
 
-                // Fuzzy repair: try case-insensitive prefix / substring search
-                // across all notes for this agent.
-                let all_notes = match ctx.indexer.store().list_notes(&ctx.agent_id).await {
-                    Ok(n) => n,
-                    Err(_) => continue,
-                };
-
+                // Fuzzy repair against the once-per-stage snapshot.
                 let target_lower = target.to_lowercase();
-                let fuzzy_matches: Vec<&str> = all_notes
+                let fuzzy_matches: Vec<&str> = all_notes_snapshot
                     .iter()
                     .filter(|e| e.filename.to_lowercase() == target_lower)
                     .map(|e| e.filename.as_str())
                     .collect();
 
                 if fuzzy_matches.is_empty() {
-                    // D4: truly missing target — purge the wikilink from the file body.
+                    // D4: snapshot says target is missing — about to purge the
+                    // wikilink. Re-check find_by_filename with a fresh query
+                    // first to close the TOCTOU window: another writer may
+                    // have created the target since our snapshot was taken,
+                    // in which case purging would erase a now-valid link.
+                    let recheck = ctx
+                        .indexer
+                        .store()
+                        .find_by_filename(&target, &ctx.agent_id)
+                        .await;
+                    if matches!(recheck, Ok(ref c) if !c.is_empty()) {
+                        tracing::info!(
+                            target,
+                            "NoteLint: target appeared during stage execution — skipping purge"
+                        );
+                        continue;
+                    }
+
                     // tracing log preserves the original target for audit.
                     let file_path = ctx
                         .indexer
