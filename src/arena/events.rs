@@ -56,10 +56,7 @@ impl ArenaEvent {
         total_steps: usize,
         latest_artifacts: Vec<String>,
     ) -> crate::agents::swarm::events::ImportantEvent {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let timestamp = chrono::Utc::now().timestamp() as u64;
 
         crate::agents::swarm::events::ImportantEvent::ArenaStateUpdate {
             arena_id: self.arena_id().to_string(),

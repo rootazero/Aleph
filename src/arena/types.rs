@@ -394,8 +394,6 @@ impl ArenaSlot {
 /// Progress tracking for a single agent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentProgress {
-    /// Number of tasks assigned to this agent.
-    pub assigned: usize,
     /// Number of tasks completed.
     pub completed: usize,
     /// Description of current work, if any.

@@ -94,8 +94,7 @@ impl ArenaManager {
 
     /// Returns arena IDs where the given agent is a participant and the arena is not Archived.
     pub fn active_arenas_for(&self, agent_id: &AgentId) -> Vec<ArenaId> {
-        let mut result: Vec<ArenaId> = self
-            .arenas
+        self.arenas
             .iter()
             .filter_map(|(arena_id, shared)| {
                 let arena = shared.read().unwrap_or_else(|e| e.into_inner());
@@ -113,9 +112,7 @@ impl ArenaManager {
                     None
                 }
             })
-            .collect();
-        result.sort();
-        result
+            .collect()
     }
 
     /// Query arena state as a JSON snapshot (for RPC handlers).
@@ -125,10 +122,7 @@ impl ArenaManager {
         let shared = self.arenas.get(arena_id)?;
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());
 
-        let mut slot_entries: Vec<_> = arena.slots().values().collect();
-        slot_entries.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
-        let slot_summaries: Vec<Value> = slot_entries
-            .iter()
+        let slot_summaries: Vec<Value> = arena.slots().values()
             .map(|slot| {
                 json!({
                     "agent_id": slot.agent_id,

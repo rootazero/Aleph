@@ -104,7 +104,7 @@ fn peer_collaboration_full_lifecycle() {
     assert_eq!(report.facts_persisted, 1);
     assert_eq!(report.artifacts_archived, 2);
 
-    // 9. Verify facts[0].content matches
+    // 8. Verify facts[0].content matches
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].content, "Report identifies 3 critical risks");
 }
@@ -196,7 +196,7 @@ fn pipeline_collaboration_full_lifecycle() {
     assert_eq!(report.facts_persisted, 1);
     assert_eq!(report.artifacts_archived, 2);
 
-    // 8. Verify facts[0].content matches
+    // 7. Verify facts[0].content matches
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].content, "Term mapping: quantum → 量子");
 }
