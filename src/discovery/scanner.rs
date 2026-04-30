@@ -75,13 +75,11 @@ impl DirectoryScanner {
 
         // 1. Claude global (lowest priority, read-only)
         if let Some(ref claude_home) = self.claude_home {
-            if claude_home.exists() {
-                dirs.push(ScanDirectory::new(
-                    claude_home.clone(),
-                    DiscoverySource::ClaudeGlobal,
-                    0,
-                ));
-            }
+            dirs.push(ScanDirectory::new(
+                claude_home.clone(),
+                DiscoverySource::ClaudeGlobal,
+                0,
+            ));
         }
 
         // 2. Aleph global
@@ -174,7 +172,14 @@ impl DirectoryScanner {
             // Scan for subdirectories (each is a component)
             match std::fs::read_dir(&component_dir) {
                 Ok(entries) => {
-                    for entry in entries.filter_map(|e| e.ok()) {
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(e) => e,
+                            Err(e) => {
+                                debug!("Failed to read entry in {:?}: {}", component_dir, e);
+                                continue;
+                            }
+                        };
                         let path = entry.path();
                         if path.is_dir() {
                             if is_hidden(&path) {
@@ -247,7 +252,14 @@ impl DirectoryScanner {
 
         match std::fs::read_dir(&plugins_dir) {
             Ok(entries) => {
-                for entry in entries.filter_map(|e| e.ok()) {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            debug!("Failed to read entry in {:?}: {}", plugins_dir, e);
+                            continue;
+                        }
+                    };
                     let path = entry.path();
                     if !path.is_dir() {
                         continue;
@@ -267,7 +279,14 @@ impl DirectoryScanner {
                     } else {
                         // Check subdirectories (monorepo layout)
                         if let Ok(sub_entries) = std::fs::read_dir(&path) {
-                            for sub_entry in sub_entries.filter_map(|e| e.ok()) {
+                            for sub_entry in sub_entries {
+                                let sub_entry = match sub_entry {
+                                    Ok(e) => e,
+                                    Err(e) => {
+                                        debug!("Failed to read entry in {:?}: {}", path, e);
+                                        continue;
+                                    }
+                                };
                                 let sub_path = sub_entry.path();
                                 if !sub_path.is_dir() {
                                     continue;
