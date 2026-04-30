@@ -399,6 +399,83 @@ impl<S: NoteStore> NoteIndexer<S> {
         Ok(())
     }
 
+    /// Each newly-corroborating source fact lifts a note's confidence by this
+    /// step, saturating at 1.0. Small enough that the score grows monotonically
+    /// without overshooting on a single high-corroboration round.
+    const STRENGTHEN_STEP: f32 = 0.05;
+
+    /// Merge new source_facts into an existing note on disk and bump its
+    /// confidence monotonically. Used by both `DistillAction::Strengthen`
+    /// (no floor lift) and the `New`-with-collision demotion path
+    /// (`confidence_floor = new_action.confidence` lifts the note's
+    /// confidence to at least the LLM's latest judgment).
+    ///
+    /// Confidence formula:
+    ///   `confidence = min(1.0, max(existing, floor) + STRENGTHEN_STEP * newly_added_facts)`
+    async fn merge_source_facts_into_note(
+        &self,
+        agent_id: &str,
+        existing_note_path: &str,
+        new_source_facts: &[String],
+        confidence_floor: f32,
+    ) -> Result<(), AlephError> {
+        let (cat, filename) = existing_note_path.split_once('/').ok_or_else(|| {
+            AlephError::ConfigError {
+                message: format!(
+                    "merge_source_facts: invalid note_path '{existing_note_path}' \
+                     (expected 'category/filename')"
+                ),
+                suggestion: None,
+            }
+        })?;
+        let safe_title = sanitize_title(filename);
+        let file_path = self
+            .memory_dir
+            .join(agent_id)
+            .join(cat)
+            .join(format!("{safe_title}.md"));
+        if !file_path.exists() {
+            return Err(AlephError::other(format!(
+                "merge_source_facts: target missing on disk: {existing_note_path}"
+            )));
+        }
+        let content =
+            fs::read_to_string(&file_path)
+                .await
+                .map_err(|e| AlephError::ConfigError {
+                    message: format!("merge read {file_path:?}: {e}"),
+                    suggestion: None,
+                })?;
+        let mut note = KnowledgeNote::from_markdown(filename, &content)?;
+
+        let mut added_count: u32 = 0;
+        for f in new_source_facts {
+            if !note.source_facts.contains(f) {
+                note.source_facts.push(f.clone());
+                added_count += 1;
+            }
+        }
+
+        // Lift to the floor first (covers the New-collision case where the
+        // LLM's new confidence may exceed the existing value), then add a
+        // proportional bump for genuinely-new corroborating facts.
+        let base = note.confidence.max(confidence_floor);
+        note.confidence = (base + Self::STRENGTHEN_STEP * (added_count as f32)).min(1.0);
+
+        note.updated_at = chrono::Utc::now().timestamp();
+        let md = note.to_markdown();
+        note.content_hash = sha2_hash(&md);
+        fs::write(&file_path, &md)
+            .await
+            .map_err(|e| AlephError::ConfigError {
+                message: format!("merge write {file_path:?}: {e}"),
+                suggestion: None,
+            })?;
+        self.store.index_note(&note, agent_id, cat).await?;
+        self.notify_orientation(agent_id, cat, &safe_title);
+        Ok(())
+    }
+
     /// Apply a `DistillAction` emitted by a Distill stage (SkillDistill, FeedbackDistill).
     ///
     /// Pure plumbing — the LLM already judged what to do; this method just executes
@@ -422,6 +499,33 @@ impl<S: NoteStore> NoteIndexer<S> {
                 severity,
                 source_facts,
             } => {
+                // Write-time collision guard: if a note with the same safe
+                // filename already exists in this (agent, category), demote
+                // to Strengthen semantics rather than silently overwriting
+                // (which would lose existing source_facts and stale the
+                // confidence to whatever the new action emitted).
+                let safe_title = sanitize_title(title);
+                let candidate_path = format!("{category}/{safe_title}");
+                if self
+                    .store
+                    .get_note_index(&candidate_path, agent_id)
+                    .await?
+                    .is_some()
+                {
+                    tracing::info!(
+                        note_path = %candidate_path,
+                        "DistillAction::New collided with existing note — demoting to Strengthen"
+                    );
+                    return self
+                        .merge_source_facts_into_note(
+                            agent_id,
+                            &candidate_path,
+                            source_facts,
+                            *confidence,
+                        )
+                        .await;
+                }
+
                 let now = chrono::Utc::now().timestamp();
                 let note = KnowledgeNote {
                     title: title.clone(),
@@ -442,50 +546,16 @@ impl<S: NoteStore> NoteIndexer<S> {
                 existing_note_path,
                 source_facts,
             } => {
-                let (cat, filename) = existing_note_path.split_once('/').ok_or_else(|| {
-                    AlephError::ConfigError {
-                        message: format!(
-                            "Strengthen: invalid existing_note_path '{existing_note_path}' \
-                             (expected 'category/filename')"
-                        ),
-                        suggestion: None,
-                    }
-                })?;
-                let safe_title = sanitize_title(filename);
-                let file_path = self
-                    .memory_dir
-                    .join(agent_id)
-                    .join(cat)
-                    .join(format!("{safe_title}.md"));
-                if !file_path.exists() {
-                    return Err(AlephError::other(format!(
-                        "Strengthen target missing on disk: {existing_note_path}"
-                    )));
-                }
-                let content =
-                    fs::read_to_string(&file_path)
-                        .await
-                        .map_err(|e| AlephError::ConfigError {
-                            message: format!("Strengthen read {file_path:?}: {e}"),
-                            suggestion: None,
-                        })?;
-                let mut note = KnowledgeNote::from_markdown(filename, &content)?;
-                for f in source_facts {
-                    if !note.source_facts.contains(f) {
-                        note.source_facts.push(f.clone());
-                    }
-                }
-                note.updated_at = chrono::Utc::now().timestamp();
-                let md = note.to_markdown();
-                note.content_hash = sha2_hash(&md);
-                fs::write(&file_path, &md)
-                    .await
-                    .map_err(|e| AlephError::ConfigError {
-                        message: format!("Strengthen write {file_path:?}: {e}"),
-                        suggestion: None,
-                    })?;
-                self.store.index_note(&note, agent_id, cat).await?;
-                self.notify_orientation(agent_id, cat, &safe_title);
+                // Strengthen does not carry a confidence value — pass 0.0 as
+                // floor so the bump is purely additive against the existing
+                // note's confidence.
+                self.merge_source_facts_into_note(
+                    agent_id,
+                    existing_note_path,
+                    source_facts,
+                    0.0,
+                )
+                .await?;
             }
             DistillAction::Supersede {
                 old_note_path,
@@ -1045,5 +1115,209 @@ mod reference_hook_tests {
         let listed = backend.list_notes("default").await.unwrap();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].path == "learning/rust-async");
+    }
+
+    // -----------------------------------------------------------------
+    // H1 — Strengthen lifts confidence monotonically with new facts.
+    // -----------------------------------------------------------------
+
+    /// Read a note's current confidence by re-parsing its markdown from disk.
+    async fn read_confidence(dir: &Path, agent: &str, path: &str) -> f32 {
+        let (cat, name) = path.split_once('/').unwrap();
+        let file = dir
+            .join("note")
+            .join(agent)
+            .join(cat)
+            .join(format!("{name}.md"));
+        let content = fs::read_to_string(&file).await.unwrap();
+        KnowledgeNote::from_markdown(name, &content).unwrap().confidence
+    }
+
+    /// Seed a skill note with the given confidence and source_facts.
+    async fn seed_note<S: NoteStore>(
+        indexer: &NoteIndexer<S>,
+        agent: &str,
+        category: &str,
+        title: &str,
+        confidence: f32,
+        source_facts: Vec<String>,
+    ) {
+        let note = KnowledgeNote {
+            title: title.into(),
+            category: category.into(),
+            facts: vec!["body fact".into()],
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            confidence,
+            source_facts,
+            ..Default::default()
+        };
+        indexer.write_note(agent, category, &note).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn strengthen_with_new_facts_bumps_confidence_monotonically() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        seed_note(&indexer, "default", "skill", "topic", 0.4, vec![]).await;
+
+        let action = DistillAction::Strengthen {
+            existing_note_path: "skill/topic".into(),
+            source_facts: (0..5).map(|i| format!("fact-{i}")).collect(),
+        };
+        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+
+        let after = read_confidence(dir.path(), "default", "skill/topic").await;
+        // 0.4 + 5 * 0.05 = 0.65 — within float tolerance.
+        assert!(
+            after >= 0.6499 && after <= 0.6501,
+            "expected confidence ~0.65, got {after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn strengthen_with_zero_new_facts_leaves_confidence_unchanged() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        seed_note(
+            &indexer,
+            "default",
+            "skill",
+            "stable",
+            0.42,
+            vec!["fact-a".into(), "fact-b".into()],
+        )
+        .await;
+
+        // Re-submit the SAME source_facts — none should be new.
+        let action = DistillAction::Strengthen {
+            existing_note_path: "skill/stable".into(),
+            source_facts: vec!["fact-a".into(), "fact-b".into()],
+        };
+        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+
+        let after = read_confidence(dir.path(), "default", "skill/stable").await;
+        assert!(
+            (after - 0.42).abs() < 1e-5,
+            "confidence must stay at 0.42 when no new facts arrive, got {after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn strengthen_saturates_at_one() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        seed_note(&indexer, "default", "skill", "almost", 0.95, vec![]).await;
+
+        // 10 new facts × 0.05 = 0.50 → would push to 1.45 without the clamp.
+        let action = DistillAction::Strengthen {
+            existing_note_path: "skill/almost".into(),
+            source_facts: (0..10).map(|i| format!("f{i}")).collect(),
+        };
+        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+
+        let after = read_confidence(dir.path(), "default", "skill/almost").await;
+        assert!(
+            (after - 1.0).abs() < 1e-5,
+            "confidence must saturate at 1.0, got {after}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // H2 — DistillAction::New collision-guards by demoting to Strengthen.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn apply_new_with_filename_collision_strengthens_existing() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        // First New: confidence 0.4, one source fact.
+        let first = DistillAction::New {
+            title: "duplicate-topic".into(),
+            rule: "first body".into(),
+            confidence: 0.4,
+            severity: Default::default(),
+            source_facts: vec!["seed-fact".into()],
+        };
+        indexer.apply_distill_action("default", "skill", &first).await.unwrap();
+
+        // Second New with the SAME safe_title — must not silently overwrite.
+        let second = DistillAction::New {
+            title: "duplicate-topic".into(),
+            rule: "second body".into(), // would replace the body if we naively wrote
+            confidence: 0.9,             // floor that the existing note must be lifted to
+            severity: Default::default(),
+            source_facts: vec!["seed-fact".into(), "extra-fact".into()],
+        };
+        indexer.apply_distill_action("default", "skill", &second).await.unwrap();
+
+        // Re-read the (single) note from disk.
+        let file = dir
+            .path()
+            .join("note")
+            .join("default")
+            .join("skill")
+            .join("duplicate-topic.md");
+        let content = fs::read_to_string(&file).await.unwrap();
+        let merged = KnowledgeNote::from_markdown("duplicate-topic", &content).unwrap();
+
+        // Source facts are merged + deduped (seed-fact stays, extra-fact added).
+        assert_eq!(merged.source_facts.len(), 2);
+        assert!(merged.source_facts.contains(&"seed-fact".to_string()));
+        assert!(merged.source_facts.contains(&"extra-fact".to_string()));
+
+        // Confidence is lifted to ≥ the new action's confidence (0.9), then
+        // bumped by STRENGTHEN_STEP for each new fact (1 new = +0.05).
+        // Expected: 0.9 + 0.05 = 0.95.
+        assert!(
+            merged.confidence >= 0.949 && merged.confidence <= 0.951,
+            "confidence must be lifted to ~0.95, got {}",
+            merged.confidence
+        );
+
+        // The original body must NOT have been replaced — collision demoted
+        // to Strengthen, so the body content is preserved.
+        assert!(
+            content.contains("first body"),
+            "first body must be preserved when collision is demoted to Strengthen"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_new_without_collision_writes_fresh() {
+        use crate::memory::dreaming::distill_action::DistillAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
+
+        let action = DistillAction::New {
+            title: "fresh-topic".into(),
+            rule: "fresh body".into(),
+            confidence: 0.7,
+            severity: Default::default(),
+            source_facts: vec!["fact-1".into()],
+        };
+        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+
+        let after = read_confidence(dir.path(), "default", "skill/fresh-topic").await;
+        // No collision → no bump applied; confidence == as written.
+        assert!((after - 0.7).abs() < 1e-5, "got {after}");
     }
 }
