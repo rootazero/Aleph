@@ -143,11 +143,7 @@ impl ProviderConfig {
     /// If the first entry is a comma-separated string of fallback models
     /// (e.g. "gpt-5.4,gpt-5.3-codex"), returns only the first model name.
     pub fn default_model(&self) -> &str {
-        debug_assert!(
-            !self.models.is_empty(),
-            "models should never be empty after deserialization"
-        );
-        let first = &self.models[0];
+        let first = self.models.first().map(|s| s.as_str()).unwrap_or("");
         // Handle comma-separated model lists stored as a single string
         first.split(',').next().unwrap_or(first).trim()
     }

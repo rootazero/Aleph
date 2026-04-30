@@ -7,8 +7,29 @@ use crate::error::{AlephError, Result};
 use super::{AgentManager, WorkspaceFile, BOOTSTRAP_FILES};
 
 impl AgentManager {
+    /// Validate agent_id: only alphanumeric, underscore, hyphen
+    pub(super) fn validate_agent_id(&self, agent_id: &str) -> Result<()> {
+        if agent_id.is_empty() {
+            return Err(AlephError::invalid_config("agent_id must not be empty".to_string()));
+        }
+        if agent_id.len() > super::MAX_ID_LENGTH {
+            return Err(AlephError::invalid_config(format!(
+                "agent_id '{}' exceeds max length {}",
+                agent_id, super::MAX_ID_LENGTH
+            )));
+        }
+        if !agent_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            return Err(AlephError::invalid_config(format!(
+                "Invalid agent_id '{}': must be alphanumeric, '_', or '-'",
+                agent_id
+            )));
+        }
+        Ok(())
+    }
+
     /// List files in an agent's identity directory
     pub fn list_files(&self, agent_id: &str) -> Result<Vec<WorkspaceFile>> {
+        self.validate_agent_id(agent_id)?;
         let agent_dir = self.agents_root.join(agent_id);
         if !agent_dir.exists() {
             return Ok(Vec::new());
@@ -51,6 +72,7 @@ impl AgentManager {
 
     /// Read a file from an agent's identity directory
     pub fn read_file(&self, agent_id: &str, filename: &str) -> Result<String> {
+        self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
         let path = self.agents_root.join(agent_id).join(filename);
         fs::read_to_string(&path).map_err(|e| {
@@ -60,6 +82,7 @@ impl AgentManager {
 
     /// Write a file to an agent's identity directory
     pub fn write_file(&self, agent_id: &str, filename: &str, content: &str) -> Result<()> {
+        self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
         let agent_dir = self.agents_root.join(agent_id);
         fs::create_dir_all(&agent_dir)
@@ -72,6 +95,7 @@ impl AgentManager {
 
     /// Delete a file from an agent's identity directory
     pub fn delete_file(&self, agent_id: &str, filename: &str) -> Result<()> {
+        self.validate_agent_id(agent_id)?;
         self.validate_filename(filename)?;
         let path = self.agents_root.join(agent_id).join(filename);
         if path.exists() {

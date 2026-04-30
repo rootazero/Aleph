@@ -25,7 +25,7 @@ fn cached_config_schema() -> &'static serde_json::Value {
     static SCHEMA: OnceLock<serde_json::Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         let schema = generate_config_schema();
-        serde_json::to_value(&schema).expect("Config schema serialization is infallible")
+        serde_json::to_value(&schema).unwrap()
     })
 }
 

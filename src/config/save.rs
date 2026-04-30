@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 impl Config {
     /// Save configuration to a TOML file with atomic write
@@ -385,7 +385,9 @@ impl Config {
             if let Ok(metadata) = fs::metadata(path) {
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o600);
-                let _ = fs::set_permissions(path, perms);
+                if let Err(e) = fs::set_permissions(path, perms) {
+                    warn!("Failed to set config file permissions: {}", e);
+                }
             }
         }
 
