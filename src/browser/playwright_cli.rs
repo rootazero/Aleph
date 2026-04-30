@@ -142,7 +142,12 @@ impl PlaywrightCliDriver {
         let exit_code = output.status.code().unwrap_or(-1);
 
         if !output.status.success() {
-            return Err(classify_stderr(&stderr, exit_code, session_key));
+            return Err(classify_stderr(
+                &stderr,
+                exit_code,
+                session_key,
+                timeout.as_millis() as u64,
+            ));
         }
 
         let page_meta = parse_page_meta(&stdout);
@@ -159,12 +164,12 @@ impl PlaywrightCliDriver {
     }
 }
 
-fn classify_stderr(stderr: &str, exit_code: i32, session_key: &str) -> BrowserError {
+fn classify_stderr(stderr: &str, exit_code: i32, session_key: &str, timeout_ms: u64) -> BrowserError {
     let s = stderr.to_lowercase();
     if s.contains("no session") || s.contains("browser not open") {
         BrowserError::NoSession(session_key.to_string())
     } else if s.contains("timeout") {
-        BrowserError::Timeout(0)
+        BrowserError::Timeout(timeout_ms)
     } else if s.contains("element not found") || s.contains("no element") {
         BrowserError::ActionFailed(format!("element not found ({stderr})"))
     } else {
@@ -238,25 +243,25 @@ mod tests {
 
     #[test]
     fn test_classify_stderr_no_session() {
-        let err = classify_stderr("Error: no session found for -s=foo", 1, "foo");
+        let err = classify_stderr("Error: no session found for -s=foo", 1, "foo", 5000);
         assert!(matches!(err, BrowserError::NoSession(_)));
     }
 
     #[test]
     fn test_classify_stderr_timeout() {
-        let err = classify_stderr("Error: action timeout 5000ms", 1, "foo");
-        assert!(matches!(err, BrowserError::Timeout(_)));
+        let err = classify_stderr("Error: action timeout 5000ms", 1, "foo", 5000);
+        assert!(matches!(err, BrowserError::Timeout(5000)));
     }
 
     #[test]
     fn test_classify_stderr_element_not_found() {
-        let err = classify_stderr("element not found: #missing", 1, "foo");
+        let err = classify_stderr("element not found: #missing", 1, "foo", 5000);
         assert!(matches!(err, BrowserError::ActionFailed(_)));
     }
 
     #[test]
     fn test_classify_stderr_generic() {
-        let err = classify_stderr("something else", 2, "foo");
+        let err = classify_stderr("something else", 2, "foo", 5000);
         assert!(matches!(err, BrowserError::PlaywrightCliError(_)));
     }
 }

@@ -1,7 +1,6 @@
 pub mod backend;
 pub mod chrome_mcp;
 pub mod chrome_mcp_backend;
-mod chrome_mcp_snapshot;
 mod discovery;
 pub mod error;
 pub mod manager;
@@ -20,5 +19,5 @@ pub use discovery::find_chromium;
 pub use error::BrowserError;
 pub use types::{
     ActionTarget, BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, StorageKind, TabId,
+    SnapshotOutput, TabId,
 };

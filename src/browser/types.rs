@@ -116,14 +116,6 @@ impl Default for ScreenshotOpts {
     }
 }
 
-/// Kind of web storage.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum StorageKind {
-    Local,
-    Session,
-}
-
 /// Browser snapshot (text-first).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotOutput {

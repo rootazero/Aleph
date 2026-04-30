@@ -51,7 +51,12 @@ impl ChromeMcpBackend {
     /// Select a page by its index before performing operations on it.
     /// Chrome DevTools MCP uses `pageId` (number) for page selection.
     async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
-        let page_id: u32 = tab_id.parse().unwrap_or(1);
+        let page_id: u32 = tab_id.parse().map_err(|_| {
+            BrowserError::ActionFailed(format!(
+                "Invalid tab ID '{}': expected numeric page ID",
+                tab_id
+            ))
+        })?;
         self.call("select_page", json!({ "pageId": page_id }))
             .await?;
         Ok(())

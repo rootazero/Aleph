@@ -20,7 +20,6 @@ use super::profile::{
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
-    ssrf_policy: BrowserSsrfGuard,
     ssrf_guard: Arc<BrowserSsrfGuard>,
     #[allow(dead_code)]
     config: BrowserSystemConfig,
@@ -36,7 +35,6 @@ struct ManagedProfile {
 
 impl ProfileManager {
     pub fn new(config: BrowserSystemConfig) -> Self {
-        let ssrf_policy = BrowserSsrfGuard::new(config.policy.clone());
         let ssrf_guard = Arc::new(BrowserSsrfGuard::new(config.policy.clone()));
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
         let playwright_cli_driver =
@@ -102,7 +100,6 @@ impl ProfileManager {
 
         Self {
             profiles: RwLock::new(profiles),
-            ssrf_policy,
             ssrf_guard,
             config,
             chrome_mcp_driver,
@@ -186,7 +183,7 @@ impl ProfileManager {
 
     /// Validate a URL against the SSRF policy.
     pub fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
-        self.ssrf_policy.check_url(url)
+        self.ssrf_guard.check_url(url)
     }
 
     /// Record activity on a profile to reset its idle timer.
