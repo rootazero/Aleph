@@ -4,6 +4,7 @@
 use crate::event::global_bus::GlobalBus;
 use crate::event::types::{AlephEvent, EventType, TimestampedEvent};
 use crate::sync_primitives::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace, warn};
 
@@ -32,6 +33,8 @@ pub struct EventBus {
     session_id: Option<String>,
     /// Reference to the GlobalBus for auto-broadcast
     global_bus: Option<&'static GlobalBus>,
+    /// Monotonic sequence counter for events published on this bus
+    sequence: Arc<AtomicU64>,
 }
 
 /// Configuration for the event bus
@@ -85,6 +88,7 @@ impl EventBus {
             agent_id: None,
             session_id: None,
             global_bus: None,
+            sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -194,7 +198,8 @@ impl EventBus {
     /// the event will also be automatically broadcast to the GlobalBus with
     /// the configured agent_id and session_id.
     pub async fn publish(&self, event: AlephEvent) -> usize {
-        let timestamped = TimestampedEvent::new(event.clone());
+        let sequence = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let timestamped = TimestampedEvent::new(event.clone(), sequence);
 
         trace!(
             event_type = ?timestamped.event.event_type(),

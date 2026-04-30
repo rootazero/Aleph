@@ -3,15 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-// Global sequence counter for events
-static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-/// Generate next event sequence number
-fn next_sequence() -> u64 {
-    EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst)
-}
 
 // ============================================================================
 // Core Event Types
@@ -26,11 +17,12 @@ pub struct TimestampedEvent {
 }
 
 impl TimestampedEvent {
-    pub fn new(event: AlephEvent) -> Self {
+    /// Create a new timestamped event with the given sequence number.
+    pub fn new(event: AlephEvent, sequence: u64) -> Self {
         Self {
             event,
             timestamp: chrono::Utc::now().timestamp_millis(),
-            sequence: next_sequence(),
+            sequence,
         }
     }
 }
@@ -612,8 +604,8 @@ mod tests {
 
     #[test]
     fn test_timestamped_event_sequence() {
-        let e1 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
-        let e2 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed));
+        let e1 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed), 1);
+        let e2 = TimestampedEvent::new(AlephEvent::LoopStop(StopReason::Completed), 2);
 
         assert!(e2.sequence > e1.sequence);
     }
