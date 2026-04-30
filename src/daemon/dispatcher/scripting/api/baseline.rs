@@ -69,29 +69,39 @@ impl BaselineApi {
         let target_window = Duration::days(7);
         let now = Utc::now();
 
-        // Create new runtime for sync call (MVP only, same pattern as HistoryApi)
         let worldmodel = self.worldmodel.clone();
         let metric = self.metric.clone();
 
-        let events = std::thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
+        let events = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            worldmodel
+                                .query_derived_events(now - target_window, now)
+                                .await
+                        })
+                    })
+                } else {
+                    handle.block_on(async {
+                        worldmodel
+                            .query_derived_events(now - target_window, now)
+                            .await
+                    })
+                }
+            }
+            Err(_) => match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(async {
+                    worldmodel
+                        .query_derived_events(now - target_window, now)
+                        .await
+                }),
                 Err(e) => {
                     log::error!("Failed to create tokio runtime: {}", e);
-                    return Vec::new();
+                    Vec::new()
                 }
-            };
-            rt.block_on(async {
-                worldmodel
-                    .query_derived_events(now - target_window, now)
-                    .await
-            })
-        })
-        .join()
-        .unwrap_or_else(|_| {
-            log::error!("Failed to query baseline events");
-            Vec::new()
-        });
+            },
+        };
 
         if events.is_empty() {
             log::warn!("No historical data for baseline '{}'", metric);
@@ -128,7 +138,7 @@ mod tests {
     use crate::daemon::event_bus::DaemonEventBus;
     use crate::daemon::worldmodel::WorldModelConfig;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_baseline_api_avg_caching() {
         let event_bus = Arc::new(DaemonEventBus::new(100));
         let config = WorldModelConfig::default();
@@ -145,7 +155,7 @@ mod tests {
         assert_eq!(value1, value2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_baseline_api_graceful_degradation() {
         let event_bus = Arc::new(DaemonEventBus::new(100));
         let config = WorldModelConfig::default();

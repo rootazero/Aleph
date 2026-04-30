@@ -38,29 +38,34 @@ impl HistoryApi {
 
     /// Get events from last N duration (sync version for Rhai)
     /// Example: history.last("2h") -> events from last 2 hours
-    ///
-    /// Note: For MVP, this creates a new runtime. Phase 5.2 will refactor to async.
     pub fn last(&self, duration_str: &str) -> EventCollection {
         let duration_str = duration_str.to_string();
         let worldmodel = self.worldmodel.clone();
 
-        // Create new runtime for sync call (MVP only)
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    log::error!("Failed to create tokio runtime: {}", e);
-                    return EventCollection::empty();
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                    tokio::task::block_in_place(|| {
+                        let api = HistoryApi::new(worldmodel);
+                        handle.block_on(api.last_async(&duration_str))
+                    })
+                } else {
+                    let api = HistoryApi::new(worldmodel);
+                    handle.block_on(api.last_async(&duration_str))
                 }
-            };
-            let api = HistoryApi::new(worldmodel);
-            rt.block_on(api.last_async(&duration_str))
-        })
-        .join()
-        .unwrap_or_else(|_| {
-            log::error!("Failed to query history events");
-            EventCollection::empty()
-        })
+            }
+            Err(_) => {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!("Failed to create tokio runtime: {}", e);
+                        return EventCollection::empty();
+                    }
+                };
+                let api = HistoryApi::new(worldmodel);
+                rt.block_on(api.last_async(&duration_str))
+            }
+        }
     }
 
     /// Get baseline calculator for a metric
@@ -101,7 +106,7 @@ mod tests {
         assert_eq!(events.count(), 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_history_api_baseline() {
         let event_bus = Arc::new(DaemonEventBus::new(100));
         let config = WorldModelConfig::default();
