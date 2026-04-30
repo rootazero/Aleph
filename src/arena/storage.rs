@@ -7,12 +7,18 @@ use super::types::{ArenaId, ArenaManifest, ArenaStatus, ArtifactId, ArtifactKind
 use crate::resilience::database::StateDatabase;
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
+use thiserror::Error;
 
-// =============================================================================
-// Helpers
-// =============================================================================
+#[derive(Debug, Error)]
+pub enum ArenaStorageError {
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
+    #[error("serialization error: {0}")]
+    Serialization(String),
+    #[error("arena not found: {0}")]
+    NotFound(String),
+}
 
-/// Convert ArenaStatus to its lowercase string representation for storage.
 fn status_to_str(status: &ArenaStatus) -> &'static str {
     match status {
         ArenaStatus::Created => "created",
@@ -22,7 +28,6 @@ fn status_to_str(status: &ArenaStatus) -> &'static str {
     }
 }
 
-/// Convert ArtifactKind to its lowercase string representation for storage.
 fn kind_to_str(kind: &ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::Text => "text",
@@ -32,23 +37,18 @@ fn kind_to_str(kind: &ArtifactKind) -> &'static str {
     }
 }
 
-// =============================================================================
-// Arena CRUD
-// =============================================================================
-
-/// Save a new arena to the database.
 pub fn save_arena(
     db: &StateDatabase,
     arena_id: &ArenaId,
     manifest: &ArenaManifest,
     status: &ArenaStatus,
-) -> Result<(), String> {
+) -> Result<(), ArenaStorageError> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     let strategy_json = serde_json::to_string(&manifest.strategy)
-        .map_err(|e| format!("serialize strategy: {}", e))?;
+        .map_err(|e| ArenaStorageError::Serialization(format!("strategy: {}", e)))?;
     let participants_json = serde_json::to_string(&manifest.participants)
-        .map_err(|e| format!("serialize participants: {}", e))?;
+        .map_err(|e| ArenaStorageError::Serialization(format!("participants: {}", e)))?;
 
     conn.execute(
         r#"
@@ -65,17 +65,16 @@ pub fn save_arena(
             manifest.created_at.to_rfc3339(),
         ],
     )
-    .map_err(|e| format!("save_arena: {}", e))?;
+    .map_err(ArenaStorageError::Database)?;
 
     Ok(())
 }
 
-/// Update the status (and optionally settled_at) of an existing arena.
 pub fn update_arena_status(
     db: &StateDatabase,
     arena_id: &ArenaId,
     status: &ArenaStatus,
-) -> Result<(), String> {
+) -> Result<(), ArenaStorageError> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     let settled_at = if *status == ArenaStatus::Archived {
@@ -90,18 +89,15 @@ pub fn update_arena_status(
         "#,
         params![status_to_str(status), settled_at, arena_id.as_str()],
     )
-    .map_err(|e| format!("update_arena_status: {}", e))?;
+    .map_err(ArenaStorageError::Database)?;
 
     Ok(())
 }
 
-/// Load an arena's goal and status by ID.
-///
-/// Returns `Ok(None)` if the arena does not exist.
 pub fn load_arena(
     db: &StateDatabase,
     arena_id: &ArenaId,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<Option<(String, String)>, ArenaStorageError> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     let result = conn
@@ -115,16 +111,11 @@ pub fn load_arena(
             },
         )
         .optional()
-        .map_err(|e| format!("load_arena: {}", e))?;
+        .map_err(ArenaStorageError::Database)?;
 
     Ok(result)
 }
 
-// =============================================================================
-// Artifact CRUD
-// =============================================================================
-
-/// Save an artifact to the database.
 pub fn save_artifact(
     db: &StateDatabase,
     artifact_id: &ArtifactId,
@@ -133,7 +124,7 @@ pub fn save_artifact(
     kind: &ArtifactKind,
     content: Option<&str>,
     reference: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), ArenaStorageError> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     conn.execute(
@@ -151,43 +142,30 @@ pub fn save_artifact(
             Utc::now().to_rfc3339(),
         ],
     )
-    .map_err(|e| format!("save_artifact: {}", e))?;
+    .map_err(ArenaStorageError::Database)?;
 
     Ok(())
 }
 
-/// Load artifacts for a given arena and agent.
-///
-/// Returns a list of `(artifact_id, content)` tuples.
-/// Artifacts without inline content return an empty string for `content`.
 pub fn load_artifacts(
     db: &StateDatabase,
     arena_id: &ArenaId,
     agent_id: &str,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<(String, String)>, ArenaStorageError> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, COALESCE(content, '') FROM arena_artifacts WHERE arena_id = ?1 AND agent_id = ?2",
-        )
-        .map_err(|e| format!("load_artifacts prepare: {}", e))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(content, '') FROM arena_artifacts WHERE arena_id = ?1 AND agent_id = ?2",
+    )?;
 
-    let rows = stmt
-        .query_map(params![arena_id.as_str(), agent_id], |row| {
-            let id: String = row.get(0)?;
-            let content: String = row.get(1)?;
-            Ok((id, content))
-        })
-        .map_err(|e| format!("load_artifacts query: {}", e))?;
+    let rows = stmt.query_map(params![arena_id.as_str(), agent_id], |row| {
+        let id: String = row.get(0)?;
+        let content: String = row.get(1)?;
+        Ok((id, content))
+    })?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("load_artifacts row: {}", e))
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -198,7 +176,6 @@ mod tests {
     };
     use chrono::Utc;
 
-    /// Helper: create a test manifest.
     fn test_manifest() -> ArenaManifest {
         ArenaManifest {
             goal: "Build a widget".to_string(),
@@ -238,11 +215,9 @@ mod tests {
 
         save_arena(&db, &arena_id, &manifest, &ArenaStatus::Active).unwrap();
 
-        // Verify initial status
         let (_, status) = load_arena(&db, &arena_id).unwrap().unwrap();
         assert_eq!(status, "active");
 
-        // Update to Archived
         update_arena_status(&db, &arena_id, &ArenaStatus::Archived).unwrap();
 
         let (_, status) = load_arena(&db, &arena_id).unwrap().unwrap();
@@ -255,7 +230,6 @@ mod tests {
         let arena_id = ArenaId::from_string("arena-3");
         let manifest = test_manifest();
 
-        // Must save arena first (for referential integrity)
         save_arena(&db, &arena_id, &manifest, &ArenaStatus::Active).unwrap();
 
         let artifact_id = ArtifactId::from_string("art-1");

@@ -7,6 +7,9 @@ use chrono::Utc;
 use super::types::*;
 use crate::domain::{AggregateRoot, Entity};
 
+const MAX_SHARED_FACTS: usize = 10_000;
+const MAX_ARTIFACTS_PER_SLOT: usize = 1_000;
+
 /// The aggregate root for multi-agent collaboration.
 ///
 /// A `SharedArena` manages participants, their working slots, shared facts,
@@ -141,6 +144,12 @@ impl SharedArena {
             .slots
             .get_mut(agent_id)
             .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
+        if slot.artifacts.len() >= MAX_ARTIFACTS_PER_SLOT {
+            return Err(format!(
+                "Artifact limit reached for agent {}: max {} artifacts per slot",
+                agent_id, MAX_ARTIFACTS_PER_SLOT
+            ));
+        }
         slot.artifacts.push(artifact);
         // Only transition Idle -> Working; preserve Done/Failed status
         if slot.status == SlotStatus::Idle {
@@ -205,6 +214,12 @@ impl SharedArena {
             return Err(format!(
                 "Cannot add shared fact: arena is {:?}, not Active",
                 self.status
+            ));
+        }
+        if self.shared_facts.len() >= MAX_SHARED_FACTS {
+            return Err(format!(
+                "Shared fact limit reached: max {} facts per arena",
+                MAX_SHARED_FACTS
             ));
         }
         self.shared_facts.push(fact);
