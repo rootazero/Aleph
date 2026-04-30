@@ -93,7 +93,18 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut SkillManifest
     let mut all_ok = true;
 
     for dir in bundled.dirs() {
-        let name = dir.path().to_string_lossy().to_string();
+        // Use file_name() to get the base directory name, matching reconcile()
+        let Some(name_os) = dir.path().file_name() else {
+            warn!(path = ?dir.path(), "Bundled skill dir has no file_name, skipping");
+            continue;
+        };
+        let name = name_os.to_string_lossy().to_string();
+
+        // Defensive: reject empty or path-traversal directory names
+        if name.is_empty() || name == "." || name == ".." {
+            warn!(skill = %name, "Skipping bundled skill with invalid name");
+            continue;
+        }
 
         // Skip if user has a non-official skill with the same name
         if let Some(entry) = manifest.skills.get(&name) {
@@ -156,15 +167,54 @@ fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
     }
 }
 
-/// Recursively extract an include_dir Dir to a filesystem path.
 fn extract_dir_recursive(dir: &Dir, target: &Path) -> std::io::Result<()> {
-    // Remove existing and recreate (for clean update)
-    if target.exists() {
-        std::fs::remove_dir_all(target)?;
-    }
     std::fs::create_dir_all(target)?;
+    extract_dir_contents(dir, target)?;
+    prune_stale_entries(dir, target)?;
+    Ok(())
+}
 
-    extract_dir_contents(dir, target)
+fn prune_stale_entries(dir: &Dir, target: &Path) -> std::io::Result<()> {
+    use std::collections::HashSet;
+
+    let mut bundle_names: HashSet<std::ffi::OsString> = HashSet::new();
+    for file in dir.files() {
+        if let Some(name) = file.path().file_name() {
+            bundle_names.insert(name.to_os_string());
+        }
+    }
+    for subdir in dir.dirs() {
+        if let Some(name) = subdir.path().file_name() {
+            bundle_names.insert(name.to_os_string());
+        }
+    }
+
+    let mut read_err = None;
+    if let Ok(entries) = std::fs::read_dir(target) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name();
+            if !bundle_names.contains(&name) {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Err(e) = std::fs::remove_dir_all(&path) {
+                        warn!(path = %path.display(), error = %e, "Failed to remove stale directory");
+                    }
+                } else if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(path = %path.display(), error = %e, "Failed to remove stale file");
+                }
+            }
+        }
+    } else {
+        read_err = Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to read target directory for pruning",
+        ));
+    }
+
+    if let Some(e) = read_err {
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Extract contents of a Dir (files + subdirs) into target path.

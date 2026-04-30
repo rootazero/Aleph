@@ -192,7 +192,7 @@ impl AlephTool for ArenaQueryTool {
 
         if let Some(ref agent_id_str) = args.agent_id {
             // Use handle-based query with permission checks
-            let agent_id = AgentId::from_string(agent_id_str.clone());
+            let agent_id = agent_id_str.clone();
             let handle = manager
                 .get_handle(&arena_id, &agent_id)
                 .map_err(crate::error::AlephError::other)?;
@@ -202,7 +202,7 @@ impl AlephTool for ArenaQueryTool {
 
             let mut slot_summaries: Vec<SlotSummary> = Vec::new();
             for agent_str in &active_agents {
-                let agent = AgentId::from_string(agent_str.clone());
+                let agent = agent_str.clone();
                 let artifacts = handle.list_artifacts(&agent).unwrap_or_default();
                 let slot_status = handle
                     .slot_status(&agent)
