@@ -22,7 +22,7 @@ pub trait Clock: Send + Sync + 'static {
         let nanos = ((ms % 1000) * 1_000_000) as u32;
         Utc.timestamp_opt(secs, nanos)
             .single()
-            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap())
+            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or_else(|| Utc::now()))
     }
 }
 

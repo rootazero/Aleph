@@ -236,7 +236,13 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("failed to read schema version: {e}"))?;
 
-    let version: u32 = version_str.parse().unwrap_or(0);
+    let version: u32 = version_str.parse().map_err(|e| {
+        format!(
+            "schema version '{}' is not a valid number: {e}. \
+             Manual intervention may be required to repair the cron database.",
+            version_str
+        )
+    })?;
 
     if version < CURRENT_VERSION {
         // Future migrations go here

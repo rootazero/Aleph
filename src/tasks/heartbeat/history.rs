@@ -5,10 +5,12 @@
 //! specific database wrapper.
 
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 // ── HeartbeatRunRecord ───────────────────────────────────────────────────────
 
 /// A single heartbeat task execution record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatRunRecord {
     pub id: String,
     pub task_id: String,
@@ -139,7 +141,7 @@ pub fn get_run_records(
 pub fn prune_old_records(conn: &Connection, retention_days: u32) -> Result<usize, String> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|e| format!("system time before Unix epoch: {e}"))?
         .as_millis() as i64;
     let cutoff_ms = now_ms - (retention_days as i64) * 86_400_000;
     let deleted = conn

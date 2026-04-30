@@ -125,7 +125,8 @@ impl HeartbeatTask {
     pub fn new(name: String, agent_id: String, interval_ms: u64, probe: ProbeConfig) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .map_err(|e| format!("system time before Unix epoch: {e}"))
+            .expect("system clock must be after Unix epoch")
             .as_millis() as i64;
         Self {
             id: uuid::Uuid::new_v4().to_string(),

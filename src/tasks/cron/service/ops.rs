@@ -34,8 +34,7 @@ pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
             tz,
             stagger_ms,
         } => {
-            let from =
-                chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
+            let from = chrono::DateTime::from_timestamp_millis(now_ms)?;
             let base = compute_next_cron(expr, tz.as_deref(), from);
             match base {
                 Ok(Some(next)) => {

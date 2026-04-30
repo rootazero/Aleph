@@ -2,11 +2,12 @@
 
 use std::sync::LazyLock;
 
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{CronJob, JobRun};
 
-static ENV_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\{\{env:(\w+)\}\}").unwrap());
+static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"\{\{env:(\w+)\}\}").expect("ENV_RE regex is hardcoded and always valid")
+});
 
 /// Render a prompt template with variable substitution.
 ///

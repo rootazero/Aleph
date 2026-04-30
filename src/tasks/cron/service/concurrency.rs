@@ -44,11 +44,10 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
         if job.state.running_at_ms.is_some() {
             continue;
         }
-        let next = match job.state.next_run_at_ms {
+        let _next = match job.state.next_run_at_ms {
             Some(t) if t <= now => t,
             _ => continue,
         };
-        let _ = next;
 
         // Mark as running
         job.state.running_at_ms = Some(now);
@@ -195,11 +194,11 @@ pub async fn phase3_writeback<C: Clock>(
     }
 
     // Maintenance recompute ALL jobs
-    let job_count = guard.jobs().len();
-    for i in 0..job_count {
-        // We need to work with indices because recompute needs &mut job and clock
+    {
         let jobs = guard.jobs_mut();
-        recompute_next_run_maintenance(&mut jobs[i], clock);
+        for job in jobs.iter_mut() {
+            recompute_next_run_maintenance(job, clock);
+        }
     }
 
     guard.persist()?;

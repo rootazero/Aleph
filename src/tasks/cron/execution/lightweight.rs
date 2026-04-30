@@ -1,4 +1,4 @@
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus};
 
 /// Execute a lightweight job. The actual event injection into the main session

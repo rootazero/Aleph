@@ -23,10 +23,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
+    if norm_a == 0.0 || norm_b == 0.0 || dot.is_nan() || norm_a.is_nan() || norm_b.is_nan() {
         return 0.0;
     }
-    dot / (norm_a * norm_b)
+    let sim = dot / (norm_a * norm_b);
+    if sim.is_nan() { 0.0 } else { sim }
 }
 
 // ── DedupEngine ───────────────────────────────────────────────────────────────
@@ -63,8 +64,20 @@ impl DedupEngine {
     ///
     /// Used in tests and as a fallback when no DB is available.
     pub fn noop(config: DedupConfig) -> Self {
-        let conn = Connection::open_in_memory()
-            .expect("failed to open in-memory connection for noop DedupEngine");
+        let conn = match Connection::open_in_memory() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open in-memory connection for noop DedupEngine");
+                return Self {
+                    config,
+                    conn: Arc::new(Mutex::new(
+                        Connection::open_in_memory()
+                            .expect("failed to open in-memory connection for noop DedupEngine fallback")
+                    )),
+                    embedding_provider: None,
+                };
+            }
+        };
         // Initialize schema so the connection is valid, errors are ignored.
         let _ = init_dedup_schema(&conn);
         Self {

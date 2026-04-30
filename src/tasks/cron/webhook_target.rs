@@ -79,7 +79,12 @@ impl DeliveryTarget for WebhookTarget {
 
         // Determine HTTP method
         let http_method = match method.as_deref().unwrap_or("POST") {
+            "GET" => Method::GET,
             "PUT" => Method::PUT,
+            "PATCH" => Method::PATCH,
+            "DELETE" => Method::DELETE,
+            "HEAD" => Method::HEAD,
+            "OPTIONS" => Method::OPTIONS,
             _ => Method::POST,
         };
 

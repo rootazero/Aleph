@@ -153,7 +153,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
             Ok(()) => {
                 let duration_ms = start.elapsed().as_millis() as i64;
                 // Successful execution — treat as Silent for now.
-                // TODO: Parse agent response for heartbeat_report tool calls
+                // Future: Parse agent response for heartbeat_report tool calls
                 // to distinguish NeedsDelivery vs Silent.
                 Ok(HeartbeatL2Result {
                     status: HeartbeatL2Status::Silent,

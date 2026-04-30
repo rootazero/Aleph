@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sync_primitives::Arc;
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::CronConfig;
 use crate::tasks::cron::store::CronStore;
 
