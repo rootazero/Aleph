@@ -312,9 +312,11 @@ mod tests {
     #[tokio::test]
     async fn test_uv_post_install_creates_venv_idempotently() {
         use crate::runtimes::post_install::run;
+        use crate::runtimes::post_install::HOME_LOCK;
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
 
+        let _lock = HOME_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
         std::env::set_var("HOME", dir.path());
 

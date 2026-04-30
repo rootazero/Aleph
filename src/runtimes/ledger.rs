@@ -177,6 +177,9 @@ impl CapabilityLedger {
     /// Build an enhanced PATH string with Ready entries' bin directories
     /// prepended to the system PATH.
     pub fn build_path(&self) -> String {
+        use std::collections::HashSet;
+
+        let mut seen: HashSet<PathBuf> = HashSet::new();
         let mut paths: Vec<PathBuf> = Vec::new();
 
         // Collect bin directories from Ready entries (sorted by name for deterministic PATH order)
@@ -189,9 +192,9 @@ impl CapabilityLedger {
 
         for entry in ready_entries {
             if let Some(parent) = entry.bin_path.parent() {
-                // Avoid duplicates
-                if !paths.contains(&parent.to_path_buf()) {
-                    paths.push(parent.to_path_buf());
+                let parent_buf = parent.to_path_buf();
+                if seen.insert(parent_buf.clone()) {
+                    paths.push(parent_buf);
                 }
             }
         }
@@ -199,7 +202,7 @@ impl CapabilityLedger {
         // Append system PATH
         if let Ok(system_path) = std::env::var("PATH") {
             for p in std::env::split_paths(&system_path) {
-                if !paths.contains(&p) {
+                if seen.insert(p.clone()) {
                     paths.push(p);
                 }
             }

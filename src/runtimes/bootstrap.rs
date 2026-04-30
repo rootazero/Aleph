@@ -112,55 +112,42 @@ enum CmdOutcome {
     Failed { stderr: String },
 }
 
-async fn run_shell(script: &str) -> Result<CmdOutcome, BootstrapError> {
-    let output = Command::new("sh").args(["-c", script]).output().await?;
-    if output.status.success() {
-        Ok(CmdOutcome::Success)
+async fn run_cmd(cmd: &mut Command) -> Result<CmdOutcome, BootstrapError> {
+    let output = cmd.output().await?;
+    Ok(if output.status.success() {
+        CmdOutcome::Success
     } else {
-        Ok(CmdOutcome::Failed {
+        CmdOutcome::Failed {
             stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
-    }
+        }
+    })
+}
+
+async fn run_shell(script: &str) -> Result<CmdOutcome, BootstrapError> {
+    run_cmd(Command::new("sh").args(["-c", script])).await
 }
 
 async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
-    let output = Command::new("powershell")
-        .args(["-Command", script])
-        .output()
-        .await?;
-    if output.status.success() {
-        Ok(CmdOutcome::Success)
-    } else {
-        Ok(CmdOutcome::Failed {
-            stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
-    }
+    run_cmd(Command::new("powershell").args(["-Command", script])).await
 }
 
 async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome, BootstrapError> {
-    let output = match parent {
-        "fnm" => Command::new("fnm").args(subcommand).output().await?,
+    let mut cmd = match parent {
+        "fnm" => Command::new("fnm"),
         "node" => {
-            // Wrap in `fnm exec --using lts --` to get a Node shell with PATH.
-            let mut args: Vec<&str> = vec!["exec", "--using", "lts", "--"];
-            args.extend(subcommand.iter().copied());
-            Command::new("fnm").args(&args).output().await?
+            let mut cmd = Command::new("fnm");
+            cmd.args(["exec", "--using", "lts", "--"]);
+            return run_cmd(cmd.args(subcommand)).await;
         }
-        "uv" => Command::new("uv").args(subcommand).output().await?,
-        "cargo" => Command::new("cargo").args(subcommand).output().await?,
+        "uv" => Command::new("uv"),
+        "cargo" => Command::new("cargo"),
         _ => {
             return Ok(CmdOutcome::Failed {
                 stderr: format!("unknown Via parent: {}", parent),
             });
         }
     };
-    if output.status.success() {
-        Ok(CmdOutcome::Success)
-    } else {
-        Ok(CmdOutcome::Failed {
-            stderr: String::from_utf8_lossy(&output.stderr).into(),
-        })
-    }
+    run_cmd(cmd.args(subcommand)).await
 }
 
 #[cfg(test)]

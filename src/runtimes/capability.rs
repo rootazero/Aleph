@@ -32,30 +32,24 @@ impl RuntimeCapability {
             return String::new();
         }
 
+        use std::fmt::Write;
         let mut output = String::new();
         output.push_str("You can execute code using these installed runtimes:\n\n");
 
         for cap in capabilities {
-            output.push_str(&format!("**{}**\n", cap.name));
+            let _ = write!(output, "**{}**\n", cap.name);
+            let _ = write!(output, "- {}\n", cap.description);
 
-            // Add description
-            output.push_str(&format!("- {}\n", cap.description));
-
-            // Add version if available
             if let Some(ref version) = cap.version {
-                output.push_str(&format!("- Version: {}\n", version));
+                let _ = write!(output, "- Version: {}\n", version);
             }
 
-            // Add executable path
             if let Some(ref path) = cap.executable_path {
-                output.push_str(&format!("- Executable: `{}`\n", path.display()));
+                let _ = write!(output, "- Executable: `{}`\n", path.display());
             }
 
-            // Add usage hint from SPECS
             if let Some(hint) = get_hint_from_spec(&cap.id) {
-                output.push_str("- ");
-                output.push_str(hint);
-                output.push('\n');
+                let _ = write!(output, "- {}\n", hint);
             }
             output.push('\n');
         }
@@ -82,20 +76,19 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
         return String::new();
     }
 
+    use std::fmt::Write;
     let mut output = String::new();
     for entry in entries {
-        output.push_str(&format!("**{}**\n", entry.name));
+        let _ = write!(output, "**{}**\n", entry.name);
         if !entry.version.is_empty() {
-            output.push_str(&format!("- Version: {}\n", entry.version));
+            let _ = write!(output, "- Version: {}\n", entry.version);
         }
         if !entry.bin_path.as_os_str().is_empty() {
-            output.push_str(&format!("- Executable: {}\n", entry.bin_path.display()));
+            let _ = write!(output, "- Executable: {}\n", entry.bin_path.display());
         }
         // Reuse existing usage hints from SPECS
         if let Some(hint) = get_hint_from_spec(&entry.name) {
-            output.push_str("- ");
-            output.push_str(hint);
-            output.push('\n');
+            let _ = write!(output, "- {}\n", hint);
         }
         output.push('\n');
     }

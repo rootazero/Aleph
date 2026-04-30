@@ -11,9 +11,15 @@ use crate::runtimes::ledger::{
 use crate::runtimes::probe;
 use crate::sync_primitives::Arc;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// Ensure a capability is ready, probing and bootstrapping if needed.
 /// Returns the executable path on success.
@@ -27,17 +33,19 @@ pub async fn ensure_capability(
 ) -> Result<PathBuf, AlephError> {
     // Fast path: already Ready
     {
-        let mut guard = ledger.write().await;
+        let guard = ledger.read().await;
         if guard.status(capability) == CapabilityStatus::Ready {
             if let Some(path) = guard.executable(capability) {
                 if path.exists() {
                     return Ok(path.to_path_buf());
                 }
                 // Path gone — mark stale, fall through to re-probe
+                drop(guard);
                 warn!(
                     "Capability {} path no longer exists, marking stale",
                     capability
                 );
+                let mut guard = ledger.write().await;
                 guard.update_status(capability, CapabilityStatus::Stale);
             }
         }
@@ -66,10 +74,7 @@ pub async fn ensure_capability(
             warn!("{}", warning);
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         let mut guard = ledger.write().await;
         guard.update(CapabilityEntry {
@@ -80,7 +85,9 @@ pub async fn ensure_capability(
             source: probe_result.source,
             last_probed: now,
         });
-        let _ = guard.persist();
+        if let Err(e) = guard.persist() {
+            warn!("Failed to persist ledger after probe success: {}", e);
+        }
 
         info!("Capability {} found at {}", capability, bin_path.display());
         return Ok(bin_path);
@@ -113,23 +120,22 @@ pub async fn ensure_capability(
         .await
         .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {}", e)))?;
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = now_secs();
 
     match bootstrap_result {
         BootstrapResult::Success { bin_path, version } => {
-            let mut guard = ledger.write().await;
-            guard.update(CapabilityEntry {
-                name: capability.to_string(),
-                bin_path: bin_path.clone(),
-                version,
-                status: CapabilityStatus::Ready,
-                source: CapabilitySource::AlephManaged,
-                last_probed: now,
-            });
-            let _ = guard.persist();
+        let mut guard = ledger.write().await;
+        guard.update(CapabilityEntry {
+            name: capability.to_string(),
+            bin_path: bin_path.clone(),
+            version,
+            status: CapabilityStatus::Ready,
+            source: CapabilitySource::AlephManaged,
+            last_probed: now,
+        });
+        if let Err(e) = guard.persist() {
+            warn!("Failed to persist ledger after bootstrap success: {}", e);
+        }
 
             info!(
                 "Capability {} bootstrapped at {}",
@@ -232,10 +238,7 @@ mod tests {
 
         // Pre-populate with a "ready" entry pointing to a real binary
         let bin = PathBuf::from("/bin/sh");
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = now_secs();
 
         ledger.update(CapabilityEntry {
             name: "test-shell".into(),

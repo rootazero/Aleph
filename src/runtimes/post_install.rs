@@ -118,12 +118,17 @@ async fn verify_or_repair(
     Ok(())
 }
 
+// Tests that modify HOME must run serially to avoid race conditions.
+#[cfg(test)]
+pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_expand_home_with_var() {
+        let _lock = HOME_LOCK.lock().unwrap();
         std::env::set_var("HOME", "/tmp/fake-home");
         let out = expand_home("$HOME/.aleph/skills");
         assert_eq!(out, "/tmp/fake-home/.aleph/skills");
@@ -137,6 +142,7 @@ mod tests {
 
     #[test]
     fn test_expand_home_multiple_placeholders() {
+        let _lock = HOME_LOCK.lock().unwrap();
         std::env::set_var("HOME", "/tmp/fake-home");
         let out = expand_home("$HOME/a/$HOME/b");
         assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
@@ -150,6 +156,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
 
+        let _lock = HOME_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
         std::env::set_var("HOME", dir.path());
 

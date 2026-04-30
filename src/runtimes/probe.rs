@@ -137,7 +137,6 @@ fn check_version_warning(spec: &RuntimeSpec, version: Option<&str>) -> Option<St
     }
 }
 
-/// Simple semver comparison on major.minor only.
 fn version_lt(actual: &str, minimum: &str) -> bool {
     let parse = |s: &str| -> (u64, u64) {
         let mut parts = s.split('.');
