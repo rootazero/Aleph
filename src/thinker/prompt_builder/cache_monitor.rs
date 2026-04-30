@@ -184,7 +184,7 @@ mod tests {
         // After reset, a single miss should NOT trigger a warning
         // (consecutive_misses is back to 0, so 1 miss = 1 consecutive)
         monitor.record_cache_usage(None); // miss — consecutive=1, no warn
-        let state = monitor.state.lock().unwrap();
+        let state = monitor.state.lock().expect("lock poisoned");
         assert_eq!(
             state.consecutive_misses, 1,
             "miss count should restart from 1 after compaction"

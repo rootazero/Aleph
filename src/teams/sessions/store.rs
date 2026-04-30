@@ -26,10 +26,13 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
-fn parse_rfc3339(s: &str) -> DateTime<Utc> {
+fn parse_rfc3339(s: &str) -> crate::error::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("SessionStore: invalid RFC3339 timestamp '{s}': {e}"),
+            suggestion: None,
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +206,16 @@ impl SqliteSessionStore {
                     agent_id: r.get(0)?,
                     content: r.get(1)?,
                     turn_number: r.get(2)?,
-                    timestamp: parse_rfc3339(&r.get::<_, String>(3)?),
+                    timestamp: parse_rfc3339(&r.get::<_, String>(3)?).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                e.to_string(),
+                            )),
+                        )
+                    })?,
                 })
             })
             .map_err(db_err)?
@@ -229,7 +241,7 @@ impl SqliteSessionStore {
             status: SessionStatus::from_stored(&status_str),
             transcript,
             outcome,
-            created_at: parse_rfc3339(&created_at_str),
+            created_at: parse_rfc3339(&created_at_str)?,
         })
     }
 }

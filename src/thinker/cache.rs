@@ -565,7 +565,7 @@ mod tests {
                 assert_eq!(blocks.len(), 1);
                 assert!(blocks[0].cache_control.is_some());
             }
-            _ => panic!("Expected AnthropicBlocks"),
+            other => panic!("Expected AnthropicBlocks, got {other:?}"),
         }
     }
 
@@ -578,7 +578,7 @@ mod tests {
         // No existing cache, should return plain
         match strategy.prepare_system_prompt(&prompt, &ctx) {
             SystemPromptCache::Plain(_) => {}
-            _ => panic!("Expected Plain without existing cache"),
+            other => panic!("Expected Plain without existing cache, got {other:?}"),
         }
 
         assert!(strategy.should_create_cache(&ctx));
@@ -600,7 +600,7 @@ mod tests {
             SystemPromptCache::GeminiReference { cache_name } => {
                 assert_eq!(cache_name, "cachedContents/abc123");
             }
-            _ => panic!("Expected GeminiReference with existing cache"),
+            other => panic!("Expected GeminiReference with existing cache, got {other:?}"),
         }
     }
 

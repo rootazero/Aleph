@@ -123,7 +123,7 @@ mod tests {
             Some(ProtocolToken::NeedsAttention(msg)) => {
                 assert_eq!(msg, "Database disk usage at 95%")
             }
-            _ => panic!("Expected NeedsAttention"),
+            other => panic!("Expected NeedsAttention, got {other:?}"),
         }
     }
 

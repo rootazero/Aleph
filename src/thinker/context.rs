@@ -348,17 +348,20 @@ mod tests {
         let file_ops_disabled = resolved
             .disabled_tools
             .iter()
-            .find(|d| d.name == "file_ops");
-        assert!(file_ops_disabled.is_some());
+            .find(|d| d.name == "file_ops")
+            .expect("file_ops should be in disabled list");
         assert!(matches!(
-            file_ops_disabled.unwrap().reason,
+            file_ops_disabled.reason,
             DisableReason::BlockedByPolicy { .. }
         ));
 
-        let exec_disabled = resolved.disabled_tools.iter().find(|d| d.name == "exec");
-        assert!(exec_disabled.is_some());
+        let exec_disabled = resolved
+            .disabled_tools
+            .iter()
+            .find(|d| d.name == "exec")
+            .expect("exec should be in disabled list");
         assert!(matches!(
-            exec_disabled.unwrap().reason,
+            exec_disabled.reason,
             DisableReason::BlockedByPolicy { .. }
         ));
     }
@@ -383,10 +386,13 @@ mod tests {
         assert!(available_names.contains(&"web_search"));
 
         // bash should ALSO be in disabled_tools with RequiresApproval
-        let bash_disabled = resolved.disabled_tools.iter().find(|d| d.name == "bash");
-        assert!(bash_disabled.is_some());
+        let bash_disabled = resolved
+            .disabled_tools
+            .iter()
+            .find(|d| d.name == "bash")
+            .expect("bash should be in disabled list");
         assert!(matches!(
-            bash_disabled.unwrap().reason,
+            bash_disabled.reason,
             DisableReason::RequiresApproval { .. }
         ));
 
@@ -451,10 +457,13 @@ mod tests {
         assert!(!available_names.contains(&"canvas"));
 
         // canvas should be in disabled_tools with UnsupportedByChannel
-        let canvas_disabled = resolved.disabled_tools.iter().find(|d| d.name == "canvas");
-        assert!(canvas_disabled.is_some());
+        let canvas_disabled = resolved
+            .disabled_tools
+            .iter()
+            .find(|d| d.name == "canvas")
+            .expect("canvas should be in disabled list");
         assert!(matches!(
-            canvas_disabled.unwrap().reason,
+            canvas_disabled.reason,
             DisableReason::UnsupportedByChannel
         ));
     }

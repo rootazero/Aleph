@@ -131,11 +131,7 @@ impl MessageRouter {
         let msg = self.msg_store.send_message(new_msg).await?;
 
         // 3. Publish event via EventBus if available, else fall back to direct logging
-        let to_agents: Vec<String> = msg
-            .recipients
-            .iter()
-            .map(|r| r.agent_id.clone())
-            .collect();
+        let to_agents: Vec<String> = msg.recipients.iter().map(|r| r.agent_id.clone()).collect();
 
         if let Some(ref bus) = self.bus {
             bus.publish(AlephEvent::TeamMessageSent(TeamMessageEvent {

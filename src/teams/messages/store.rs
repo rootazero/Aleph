@@ -25,14 +25,20 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
-fn parse_rfc3339(s: &str) -> DateTime<Utc> {
+fn parse_rfc3339(s: &str) -> crate::error::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+        .map_err(|e| AlephError::ConfigError {
+            message: format!("MessageStore: invalid RFC3339 timestamp '{s}': {e}"),
+            suggestion: None,
+        })
 }
 
-fn parse_rfc3339_opt(s: &Option<String>) -> Option<DateTime<Utc>> {
-    s.as_deref().map(parse_rfc3339)
+fn parse_rfc3339_opt(s: &Option<String>) -> crate::error::Result<Option<DateTime<Utc>>> {
+    match s.as_deref() {
+        Some(v) => parse_rfc3339(v).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// Compute default TTL based on recipient roles and message type.
@@ -288,15 +294,21 @@ impl SqliteMessageStore {
             return Ok(std::collections::HashMap::new());
         }
 
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT message_id, agent_id, role FROM message_recipients WHERE message_id IN ({})",
             placeholders
         );
 
         let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            message_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = message_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let mut map: std::collections::HashMap<String, Vec<Recipient>> =
             std::collections::HashMap::new();
@@ -306,10 +318,13 @@ impl SqliteMessageStore {
                 let msg_id: String = r.get(0)?;
                 let agent_id: String = r.get(1)?;
                 let role_str: String = r.get(2)?;
-                Ok((msg_id, Recipient {
-                    agent_id,
-                    role: RecipientRole::from_stored(&role_str),
-                }))
+                Ok((
+                    msg_id,
+                    Recipient {
+                        agent_id,
+                        role: RecipientRole::from_stored(&role_str),
+                    },
+                ))
             })
             .map_err(db_err)?;
 
@@ -330,15 +345,21 @@ impl SqliteMessageStore {
             return Ok(std::collections::HashMap::new());
         }
 
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "SELECT message_id, artifact_id FROM message_attachments WHERE message_id IN ({})",
             placeholders
         );
 
         let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            message_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = message_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let mut map: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
@@ -465,14 +486,15 @@ impl MessageStore for SqliteMessageStore {
                  FROM team_messages WHERE id IN ({})",
                 placeholders
             );
-            let params: Vec<&dyn rusqlite::types::ToSql> =
-                ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
             let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
             let rows = stmt
                 .query_map(params.as_slice(), Self::read_message_row)
                 .map_err(db_err)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(db_err)?
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_err)?
         };
 
         // Batch-fetch recipients and attachments for all messages (2 queries total).
@@ -494,8 +516,8 @@ impl MessageStore for SqliteMessageStore {
                 reply_to: raw.reply_to,
                 thread_id: raw.thread_id,
                 attachments,
-                created_at: parse_rfc3339(&raw.created_at_str),
-                expires_at: parse_rfc3339_opt(&raw.expires_at_str),
+            created_at: parse_rfc3339(&raw.created_at_str)?,
+            expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
             });
         }
 
@@ -567,8 +589,8 @@ impl MessageStore for SqliteMessageStore {
                 reply_to: raw.reply_to,
                 thread_id: raw.thread_id,
                 attachments,
-                created_at: parse_rfc3339(&raw.created_at_str),
-                expires_at: parse_rfc3339_opt(&raw.expires_at_str),
+            created_at: parse_rfc3339(&raw.created_at_str)?,
+            expires_at: parse_rfc3339_opt(&raw.expires_at_str)?,
             });
         }
 

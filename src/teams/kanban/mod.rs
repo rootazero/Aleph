@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::artifacts::TaskStatus;
 #[cfg(test)]
 use crate::teams::artifacts::SqliteArtifactStore;
 use crate::teams::artifacts::TaskArtifact;
+use crate::teams::artifacts::TaskStatus;
 
 fn db_err(e: impl std::fmt::Display) -> AlephError {
     AlephError::ConfigError {
@@ -19,42 +19,7 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
-fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> {
-    let artifact_type_str: String = row.get(3)?;
-    let status_str: String = row.get(6)?;
-    let blocked_by_str: String = row.get(7)?;
-    let assignee: Option<String> = row.get(8)?;
-    let priority: i32 = row.get(9)?;
-    let metadata_str: String = row.get(10)?;
-    let created_at_str: String = row.get(11)?;
-    let started_at_str: Option<String> = row.get(12)?;
-    let completed_at_str: Option<String> = row.get(13)?;
-
-    let default_metadata =
-        serde_json::Value::Object(serde_json::Map::new());
-
-    Ok(TaskArtifact {
-        id: row.get(0)?,
-        task_id: row.get(1)?,
-        agent_id: row.get(2)?,
-        artifact_type: crate::teams::artifacts::ArtifactType::from_stored(&artifact_type_str),
-        title: row.get(4)?,
-        content: row.get(5)?,
-        status: TaskStatus::from_stored(&status_str),
-        blocked_by: serde_json::from_str(&blocked_by_str).unwrap_or_default(),
-        assignee,
-        priority,
-        metadata: serde_json::from_str(&metadata_str)
-            .unwrap_or_else(|_| default_metadata.clone()),
-        created_at: DateTime::parse_from_rfc3339(&created_at_str)
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now()),
-        started_at: started_at_str
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-        completed_at: completed_at_str
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-    })
-}
+use crate::teams::artifacts::read_artifact_row;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KanbanColumns {
@@ -87,11 +52,7 @@ impl KanbanColumns {
 pub trait KanbanBoard: Send + Sync {
     async fn get_board(&self, team_id: &str) -> Result<KanbanColumns>;
 
-    async fn move_task(
-        &self,
-        artifact_id: &str,
-        new_status: TaskStatus,
-    ) -> Result<TaskArtifact>;
+    async fn move_task(&self, artifact_id: &str, new_status: TaskStatus) -> Result<TaskArtifact>;
 
     async fn complete_task(&self, artifact_id: &str) -> Result<Vec<TaskArtifact>>;
 
@@ -111,7 +72,9 @@ impl SqliteKanbanBoard {
 
     #[cfg(test)]
     pub async fn from_artifact_store(store: &SqliteArtifactStore) -> Self {
-        Self { conn: store.conn.clone() }
+        Self {
+            conn: store.conn.clone(),
+        }
     }
 
     async fn get_artifact_by_id(&self, artifact_id: &str) -> Result<Option<TaskArtifact>> {
@@ -127,7 +90,6 @@ impl SqliteKanbanBoard {
             .optional()
             .map_err(db_err)
     }
-
 }
 
 #[async_trait]
@@ -161,11 +123,7 @@ impl KanbanBoard for SqliteKanbanBoard {
         Ok(columns)
     }
 
-    async fn move_task(
-        &self,
-        artifact_id: &str,
-        new_status: TaskStatus,
-    ) -> Result<TaskArtifact> {
+    async fn move_task(&self, artifact_id: &str, new_status: TaskStatus) -> Result<TaskArtifact> {
         let current = self.get_artifact_by_id(artifact_id).await?;
         let current = current.ok_or_else(|| db_err("artifact not found"))?;
         if !current.status.can_transition_to(&new_status) {
@@ -235,8 +193,10 @@ impl KanbanBoard for SqliteKanbanBoard {
                         "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
                         placeholders
                     );
-                    let params_vec: Vec<&dyn rusqlite::types::ToSql> =
-                        deps.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+                    let params_vec: Vec<&dyn rusqlite::types::ToSql> = deps
+                        .iter()
+                        .map(|s| s as &dyn rusqlite::types::ToSql)
+                        .collect();
                     let incomplete_count: i64 = conn
                         .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
                         .map_err(db_err)?;
@@ -269,8 +229,7 @@ impl KanbanBoard for SqliteKanbanBoard {
             )
             .map_err(db_err)?;
 
-        let mut blocked_by: Vec<String> =
-            serde_json::from_str(&blocked_by_str).unwrap_or_default();
+        let mut blocked_by: Vec<String> = serde_json::from_str(&blocked_by_str).unwrap_or_default();
         if !blocked_by.contains(&depends_on.to_string()) {
             blocked_by.push(depends_on.to_string());
         }

@@ -114,7 +114,10 @@ impl InboxContextProvider for TeamInboxContextProvider {
         // Find every team the agent belongs to, then sum unread counts.
         let teams = match self.team_store.get_agent_teams(agent_id).await {
             Ok(t) => t,
-            Err(_) => return InboxContext::default(),
+            Err(e) => {
+                tracing::warn!(agent_id, error = %e, "Failed to get agent teams for inbox context");
+                return InboxContext::default();
+            }
         };
 
         let mut total_to: u32 = 0;
@@ -122,18 +125,28 @@ impl InboxContextProvider for TeamInboxContextProvider {
         let mut active_sessions = Vec::new();
 
         for team in &teams {
-            if let Ok((to, cc)) = self.inbox.get_unread_counts(agent_id, &team.id).await {
-                total_to = total_to.saturating_add(to);
-                total_cc = total_cc.saturating_add(cc);
+            match self.inbox.get_unread_counts(agent_id, &team.id).await {
+                Ok((to, cc)) => {
+                    total_to = total_to.saturating_add(to);
+                    total_cc = total_cc.saturating_add(cc);
+                }
+                Err(e) => {
+                    tracing::debug!(agent_id, team_id = %team.id, error = %e, "Failed to get unread counts");
+                }
             }
 
             // Collect active sessions for this team
             if let Some(ref ss) = self.session_store {
-                if let Ok(sessions) = ss.list_active_sessions(&team.id).await {
-                    for s in sessions {
-                        if s.participants.contains(&agent_id.to_string()) {
-                            active_sessions.push(s.id);
+                match ss.list_active_sessions(&team.id).await {
+                    Ok(sessions) => {
+                        for s in sessions {
+                            if s.participants.contains(&agent_id.to_string()) {
+                                active_sessions.push(s.id);
+                            }
                         }
+                    }
+                    Err(e) => {
+                        tracing::debug!(team_id = %team.id, error = %e, "Failed to list active sessions");
                     }
                 }
             }

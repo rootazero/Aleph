@@ -3,8 +3,8 @@
 //! Artifacts are rich outputs produced by agents during task execution —
 //! reports, code snippets, reviews, discoveries, etc.
 
-use std::any::Any;
 use crate::sync_primitives::Arc;
+use std::any::Any;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -180,7 +180,7 @@ fn db_err(e: impl std::fmt::Display) -> AlephError {
     }
 }
 
-fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> {
+pub(crate) fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> {
     let artifact_type_str: String = row.get(3)?;
     let status_str: String = row.get(6)?;
     let blocked_by_str: String = row.get(7)?;
@@ -191,6 +191,68 @@ fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> 
     let started_at_str: Option<String> = row.get(12)?;
     let completed_at_str: Option<String> = row.get(13)?;
 
+    let blocked_by = serde_json::from_str(&blocked_by_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            7,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid blocked_by JSON: {e}"),
+            )),
+        )
+    })?;
+
+    let metadata = serde_json::from_str(&metadata_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            10,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid metadata JSON: {e}"),
+            )),
+        )
+    })?;
+
+    let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
+        })?;
+
+    let started_at = match started_at_str {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(&s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        12,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
+        ),
+        None => None,
+    };
+
+    let completed_at = match completed_at_str {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(&s)
+                .map(|dt| dt.with_timezone(&Utc))
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        13,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?,
+        ),
+        None => None,
+    };
+
     Ok(TaskArtifact {
         id: row.get(0)?,
         task_id: row.get(1)?,
@@ -199,17 +261,13 @@ fn read_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskArtifact> 
         title: row.get(4)?,
         content: row.get(5)?,
         status: TaskStatus::from_stored(&status_str),
-        blocked_by: serde_json::from_str(&blocked_by_str).unwrap_or_default(),
+        blocked_by,
         assignee,
         priority,
-        metadata: serde_json::from_str(&metadata_str).unwrap_or_else(|_| default_metadata()),
-        created_at: DateTime::parse_from_rfc3339(&created_at_str)
-            .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now()),
-        started_at: started_at_str
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
-        completed_at: completed_at_str
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+        metadata,
+        created_at,
+        started_at,
+        completed_at,
     })
 }
 
@@ -443,7 +501,10 @@ impl SqliteArtifactStore {
     /// `blocked_by` is the JSON array stored in the `blocked_by` column.
     /// Returns `true` if the array is empty or if all artifact IDs in it
     /// have `status == 'completed'`.
-    async fn all_dependencies_completed(&self, blocked_by: &[String]) -> crate::error::Result<bool> {
+    async fn all_dependencies_completed(
+        &self,
+        blocked_by: &[String],
+    ) -> crate::error::Result<bool> {
         if blocked_by.is_empty() {
             return Ok(true);
         }
@@ -454,16 +515,22 @@ impl SqliteArtifactStore {
             "SELECT COUNT(*) FROM task_artifacts WHERE id IN ({}) AND status != 'completed'",
             placeholders
         );
-        let params_vec: Vec<&dyn rusqlite::types::ToSql> =
-            blocked_by.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let params_vec: Vec<&dyn rusqlite::types::ToSql> = blocked_by
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
         let incomplete_count: i64 = conn
             .query_row(&sql, params_vec.as_slice(), |row| row.get(0))
             .map_err(db_err)?;
         Ok(incomplete_count == 0)
     }
 
-    pub async fn complete_task(&self, artifact_id: &str) -> crate::error::Result<Vec<TaskArtifact>> {
-        self.update_status(artifact_id, TaskStatus::Completed).await?;
+    pub async fn complete_task(
+        &self,
+        artifact_id: &str,
+    ) -> crate::error::Result<Vec<TaskArtifact>> {
+        self.update_status(artifact_id, TaskStatus::Completed)
+            .await?;
 
         let blocked_ids: Vec<String> = {
             let conn = self.conn.lock().await;
@@ -475,7 +542,8 @@ impl SqliteArtifactStore {
             let rows = stmt
                 .query_map(params![artifact_id], |row| row.get(0))
                 .map_err(db_err)?;
-            rows.collect::<rusqlite::Result<Vec<String>>>().map_err(db_err)?
+            rows.collect::<rusqlite::Result<Vec<String>>>()
+                .map_err(db_err)?
         };
 
         let mut unblocked = Vec::new();
@@ -497,7 +565,8 @@ impl SqliteArtifactStore {
                 let rows = stmt
                     .query_map(params![&blocked_id], |row| row.get(0))
                     .map_err(db_err)?;
-                rows.collect::<rusqlite::Result<Vec<String>>>().map_err(db_err)?
+                rows.collect::<rusqlite::Result<Vec<String>>>()
+                    .map_err(db_err)?
             };
 
             if self.all_dependencies_completed(&deps).await? {
@@ -669,7 +738,10 @@ mod tests {
             .await
             .unwrap();
         assert!(store.all_dependencies_completed(&[]).await.unwrap());
-        assert!(store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
+        assert!(store
+            .all_dependencies_completed(&artifact.blocked_by)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -705,9 +777,18 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
-        store.update_status(&dep.id, TaskStatus::Pending).await.unwrap();
-        assert!(!store.all_dependencies_completed(&artifact.blocked_by).await.unwrap());
+        assert!(store
+            .all_dependencies_completed(&artifact.blocked_by)
+            .await
+            .unwrap());
+        store
+            .update_status(&dep.id, TaskStatus::Pending)
+            .await
+            .unwrap();
+        assert!(!store
+            .all_dependencies_completed(&artifact.blocked_by)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -826,7 +907,10 @@ mod tests {
         assert!(unblocked.is_empty());
         let fetched = store.get_artifact(&blocked.id).await.unwrap().unwrap();
         assert_eq!(fetched.status, TaskStatus::Blocked);
-        store.update_status(&dep1.id, TaskStatus::Completed).await.unwrap();
+        store
+            .update_status(&dep1.id, TaskStatus::Completed)
+            .await
+            .unwrap();
         let unblocked = store.complete_task(&dep2.id).await.unwrap();
         assert_eq!(unblocked.len(), 1);
         assert_eq!(unblocked[0].id, blocked.id);

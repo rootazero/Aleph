@@ -225,8 +225,16 @@ fn read_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamEvent> {
     })?;
 
     let payload_str: String = row.get(4)?;
-    let payload: serde_json::Value =
-        serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+    let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid payload JSON: {e}"),
+            )),
+        )
+    })?;
 
     let ts_str: String = row.get(5)?;
     let timestamp = DateTime::parse_from_rfc3339(&ts_str)
@@ -371,8 +379,8 @@ impl EventLogStore for SqliteEventLogStore {
 // TeamEventLogger — EventHandler for EventBus integration
 // ---------------------------------------------------------------------------
 
-use crate::event::{EventContext, EventHandler, HandlerError};
 use crate::event::{AlephEvent, EventType};
+use crate::event::{EventContext, EventHandler, HandlerError};
 
 /// Event handler that listens for team-related AlephEvents and logs them
 /// to the team's event store.
@@ -407,10 +415,7 @@ impl TeamEventLogger {
                 team_id.clone(),
                 serde_json::json!({"member_id": member_id, "role": role}),
             )),
-            AlephEvent::TeamMemberRemoved {
-                team_id,
-                member_id,
-            } => Some((
+            AlephEvent::TeamMemberRemoved { team_id, member_id } => Some((
                 TeamEventType::MemberRemoved,
                 team_id.clone(),
                 serde_json::json!({"member_id": member_id}),
