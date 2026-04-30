@@ -54,10 +54,15 @@ impl HttpProvider {
         })
     }
 
-    /// Execute a request (non-streaming)
-    async fn execute(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
+    /// Apply outbound safety checks (PII filtering + secret leak detection).
+    /// Returns filtered messages or a leak block reason.
+    fn apply_outbound_safety(
+        &self,
+        messages: &[UnifiedMessage],
+    ) -> std::result::Result<Vec<UnifiedMessage>, String> {
+        let mut filtered_messages: Vec<UnifiedMessage> = messages.to_vec();
+
         // PII filtering: filter each text block individually
-        let mut filtered_messages: Vec<UnifiedMessage> = payload.messages.to_vec();
         if let Some(engine_lock) = crate::pii::PiiEngine::global() {
             if let Ok(engine) = engine_lock.read() {
                 if !engine.is_provider_excluded(&self.name) {
@@ -79,16 +84,28 @@ impl HttpProvider {
         let detector = LeakDetector::new();
         let all_text = UnifiedMessage::extract_all_text(&filtered_messages);
         if let LeakDecision::Block { reason, .. } = detector.scan_outbound(&all_text) {
-            tracing::warn!(
-                provider = %self.name,
-                reason = %reason,
-                "Blocked outbound request: secret leak detected"
-            );
-            return Err(crate::error::AlephError::PermissionDenied {
-                message: format!("Secret leak blocked: {}", reason),
-                suggestion: Some("Remove secret values from the input before sending.".into()),
-            });
+            return Err(reason);
         }
+
+        Ok(filtered_messages)
+    }
+
+    /// Execute a request (non-streaming)
+    async fn execute(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
+        let filtered_messages = match self.apply_outbound_safety(payload.messages) {
+            Ok(msgs) => msgs,
+            Err(reason) => {
+                tracing::warn!(
+                    provider = %self.name,
+                    reason = %reason,
+                    "Blocked outbound request: secret leak detected"
+                );
+                return Err(crate::error::AlephError::PermissionDenied {
+                    message: format!("Secret leak blocked: {}", reason),
+                    suggestion: Some("Remove secret values from the input before sending.".into()),
+                });
+            }
+        };
 
         let final_payload = RequestPayload {
             messages: &filtered_messages,
@@ -125,6 +142,7 @@ impl HttpProvider {
         provider_response.validate(self.adapter.name());
 
         // Secret leak detection: scan inbound response TEXT only
+        let detector = LeakDetector::new();
         if let Some(ref text) = provider_response.text {
             if let LeakDecision::Block { reason, .. } = detector.scan_inbound(text) {
                 tracing::warn!(
@@ -152,31 +170,9 @@ impl HttpProvider {
     ) -> anyhow::Result<
         futures::stream::BoxStream<'static, anyhow::Result<crate::providers::ProviderDelta>>,
     > {
-        // PII filtering
-        let mut filtered_messages: Vec<UnifiedMessage> = payload.messages.to_vec();
-        if let Some(engine_lock) = crate::pii::PiiEngine::global() {
-            if let Ok(engine) = engine_lock.read() {
-                if !engine.is_provider_excluded(&self.name) {
-                    for msg in &mut filtered_messages {
-                        for block in msg.content_blocks_mut() {
-                            if let ContentBlock::Text { ref mut text, .. } = block {
-                                let result = engine.filter(text);
-                                if result.has_detections() {
-                                    *text = result.text;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Secret leak detection outbound
-        let detector = LeakDetector::new();
-        let all_text = UnifiedMessage::extract_all_text(&filtered_messages);
-        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(&all_text) {
-            return Err(anyhow::anyhow!("Secret leak blocked: {}", reason));
-        }
+        let filtered_messages = self
+            .apply_outbound_safety(payload.messages)
+            .map_err(|reason| anyhow::anyhow!("Secret leak blocked: {}", reason))?;
 
         let final_payload = RequestPayload {
             messages: &filtered_messages,

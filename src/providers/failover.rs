@@ -484,6 +484,8 @@ impl AiProvider for FailoverProvider {
         let think_level = payload.think_level;
         let temperature = payload.temperature;
         let max_tokens = payload.max_tokens;
+        let tool_choice = payload.tool_choice.clone();
+        let model = payload.model.clone();
 
         Box::pin(async move {
             let providers = self.providers.read().await;
@@ -516,8 +518,8 @@ impl AiProvider for FailoverProvider {
                         think_level,
                         temperature,
                         max_tokens,
-                        tool_choice: None,
-                        model: None,
+                        tool_choice: tool_choice.clone(),
+                        model: model.clone(),
                     };
 
                     let start = Instant::now();
