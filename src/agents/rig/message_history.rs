@@ -120,13 +120,18 @@ impl ChatMessage {
     pub fn tool_result(result: &ToolCallResult) -> Self {
         let mut content_parts = Vec::new();
 
-        // Inject context fields when present
-        if let Some(summary) = &result.summary {
-            content_parts.push(format!("[Summary] {}", summary));
-        }
-        if let Some(contribution) = &result.goal_contribution {
-            content_parts.push(format!("[GoalContribution] {}", contribution));
-        }
+        // Inject context fields when present and non-empty (successful calls only)
+        if result.success {
+            if let Some(summary) = &result.summary {
+                if !summary.trim().is_empty() {
+                    content_parts.push(format!("[Summary] {}", summary));
+                }
+            }
+            if let Some(contribution) = &result.goal_contribution {
+                if !contribution.trim().is_empty() {
+                    content_parts.push(format!("[GoalContribution] {}", contribution));
+                }
+            }
             if !result.extracted_knowledge.is_empty() {
                 let knowledge_preview: Vec<String> = result
                     .extracted_knowledge
@@ -141,9 +146,10 @@ impl ChatMessage {
                     .collect();
                 content_parts.push(format!("[ExtractedKnowledge] {}", knowledge_preview.join("; ")));
             }
+        }
 
         let base_content = if result.success {
-            result.content.clone()
+            format!("<tool_output>{}</tool_output>", result.content)
         } else {
             format!(
                 "Error: {}",

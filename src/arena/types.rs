@@ -242,6 +242,13 @@ impl ArenaManifest {
 
         let coord = coordinator.unwrap_or_else(|| agent_ids[0].clone());
 
+        if !agent_ids.contains(&coord) {
+            return Err(format!(
+                "Coordinator '{}' must be one of the participants",
+                coord
+            ));
+        }
+
         let strategy = match strategy_str {
             "peer" => CoordinationStrategy::Peer {
                 coordinator: coord.clone(),
@@ -423,11 +430,43 @@ pub struct SharedFact {
     /// Which agent contributed this fact.
     pub source_agent: AgentId,
     /// Confidence score in [0.0, 1.0].
-    pub confidence: f32,
+    confidence: f32,
     /// Categorization tags.
     pub tags: Vec<String>,
     /// When this fact was created.
     pub created_at: DateTime<Utc>,
+}
+
+impl SharedFact {
+    /// Create a new shared fact with validated confidence.
+    ///
+    /// # Errors
+    /// Returns an error if confidence is not in the range [0.0, 1.0].
+    pub fn new(
+        content: String,
+        source_agent: AgentId,
+        confidence: f32,
+        tags: Vec<String>,
+    ) -> Result<Self, String> {
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(format!(
+                "Confidence must be in [0.0, 1.0], got {}",
+                confidence
+            ));
+        }
+        Ok(Self {
+            content,
+            source_agent,
+            confidence,
+            tags,
+            created_at: Utc::now(),
+        })
+    }
+
+    /// Get the confidence score.
+    pub fn confidence(&self) -> f32 {
+        self.confidence
+    }
 }
 
 // =============================================================================
@@ -513,6 +552,46 @@ mod tests {
         };
         let cloned = strategy.clone();
         assert_eq!(strategy, cloned);
+    }
+
+    #[test]
+    fn shared_fact_confidence_validation() {
+        // Valid confidence values
+        assert!(SharedFact::new("test".to_string(), "agent".to_string(), 0.0, vec![]).is_ok());
+        assert!(SharedFact::new("test".to_string(), "agent".to_string(), 1.0, vec![]).is_ok());
+        assert!(SharedFact::new("test".to_string(), "agent".to_string(), 0.5, vec![]).is_ok());
+
+        // Invalid confidence values
+        assert!(SharedFact::new("test".to_string(), "agent".to_string(), -0.1, vec![]).is_err());
+        assert!(SharedFact::new("test".to_string(), "agent".to_string(), 1.1, vec![]).is_err());
+
+        // Getter returns correct value
+        let fact = SharedFact::new("test".to_string(), "agent".to_string(), 0.75, vec![]).unwrap();
+        assert_eq!(fact.confidence(), 0.75);
+    }
+
+    #[test]
+    fn arena_manifest_build_validates_coordinator() {
+        // Coordinator not in agent_ids should fail
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            Some("agent-c".to_string()),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Coordinator 'agent-c' must be one of the participants"));
+
+        // Coordinator in agent_ids should succeed
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            Some("agent-b".to_string()),
+            None,
+        );
+        assert!(result.is_ok());
     }
 
     #[test]

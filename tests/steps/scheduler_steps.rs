@@ -273,7 +273,7 @@ async fn when_enqueue_run_to_lane(w: &mut AlephWorld, run_id: String, lane_str: 
         .as_ref()
         .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
-    scheduler.enqueue(run_id, lane).await;
+    let _ = scheduler.enqueue(run_id, lane).await;
 }
 
 #[when(expr = "I enqueue {int} runs to lane {string}")]
@@ -296,7 +296,7 @@ async fn when_enqueue_multiple_runs_to_lane(w: &mut AlephWorld, count: usize, la
         .as_ref()
         .expect("LaneScheduler not created");
     for run_id in run_ids {
-        scheduler.enqueue(run_id, lane).await;
+        let _ = scheduler.enqueue(run_id, lane).await;
     }
 }
 

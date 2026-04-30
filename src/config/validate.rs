@@ -291,6 +291,20 @@ impl Config {
                 ));
             }
 
+            if self.memory.dreaming.feedback_distill_max_per_cycle == 0 {
+                error!("Dreaming feedback_distill_max_per_cycle is zero");
+                return Err(AlephError::invalid_config(
+                    "memory.dreaming.feedback_distill_max_per_cycle must be greater than 0",
+                ));
+            }
+
+            if self.memory.dreaming.feedback_lookback == 0 {
+                error!("Dreaming feedback_lookback is zero");
+                return Err(AlephError::invalid_config(
+                    "memory.dreaming.feedback_lookback must be greater than 0",
+                ));
+            }
+
             if NaiveTime::parse_from_str(&self.memory.dreaming.window_start_local, "%H:%M").is_err()
             {
                 error!(

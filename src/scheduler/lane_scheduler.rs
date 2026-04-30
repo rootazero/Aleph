@@ -9,10 +9,18 @@
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tokio::sync::Semaphore;
-use tracing::debug;
+use tracing::warn;
 
 use super::Lane;
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
+
+/// Scheduler-specific errors
+#[derive(Debug, thiserror::Error)]
+pub enum SchedulerError {
+    /// The requested lane has no configured quota
+    #[error("unknown lane: {0:?}")]
+    UnknownLane(Lane),
+}
 
 /// RAII guard for scheduled run permits.
 ///
@@ -74,7 +82,7 @@ impl LaneScheduler {
     }
 
     /// Enqueue a run to a specific lane
-    pub async fn enqueue(&self, run_id: String, lane: Lane) {
+    pub async fn enqueue(&self, run_id: String, lane: Lane) -> Result<(), SchedulerError> {
         if let Some(state) = self.lanes.get(&lane) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -82,8 +90,10 @@ impl LaneScheduler {
                 .as_millis() as i64;
             self.wait_tracker.track_enqueue(&run_id, lane, now).await;
             state.enqueue(run_id).await;
+            Ok(())
         } else {
-            debug!(run_id = %run_id, lane = ?lane, "enqueue called for lane with no quota — run dropped");
+            warn!(run_id = %run_id, lane = ?lane, "enqueue called for lane with no quota — run dropped");
+            Err(SchedulerError::UnknownLane(lane))
         }
     }
 
@@ -270,8 +280,8 @@ mod tests {
         let config = LaneConfig::default();
         let scheduler = LaneScheduler::new(config);
 
-        scheduler.enqueue("run-1".to_string(), Lane::Main).await;
-        scheduler.enqueue("run-2".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-2".to_string(), Lane::Subagent).await;
 
         let stats = scheduler.stats().await;
         assert_eq!(stats.total_queued, 2);
@@ -284,7 +294,7 @@ mod tests {
         let config = LaneConfig::default();
         let scheduler = LaneScheduler::new(config);
 
-        scheduler.enqueue("run-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Main).await;
 
         let scheduled = scheduler.try_schedule_next().await;
         assert!(scheduled.is_some());
@@ -303,14 +313,10 @@ mod tests {
         let scheduler = LaneScheduler::new(config);
 
         // Enqueue to different lanes
-        scheduler.enqueue("cron-1".to_string(), Lane::Cron).await;
-        scheduler
-            .enqueue("subagent-1".to_string(), Lane::Subagent)
-            .await;
-        scheduler.enqueue("main-1".to_string(), Lane::Main).await;
-        scheduler
-            .enqueue("nested-1".to_string(), Lane::Nested)
-            .await;
+        let _ = scheduler.enqueue("cron-1".to_string(), Lane::Cron).await;
+        let _ = scheduler.enqueue("subagent-1".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("main-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("nested-1".to_string(), Lane::Nested).await;
 
         // Should schedule in priority order: Main (10) > Nested (8) > Subagent (5) > Cron (0)
         let scheduled1 = scheduler.try_schedule_next().await;
@@ -336,11 +342,11 @@ mod tests {
         let scheduler = LaneScheduler::new(config);
 
         // Enqueue 5 runs
-        scheduler.enqueue("run-1".to_string(), Lane::Main).await;
-        scheduler.enqueue("run-2".to_string(), Lane::Main).await;
-        scheduler.enqueue("run-3".to_string(), Lane::Subagent).await;
-        scheduler.enqueue("run-4".to_string(), Lane::Subagent).await;
-        scheduler.enqueue("run-5".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-2".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-3".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("run-4".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("run-5".to_string(), Lane::Subagent).await;
 
         // Should only schedule 2 (global limit)
         let scheduled1 = scheduler.try_schedule_next().await;
@@ -363,9 +369,9 @@ mod tests {
         let scheduler = LaneScheduler::new(config);
 
         // Main lane has limit of 2
-        scheduler.enqueue("main-1".to_string(), Lane::Main).await;
-        scheduler.enqueue("main-2".to_string(), Lane::Main).await;
-        scheduler.enqueue("main-3".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("main-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("main-2".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("main-3".to_string(), Lane::Main).await;
 
         // Schedule first two
         let scheduled1 = scheduler.try_schedule_next().await;
@@ -388,7 +394,7 @@ mod tests {
         let config = LaneConfig::default();
         let scheduler = LaneScheduler::new(config);
 
-        scheduler.enqueue("run-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Main).await;
         let scheduled = scheduler.try_schedule_next().await;
         assert!(scheduled.is_some());
         let (_run_id, _lane, guard) = scheduled.unwrap();
@@ -409,9 +415,9 @@ mod tests {
         let config = LaneConfig::default();
         let scheduler = LaneScheduler::new(config);
 
-        scheduler.enqueue("main-1".to_string(), Lane::Main).await;
-        scheduler.enqueue("main-2".to_string(), Lane::Main).await;
-        scheduler.enqueue("sub-1".to_string(), Lane::Subagent).await;
+        let _ = scheduler.enqueue("main-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("main-2".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("sub-1".to_string(), Lane::Subagent).await;
 
         let stats = scheduler.stats().await;
         assert_eq!(stats.total_queued, 3);
@@ -432,7 +438,7 @@ mod tests {
         let scheduler = LaneScheduler::new(config);
 
         // Enqueue a run
-        scheduler.enqueue("run-1".to_string(), Lane::Cron).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Cron).await;
 
         // Wait time should be tracked
         let current_time = std::time::SystemTime::now()
@@ -462,7 +468,7 @@ mod tests {
         let config = LaneConfig::default();
         let scheduler = LaneScheduler::new(config);
 
-        scheduler.enqueue("run-1".to_string(), Lane::Main).await;
+        let _ = scheduler.enqueue("run-1".to_string(), Lane::Main).await;
 
         // Verify it's tracked
         let current_time = std::time::SystemTime::now()

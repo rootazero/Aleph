@@ -124,7 +124,10 @@ impl SharedArena {
     // Artifact Operations
     // =========================================================================
 
-    /// Add an artifact to the specified agent's slot, marking it as Working.
+    /// Add an artifact to the specified agent's slot.
+    ///
+    /// Marks the slot as `Working` if it was `Idle`, but preserves `Done` status
+    /// to prevent regressing a completed agent back to working state.
     ///
     /// Only allowed when arena is Active.
     pub fn put_artifact(&mut self, agent_id: &AgentId, artifact: Artifact) -> Result<(), String> {
@@ -139,7 +142,10 @@ impl SharedArena {
             .get_mut(agent_id)
             .ok_or_else(|| format!("Unknown agent: {}", agent_id))?;
         slot.artifacts.push(artifact);
-        slot.status = SlotStatus::Working;
+        // Only transition Idle -> Working; preserve Done/Failed status
+        if slot.status == SlotStatus::Idle {
+            slot.status = SlotStatus::Working;
+        }
         slot.updated_at = Utc::now();
         Ok(())
     }
@@ -160,12 +166,19 @@ impl SharedArena {
     ///
     /// Updates the agent's current task description and completed count,
     /// and increments the arena-wide completed_steps.
+    ///
+    /// # Errors
+    /// Returns an error if the agent is not a participant in this arena.
     pub fn report_progress(
         &mut self,
         agent_id: &AgentId,
         current: Option<String>,
         completed: Option<usize>,
-    ) {
+    ) -> Result<(), String> {
+        if !self.slots.contains_key(agent_id) {
+            return Err(format!("Agent '{}' is not a participant in this arena", agent_id));
+        }
+
         let agent_prog = self
             .progress
             .agent_progress
@@ -177,6 +190,7 @@ impl SharedArena {
             agent_prog.completed = c;
             self.progress.completed_steps = self.progress.completed_steps.saturating_add(delta);
         }
+        Ok(())
     }
 
     // =========================================================================
@@ -343,13 +357,13 @@ mod tests {
         let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
         arena.activate().unwrap();
 
-        let fact = SharedFact {
-            content: "The sky is blue".to_string(),
-            source_agent: "agent-a".to_string(),
-            confidence: 0.95,
-            tags: vec!["observation".to_string()],
-            created_at: Utc::now(),
-        };
+        let fact = SharedFact::new(
+            "The sky is blue".to_string(),
+            "agent-a".to_string(),
+            0.95,
+            vec!["observation".to_string()],
+        )
+        .unwrap();
 
         arena.add_shared_fact(fact).unwrap();
         assert_eq!(arena.shared_facts().len(), 1);

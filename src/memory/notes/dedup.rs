@@ -27,21 +27,34 @@ pub async fn find_similar_notes<S: NoteStore>(
         return Ok(Vec::new());
     }
     let dim = query_embedding.len() as u32;
-    // Overfetch then category-filter, since vector_search has no category arg.
-    let raw = store
-        .vector_search(
-            query_embedding,
-            dim,
-            agent_id,
-            top_n.saturating_mul(4).max(top_n),
-        )
-        .await?;
     let prefix = format!("{category}/");
-    let filtered: Vec<(String, f32)> = raw
-        .into_iter()
-        .filter(|(path, _)| path.starts_with(&prefix))
-        .take(top_n)
-        .collect();
+    let mut filtered = Vec::with_capacity(top_n);
+    let mut fetch_limit = top_n.saturating_mul(4).max(top_n);
+    const MAX_FETCH_MULTIPLIER: usize = 32;
+
+    while filtered.len() < top_n && fetch_limit <= top_n.saturating_mul(MAX_FETCH_MULTIPLIER) {
+        let raw = store
+            .vector_search(query_embedding, dim, agent_id, fetch_limit)
+            .await?;
+        let raw_count = raw.len();
+
+        filtered = raw
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .take(top_n)
+            .collect();
+
+        if filtered.len() >= top_n {
+            break;
+        }
+
+        // DB exhausted — no point requesting more
+        if raw_count < fetch_limit {
+            break;
+        }
+
+        fetch_limit = fetch_limit.saturating_mul(2);
+    }
     Ok(filtered)
 }
 

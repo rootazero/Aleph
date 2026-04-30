@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::info;
 
+use super::llm_classifier::ClassifyError;
 use super::rules::RoutingRules;
 use super::task_router::{
     CollabStrategy, EscalationContext, ManifestHints, RouterContext, TaskRoute, TaskRouter,
@@ -14,7 +15,7 @@ use super::task_router::{
 
 /// Type alias for an async LLM classify function.
 pub type LlmClassifyFn =
-    Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = TaskRoute> + Send>> + Send + Sync>;
+    Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Result<TaskRoute, ClassifyError>> + Send>> + Send + Sync>;
 
 /// Composite router: tries rules first (zero latency), then optional LLM fallback.
 pub struct CompositeRouter {
@@ -63,14 +64,25 @@ impl TaskRouter for CompositeRouter {
         // LLM fallback
         if self.llm_fallback_enabled {
             if let Some(ref classify_fn) = self.llm_classify_fn {
-                let route = (classify_fn)(message).await;
-                info!(
-                    subsystem = "task_router",
-                    source = "llm",
-                    route = route.label(),
-                    "task classified via LLM fallback"
-                );
-                return route;
+                match (classify_fn)(message).await {
+                    Ok(route) => {
+                        info!(
+                            subsystem = "task_router",
+                            source = "llm",
+                            route = route.label(),
+                            "task classified via LLM fallback"
+                        );
+                        return route;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            subsystem = "task_router",
+                            error = %e,
+                            "LLM classification parse failed, defaulting to simple"
+                        );
+                        return TaskRoute::Simple;
+                    }
+                }
             }
         }
 
@@ -168,9 +180,9 @@ mod tests {
     async fn llm_fallback() {
         let router = make_router(true).with_llm_classify_fn(Arc::new(|_msg| {
             Box::pin(async {
-                TaskRoute::MultiStep {
+                Ok(TaskRoute::MultiStep {
                     reason: "llm decided".into(),
-                }
+                })
             })
         }));
         let ctx = make_context();

@@ -1064,9 +1064,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                     tracing::warn!(
                                         subsystem = "task_router",
                                         error = %e,
-                                        "LLM classification failed, defaulting to simple"
+                                        "LLM classification provider call failed, defaulting to simple"
                                     );
-                                    alephcore::routing::TaskRoute::Simple
+                                    Ok(alephcore::routing::TaskRoute::Simple)
                                 }
                             }
                         })

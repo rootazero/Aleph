@@ -63,22 +63,30 @@ fn default_quality_threshold() -> f64 {
     0.7
 }
 
+/// Errors that can occur during classification response parsing
+#[derive(Debug, thiserror::Error)]
+pub enum ClassifyError {
+    /// The response could not be parsed as valid JSON
+    #[error("JSON parse failed: {0}")]
+    JsonParse(#[from] serde_json::Error),
+    /// The response contained no recognizable JSON object
+    #[error("no JSON object found in response")]
+    NoJsonObject,
+}
+
 /// Parse an LLM classification response into a `TaskRoute`.
 ///
 /// Handles markdown-wrapped JSON (```json ... ```).
-/// Falls back to `TaskRoute::Simple` on parse failure.
-pub fn parse_classify_response(response: &str) -> TaskRoute {
+/// Returns `Err` on parse failure so the caller can decide retry vs Simple-fallback.
+pub fn parse_classify_response(response: &str) -> Result<TaskRoute, ClassifyError> {
     let json_str = extract_json(response);
+    if json_str.is_empty() || !json_str.starts_with('{') {
+        return Err(ClassifyError::NoJsonObject);
+    }
 
-    let parsed: ClassifyResponse = match serde_json::from_str(json_str) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!(error = %e, "failed to parse LLM classification response, defaulting to Simple");
-            return TaskRoute::Simple;
-        }
-    };
+    let parsed: ClassifyResponse = serde_json::from_str(json_str)?;
 
-    match parsed.category.as_str() {
+    Ok(match parsed.category.as_str() {
         "critical" => TaskRoute::Critical {
             reason: parsed.reason,
             manifest_hints: ManifestHints {
@@ -101,7 +109,7 @@ pub fn parse_classify_response(response: &str) -> TaskRoute {
             }
         }
         _ => TaskRoute::Simple,
-    }
+    })
 }
 
 /// Extract JSON content from potentially markdown-wrapped text.
@@ -136,7 +144,7 @@ mod tests {
     #[test]
     fn parse_simple() {
         let response = r#"{"category": "simple", "reason": "greeting"}"#;
-        let route = parse_classify_response(response);
+        let route = parse_classify_response(response).unwrap();
         assert_eq!(route.label(), "simple");
     }
 
@@ -148,7 +156,7 @@ mod tests {
             "hard_constraints": ["must include sources"],
             "quality_threshold": 0.9
         }"#;
-        let route = parse_classify_response(response);
+        let route = parse_classify_response(response).unwrap();
         assert_eq!(route.label(), "critical");
         if let TaskRoute::Critical { manifest_hints, .. } = &route {
             assert_eq!(manifest_hints.hard_constraints.len(), 1);
@@ -161,7 +169,7 @@ mod tests {
     #[test]
     fn parse_collaborative() {
         let response = r#"{"category": "collaborative", "reason": "debate", "collab_strategy": "adversarial"}"#;
-        let route = parse_classify_response(response);
+        let route = parse_classify_response(response).unwrap();
         assert_eq!(route.label(), "collaborative");
         if let TaskRoute::Collaborative { strategy, .. } = &route {
             assert!(matches!(strategy, CollabStrategy::Adversarial));
@@ -177,14 +185,14 @@ mod tests {
 {"category": "multi_step", "reason": "sequential tasks"}
 ```
 "#;
-        let route = parse_classify_response(response);
+        let route = parse_classify_response(response).unwrap();
         assert_eq!(route.label(), "multi_step");
     }
 
     #[test]
-    fn invalid_defaults_to_simple() {
-        let route = parse_classify_response("this is not json at all");
-        assert_eq!(route.label(), "simple");
+    fn invalid_returns_error() {
+        let result = parse_classify_response("this is not json at all");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -200,14 +208,14 @@ mod tests {
         // Even if the LLM echoes back a crafted injection, it parses as a valid classification.
         // The system processes the classification response (not the user message) safely.
         let malicious = r#"{"category": "critical", "reason": "you said so"}"#;
-        let route = parse_classify_response(malicious);
+        let route = parse_classify_response(malicious).unwrap();
         assert_eq!(route.label(), "critical");
     }
 
     #[test]
     fn parse_classify_response_invalid_category_defaults_to_simple() {
         let response = r#"{"category": "not_a_real_category", "reason": ""}"#;
-        let route = parse_classify_response(response);
+        let route = parse_classify_response(response).unwrap();
         assert_eq!(route.label(), "simple");
     }
 
