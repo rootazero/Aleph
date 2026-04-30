@@ -35,12 +35,14 @@ impl AgentRegistry {
 
     /// Register an agent definition
     pub fn register(&self, agent: AgentDef) {
+        // Recover from poisoned lock — the data is still valid after a panic
         let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
         agents.insert(agent.id.clone(), agent);
     }
 
     /// Get an agent by ID
     pub fn get(&self, id: &str) -> Option<AgentDef> {
+        // Recover from poisoned lock — the data is still valid after a panic
         let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
         agents.get(id).cloned()
     }

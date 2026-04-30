@@ -467,7 +467,7 @@ impl ContextInjector {
         // Simple relative time formatting
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
 
         let diff = now.saturating_sub(timestamp);
