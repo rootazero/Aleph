@@ -46,7 +46,7 @@ const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 pub struct StageTimer {
     name: String,
     start: Instant,
-    metadata: HashMap<String, String>,
+    metadata: Option<HashMap<String, String>>,
     target_ms: Option<u64>,
     /// Warning multiplier (default: 2.0, can be set from policy)
     warning_multiplier: f64,
@@ -72,7 +72,7 @@ impl StageTimer {
         Self {
             name: name.to_string(),
             start: Instant::now(),
-            metadata: HashMap::new(),
+            metadata: None,
             target_ms: None,
             warning_multiplier: DEFAULT_WARNING_MULTIPLIER,
             enable_logging: true,
@@ -87,7 +87,7 @@ impl StageTimer {
         Self {
             name: name.to_string(),
             start: Instant::now(),
-            metadata: HashMap::new(),
+            metadata: None,
             target_ms: None,
             warning_multiplier: policy.warning_multiplier,
             enable_logging: policy.enable_logging,
@@ -119,7 +119,9 @@ impl StageTimer {
     ///     .with_meta("model", "gpt-4");
     /// ```
     pub fn with_meta(mut self, key: &str, value: &str) -> Self {
-        self.metadata.insert(key.to_string(), value.to_string());
+        self.metadata
+            .get_or_insert_with(HashMap::new)
+            .insert(key.to_string(), value.to_string());
         self
     }
 
@@ -140,12 +142,15 @@ impl StageTimer {
         self
     }
 
-    /// Consume the timer to trigger logging via [`Drop`].
+    /// Stop the timer, return the elapsed time, and suppress Drop logging.
     ///
-    /// This has the same effect as letting the timer go out of scope.
-    /// It exists mainly to make intent explicit at call sites.
-    pub fn stop(self) {
-        // The drop implementation handles logging
+    /// Unlike letting the timer go out of scope, this prevents the
+    /// automatic debug/warn log from firing when the value is dropped.
+    /// Useful when the caller wants to handle timing data manually.
+    pub fn stop(mut self) -> u64 {
+        self.enable_logging = false;
+        self.enable_warnings = false;
+        self.elapsed_ms()
     }
 
     /// Get the elapsed time in whole milliseconds.
@@ -187,7 +192,7 @@ impl Drop for StageTimer {
             return;
         }
 
-        if self.metadata.is_empty() {
+        if self.metadata.as_ref().map_or(true, |m| m.is_empty()) {
             tracing::debug!(
                 stage = %self.name,
                 duration_ms = %elapsed_ms,
@@ -242,7 +247,7 @@ mod tests {
     fn test_timer_creation() {
         let timer = StageTimer::start("test_stage");
         assert_eq!(timer.name, "test_stage");
-        assert!(timer.metadata.is_empty());
+        assert!(timer.metadata.is_none());
         assert!(timer.target_ms.is_none());
         assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
         assert!(timer.enable_logging);
@@ -255,8 +260,14 @@ mod tests {
             .with_meta("key1", "value1")
             .with_meta("key2", "value2");
 
-        assert_eq!(timer.metadata.get("key1"), Some(&"value1".to_string()));
-        assert_eq!(timer.metadata.get("key2"), Some(&"value2".to_string()));
+        assert_eq!(
+            timer.metadata.as_ref().and_then(|m| m.get("key1")),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            timer.metadata.as_ref().and_then(|m| m.get("key2")),
+            Some(&"value2".to_string())
+        );
     }
 
     #[test]
@@ -303,11 +314,17 @@ mod tests {
             .with_meta("model", "gpt-4")
             .with_meta("app", "com.apple.Notes");
 
-        assert_eq!(timer.metadata.len(), 3);
-        assert_eq!(timer.metadata.get("provider"), Some(&"OpenAI".to_string()));
-        assert_eq!(timer.metadata.get("model"), Some(&"gpt-4".to_string()));
+        assert_eq!(timer.metadata.as_ref().map_or(0, |m| m.len()), 3);
         assert_eq!(
-            timer.metadata.get("app"),
+            timer.metadata.as_ref().and_then(|m| m.get("provider")),
+            Some(&"OpenAI".to_string())
+        );
+        assert_eq!(
+            timer.metadata.as_ref().and_then(|m| m.get("model")),
+            Some(&"gpt-4".to_string())
+        );
+        assert_eq!(
+            timer.metadata.as_ref().and_then(|m| m.get("app")),
             Some(&"com.apple.Notes".to_string())
         );
     }
@@ -318,7 +335,10 @@ mod tests {
             .with_meta("key", "value")
             .with_target(200);
 
-        assert_eq!(timer.metadata.get("key"), Some(&"value".to_string()));
+        assert_eq!(
+            timer.metadata.as_ref().and_then(|m| m.get("key")),
+            Some(&"value".to_string())
+        );
         assert_eq!(timer.target_ms, Some(200));
     }
 
@@ -338,6 +358,7 @@ mod tests {
     #[test]
     fn test_timer_stop() {
         let timer = StageTimer::start("stop_test").with_meta("key", "value");
-        timer.stop();
+        let elapsed = timer.stop();
+        assert!(elapsed < 10, "stop() should return elapsed time");
     }
 }
