@@ -426,4 +426,16 @@ mod tests {
         assert!(result.len() < 11 * 1024);
         assert!(result.contains("output truncated"));
     }
+
+    #[test]
+    fn test_compress_generic_utf8_boundary() {
+        let input: String = (0..11_000)
+            .map(|i| if i == 10_999 { "日" } else { "a" })
+            .collect();
+        assert_eq!(input.len(), 11_002);
+
+        let result = compress_tool_output("some_unknown_tool", &input);
+
+        assert!(result.is_char_boundary(result.len()));
+    }
 }
