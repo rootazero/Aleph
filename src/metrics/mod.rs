@@ -140,15 +140,18 @@ impl StageTimer {
         self
     }
 
-    /// Stop the timer and log the results
+    /// Consume the timer to trigger logging via [`Drop`].
     ///
-    /// This is called automatically on drop, but can be called manually
-    /// if you want to log the timing before the timer goes out of scope.
+    /// This has the same effect as letting the timer go out of scope.
+    /// It exists mainly to make intent explicit at call sites.
     pub fn stop(self) {
         // The drop implementation handles logging
     }
 
-    /// Get the elapsed time in milliseconds
+    /// Get the elapsed time in whole milliseconds.
+    ///
+    /// Sub-millisecond precision is truncated (e.g., a 0.5 ms duration
+    /// returns `0`). Use this for coarse-grained reporting only.
     ///
     /// This method does not stop the timer or trigger logging.
     pub fn elapsed_ms(&self) -> u64 {
@@ -317,5 +320,24 @@ mod tests {
 
         assert_eq!(timer.metadata.get("key"), Some(&"value".to_string()));
         assert_eq!(timer.target_ms, Some(200));
+    }
+
+    #[test]
+    fn test_timer_start_with_policy() {
+        let mut policy = MetricsPolicy::default();
+        policy.warning_multiplier = 3.0;
+        policy.enable_logging = false;
+        policy.enable_warnings = false;
+        let timer = StageTimer::start_with_policy("policy_test", &policy);
+        assert_eq!(timer.name, "policy_test");
+        assert_eq!(timer.warning_multiplier, 3.0);
+        assert!(!timer.enable_logging);
+        assert!(!timer.enable_warnings);
+    }
+
+    #[test]
+    fn test_timer_stop() {
+        let timer = StageTimer::start("stop_test").with_meta("key", "value");
+        timer.stop();
     }
 }
