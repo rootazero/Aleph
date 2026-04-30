@@ -23,7 +23,7 @@ impl EnvironmentInfo {
 
         let os = std::env::consts::OS.to_string();
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+        let shell = std::env::var("SHELL").unwrap_or("unknown".to_string());
 
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 

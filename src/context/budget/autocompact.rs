@@ -158,7 +158,7 @@ impl PreflightStage for AutocompactStage {
 
         // Update cooldown tracking (monotonic invocation count).
         self.last_compact_turn
-            .store(current_invocation, Ordering::Release);
+            .store(current_invocation + 1, Ordering::Release);
 
         // Return tokens freed.
         tokens_before.saturating_sub(tokens_after)

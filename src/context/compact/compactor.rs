@@ -278,10 +278,11 @@ fn serialize_transcript(messages: &[UnifiedMessage]) -> String {
     lines.join("\n")
 }
 
-/// Estimate token count using the 3.5 chars/token heuristic.
+/// Estimate token count using content-aware ratio detection.
 fn estimate_tokens(text: &str) -> usize {
+    let ratio = crate::context::budget::pressure::detect_content_ratio(text);
     let char_count = text.chars().count();
-    (char_count as f64 / 3.5).ceil() as usize
+    (char_count as f64 / ratio).ceil() as usize
 }
 
 /// Deterministic truncation: keep only the first line of each message.
