@@ -37,13 +37,13 @@ impl LogLevel {
     }
 
     /// Convert to EnvFilter string
-    pub fn to_filter_string(&self) -> String {
+    pub fn to_filter_string(&self) -> &'static str {
         match self {
-            LogLevel::Error => "error".to_string(),
-            LogLevel::Warn => "warn".to_string(),
-            LogLevel::Info => "info".to_string(),
-            LogLevel::Debug => "debug".to_string(),
-            LogLevel::Trace => "trace".to_string(),
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
         }
     }
 
@@ -60,7 +60,7 @@ impl LogLevel {
     }
 
     /// Convert to u8 for atomic storage
-    fn to_u8(self) -> u8 {
+    const fn to_u8(self) -> u8 {
         match self {
             LogLevel::Error => 0,
             LogLevel::Warn => 1,
@@ -84,7 +84,7 @@ impl LogLevel {
 }
 
 /// Global log level storage
-static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(2); // Default to Info (2)
+static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info.to_u8());
 
 /// Initialization guard for log level
 static INIT: Once = Once::new();

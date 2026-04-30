@@ -8,38 +8,12 @@ use tracing_subscriber::layer::{Context, Layer};
 
 /// Tracing layer that scrubs PII from all log messages
 ///
-/// This layer wraps the standard tracing subscriber and applies PII scrubbing
-/// to all event fields before they are formatted and written to outputs.
+/// **Note:** This type is a placeholder. The actual PII scrubbing is performed
+/// by the formatting layer returned by [`create_pii_scrubbing_layer`].
+/// Use [`create_pii_scrubbing_layer`] for production logging with PII protection.
 ///
-/// # Privacy Guarantees
-///
-/// - All text fields are scrubbed for PII patterns
-/// - Email addresses → [EMAIL]
-/// - Phone numbers → [PHONE]
-/// - SSN → [SSN]
-/// - Credit cards → [CREDIT_CARD]
-/// - API keys → [REDACTED]
-///
-/// # Performance
-///
-/// The layer uses lazy regex compilation and efficient string operations.
-/// Overhead is typically <1% for normal logging volume.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use aleph::logging::PiiScrubbingLayer;
-/// use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-///
-/// tracing_subscriber::registry()
-///     .with(PiiScrubbingLayer)
-///     .with(tracing_subscriber::fmt::layer())
-///     .init();
-///
-/// // Logs will have PII scrubbed automatically
-/// tracing::info!(user_input = "My email is john@example.com");
-/// // Output: user_input="My email is [EMAIL]"
-/// ```
+/// This struct implements [`Layer`] as a no-op and exists primarily for
+/// backward compatibility and documentation purposes.
 pub struct PiiScrubbingLayer;
 
 impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
@@ -184,11 +158,10 @@ impl Visit for StringVisitor {
         }
 
         if field.name() == "message" {
-            // For the special "message" field, just append the value
-            let _ = write!(&mut self.message, "{:?}", value);
+            write!(&mut self.message, "{:?}", value).expect("write to String cannot fail");
         } else {
-            // For other fields, include the field name
-            let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
+            write!(&mut self.message, "{}={:?}", field.name(), value)
+                .expect("write to String cannot fail");
         }
     }
 }
