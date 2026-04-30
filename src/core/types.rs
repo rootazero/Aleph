@@ -118,7 +118,7 @@ pub struct CompressionStats {
 }
 
 /// Memory entry for API responses
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
     /// Unique identifier for the memory entry
     pub id: String,

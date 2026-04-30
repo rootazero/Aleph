@@ -205,4 +205,11 @@ mod tests {
         assert_eq!(config.working_dir, temp.path());
         assert!(!config.scan_claude_dirs);
     }
+
+    #[test]
+    fn test_discovery_config_without_project_dirs() {
+        let config = DiscoveryConfig::default().without_project_dirs();
+        assert!(!config.scan_project_dirs);
+        assert!(config.scan_claude_dirs);
+    }
 }

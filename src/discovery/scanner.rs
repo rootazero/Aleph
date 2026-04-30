@@ -4,7 +4,7 @@
 
 use super::paths::*;
 use super::types::*;
-use super::{DiscoveryConfig, DiscoveryResult};
+use super::{DiscoveryConfig, DiscoveryError, DiscoveryResult};
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace};
 
@@ -151,6 +151,13 @@ impl DirectoryScanner {
 
     /// Discover a specific component type (skills, commands, agents, plugins)
     pub fn discover_component(&self, component_name: &str) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        if component_name.contains('/') || component_name.contains('\\') {
+            return Err(DiscoveryError::InvalidPath(format!(
+                "component name cannot contain path separators: {}",
+                component_name
+            )));
+        }
+
         let mut discovered = Vec::new();
         let scan_dirs = self.get_all_directories()?;
 
