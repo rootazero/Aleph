@@ -57,8 +57,15 @@ impl MediaRegistry {
 
     pub fn register(&mut self, id: impl Into<String>, record: MediaRecord) -> MediaPlaceholder {
         let id = id.into();
+        let ty = if record.mime_type.starts_with("image/") {
+            MediaPlaceholderType::Image
+        } else if record.mime_type.starts_with("audio/") {
+            MediaPlaceholderType::Audio
+        } else {
+            MediaPlaceholderType::File
+        };
         self.entries.insert(id.clone(), record);
-        MediaPlaceholder::new(MediaPlaceholderType::File, id)
+        MediaPlaceholder::new(ty, id)
     }
 
     pub fn resolve(&self, id: &str) -> Option<&MediaRecord> {

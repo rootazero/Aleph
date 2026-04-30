@@ -64,7 +64,7 @@ impl MediaCache {
         let client = reqwest::Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)
             .build()
-            .unwrap_or_default();
+            .expect("reqwest client build should not fail with only timeout set");
         Self { client }
     }
 

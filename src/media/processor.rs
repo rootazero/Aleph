@@ -225,7 +225,17 @@ impl MediaProcessor {
             };
         };
 
-        let format = image_format_from_mime(&cached.mime_type);
+        let Some(format) = image_format_from_mime(&cached.mime_type) else {
+            warn!(
+                attachment_id = %attachment.id,
+                mime_type = %cached.mime_type,
+                "unsupported image format for vision fallback"
+            );
+            return ContentBlock::Text {
+                text: MediaPlaceholder::new(MediaPlaceholderType::Image, &attachment.id).to_text(),
+                cache_control: None,
+            };
+        };
         let input = ImageInput::Base64 {
             data: b64.to_string(),
             format,
@@ -351,7 +361,7 @@ impl MediaProcessor {
 // =============================================================================
 
 /// Build a generic fallback text block for a failed attachment.
-fn fallback_text(attachment: &Attachment, _error: &str) -> ContentBlock {
+fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
     let ty = if attachment.mime_type.starts_with("image/") {
         MediaPlaceholderType::Image
     } else if attachment.mime_type.starts_with("audio/") {
@@ -360,21 +370,31 @@ fn fallback_text(attachment: &Attachment, _error: &str) -> ContentBlock {
         MediaPlaceholderType::File
     };
     ContentBlock::Text {
-        text: MediaPlaceholder::new(ty, &attachment.id).to_text(),
+        text: format!(
+            "{} [{}]",
+            MediaPlaceholder::new(ty, &attachment.id).to_text(),
+            error
+        ),
         cache_control: None,
     }
 }
 
-/// Best-effort MIME-to-ImageFormat mapping. Defaults to JPEG for unknown types.
-fn image_format_from_mime(mime: &str) -> ImageFormat {
+/// Best-effort MIME-to-ImageFormat mapping.
+///
+/// Returns `None` for formats that cannot be reliably converted to a
+/// vision-api-compatible format (e.g. SVG, HEIC).
+fn image_format_from_mime(mime: &str) -> Option<ImageFormat> {
     match mime {
-        "image/png" => ImageFormat::Png,
-        "image/webp" => ImageFormat::WebP,
+        "image/png" => Some(ImageFormat::Png),
+        "image/webp" => Some(ImageFormat::WebP),
         // JPEG variants
-        "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
+        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+        // SVG and HEIC are not raster formats — vision APIs typically cannot
+        // process them directly. Return None so callers can fail gracefully.
+        "image/svg+xml" | "image/heic" | "image/heif" => None,
         _ => {
-            // Default to JPEG — most vision APIs handle it gracefully
-            ImageFormat::Jpeg
+            // Unknown format — don't guess, let caller decide fallback
+            None
         }
     }
 }
@@ -391,25 +411,25 @@ mod tests {
     fn test_image_format_from_mime() {
         assert!(matches!(
             image_format_from_mime("image/png"),
-            ImageFormat::Png
+            Some(ImageFormat::Png)
         ));
         assert!(matches!(
             image_format_from_mime("image/jpeg"),
-            ImageFormat::Jpeg
+            Some(ImageFormat::Jpeg)
         ));
         assert!(matches!(
             image_format_from_mime("image/jpg"),
-            ImageFormat::Jpeg
+            Some(ImageFormat::Jpeg)
         ));
         assert!(matches!(
             image_format_from_mime("image/webp"),
-            ImageFormat::WebP
+            Some(ImageFormat::WebP)
         ));
-        // Unknown falls back to JPEG
-        assert!(matches!(
-            image_format_from_mime("image/bmp"),
-            ImageFormat::Jpeg
-        ));
+        // SVG and HEIC are not supported
+        assert!(image_format_from_mime("image/svg+xml").is_none());
+        assert!(image_format_from_mime("image/heic").is_none());
+        // Unknown formats return None
+        assert!(image_format_from_mime("image/bmp").is_none());
     }
 
     #[test]
@@ -425,7 +445,8 @@ mod tests {
         };
         let block = fallback_text(&att, "network timeout");
         if let ContentBlock::Text { text, .. } = block {
-            assert_eq!(text, "{{media:image:att-1}}");
+            assert!(text.starts_with("{{media:image:att-1}}"));
+            assert!(text.contains("network timeout"));
         } else {
             panic!("expected Text block");
         }
@@ -444,7 +465,8 @@ mod tests {
         };
         let block = fallback_text(&att, "download failed");
         if let ContentBlock::Text { text, .. } = block {
-            assert_eq!(text, "{{media:audio:att-2}}");
+            assert!(text.starts_with("{{media:audio:att-2}}"));
+            assert!(text.contains("download failed"));
         } else {
             panic!("expected Text block");
         }

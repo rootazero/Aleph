@@ -27,11 +27,5 @@ pub enum MediaError {
 
     /// I/O error reading file.
     #[error("I/O error: {0}")]
-    IoError(String),
-}
-
-impl From<std::io::Error> for MediaError {
-    fn from(err: std::io::Error) -> Self {
-        MediaError::IoError(err.to_string())
-    }
+    IoError(#[from] std::io::Error),
 }
