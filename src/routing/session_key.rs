@@ -187,6 +187,29 @@ impl SessionKey {
         }
     }
 
+    /// Format the base string for a DM session key (shared between `to_key_string` and `base_key_pattern`).
+    fn format_dm_base(agent_id: &str, channel: &str, peer_id: &str, dm_scope: &DmScope) -> String {
+        match dm_scope {
+            DmScope::Main => format!("agent:{}:main", agent_id),
+            DmScope::PerPeer if channel.is_empty() => {
+                format!("agent:{}:peer:{}", agent_id, peer_id)
+            }
+            DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
+            DmScope::PerChannelPeer => {
+                format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
+            }
+        }
+    }
+
+    /// Append epoch suffix if non-zero.
+    fn append_epoch(base: String, epoch: u32) -> String {
+        if epoch > 0 {
+            format!("{}:s{}", base, epoch)
+        } else {
+            base
+        }
+    }
+
     /// Get the agent ID from this session key
     pub fn agent_id(&self) -> &str {
         match self {
@@ -287,16 +310,7 @@ impl SessionKey {
                 peer_id,
                 dm_scope,
                 ..
-            } => match dm_scope {
-                DmScope::Main => format!("agent:{}:main", agent_id),
-                DmScope::PerPeer if channel.is_empty() => {
-                    format!("agent:{}:peer:{}", agent_id, peer_id)
-                }
-                DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
-                DmScope::PerChannelPeer => {
-                    format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
-                }
-            },
+            } => Self::format_dm_base(agent_id, channel, peer_id, dm_scope),
             // Non-epoch types: base_key_pattern == to_key_string
             _ => self.to_key_string(),
         }
@@ -311,11 +325,7 @@ impl SessionKey {
                 epoch,
             } => {
                 let base = format!("agent:{}:{}", agent_id, main_key);
-                if *epoch > 0 {
-                    format!("{}:s{}", base, epoch)
-                } else {
-                    base
-                }
+                Self::append_epoch(base, *epoch)
             }
             Self::DirectMessage {
                 agent_id,
@@ -324,21 +334,8 @@ impl SessionKey {
                 dm_scope,
                 epoch,
             } => {
-                let base = match dm_scope {
-                    DmScope::Main => format!("agent:{}:main", agent_id),
-                    DmScope::PerPeer if channel.is_empty() => {
-                        format!("agent:{}:peer:{}", agent_id, peer_id)
-                    }
-                    DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
-                    DmScope::PerChannelPeer => {
-                        format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
-                    }
-                };
-                if *epoch > 0 {
-                    format!("{}:s{}", base, epoch)
-                } else {
-                    base
-                }
+                let base = Self::format_dm_base(agent_id, channel, peer_id, dm_scope);
+                Self::append_epoch(base, *epoch)
             }
             Self::Group {
                 agent_id,
@@ -384,10 +381,10 @@ impl SessionKey {
 
     /// Parse a session key from a string
     pub fn parse(s: &str) -> Option<Self> {
-        let s = s.trim().to_lowercase();
+        let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || parts[0] != "agent" {
+        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
             return None;
         }
 

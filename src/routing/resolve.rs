@@ -67,7 +67,7 @@ pub fn resolve_route(
     input: &RouteInput,
 ) -> ResolvedRoute {
     let channel = input.channel.trim().to_lowercase();
-    let account_id = input.account_id.as_deref().unwrap_or("default").to_string();
+    let account_id = input.account_id.as_deref().unwrap_or("default");
 
     // Filter bindings matching channel and account
     let candidates: Vec<&RouteBinding> = bindings
@@ -94,7 +94,7 @@ pub fn resolve_route(
             ResolvedRoute {
                 agent_id,
                 channel: channel.clone(),
-                account_id: account_id.clone(),
+                account_id: account_id.to_string(),
                 session_key,
                 main_session_key,
                 matched_by,
@@ -206,7 +206,7 @@ fn build_session_key(
 fn matches_channel(rule: &MatchRule, channel: &str) -> bool {
     rule.channel
         .as_ref()
-        .map(|c| c.to_lowercase() == channel)
+        .map(|c| c.eq_ignore_ascii_case(channel))
         .unwrap_or(false)
 }
 

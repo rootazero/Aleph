@@ -497,7 +497,7 @@ mod tests {
         let calls = requester.calls.clone();
         let gate = Arc::new(ApprovalGate::new(
             ApprovalConfig::default(),
-            Some(Box::new(requester)),
+            Some(Arc::new(requester)),
         ));
         let sandbox = build_sandbox(&tmp, driver_trait, gate, SandboxHooks::new());
         let elevated = SandboxCapabilities {

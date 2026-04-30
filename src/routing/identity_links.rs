@@ -92,11 +92,7 @@ pub(crate) fn resolve_linked_peer_id(
         Some(format!("{}:{}", channel_lower, peer_lower))
     };
 
-    // Sort by canonical name for deterministic resolution when multiple matches exist
-    let mut sorted_links: Vec<_> = identity_links.iter().collect();
-    sorted_links.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-    for (canonical, ids) in sorted_links {
+    for (canonical, ids) in identity_links {
         let canonical_name = canonical.trim();
         if canonical_name.is_empty() {
             continue;

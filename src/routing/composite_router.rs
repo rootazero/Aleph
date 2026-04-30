@@ -1,5 +1,6 @@
 //! Composite router combining rule-based and LLM-based classification.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,8 +15,11 @@ use super::task_router::{
 };
 
 /// Type alias for an async LLM classify function.
-pub type LlmClassifyFn =
-    Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Result<TaskRoute, ClassifyError>> + Send>> + Send + Sync>;
+pub type LlmClassifyFn = Arc<
+    dyn Fn(&str) -> Pin<Box<dyn Future<Output = Result<TaskRoute, ClassifyError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Composite router: tries rules first (zero latency), then optional LLM fallback.
 pub struct CompositeRouter {
@@ -109,7 +113,7 @@ impl TaskRouter for CompositeRouter {
         }
 
         // Heuristic: multi-domain tools suggest collaborative
-        let unique_prefixes: std::collections::HashSet<&str> = state
+        let unique_prefixes: HashSet<&str> = state
             .tools_invoked
             .iter()
             .filter_map(|t| t.split('_').next())
