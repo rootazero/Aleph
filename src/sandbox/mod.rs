@@ -18,8 +18,8 @@ pub mod exec_approval;
 pub mod factory;
 pub mod hooks;
 pub mod platforms;
-pub mod rate_limit;
 pub mod policy;
+pub mod rate_limit;
 pub mod workspace;
 
 pub use capabilities::{NetworkPolicy, SandboxCapabilities};

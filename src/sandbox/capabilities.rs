@@ -52,19 +52,47 @@ impl SandboxCapabilities {
 
     /// Is `self` ⊆ `baseline` (fs subset; Network ordered None ⊆ AllowHosts ⊆ AllowAll;
     /// spawn monotonic)?
+    ///
+    /// For filesystem paths, both paths are normalized (resolving `.` and `..`)
+    /// before the prefix check to prevent path traversal bypasses.
     pub fn is_within(&self, baseline: &Self) -> bool {
         let fs_read_ok = self
             .fs_read
             .iter()
-            .all(|p| baseline.fs_read.iter().any(|b| p.starts_with(b)));
+            .all(|p| baseline.fs_read.iter().any(|b| path_starts_with_normalized(p, b)));
         let fs_write_ok = self
             .fs_write
             .iter()
-            .all(|p| baseline.fs_write.iter().any(|b| p.starts_with(b)));
+            .all(|p| baseline.fs_write.iter().any(|b| path_starts_with_normalized(p, b)));
         let net_ok = network_within(&self.network, &baseline.network);
         let spawn_ok = !self.spawn_subprocess || baseline.spawn_subprocess;
         fs_read_ok && fs_write_ok && net_ok && spawn_ok
     }
+}
+
+/// Normalize a path and check if `child` is within `baseline`.
+/// Resolves `.` and `..` segments to prevent path traversal bypasses.
+fn path_starts_with_normalized(child: &std::path::Path, baseline: &std::path::Path) -> bool {
+    let child_norm = normalize_path_components(child);
+    let baseline_norm = normalize_path_components(baseline);
+    child_norm.starts_with(&baseline_norm)
+}
+
+fn normalize_path_components(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(c) => normalized.push(c),
+            Component::RootDir => normalized.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => {}
+        }
+    }
+    normalized
 }
 
 fn network_within(child: &NetworkPolicy, baseline: &NetworkPolicy) -> bool {

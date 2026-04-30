@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -26,12 +27,12 @@ impl ApprovalOutcome {
 
 pub struct ApprovalGate {
     config: ApprovalConfig,
-    requester: Option<Box<dyn ApprovalRequester>>,
+    requester: Option<Arc<dyn ApprovalRequester>>,
     retry_count: u8,
 }
 
 impl ApprovalGate {
-    pub fn new(config: ApprovalConfig, requester: Option<Box<dyn ApprovalRequester>>) -> Self {
+    pub fn new(config: ApprovalConfig, requester: Option<Arc<dyn ApprovalRequester>>) -> Self {
         Self {
             config,
             requester,
@@ -39,7 +40,7 @@ impl ApprovalGate {
         }
     }
 
-    pub fn with_requester(mut self, requester: Box<dyn ApprovalRequester>) -> Self {
+    pub fn with_requester(mut self, requester: Arc<dyn ApprovalRequester>) -> Self {
         self.requester = Some(requester);
         self
     }

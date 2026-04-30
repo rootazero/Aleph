@@ -74,16 +74,50 @@ pub struct SandboxRateLimitConfigSchema {
     pub admin: WindowConfigSchema,
 }
 
-fn default_rate_limit_enabled() -> bool { true }
-fn default_rate_limit_exempt_loopback() -> bool { true }
-fn default_max_requests() -> u32 { 60 }
-fn default_window_secs() -> u64 { 60 }
-fn default_burst_allow() -> u32 { 20 }
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+fn default_rate_limit_exempt_loopback() -> bool {
+    true
+}
+fn default_max_requests() -> u32 {
+    60
+}
+fn default_window_secs() -> u64 {
+    60
+}
+fn default_burst_allow() -> u32 {
+    20
+}
 
-fn default_rate_limit_read() -> WindowConfigSchema { WindowConfigSchema { max_requests: 60, window_secs: 60, burst_allow: 20 } }
-fn default_rate_limit_write() -> WindowConfigSchema { WindowConfigSchema { max_requests: 30, window_secs: 60, burst_allow: 10 } }
-fn default_rate_limit_dangerous() -> WindowConfigSchema { WindowConfigSchema { max_requests: 10, window_secs: 60, burst_allow: 5 } }
-fn default_rate_limit_admin() -> WindowConfigSchema { WindowConfigSchema { max_requests: 5, window_secs: 60, burst_allow: 2 } }
+fn default_rate_limit_read() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 60,
+        window_secs: 60,
+        burst_allow: 20,
+    }
+}
+fn default_rate_limit_write() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 30,
+        window_secs: 60,
+        burst_allow: 10,
+    }
+}
+fn default_rate_limit_dangerous() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 10,
+        window_secs: 60,
+        burst_allow: 5,
+    }
+}
+fn default_rate_limit_admin() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 5,
+        window_secs: 60,
+        burst_allow: 2,
+    }
+}
 
 impl Default for SandboxRateLimitConfigSchema {
     fn default() -> Self {
@@ -101,26 +135,38 @@ impl Default for SandboxRateLimitConfigSchema {
 impl From<SandboxRateLimitConfigSchema> for SandboxRateLimitConfig {
     fn from(schema: SandboxRateLimitConfigSchema) -> Self {
         let mut per_category = HashMap::new();
-        per_category.insert(ToolCategory::Read, WindowConfig {
-            max_requests: schema.read.max_requests,
-            window_secs: schema.read.window_secs,
-            burst_allow: schema.read.burst_allow,
-        });
-        per_category.insert(ToolCategory::Write, WindowConfig {
-            max_requests: schema.write.max_requests,
-            window_secs: schema.write.window_secs,
-            burst_allow: schema.write.burst_allow,
-        });
-        per_category.insert(ToolCategory::Dangerous, WindowConfig {
-            max_requests: schema.dangerous.max_requests,
-            window_secs: schema.dangerous.window_secs,
-            burst_allow: schema.dangerous.burst_allow,
-        });
-        per_category.insert(ToolCategory::Admin, WindowConfig {
-            max_requests: schema.admin.max_requests,
-            window_secs: schema.admin.window_secs,
-            burst_allow: schema.admin.burst_allow,
-        });
+        per_category.insert(
+            ToolCategory::Read,
+            WindowConfig {
+                max_requests: schema.read.max_requests,
+                window_secs: schema.read.window_secs,
+                burst_allow: schema.read.burst_allow,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Write,
+            WindowConfig {
+                max_requests: schema.write.max_requests,
+                window_secs: schema.write.window_secs,
+                burst_allow: schema.write.burst_allow,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Dangerous,
+            WindowConfig {
+                max_requests: schema.dangerous.max_requests,
+                window_secs: schema.dangerous.window_secs,
+                burst_allow: schema.dangerous.burst_allow,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Admin,
+            WindowConfig {
+                max_requests: schema.admin.max_requests,
+                window_secs: schema.admin.window_secs,
+                burst_allow: schema.admin.burst_allow,
+            },
+        );
         Self {
             enabled: schema.enabled,
             exempt_loopback: schema.exempt_loopback,
@@ -193,11 +239,13 @@ pub struct SandboxConfig {
 }
 
 fn default_workspace_root() -> PathBuf {
-    if let Some(home) = dirs::home_dir() {
-        home.join(".aleph").join("workspaces")
-    } else {
-        PathBuf::from("./.aleph/workspaces")
-    }
+    dirs::home_dir()
+        .map(|home| home.join(".aleph").join("workspaces"))
+        .unwrap_or_else(|| {
+            // Fall back to a known absolute path to avoid creating workspaces
+            // in an arbitrary working directory.
+            PathBuf::from("/tmp/.aleph/workspaces")
+        })
 }
 
 fn default_enabled() -> bool {

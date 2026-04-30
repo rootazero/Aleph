@@ -268,6 +268,17 @@ impl BubblewrapDriver {
     fn apply_no_new_privs(&self, cmd: &mut Command) {
         if self.options.no_new_privs {
             debug!("Applying PR_SET_NO_NEW_PRIVS via pre-exec");
+            unsafe {
+                cmd.pre_exec(|| {
+                    // SAFETY: prctl with PR_SET_NO_NEW_PRIVS is a well-defined
+                    // Linux syscall that cannot fail with valid arguments.
+                    let rc = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+                    if rc != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
     }
 }

@@ -116,13 +116,38 @@ impl WorkspaceSandbox {
     }
 }
 
+/// Normalize a path, resolving `..` and `.` segments, then check if it stays
+/// within the workspace root.
+fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let base = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in base.components() {
+        match component {
+            Component::Normal(c) => normalized.push(c),
+            Component::RootDir => normalized.push("/"),
+            Component::CurDir => {} // skip .
+            Component::ParentDir => {
+                // pop the last component for ..
+                normalized.pop();
+            }
+            _ => {}
+        }
+    }
+    normalized
+}
+
 /// Deterministic filesystem-safe directory name derived from a `SessionId`.
 ///
 /// Uses SHA-256 of the JSON-serialised key, truncated to 16 bytes (32 hex
 /// chars). Keeps the path short and avoids slashes / special chars that the
 /// various `SessionKey` variants may carry.
 fn session_key_to_filename(sid: &SessionId) -> String {
-    let json = serde_json::to_string(sid).unwrap_or_default();
+    let json = serde_json::to_string(sid).expect("SessionId must be JSON serializable");
     let mut hasher = Sha256::new();
     hasher.update(json.as_bytes());
     let digest = hasher.finalize();
@@ -142,13 +167,19 @@ impl Sandbox for WorkspaceSandbox {
 
         let cwd = match &cmd.cwd {
             None => ws.cwd.clone(),
-            Some(p) if p.starts_with(&ws.cwd) => p.clone(),
-            Some(_) => {
-                let err = SandboxError::CapabilityDenied {
-                    reason: "cwd outside workspace root".into(),
-                };
-                self.hooks.run_after(&ctx, Err("cwd outside workspace root")).await;
-                return Err(err);
+            Some(p) => {
+                let normalized = normalize_path(p, &ws.cwd);
+                if normalized.starts_with(&ws.cwd) {
+                    normalized
+                } else {
+                    let err = SandboxError::CapabilityDenied {
+                        reason: "cwd outside workspace root".into(),
+                    };
+                    self.hooks
+                        .run_after(&ctx, Err("cwd outside workspace root"))
+                        .await;
+                    return Err(err);
+                }
             }
         };
 
@@ -354,7 +385,7 @@ mod tests {
     fn build_gate_with(outcome: ApprovalOutcome) -> Arc<ApprovalGate> {
         Arc::new(ApprovalGate::new(
             ApprovalConfig::default(),
-            Some(Box::new(FixedRequester::new(outcome))),
+            Some(Arc::new(FixedRequester::new(outcome))),
         ))
     }
 
@@ -372,7 +403,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let driver = Arc::new(FakeDriver::new());
         let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
-        let sandbox = build_sandbox(&tmp, driver_trait, build_gate_auto_deny(), SandboxHooks::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_auto_deny(),
+            SandboxHooks::new(),
+        );
         let session = sid();
         let expected_dir = tmp.path().join(session_key_to_filename(&session));
 
@@ -426,7 +462,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
         // Elevated request (network) + gate that denies → expect CapabilityDenied.
-        let sandbox = build_sandbox(&tmp, driver, build_gate_with(ApprovalOutcome::Denied), SandboxHooks::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
         let elevated = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
             ..SandboxCapabilities::strict()

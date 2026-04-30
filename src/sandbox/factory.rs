@@ -36,8 +36,7 @@ pub fn build_sandbox(
         return Arc::new(NoopSandbox);
     }
     let rate_limiter = Arc::new(SandboxRateLimiter::new(rate_limit_config));
-    let hooks = SandboxHooks::new()
-        .with_before(Arc::new(RateLimitHook::new(rate_limiter)));
+    let hooks = SandboxHooks::new().with_before(Arc::new(RateLimitHook::new(rate_limiter)));
     let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);

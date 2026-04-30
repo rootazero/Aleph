@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 
-use crate::sandbox::hooks::{SandboxBeforeHook, SandboxHookContext, SandboxHookResult, SandboxHookResult::Deny};
+use crate::sandbox::hooks::{
+    SandboxBeforeHook, SandboxHookContext, SandboxHookResult, SandboxHookResult::Deny,
+};
 use crate::session::service::SessionId;
 
 /// Tool danger category for rate limiting.
@@ -48,10 +50,38 @@ pub struct SandboxRateLimitConfig {
 impl Default for SandboxRateLimitConfig {
     fn default() -> Self {
         let mut per_category = HashMap::new();
-        per_category.insert(ToolCategory::Read, WindowConfig { max_requests: 60, window_secs: 60, burst_allow: 20 });
-        per_category.insert(ToolCategory::Write, WindowConfig { max_requests: 30, window_secs: 60, burst_allow: 10 });
-        per_category.insert(ToolCategory::Dangerous, WindowConfig { max_requests: 10, window_secs: 60, burst_allow: 5 });
-        per_category.insert(ToolCategory::Admin, WindowConfig { max_requests: 5, window_secs: 60, burst_allow: 2 });
+        per_category.insert(
+            ToolCategory::Read,
+            WindowConfig {
+                max_requests: 60,
+                window_secs: 60,
+                burst_allow: 20,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Write,
+            WindowConfig {
+                max_requests: 30,
+                window_secs: 60,
+                burst_allow: 10,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Dangerous,
+            WindowConfig {
+                max_requests: 10,
+                window_secs: 60,
+                burst_allow: 5,
+            },
+        );
+        per_category.insert(
+            ToolCategory::Admin,
+            WindowConfig {
+                max_requests: 5,
+                window_secs: 60,
+                burst_allow: 2,
+            },
+        );
         Self {
             enabled: true,
             exempt_loopback: true,
@@ -98,7 +128,11 @@ impl SandboxRateLimiter {
     }
 
     /// Check if execution is allowed. Returns Ok(()) or Err(reason).
-    pub fn check_and_record(&self, session_id: &SessionId, category: &ToolCategory) -> Result<(), String> {
+    pub fn check_and_record(
+        &self,
+        session_id: &SessionId,
+        category: &ToolCategory,
+    ) -> Result<(), String> {
         if !self.config.enabled {
             return Ok(());
         }
@@ -110,7 +144,10 @@ impl SandboxRateLimiter {
 
         let now = Instant::now();
         let window_dur = Duration::from_secs(wc.window_secs);
-        let key = RateLimitKey { session_id: session_id.clone(), category: category.clone() };
+        let key = RateLimitKey {
+            session_id: session_id.clone(),
+            category: category.clone(),
+        };
 
         let mut entry = self.windows.entry(key).or_insert_with(|| SlidingWindow {
             timestamps: VecDeque::new(),

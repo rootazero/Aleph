@@ -42,10 +42,7 @@ pub trait SandboxBeforeHook: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
     /// Called before sandboxed execution proceeds.
-    async fn before(
-        &self,
-        ctx: SandboxHookContext<'_>,
-    ) -> SandboxHookResult;
+    async fn before(&self, ctx: SandboxHookContext<'_>) -> SandboxHookResult;
 }
 
 /// Hook executed after sandboxed tool execution completes.
@@ -56,11 +53,7 @@ pub trait SandboxAfterHook: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
     /// Called after sandboxed execution finishes.
-    async fn after(
-        &self,
-        ctx: SandboxHookContext<'_>,
-        outcome: &Result<(), &str>,
-    );
+    async fn after(&self, ctx: SandboxHookContext<'_>, outcome: &Result<(), &str>);
 }
 
 /// Compose multiple before/after hooks into a pair for use in the sandbox
@@ -89,7 +82,9 @@ impl SandboxHooks {
     /// Run all before hooks. Returns `SandboxHookResult::Deny` on first denial.
     pub async fn run_before(&self, ctx: &SandboxHookContext<'_>) -> SandboxHookResult {
         for hook in &self.before {
-            let result = hook.before(SandboxHookContext::new(ctx.tool_name, ctx.command)).await;
+            let result = hook
+                .before(SandboxHookContext::new(ctx.tool_name, ctx.command))
+                .await;
             if !matches!(result, SandboxHookResult::Allow) {
                 return result;
             }
@@ -100,7 +95,11 @@ impl SandboxHooks {
     /// Run all after hooks.
     pub async fn run_after(&self, ctx: &SandboxHookContext<'_>, outcome: Result<(), &str>) {
         for hook in &self.after {
-            hook.after(SandboxHookContext::new(ctx.tool_name, ctx.command), &outcome).await;
+            hook.after(
+                SandboxHookContext::new(ctx.tool_name, ctx.command),
+                &outcome,
+            )
+            .await;
         }
     }
 }
@@ -140,8 +139,7 @@ mod tests {
     #[tokio::test]
     async fn test_before_hook_allows() {
         use crate::routing::session_key::SessionKey;
-        let hooks = SandboxHooks::new()
-            .with_before(Arc::new(TestBeforeHook("allow", true)));
+        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook("allow", true)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
             program: "echo".into(),
@@ -153,14 +151,16 @@ mod tests {
             timeout: None,
         };
         let ctx = SandboxHookContext::new("test_tool", &cmd);
-        assert!(matches!(hooks.run_before(&ctx).await, SandboxHookResult::Allow));
+        assert!(matches!(
+            hooks.run_before(&ctx).await,
+            SandboxHookResult::Allow
+        ));
     }
 
     #[tokio::test]
     async fn test_before_hook_denies() {
         use crate::routing::session_key::SessionKey;
-        let hooks = SandboxHooks::new()
-            .with_before(Arc::new(TestBeforeHook("deny", false)));
+        let hooks = SandboxHooks::new().with_before(Arc::new(TestBeforeHook("deny", false)));
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
             program: "echo".into(),
@@ -200,7 +200,9 @@ mod tests {
 
         let hooks = SandboxHooks::new()
             .with_before(Arc::new(TestBeforeHook("first_deny", false))) // denies
-            .with_before(Arc::new(SecondBeforeHook { flag: second_ran_clone })); // would set flag if called
+            .with_before(Arc::new(SecondBeforeHook {
+                flag: second_ran_clone,
+            })); // would set flag if called
 
         let cmd = SandboxCommand {
             session_id: SessionKey::ephemeral("test"),
@@ -240,8 +242,7 @@ mod tests {
             }
         }
 
-        let hooks = SandboxHooks::new()
-            .with_after(Arc::new(CheckAfter { flag: ran_clone }));
+        let hooks = SandboxHooks::new().with_after(Arc::new(CheckAfter { flag: ran_clone }));
         let cmd = SandboxCommand {
             session_id: crate::routing::session_key::SessionKey::ephemeral("test"),
             program: "echo".into(),
