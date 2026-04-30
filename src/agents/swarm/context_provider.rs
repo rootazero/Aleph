@@ -5,15 +5,19 @@
 //! them as XML team communication protocol.
 
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
+
 /// Trait for providing additional context to the agent loop
+#[async_trait]
 pub trait ContextProvider: Send + Sync {
     /// Get context to inject into the agent loop
-    fn get_context(&self) -> Option<String>;
+    async fn get_context(&self) -> Option<String>;
     /// Priority of this provider (higher = injected first)
     fn priority(&self) -> i32;
     /// Name of this provider for logging
     fn name(&self) -> &str;
 }
+
 use super::context_injector::ContextInjector;
 
 /// Swarm context provider for team awareness injection
@@ -73,18 +77,13 @@ impl SwarmContextProvider {
     }
 }
 
+#[async_trait]
 impl ContextProvider for SwarmContextProvider {
-    fn get_context(&self) -> Option<String> {
-        // Call async method from sync context using block_in_place
-        // This is safe and designed for calling async code from sync contexts
-        // within a tokio runtime
-        let injector = self.context_injector.clone();
-
-        let swarm_state = tokio::task::block_in_place(|| {
-            let id = self.agent_id.clone();
-            tokio::runtime::Handle::current()
-                .block_on(async move { injector.inject_swarm_state(&id).await })
-        });
+    async fn get_context(&self) -> Option<String> {
+        let swarm_state = self
+            .context_injector
+            .inject_swarm_state(&self.agent_id)
+            .await;
 
         if swarm_state.is_empty() {
             return None;
@@ -115,7 +114,7 @@ mod tests {
         let provider = SwarmContextProvider::new(injector);
 
         // No events yet, should return None
-        assert_eq!(provider.get_context(), None);
+        assert_eq!(provider.get_context().await, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -148,7 +147,7 @@ mod tests {
         let provider = SwarmContextProvider::new(injector);
 
         // Should return formatted context
-        let context = provider.get_context();
+        let context = provider.get_context().await;
         assert!(context.is_some());
         let ctx = context.unwrap();
         assert!(ctx.contains("<team_awareness"));
