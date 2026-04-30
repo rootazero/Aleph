@@ -352,15 +352,15 @@ impl StateDatabase {
         &self,
         file_unique_id: &str,
         description: &str,
-    ) -> Result<(), crate::error::AlephError> {
+    ) -> Result<(), AlephError> {
         let conn = self.conn.lock().map_err(|e| {
-            crate::error::AlephError::config(format!("Database lock poisoned: {}", e))
+            AlephError::config(format!("Database lock poisoned: {}", e))
         })?;
         conn.execute(
             "INSERT OR REPLACE INTO sticker_descriptions (file_unique_id, description, cached_at) VALUES (?1, ?2, datetime('now'))",
             [file_unique_id, description],
         )
-        .map_err(|e| crate::error::AlephError::config(format!("Failed to store sticker description: {}", e)))?;
+        .map_err(|e| AlephError::config(format!("Failed to store sticker description: {}", e)))?;
         Ok(())
     }
 
@@ -368,26 +368,26 @@ impl StateDatabase {
     pub fn load_sticker_description(
         &self,
         file_unique_id: &str,
-    ) -> Result<Option<String>, crate::error::AlephError> {
+    ) -> Result<Option<String>, AlephError> {
         let conn = self.conn.lock().map_err(|e| {
-            crate::error::AlephError::config(format!("Database lock poisoned: {}", e))
+            AlephError::config(format!("Database lock poisoned: {}", e))
         })?;
         let mut stmt = conn
             .prepare(
                 "SELECT description FROM sticker_descriptions WHERE file_unique_id = ?1 LIMIT 1",
             )
             .map_err(|e| {
-                crate::error::AlephError::config(format!("Failed to prepare sticker query: {}", e))
+                AlephError::config(format!("Failed to prepare sticker query: {}", e))
             })?;
         let mut rows = stmt.query([file_unique_id]).map_err(|e| {
-            crate::error::AlephError::config(format!("Failed to query sticker description: {}", e))
+            AlephError::config(format!("Failed to query sticker description: {}", e))
         })?;
         if let Some(row) = rows.next().map_err(|e| {
-            crate::error::AlephError::config(format!("Failed to read sticker row: {}", e))
+            AlephError::config(format!("Failed to read sticker row: {}", e))
         })? {
             row.get(0)
                 .map_err(|e| {
-                    crate::error::AlephError::config(format!(
+                    AlephError::config(format!(
                         "Failed to deserialize sticker description: {}",
                         e
                     ))

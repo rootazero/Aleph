@@ -141,11 +141,10 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
+        let since_seq_i64 = i64::try_from(since_seq)
+            .map_err(|e| AlephError::other(format!("Sequence number too large for query: {e}")))?;
         let rows = stmt
-            .query_map(
-                params![fact_id, i64::try_from(since_seq).unwrap_or(i64::MAX)],
-                MemoryEventRow::from_row,
-            )
+            .query_map(params![fact_id, since_seq_i64], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
