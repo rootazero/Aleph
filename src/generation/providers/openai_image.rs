@@ -76,11 +76,11 @@ const DEFAULT_TIMEOUT_SECS: u64 = 120;
 ///
 /// assert_eq!(provider.name(), "openai-image");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiImageProvider {
     /// HTTP client for making requests
     client: Client,
-    /// OpenAI API key
+    /// OpenAI API key (redacted in Debug)
     api_key: String,
     /// API endpoint — fully resolved generations URL
     endpoint: String,
@@ -88,6 +88,18 @@ pub struct OpenAiImageProvider {
     model: String,
     /// Resolved URL for deriving secondary endpoints (e.g., image edits)
     resolved: ResolvedUrl,
+}
+
+impl std::fmt::Debug for OpenAiImageProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiImageProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("resolved", &self.resolved)
+            .finish()
+    }
 }
 
 impl OpenAiImageProvider {
@@ -180,7 +192,7 @@ impl OpenAiImageProvider {
     }
 
     /// Parse API error response and convert to GenerationError
-    fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
+    fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<OpenAiErrorResponse>(body) {
             let message = error_response.error.message;
@@ -213,7 +225,7 @@ impl OpenAiImageProvider {
                 "Access forbidden - check your API key permissions",
                 "openai-image",
             ),
-            404 => GenerationError::model_not_found("dall-e-3", "openai-image"),
+            404 => GenerationError::model_not_found(&self.model, "openai-image"),
             500..=599 => GenerationError::provider(
                 format!("OpenAI server error: {}", body),
                 Some(status.as_u16()),
@@ -356,7 +368,7 @@ impl GenerationProvider for OpenAiImageProvider {
                     body = %response_text,
                     "OpenAI API request failed"
                 );
-                return Err(Self::parse_error_response(status, &response_text));
+                return Err(self.parse_error_response(status, &response_text));
             }
 
             // Parse successful response
@@ -696,7 +708,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_auth() {
-        let error = OpenAiImageProvider::parse_error_response(
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::UNAUTHORIZED,
             "Unauthorized",
         );
@@ -706,7 +719,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_rate_limit() {
-        let error = OpenAiImageProvider::parse_error_response(
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             "Rate limit exceeded",
         );
@@ -716,6 +730,7 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_content_policy() {
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let body = r#"{
             "error": {
                 "message": "Your request was rejected as a result of our safety system. The prompt may contain content policy violations.",
@@ -725,8 +740,7 @@ mod tests {
             }
         }"#;
 
-        let error =
-            OpenAiImageProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
+        let error = provider.parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
         assert!(matches!(
             error,
@@ -736,6 +750,7 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_invalid_params() {
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let body = r#"{
             "error": {
                 "message": "Invalid size parameter",
@@ -745,8 +760,7 @@ mod tests {
             }
         }"#;
 
-        let error =
-            OpenAiImageProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
+        let error = provider.parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
         assert!(matches!(
             error,
@@ -756,7 +770,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_server_error() {
-        let error = OpenAiImageProvider::parse_error_response(
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
         );

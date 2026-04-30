@@ -127,7 +127,7 @@ pub const OUTPUT_FORMATS: &[&str] = &[
 ///
 /// assert_eq!(provider.name(), "elevenlabs");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ElevenLabsProvider {
     /// HTTP client for making requests
     client: Client,
@@ -139,6 +139,18 @@ pub struct ElevenLabsProvider {
     model: String,
     /// Default voice ID to use
     default_voice_id: String,
+}
+
+impl std::fmt::Debug for ElevenLabsProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevenLabsProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("default_voice_id", &self.default_voice_id)
+            .finish()
+    }
 }
 
 impl ElevenLabsProvider {

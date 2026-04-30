@@ -35,7 +35,7 @@ use crate::generation::GenerationResult;
 ///
 /// assert_eq!(provider.name(), "custom-provider");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiCompatProvider {
     /// Provider name (user-configurable)
     pub(crate) name: String,
@@ -53,6 +53,21 @@ pub struct OpenAiCompatProvider {
     pub(crate) supported_types: Vec<GenerationType>,
     /// Optional explicit edit endpoint URL
     pub(crate) edit_endpoint: Option<String>,
+}
+
+impl std::fmt::Debug for OpenAiCompatProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiCompatProvider")
+            .field("name", &self.name)
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("color", &self.color)
+            .field("supported_types", &self.supported_types)
+            .field("edit_endpoint", &self.edit_endpoint)
+            .finish()
+    }
 }
 
 impl OpenAiCompatProvider {

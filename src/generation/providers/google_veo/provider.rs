@@ -43,7 +43,7 @@ use tracing::{debug, error, info};
 ///
 /// assert_eq!(provider.name(), "google-veo");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GoogleVeoProvider {
     /// HTTP client for making requests
     client: Client,
@@ -53,6 +53,17 @@ pub struct GoogleVeoProvider {
     endpoint: String,
     /// Model to use (e.g., "veo-2.0-generate-001")
     model: String,
+}
+
+impl std::fmt::Debug for GoogleVeoProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleVeoProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl GoogleVeoProvider {

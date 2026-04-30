@@ -96,7 +96,7 @@ pub const PERSON_GENERATION_OPTIONS: &[&str] = &["dont_allow", "allow_adult", "a
 ///
 /// assert_eq!(provider.name(), "google-imagen");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GoogleImagenProvider {
     /// HTTP client for making requests
     client: Client,
@@ -106,6 +106,17 @@ pub struct GoogleImagenProvider {
     endpoint: String,
     /// Model to use (e.g., "imagen-3.0-generate-002")
     model: String,
+}
+
+impl std::fmt::Debug for GoogleImagenProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleImagenProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl GoogleImagenProvider {

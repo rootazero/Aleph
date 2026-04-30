@@ -41,7 +41,7 @@ use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 ///
 /// assert_eq!(provider.name(), "midjourney");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MidjourneyProvider {
     /// Provider name (typically "midjourney")
     pub(crate) name: String,
@@ -55,6 +55,19 @@ pub struct MidjourneyProvider {
     pub(crate) mode: MidjourneyMode,
     /// Brand color for UI theming
     pub(crate) color: String,
+}
+
+impl std::fmt::Debug for MidjourneyProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MidjourneyProvider")
+            .field("name", &self.name)
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("mode", &self.mode)
+            .field("color", &self.color)
+            .finish()
+    }
 }
 
 impl MidjourneyProvider {

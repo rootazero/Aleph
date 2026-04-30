@@ -42,7 +42,7 @@ use tracing::{debug, info, warn};
 /// assert_eq!(provider.name(), "replicate");
 /// assert_eq!(provider.color(), "#f59e0b");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReplicateProvider {
     /// HTTP client for making requests
     pub(crate) client: Client,
@@ -54,6 +54,18 @@ pub struct ReplicateProvider {
     pub(crate) model_mappings: HashMap<String, String>,
     /// Supported generation types
     pub(crate) supported_types: Vec<GenerationType>,
+}
+
+impl std::fmt::Debug for ReplicateProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplicateProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model_mappings", &self.model_mappings)
+            .field("supported_types", &self.supported_types)
+            .finish()
+    }
 }
 
 impl ReplicateProvider {

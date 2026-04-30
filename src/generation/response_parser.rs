@@ -34,8 +34,10 @@ pub struct ParseResult {
 }
 
 // Regex pattern for [GENERATE:type:provider:model:prompt]
-static GENERATE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]").unwrap());
+static GENERATE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[GENERATE:([^:]+):([^:]+):([^:]+):([^\]]+)\]")
+        .expect("GENERATE_PATTERN regex is valid and statically defined")
+});
 
 /// Parse AI response for generation requests
 ///
@@ -68,7 +70,9 @@ pub fn parse_generation_requests(response: &str) -> ParseResult {
 
         // Replace the generation tag with a user-friendly message
         let replacement = format!("🎨 正在使用 {} ({}) 生成: {}", provider, model, prompt);
-        cleaned_response = cleaned_response.replace(original_text, &replacement);
+        // Use replacen to only replace the first occurrence, avoiding issues
+        // when the same tag appears multiple times or replacement text contains similar patterns
+        cleaned_response = cleaned_response.replacen(original_text, &replacement, 1);
     }
 
     ParseResult {

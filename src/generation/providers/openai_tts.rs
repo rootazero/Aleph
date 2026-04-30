@@ -98,7 +98,7 @@ pub const AVAILABLE_FORMATS: [&str; 4] = ["mp3", "opus", "aac", "flac"];
 ///
 /// assert_eq!(provider.name(), "openai-tts");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiTtsProvider {
     /// HTTP client for making requests
     client: Client,
@@ -110,6 +110,18 @@ pub struct OpenAiTtsProvider {
     model: String,
     /// Default voice to use
     default_voice: String,
+}
+
+impl std::fmt::Debug for OpenAiTtsProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiTtsProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("default_voice", &self.default_voice)
+            .finish()
+    }
 }
 
 impl OpenAiTtsProvider {
@@ -290,7 +302,7 @@ impl OpenAiTtsProvider {
     }
 
     /// Parse API error response and convert to GenerationError
-    fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
+    fn parse_error_response(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<OpenAiErrorResponse>(body) {
             let message = error_response.error.message;
@@ -321,7 +333,7 @@ impl OpenAiTtsProvider {
                 "Access forbidden - check your API key permissions",
                 "openai-tts",
             ),
-            404 => GenerationError::model_not_found("tts-1", "openai-tts"),
+            404 => GenerationError::model_not_found(&self.model, "openai-tts"),
             500..=599 => GenerationError::provider(
                 format!("OpenAI server error: {}", body),
                 Some(status.as_u16()),
@@ -475,7 +487,7 @@ impl GenerationProvider for OpenAiTtsProvider {
                     body = %response_text,
                     "OpenAI TTS API request failed"
                 );
-                return Err(Self::parse_error_response(status, &response_text));
+                return Err(self.parse_error_response(status, &response_text));
             }
 
             // Get audio bytes from response
@@ -854,7 +866,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_auth() {
-        let error = OpenAiTtsProvider::parse_error_response(
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::UNAUTHORIZED,
             "Unauthorized",
         );
@@ -864,7 +877,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_rate_limit() {
-        let error = OpenAiTtsProvider::parse_error_response(
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::TOO_MANY_REQUESTS,
             "Rate limit exceeded",
         );
@@ -874,7 +888,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_bad_request_empty_input() {
-        let error = OpenAiTtsProvider::parse_error_response(
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::BAD_REQUEST,
             "input is required and cannot be empty",
         );
@@ -887,7 +902,8 @@ mod tests {
 
     #[test]
     fn test_parse_error_response_server_error() {
-        let error = OpenAiTtsProvider::parse_error_response(
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
+        let error = provider.parse_error_response(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
         );

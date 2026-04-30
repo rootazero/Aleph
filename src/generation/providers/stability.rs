@@ -110,7 +110,7 @@ pub const STYLE_PRESETS: &[&str] = &[
 ///
 /// assert_eq!(provider.name(), "stability-image");
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StabilityImageProvider {
     /// HTTP client for making requests
     client: Client,
@@ -120,6 +120,17 @@ pub struct StabilityImageProvider {
     endpoint: String,
     /// Model (engine_id) to use (e.g., "stable-diffusion-xl-1024-v1-0")
     model: String,
+}
+
+impl std::fmt::Debug for StabilityImageProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StabilityImageProvider")
+            .field("client", &self.client)
+            .field("api_key", &"[REDACTED]")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl StabilityImageProvider {
