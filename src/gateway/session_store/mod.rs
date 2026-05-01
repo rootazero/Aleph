@@ -133,6 +133,19 @@ pub trait SessionStore: Send + Sync {
     /// Returns up to `max_turns` most-recent messages, further capped at
     /// `max_chars` total content characters, in chronological (oldest-first)
     /// order.
+    ///
+    /// **Trailing-N semantics**: this default impl relies on `get_history`
+    /// returning the *trailing* `max_turns` messages (most recent N) when a
+    /// LIMIT is supplied, in chronological order. Both production impls
+    /// satisfy this contract:
+    ///   * `SessionManager` (sqlite) wraps the LIMIT in
+    ///     `SELECT ... FROM (... ORDER BY timestamp DESC LIMIT N) ORDER BY timestamp ASC`
+    ///     (`session_manager/ops.rs:302`).
+    ///   * `FileSessionStore::read_transcript` reads the full transcript and
+    ///     `split_off(messages.len() - n)` (`file_backend/mod.rs:247`).
+    ///
+    /// New impls MUST honor this contract — returning the leading N would
+    /// summarize stale context and break the lazy synthesizer.
     async fn load_window(
         &self,
         agent_id: &str,

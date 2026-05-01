@@ -458,6 +458,42 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
             .map_err(|e| AlephError::config(format!("ALTER TABLE raw_memories failed: {e}")))?;
     }
 
+    // Spec B (Task 7 follow-up): enforce uniqueness on (agent_id, path) so that
+    // `INSERT OR IGNORE` actually wins races for the canonical
+    // `aleph://session/{sid}/end-summary` rows. The `raw_memories` schema
+    // historically had only a PRIMARY KEY on `id` (a fresh UUID per insert),
+    // so two concurrent `lazy_for(agent, sid)` calls would each insert a NEW
+    // row at the same path. The partial unique index below enforces "first
+    // writer wins" at the SQL level, while still allowing rows with NULL path
+    // (legacy raw memories without a path are unaffected).
+    //
+    // Pre-flight dedup: if any duplicate (agent_id, path) groups exist (rare
+    // — d{depth}/{seq} paths are already unique by construction, and the new
+    // /end-summary path is brand new with Spec B), keep only the lowest `id`
+    // per group so the unique index can be created.
+    conn.execute(
+        "DELETE FROM raw_memories \
+         WHERE path IS NOT NULL \
+           AND id NOT IN ( \
+             SELECT MIN(id) FROM raw_memories \
+             WHERE path IS NOT NULL \
+             GROUP BY agent_id, path \
+           )",
+        [],
+    )
+    .map_err(|e| AlephError::config(format!("raw_memories dedup pre-index failed: {e}")))?;
+
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_memories_agent_path \
+         ON raw_memories(agent_id, path) \
+         WHERE path IS NOT NULL;",
+    )
+    .map_err(|e| {
+        AlephError::config(format!(
+            "Failed to create idx_raw_memories_agent_path unique index: {e}"
+        ))
+    })?;
+
     conn.execute_batch(NOTES_INDEX_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_index table: {e}")))?;
 

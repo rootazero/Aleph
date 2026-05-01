@@ -525,7 +525,7 @@ mod tests {
         );
         let llm = MockSummaryLlm::with_response("Concurrent summary");
         let synthesizer = Arc::new(SummarySynthesizer::new(
-            store,
+            store.clone(),
             session_store as Arc<dyn SessionStore>,
             llm.clone(),
         ));
@@ -550,9 +550,33 @@ mod tests {
             "all callers must see the same summary"
         );
 
-        // LLM calls should be low (ideally 1, at most a few due to race windows).
+        // SQL-level uniqueness: with the UNIQUE(agent_id, path) partial index,
+        // exactly ONE row at the canonical /end-summary path must exist after
+        // 10 concurrent writers contended. (Without the index, INSERT OR
+        // IGNORE is inert and the table would hold up to 10 rows.)
+        let path = "aleph://session/sess-concurrent/end-summary";
+        let rows = store
+            .get_raw_by_path_prefix(path, "agent-4", 100)
+            .await
+            .unwrap();
+        let exact: Vec<_> = rows
+            .into_iter()
+            .filter(|r| r.path.as_deref() == Some(path))
+            .collect();
+        assert_eq!(
+            exact.len(),
+            1,
+            "expected exactly one /end-summary row, found {}",
+            exact.len()
+        );
+
+        // With the UNIQUE(agent_id, path) partial index in place, the race
+        // window is genuinely small: only callers that pass the read fast-path
+        // before any writer commits will issue an LLM call. In a single-thread
+        // tokio runtime serving a make_store() in-memory backend, the
+        // expected count is 1 (≤ 2 allows a tiny scheduling jitter cushion).
         assert!(
-            llm.call_count() <= 5,
+            llm.call_count() <= 2,
             "too many LLM calls: {}",
             llm.call_count()
         );
