@@ -108,6 +108,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Memory search tool instance (optional - requires memory_db + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
+    /// Memory context provider — used by the `remember` tool to resolve the
+    /// per-agent `CuratedMemoryStore`. Uses `OnceCell` for deferred injection:
+    /// the registry is wrapped in `Arc` before the MCP is constructed.
+    pub(crate) memory_context_provider:
+        Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
     /// Memory browse tool instance (optional - requires memory_db)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Memory explore tool instance (optional - requires memory_db + embedder)
@@ -293,6 +298,29 @@ impl BuiltinToolRegistry {
             *tool = tool.clone().with_reflector(reflector);
             info!("MemoryReflector injected into memory_reflect tool");
         }
+    }
+
+    /// Inject a `MemoryContextProvider` so the `remember` tool can resolve
+    /// the per-agent `CuratedMemoryStore` at call time.
+    ///
+    /// Takes `&self` (not `&mut self`) so it works through `Arc` — the MCP is
+    /// constructed after the registry has been wrapped in `Arc::new` in
+    /// `agent_init`.
+    pub fn set_memory_context_provider(
+        &self,
+        mcp: Arc<crate::thinker::MemoryContextProvider>,
+    ) {
+        if self.memory_context_provider.set(mcp).is_ok() {
+            info!("MemoryContextProvider injected — `remember` tool now available");
+        }
+    }
+
+    /// Get a handle to the `MemoryContextProvider` `OnceCell` for deferred
+    /// injection from the server builder.
+    pub fn memory_context_provider_cell(
+        &self,
+    ) -> Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>> {
+        Arc::clone(&self.memory_context_provider)
     }
 
     /// Inject a `QueryFiler` into the `memory_reflect` tool (Spec 8 Task 8 wiring).
@@ -568,6 +596,29 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "flag_user_correction not available: no memory backend configured",
                     )
                 })?;
+                tool.call_json(arguments).await
+            }),
+
+            // Curated hot memory write tool — resolves a per-agent
+            // CuratedMemoryStore via MemoryContextProvider at call time
+            // (mirrors the per-call construction pattern used by session_search).
+            "remember" => Box::pin(async move {
+                let mcp = self.memory_context_provider.get().ok_or_else(|| {
+                    AlephError::tool(
+                        "remember not available: MemoryContextProvider not yet injected",
+                    )
+                })?;
+                let agent_id = self
+                    .session_context_handle
+                    .as_ref()
+                    .and_then(|h| h.try_read().ok())
+                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "main".to_string());
+                let store = mcp
+                    .get_or_load_curated_store(&agent_id)
+                    .await
+                    .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
+                let tool = crate::builtin_tools::RememberTool::new(store);
                 tool.call_json(arguments).await
             }),
 

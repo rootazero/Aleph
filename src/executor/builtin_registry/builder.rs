@@ -927,6 +927,7 @@ impl BuiltinToolRegistry {
             desktop_platform,
             scratchpad_tool,
             memory_search_tool,
+            memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             memory_browse_tool,
             memory_explore_tool,
             memory_timeline_tool: timeline_tool,
@@ -1355,6 +1356,21 @@ impl BuiltinToolRegistry {
             );
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
         }
+
+        // Spec A Task 17 — remember tool is always exposed; its execution
+        // path resolves the per-agent CuratedMemoryStore via the deferred
+        // MemoryContextProvider injection. Curated memory is independent of
+        // the retrieval backend, so we don't gate registration on memory_db.
+        reg(
+            tools,
+            "remember",
+            crate::builtin_tools::RememberTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(
+                crate::builtin_tools::remember::RememberArgs
+            ))
+            .unwrap_or_default(),
+        );
+        info!("Registered remember tool in BuiltinToolRegistry");
 
         // Vault store tool
         if vault_store_tool.is_some() {

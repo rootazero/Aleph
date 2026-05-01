@@ -996,8 +996,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Grab handles to OnceCell's before wrapping in Arc.
         // We'll inject GatewayContext after ExecutionAdapter is created (breaks circular dep).
         // ChannelRegistry is injected after channel initialization.
+        // MemoryContextProvider is injected after the MCP is constructed below
+        // (Spec A Task 17 — enables the `remember` tool).
         let gateway_context_cell = tool_registry.gateway_context_cell();
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
+        let mcp_cell_for_tools = tool_registry.memory_context_provider_cell();
 
         // Spec 2 Task 8: construct Arc<MemoryReflector> and inject into memory_reflect tool.
         // Requires embedder (for retrieval) and a default provider (for LLM synthesis).
@@ -1365,6 +1368,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 orientation.clone(),
                 profile_synth.clone(),
             );
+            // Spec A Task 17 — inject MCP into the tool registry so the
+            // `remember` tool can resolve the per-agent CuratedMemoryStore.
+            let _ = mcp_cell_for_tools.set(mcp.clone());
             engine = engine.with_memory_context_provider(mcp);
         }
 

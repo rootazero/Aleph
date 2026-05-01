@@ -372,6 +372,24 @@ impl MemoryContextProvider {
         Ok(self.snapshot_to_message(&snap))
     }
 
+    /// Get or lazily load the per-agent `CuratedMemoryStore`. Public so the
+    /// builtin `remember` tool can resolve the same store instance the
+    /// CuratedMemoryLayer renders into the system prompt.
+    pub async fn get_or_load_curated_store(
+        &self,
+        agent_id: &str,
+    ) -> Result<Arc<CuratedMemoryStore>, crate::error::AlephError> {
+        if let Some(s) = self.curated_stores.get(agent_id) {
+            return Ok(s.clone());
+        }
+        let path = self.agent_memory_path(agent_id);
+        let s = Arc::new(
+            CuratedMemoryStore::load(path, self.curated_config.memory_char_limit, agent_id).await?,
+        );
+        self.curated_stores.insert(agent_id.to_string(), s.clone());
+        Ok(s)
+    }
+
     /// Load (or reuse) the per-agent CuratedMemoryStore, render the
     /// `<CuratedMemory>` and `<UserProfile>` blocks, and return them as a
     /// frozen `CuratedSnapshot`.
@@ -381,17 +399,7 @@ impl MemoryContextProvider {
     ) -> Result<CuratedSnapshot, crate::error::AlephError> {
         use crate::memory::curated::snapshot::{render_agent_block, render_user_block};
 
-        let store = if let Some(s) = self.curated_stores.get(agent_id) {
-            s.clone()
-        } else {
-            let path = self.agent_memory_path(agent_id);
-            let s = Arc::new(
-                CuratedMemoryStore::load(path, self.curated_config.memory_char_limit, agent_id)
-                    .await?,
-            );
-            self.curated_stores.insert(agent_id.to_string(), s.clone());
-            s
-        };
+        let store = self.get_or_load_curated_store(agent_id).await?;
 
         let entries = store.current_entries();
         let agent_block = render_agent_block(

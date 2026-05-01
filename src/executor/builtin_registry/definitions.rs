@@ -179,6 +179,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires StateDatabase
     },
     BuiltinToolDefinition {
+        name: "remember",
+        description: "Save durable agent-side memory (add/replace/remove) that auto-injects into future system prompts. Curated, bounded — only stable user preferences, environment facts, or workflow conventions. Not for task progress or transient notes.",
+        requires_config: true, // Requires MemoryContextProvider (deferred via OnceCell)
+    },
+    BuiltinToolDefinition {
         name: "session_list",
         description: "List sessions accessible to this agent for cross-session communication",
         requires_config: true, // Requires gateway_context
@@ -551,6 +556,9 @@ pub fn create_tool_boxed(
         "session_rename" => None,
         // Session search tool requires SessionManager at runtime
         "session_search" => None,
+        // Remember tool requires MemoryContextProvider (per-agent CuratedMemoryStore)
+        // and is built fresh per call from session context — same pattern as session_search.
+        "remember" => None,
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
         // Heartbeat management tools require SharedHeartbeatService at runtime
