@@ -70,15 +70,27 @@ impl SecretVault {
 
         // Atomic write: write to temp file, then rename
         let tmp_path = self.path.with_extension("vault.tmp");
-        std::fs::write(&tmp_path, &bytes)?;
-        std::fs::rename(&tmp_path, &self.path)?;
+        if let Err(e) = std::fs::write(&tmp_path, &bytes) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
 
         // Restrict vault file permissions on Unix (owner-only read/write)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = std::fs::set_permissions(&self.path, perms);
+            if let Err(e) = std::fs::set_permissions(&self.path, perms) {
+                tracing::warn!(
+                    path = %self.path.display(),
+                    error = %e,
+                    "Failed to set vault file permissions"
+                );
+            }
         }
 
         debug!(path = %self.path.display(), entries = self.data.entries.len(), "Vault saved");

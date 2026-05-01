@@ -10,6 +10,7 @@ use aes_gcm::{
 use hkdf::Hkdf;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::Sha256;
+use zeroize::Zeroize;
 
 use super::types::SecretError;
 
@@ -76,7 +77,7 @@ impl SecretsCrypto {
 
         // Zeroize derived key on stack
         let mut key = key;
-        key.fill(0);
+        key.zeroize();
 
         Ok(EncryptedData {
             ciphertext,
@@ -94,18 +95,18 @@ impl SecretsCrypto {
     ) -> Result<String, SecretError> {
         let mut key = self.derive_key(salt)?;
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| {
-            key.fill(0);
+            key.zeroize();
             SecretError::DecryptionFailed
         })?;
 
         let nonce = Nonce::from_slice(nonce_bytes);
         let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            key.fill(0);
+            key.zeroize();
             SecretError::DecryptionFailed
         })?;
 
         // Zeroize derived key on stack
-        key.fill(0);
+        key.zeroize();
 
         String::from_utf8(plaintext).map_err(|_| SecretError::DecryptionFailed)
     }

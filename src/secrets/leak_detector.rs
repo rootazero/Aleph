@@ -83,9 +83,7 @@ impl LeakDetector {
     ///
     /// Built-in patterns are always active. Custom patterns are additive.
     /// Invalid regex patterns are logged and skipped.
-    pub fn with_custom_patterns(
-        custom: &[crate::config::types::CustomLeakPattern],
-    ) -> Self {
+    pub fn with_custom_patterns(custom: &[crate::config::types::CustomLeakPattern]) -> Self {
         let mut detector = Self::new();
         for pattern in custom {
             match Regex::new(&pattern.pattern) {
@@ -263,7 +261,10 @@ mod tests {
         let injected = InjectedSecret {
             name: "my_key".to_string(),
             value_hash: {
-                let mut h = siphasher::sip::SipHasher::new();
+                let mut h = siphasher::sip::SipHasher::new_with_keys(
+                    0x517c_c1b7_2722_0a95,
+                    0x6c62_272e_07bb_0142,
+                );
                 "sk-ant-my-super-secret-key-12345678".hash(&mut h);
                 h.finish()
             },
