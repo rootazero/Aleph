@@ -72,6 +72,38 @@ pub struct Rect {
     pub height: f64,
 }
 
+impl Rect {
+    /// Create a new Rect, validating that width and height are non-negative.
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Result<Self, &'static str> {
+        if width < 0.0 {
+            return Err("width must be non-negative");
+        }
+        if height < 0.0 {
+            return Err("height must be non-negative");
+        }
+        Ok(Self { x, y, width, height })
+    }
+
+    /// Create a new Rect without validation (use with caution).
+    pub fn new_unchecked(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// Check if the rectangle has valid dimensions (non-negative width/height).
+    pub fn is_valid(&self) -> bool {
+        self.width >= 0.0 && self.height >= 0.0
+    }
+
+    /// Return the area of the rectangle.
+    pub fn area(&self) -> f64 {
+        if self.width < 0.0 || self.height < 0.0 {
+            0.0
+        } else {
+            self.width * self.height
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Vision Result (image understanding)
 // ---------------------------------------------------------------------------
@@ -149,6 +181,14 @@ pub struct VisionCapabilities {
 
     /// Can detect and localise objects with bounding boxes.
     pub object_detection: bool,
+}
+
+/// Validate that a confidence value is within the valid range [0.0, 1.0].
+pub fn validate_confidence(confidence: f64) -> Result<f64, &'static str> {
+    if !(0.0..=1.0).contains(&confidence) {
+        return Err("confidence must be in [0.0, 1.0]");
+    }
+    Ok(confidence)
 }
 
 impl VisionCapabilities {

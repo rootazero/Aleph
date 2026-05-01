@@ -23,6 +23,8 @@ pub struct ClaudeVisionProvider {
     api_key: String,
     model: String,
     base_url: String,
+    max_tokens: u32,
+    default_confidence: f64,
 }
 
 impl ClaudeVisionProvider {
@@ -37,6 +39,8 @@ impl ClaudeVisionProvider {
             api_key: api_key.into(),
             model: model.into(),
             base_url: "https://api.anthropic.com".to_string(),
+            max_tokens: 1024,
+            default_confidence: 0.9,
         }
     }
 
@@ -51,7 +55,21 @@ impl ClaudeVisionProvider {
             api_key: api_key.into(),
             model: model.into(),
             base_url: base_url.into(),
+            max_tokens: 1024,
+            default_confidence: 0.9,
         }
+    }
+
+    /// Set the maximum tokens for API calls (default: 1024).
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Set the default confidence score for responses (default: 0.9).
+    pub fn with_default_confidence(mut self, confidence: f64) -> Self {
+        self.default_confidence = confidence.clamp(0.0, 1.0);
+        self
     }
 
     fn endpoint(&self) -> String {
@@ -116,7 +134,7 @@ impl ClaudeVisionProvider {
         let mut request = MessagesRequest {
             model: self.model.clone(),
             messages,
-            max_tokens: 1024,
+            max_tokens: self.max_tokens,
             system: None,
             temperature: None,
             stream: None,
@@ -180,7 +198,7 @@ impl VisionProvider for ClaudeVisionProvider {
         Ok(VisionResult {
             description,
             elements: Vec::new(),
-            confidence: 0.9,
+            confidence: self.default_confidence,
         })
     }
 
@@ -195,7 +213,7 @@ impl VisionProvider for ClaudeVisionProvider {
             .map(|t| crate::vision::types::OcrLine {
                 text: t.to_string(),
                 bounding_box: None,
-                confidence: 0.9,
+                confidence: self.default_confidence,
             })
             .collect();
         Ok(OcrResult {

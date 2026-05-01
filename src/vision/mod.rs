@@ -11,8 +11,8 @@ pub mod types;
 pub use error::VisionError;
 pub use provider::VisionProvider;
 pub use types::{
-    ImageFormat, ImageInput, OcrLine, OcrResult, Rect, VisionCapabilities, VisionResult,
-    VisualElement,
+    validate_confidence, ImageFormat, ImageInput, OcrLine, OcrResult, Rect, VisionCapabilities,
+    VisionResult, VisualElement,
 };
 
 /// Orchestrates multiple [`VisionProvider`] instances in a fallback chain.
@@ -411,6 +411,44 @@ mod tests {
             caps: VisionCapabilities::all(),
         }));
         assert_eq!(pipeline.provider_count(), 1);
+    }
+
+    #[test]
+    fn rect_validation() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 80.0).unwrap();
+        assert_eq!(rect.x, 10.0);
+        assert_eq!(rect.y, 20.0);
+        assert_eq!(rect.width, 100.0);
+        assert_eq!(rect.height, 80.0);
+        assert!(rect.is_valid());
+        assert_eq!(rect.area(), 8000.0);
+
+        let rect = Rect::new(0.0, 0.0, -1.0, 80.0);
+        assert!(rect.is_err());
+
+        let rect = Rect::new(0.0, 0.0, 100.0, -1.0);
+        assert!(rect.is_err());
+    }
+
+    #[test]
+    fn rect_new_unchecked() {
+        let rect = Rect::new_unchecked(10.0, 20.0, 100.0, 80.0);
+        assert!(rect.is_valid());
+        assert_eq!(rect.area(), 8000.0);
+
+        let invalid = Rect::new_unchecked(0.0, 0.0, -10.0, 80.0);
+        assert!(!invalid.is_valid());
+        assert_eq!(invalid.area(), 0.0);
+    }
+
+    #[test]
+    fn confidence_validation() {
+        assert_eq!(validate_confidence(0.0).unwrap(), 0.0);
+        assert_eq!(validate_confidence(1.0).unwrap(), 1.0);
+        assert_eq!(validate_confidence(0.5).unwrap(), 0.5);
+
+        assert!(validate_confidence(-0.1).is_err());
+        assert!(validate_confidence(1.1).is_err());
     }
 
     #[test]
