@@ -14,6 +14,7 @@ use crate::memory::dreaming::distill_action::DistillAction;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::wikilink::rewrite_wikilinks;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, Severity};
+use crate::utils::atomic_write::atomic_write_file;
 
 /// All valid category subdirectories under `memory/{agent_id}/`.
 pub const CATEGORY_DIRS: &[&str] = &[
@@ -637,34 +638,6 @@ fn sha2_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
-}
-
-/// Write `content` to `path` atomically — write to `<path>.tmp` first, then
-/// rename. POSIX rename is atomic within a single filesystem, so readers
-/// either see the old file or the new file but never a partial write.
-///
-/// Pairs with the write-then-index sequence in `write_note` /
-/// `merge_source_facts_into_note`: if downstream `index_note` errors, the
-/// renamed file is fully on disk and `full_rebuild` reconciles SQLite from
-/// disk on next startup. Without atomic rename, a crash mid-`fs::write`
-/// would leave a truncated file that re-parses incorrectly on rebuild.
-async fn atomic_write_file(path: &Path, content: &str) -> Result<(), AlephError> {
-    let mut tmp_os = path.as_os_str().to_owned();
-    tmp_os.push(".tmp");
-    let tmp = PathBuf::from(tmp_os);
-    fs::write(&tmp, content)
-        .await
-        .map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to write {tmp:?}: {e}"),
-            suggestion: None,
-        })?;
-    fs::rename(&tmp, path)
-        .await
-        .map_err(|e| AlephError::ConfigError {
-            message: format!("Failed to rename {tmp:?} -> {path:?}: {e}"),
-            suggestion: None,
-        })?;
-    Ok(())
 }
 
 #[cfg(test)]
