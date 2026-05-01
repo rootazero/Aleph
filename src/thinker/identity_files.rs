@@ -8,12 +8,15 @@ use std::path::{Path, PathBuf};
 use crate::thinker::prompt_budget::truncate_with_head_tail;
 
 /// Canonical identity file names, loaded in this order.
+///
+/// Note: `MEMORY.md` is intentionally absent — it's owned by the curated
+/// memory module (`src/memory/curated/`) and rendered into the prompt by
+/// `CuratedMemoryLayer`, not loaded as a generic identity file.
 pub const IDENTITY_FILE_NAMES: &[&str] = &[
     "SOUL.md",
     "IDENTITY.md",
     "AGENTS.md",
     "TOOLS.md",
-    "MEMORY.md",
     "HEARTBEAT.md",
 ];
 
@@ -50,10 +53,11 @@ pub struct IdentityFile {
 
 /// Collection of loaded identity files from an agent identity directory.
 ///
-/// Identity files (SOUL.md / IDENTITY.md / AGENTS.md / MEMORY.md / TOOLS.md /
+/// Identity files (SOUL.md / IDENTITY.md / AGENTS.md / TOOLS.md /
 /// HEARTBEAT.md) live under `~/.aleph/agents/{agent_id}/` — this is the
 /// agent's *identity* directory, distinct from `~/.aleph/workspaces/{agent_id}/`
-/// which only holds runtime tool output and scratch files.
+/// which only holds runtime tool output and scratch files. `MEMORY.md` lives
+/// alongside but is loaded by the curated memory module, not this loader.
 #[derive(Debug, Clone)]
 pub struct IdentityFiles {
     /// The agent identity directory these files were loaded from.
@@ -166,13 +170,16 @@ mod tests {
 
     #[test]
     fn workspace_file_names_match_spec() {
-        assert_eq!(IDENTITY_FILE_NAMES.len(), 6);
+        assert_eq!(IDENTITY_FILE_NAMES.len(), 5);
         assert_eq!(IDENTITY_FILE_NAMES[0], "SOUL.md");
         assert_eq!(IDENTITY_FILE_NAMES[1], "IDENTITY.md");
         assert_eq!(IDENTITY_FILE_NAMES[2], "AGENTS.md");
         assert_eq!(IDENTITY_FILE_NAMES[3], "TOOLS.md");
-        assert_eq!(IDENTITY_FILE_NAMES[4], "MEMORY.md");
-        assert_eq!(IDENTITY_FILE_NAMES[5], "HEARTBEAT.md");
+        assert_eq!(IDENTITY_FILE_NAMES[4], "HEARTBEAT.md");
+        assert!(
+            !IDENTITY_FILE_NAMES.contains(&"MEMORY.md"),
+            "MEMORY.md is owned by curated memory module, not identity files"
+        );
     }
 
     #[test]
