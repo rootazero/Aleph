@@ -84,5 +84,6 @@ pub mod filter;
 pub mod lookup;
 pub mod synthesizer;
 
+pub use end_hook::SessionEndSummarizer;
 pub use filter::FactSourceFilter;
 pub use lookup::retrieve_summary_fact;
