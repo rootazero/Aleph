@@ -1,0 +1,50 @@
+{
+  "agent_id": "agent-1",
+  "generated_at": "<redacted>",
+  "meta": {
+    "candidates_considered": 2,
+    "fallback_reason": "forced",
+    "llm_rerank_latency_ms": "<redacted>",
+    "strategy": "skeleton_fallback_v1",
+    "total_latency_ms": "<redacted>",
+    "used_fallback": true
+  },
+  "query": "deployment",
+  "schema_version": "1.0",
+  "session_id": "sess-baseline",
+  "slots": [
+    {
+      "items": [
+        {
+          "content": "Aleph uses Rust",
+          "id": "aleph://session/sess-baseline/raw/<uuid>",
+          "relevance": 0.6000000238418579,
+          "source": {
+            "kind": "raw",
+            "raw_id": "<redacted>",
+            "session_id": "sess-baseline"
+          },
+          "title": "Raw fragment <uuid>",
+          "tokens": 3,
+          "updated_at": "<redacted>"
+        },
+        {
+          "content": "Project deadline 2026-Q3",
+          "id": "aleph://session/sess-baseline/raw/<uuid>",
+          "relevance": 0.6000000238418579,
+          "source": {
+            "kind": "raw",
+            "raw_id": "<redacted>",
+            "session_id": "sess-baseline"
+          },
+          "title": "Raw fragment <uuid>",
+          "tokens": 6,
+          "updated_at": "<redacted>"
+        }
+      ],
+      "kind": "raw_fragments",
+      "tokens_budget": 1000,
+      "tokens_used": 9
+    }
+  ]
+}
