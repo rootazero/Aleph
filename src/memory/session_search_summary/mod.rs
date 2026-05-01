@@ -20,9 +20,55 @@
 //!   Signature: `async fn search_messages(&self, query: &str, max_results: usize) -> Result<Vec<SearchHit>, SessionStoreError>`.
 //!   Does NOT accept a session_id filter; search is global across all sessions.
 //!
-//! - Memory-fact write entry-point: `NoteStore::index_note` at `src/memory/notes/store.rs:2`.
-//!   Signature: `async fn index_note(&self, note: &KnowledgeNote, agent_id: &str, category: &str) -> Result<(), AlephError>`.
-//!   No explicit INSERT OR IGNORE flag in the trait; implementation detail is in SQLite backend.
+//! - Memory-fact write entry-point (CORRECTED 2026-05-01): Spec B writes to the
+//!   `raw_memories` table via `RawMemoryStore`, NOT to the `notes`/wiki layer
+//!   and NOT to a `memory_facts` table (that name is aspirational in the plan).
+//!
+//!   * Trait method: `RawMemoryStore::insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>`
+//!     at `src/memory/store/raw_memory.rs:203`.
+//!   * SQLite impl: `src/memory/store/sqlite/raw_memories.rs:52`. Writes to the
+//!     `raw_memories` table.
+//!   * Construction pattern (from `src/memory/session_compactor/mod.rs:503-506`,
+//!     also lines 758-761 and 854-857):
+//!     `RawMemory::new(content, RawMemorySource::SessionCompressed)
+//!         .with_agent(...)
+//!         .with_session(&session_id)
+//!         .with_path(path)`.
+//!   * For agents with a `capture_registry` configured, writes go through
+//!     `insert_with_capture_filter` at `src/memory/extensions/insert_helper.rs:11`,
+//!     which dispatches `on_capture` extensions then forwards to
+//!     `RawMemoryStore::insert_raw_memory` only when the chain returns
+//!     `CaptureDecision::Allow`. New writers should prefer this indirection
+//!     when the registry is available.
+//!
+//!   Read-side audit (Step A, for Tasks 5 and 8):
+//!   * Path-prefix lookup EXISTS:
+//!     `RawMemoryStore::get_raw_by_path_prefix(path_prefix, agent_id, limit)`
+//!     at `src/memory/store/raw_memory.rs:229` (impl `raw_memories.rs:174`,
+//!     SQL `WHERE path LIKE ?1 AND agent_id = ?2`). Task 8 can use this
+//!     directly to enumerate `aleph://session/{sid}/d*` rows.
+//!   * Watermarked variant `get_raw_by_path_prefix_since(...since: i64)` also
+//!     exists at `raw_memory.rs:244` / `raw_memories.rs:207`.
+//!   * Exact-path lookup does NOT exist (no `find_by_path` / `get_by_path`
+//!     method on `RawMemoryStore`). Task 5 must either:
+//!     (a) add a new trait method `find_by_path(path, agent_id) -> Option<RawMemory>`, or
+//!     (b) reuse `get_raw_by_path_prefix` with the full exact path and filter
+//!     for the single-row case.
+//!
+//!   `INSERT OR IGNORE` semantics:
+//!   * `insert_raw_memory` uses plain `INSERT INTO raw_memories ...` (no
+//!     `OR IGNORE` clause — see `raw_memories.rs:57`). Other writers in
+//!     `src/memory/store/sqlite/` (notes-links, query_filed, recall_signals)
+//!     do use `INSERT OR IGNORE`, but raw_memories does not.
+//!   * Task 7 will therefore need either (a) a new
+//!     `insert_raw_memory_or_ignore` helper on the trait, or (b) modify the
+//!     SQL in the existing impl to `INSERT OR IGNORE`. (a) is preferred to
+//!     avoid changing semantics for existing callers.
+//!
+//!   Naming note: Spec B's plan text mentions "memory_facts" / "memory fact" /
+//!   `find_fact_by_path` / `write_fact_or_ignore`. Those are ASPIRATIONAL
+//!   placeholders; the actual implementation in this module will use
+//!   `RawMemoryStore` / `raw_memories` / `RawMemory` naming throughout.
 //!
 //! - Spec A's `register_session_end_mcp` pattern at `src/thinker/memory_context_provider.rs:663`.
 //!   Uses `tokio::sync::OnceCell<Arc<MemoryContextProvider>>` for single registration (idempotent, subsequent calls are no-op).
