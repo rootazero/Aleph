@@ -137,6 +137,16 @@ Spec 1 (Hooks) ─────┬─────► Spec 2 (Reflect)
 | 3. Fencing/Modes | ✅ shipped | [design](2026-04-13-memory-evolution-spec3-fencing-modes-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec3-fencing-modes.md) | 2026-04-13 |
 | 4. Extensions | ✅ shipped | [design](2026-04-13-memory-evolution-spec4-extensions-design.md) | [plan](../plans/2026-04-13-memory-evolution-spec4-extensions.md) | 2026-04-13 |
 
+### Follow-up Specs (post-roadmap)
+
+Closes the remaining Hermes-vs-Aleph gaps surfaced after the 4-spec roadmap shipped.
+
+| Spec | 状态 | 设计文档 | 实施计划 | 完成日期 |
+|------|------|----------|----------|----------|
+| A. Curated Hot Memory + Frozen Snapshot + `remember` tool | ✅ shipped | [design](2026-05-01-memory-evolution-spec-a-curated-hot-snapshot-design.md) | [plan](../plans/2026-05-01-memory-evolution-spec-a-curated-hot-snapshot.md) | 2026-05-01 |
+| B. `session_search` summarization pipeline | ⏸ pending | — | — | — |
+| C. Cross-process safety beyond curated layer | ⏸ pending | — | — | — |
+
 > 每个 spec 完成后回到本文档更新状态栏和文档链接。
 > 下一个 session 若遗忘整个 roadmap，从本文件重新启动。
 

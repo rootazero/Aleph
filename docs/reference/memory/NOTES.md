@@ -2,6 +2,19 @@
 
 > Markdown-first persistent knowledge. Each note is one `.md` file; SQLite tables are rebuildable indexes.
 
+## Curated Hot Memory (MEMORY.md) — sibling concept
+
+A separate, single-file *curated hot memory* lives at
+`~/.aleph/agents/{agent_id}/MEMORY.md` alongside the L1 notes library. It is **not** a Knowledge Note — it is a small bounded "hot zone" rendered into the system prompt at session start.
+
+- **Format:** entries separated by `\n§\n`. The `remember` tool is the only writer (LLM-driven add / replace / remove); direct edits via `self_config(write_file)` are rejected.
+- **Char budget:** default 2,200 chars (configurable in `[memory.curated]`). Over-budget writes are rejected; the LLM must `replace` or `remove` first.
+- **Frozen snapshot:** captured once per `(agent_id, session_key)` and reused for every prompt build in the session. Refreshes only on compression-run completion or session end (Hermes-inspired prefix-cache stability).
+- **Threat scanning:** every write goes through `content_scanner` (prompt-injection / exfiltration / SSH access / invisible-unicode patterns).
+- **Legacy compatibility:** existing free-format `MEMORY.md` is read as a single legacy entry; `add` is blocked until the LLM curates it via `replace` / `remove`.
+
+Module: `src/memory/curated/`. Spec: `docs/superpowers/specs/2026-05-01-memory-evolution-spec-a-curated-hot-snapshot-design.md`.
+
 ## 1. Overview
 
 Notes are the L1 **persistent** layer of Aleph's memory stack. Three claims define the contract:
