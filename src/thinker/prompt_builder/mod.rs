@@ -144,6 +144,12 @@ pub struct PromptBuilder {
     /// When set, threaded into every `LayerInput` as `memory_user_message` so
     /// `MemoryAugmentationLayer` can inject it verbatim into the system prompt.
     memory_user_message: Option<String>,
+    /// Pre-rendered curated memory envelope (`<CuratedMemory>` + `<UserProfile>`).
+    ///
+    /// When set, threaded into every `LayerInput` as `curated_memory_envelope`
+    /// so `CuratedMemoryLayer` (Stable) can inject it verbatim, preserving the
+    /// prompt prefix cache.
+    curated_memory_envelope: Option<String>,
 }
 
 impl PromptBuilder {
@@ -157,6 +163,7 @@ impl PromptBuilder {
             soul: None,
             identity_files: None,
             memory_user_message: None,
+            curated_memory_envelope: None,
         }
     }
 
@@ -201,6 +208,16 @@ impl PromptBuilder {
         self
     }
 
+    /// Attach a pre-rendered curated memory envelope for prompt injection.
+    ///
+    /// When set, `build_system_prompt` threads this into
+    /// `LayerInput::curated_memory_envelope` so `CuratedMemoryLayer` (Stable)
+    /// injects it verbatim. Pass `None` to clear a previously attached envelope.
+    pub fn with_curated_envelope(mut self, envelope: Option<String>) -> Self {
+        self.curated_memory_envelope = envelope;
+        self
+    }
+
     /// Build the system prompt
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let (path, input) = match &self.soul {
@@ -223,6 +240,7 @@ impl PromptBuilder {
             Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(path, &input)
     }
 
@@ -232,7 +250,8 @@ impl PromptBuilder {
     /// instead of the traditional ToolInfo array, enabling semantic tool
     /// selection based on query relevance.
     pub fn build_system_prompt_with_hydration(&self, hydration: &HydrationResult) -> String {
-        let input = LayerInput::hydration(&self.config, hydration);
+        let input = LayerInput::hydration(&self.config, hydration)
+            .with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline
             .execute_cached(AssemblyPath::Hydration, &input)
     }
@@ -256,6 +275,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -315,6 +335,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -333,6 +354,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(AssemblyPath::Basic, &input)
     }
 
@@ -351,6 +373,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         let stable_prefix = self.pipeline.execute_stable_only(path, &input);
         PromptSnapshot {
             stable_prefix,
@@ -375,6 +398,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
 
         let dynamic_suffix = self.pipeline.execute_dynamic_only(snapshot.path, &input);
         let mut result = String::with_capacity(snapshot.stable_prefix.len() + dynamic_suffix.len());
@@ -409,6 +433,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline
             .execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
@@ -434,6 +459,7 @@ impl PromptBuilder {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline
             .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
@@ -462,6 +488,7 @@ impl PromptBuilder {
             Some(text) => input.with_memory_user_message(text.clone()),
             None => input,
         };
+        let input = input.with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
     }
 
@@ -475,7 +502,8 @@ impl PromptBuilder {
         &self,
         ctx: &super::context::ResolvedContext,
     ) -> String {
-        let input = LayerInput::context(&self.config, ctx);
+        let input = LayerInput::context(&self.config, ctx)
+            .with_curated_envelope(self.curated_memory_envelope.clone());
         self.pipeline.execute_cached(AssemblyPath::Context, &input)
     }
 }

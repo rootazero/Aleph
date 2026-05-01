@@ -110,6 +110,13 @@ pub struct LayerInput<'a> {
     /// When set, `SessionResumeLayer` injects the snapshot summary,
     /// key decisions, active files, and pending tasks into the prompt.
     pub session_snapshot: Option<&'a crate::memory::session_resume::SessionSnapshot>,
+    /// Pre-rendered curated memory envelope (`<CuratedMemory>` + `<UserProfile>`).
+    ///
+    /// Populated once per session by `MemoryContextProvider::build_curated_message`
+    /// and threaded through every `LayerInput` construction.  `CuratedMemoryLayer`
+    /// (priority 60, Stable) injects this text verbatim, preserving the prompt
+    /// prefix cache.
+    pub curated_memory_envelope: Option<String>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -131,6 +138,7 @@ impl<'a> LayerInput<'a> {
             mcp_instructions: None,
             mcp_tool_index: None,
             session_snapshot: None,
+            curated_memory_envelope: None,
         }
     }
 
@@ -152,6 +160,7 @@ impl<'a> LayerInput<'a> {
             mcp_instructions: None,
             mcp_tool_index: None,
             session_snapshot: None,
+            curated_memory_envelope: None,
         }
     }
 
@@ -173,6 +182,7 @@ impl<'a> LayerInput<'a> {
             mcp_instructions: None,
             mcp_tool_index: None,
             session_snapshot: None,
+            curated_memory_envelope: None,
         }
     }
 
@@ -194,6 +204,7 @@ impl<'a> LayerInput<'a> {
             mcp_instructions: None,
             mcp_tool_index: None,
             session_snapshot: None,
+            curated_memory_envelope: None,
         }
     }
 
@@ -239,6 +250,15 @@ impl<'a> LayerInput<'a> {
     /// ignores the legacy `memory_context` field.
     pub fn with_memory_user_message(mut self, text: String) -> Self {
         self.memory_user_message = Some(text);
+        self
+    }
+
+    /// Attach the pre-rendered curated memory envelope.
+    ///
+    /// When set, `CuratedMemoryLayer` injects this text verbatim into the
+    /// system prompt as a Stable section so the prefix cache stays warm.
+    pub fn with_curated_envelope(mut self, envelope: Option<String>) -> Self {
+        self.curated_memory_envelope = envelope;
         self
     }
 

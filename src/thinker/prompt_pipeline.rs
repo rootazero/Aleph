@@ -205,6 +205,7 @@ impl PromptPipeline {
     /// **Stable zone** (cacheable):
     ///   50  SoulLayer
     ///   55  AgentRoleLayer
+    ///   60  CuratedMemoryLayer
     ///   75  ProfileLayer
     ///  100  RoleLayer
     ///  300  EnvironmentLayer
@@ -241,6 +242,7 @@ impl PromptPipeline {
         Self::new(vec![
             Box::new(SoulLayer),
             Box::new(AgentRoleLayer),
+            Box::new(CuratedMemoryLayer),
             Box::new(InboundContextLayer),
             Box::new(McpInstructionsLayer),
             Box::new(McpToolIndexLayer),
@@ -464,7 +466,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 33);
+        assert_eq!(pipeline.layer_count(), 34);
     }
 
     #[test]

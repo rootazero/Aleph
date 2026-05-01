@@ -47,6 +47,9 @@ mod voice_mode;
 // --- Identity files layer ---
 mod identity_files;
 
+// --- Curated memory layer ---
+mod curated_memory;
+
 // --- Memory augmentation layer ---
 mod memory_augmentation;
 
@@ -83,6 +86,7 @@ pub use tool_usage_grammar::ToolUsageGrammarLayer;
 pub use tools::HydratedToolsLayer;
 pub use tools::ToolsLayer;
 
+pub use curated_memory::CuratedMemoryLayer;
 pub use environment::EnvironmentLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;
