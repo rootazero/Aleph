@@ -1,4 +1,85 @@
-//! Stub — implementation in Task 8.
+//! Frozen renderings of MEMORY.md and USER.md, captured at session start
+//! and reused for every prompt build until evicted by compression / SessionEnd.
+
+use std::time::SystemTime;
+
+use super::budget::header;
+use super::format::serialize;
 
 #[derive(Debug, Clone)]
-pub struct CuratedSnapshot;
+pub struct CuratedSnapshot {
+    pub agent_id: String,
+    pub agent_md_block: String,             // <CuratedMemory> XML
+    pub user_md_block: Option<String>,      // <UserProfile> XML, optional
+    pub captured_at: SystemTime,
+}
+
+/// Render the agent-side MEMORY.md as an XML envelope. Empty entries → empty string.
+pub fn render_agent_block(
+    entries: &[String],
+    char_limit: usize,
+    near_threshold: f32,
+) -> String {
+    if entries.is_empty() { return String::new(); }
+    let head = header(entries, char_limit, near_threshold);
+    let body = serialize(entries);
+    format!("<CuratedMemory>\n{head}\n{body}\n</CuratedMemory>")
+}
+
+/// Render the user-profile body as an XML envelope with a budget header.
+/// `body` is the synthesized USER.md content (already markdown). Truncated
+/// to `char_limit` to enforce budget on synthesizer output.
+pub fn render_user_block(
+    body: &str,
+    char_limit: usize,
+    near_threshold: f32,
+) -> String {
+    if body.trim().is_empty() { return String::new(); }
+    let truncated = if body.chars().count() > char_limit {
+        body.chars().take(char_limit).collect::<String>()
+    } else {
+        body.to_string()
+    };
+    // Use a single virtual entry for header math.
+    let entries = vec![truncated.clone()];
+    let head = header(&entries, char_limit, near_threshold);
+    format!("<UserProfile>\n{head}\n{truncated}\n</UserProfile>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_entries_produce_empty_block() {
+        assert_eq!(render_agent_block(&[], 100, 0.95), "");
+    }
+
+    #[test]
+    fn agent_block_contains_header_and_body() {
+        let e = vec!["fact one".to_string(), "fact two".to_string()];
+        let block = render_agent_block(&e, 100, 0.95);
+        assert!(block.starts_with("<CuratedMemory>"));
+        assert!(block.ends_with("</CuratedMemory>"));
+        assert!(block.contains("/100 chars"));
+        assert!(block.contains("fact one"));
+        assert!(block.contains("§"));
+    }
+
+    #[test]
+    fn user_block_truncates_at_limit() {
+        let body = "x".repeat(2000);
+        let block = render_user_block(&body, 1375, 0.95);
+        assert!(block.contains("<UserProfile>"));
+        let inside = block.replace("<UserProfile>", "").replace("</UserProfile>", "");
+        // Must not contain more than `limit` x's after header.
+        let xs = inside.matches('x').count();
+        assert!(xs <= 1375, "got {xs} xs");
+    }
+
+    #[test]
+    fn user_block_empty_body_returns_empty() {
+        assert_eq!(render_user_block("", 100, 0.95), "");
+        assert_eq!(render_user_block("   \n  ", 100, 0.95), "");
+    }
+}
