@@ -1,12 +1,9 @@
+pub mod base;
 pub mod bing;
 pub mod brave;
 pub mod exa;
 pub mod google;
 pub mod searxng;
-/// Search provider implementations
-///
-/// This module contains concrete implementations of the `SearchProvider` trait
-/// for different search backends.
 pub mod tavily;
 
 // Re-exports

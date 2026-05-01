@@ -1,7 +1,8 @@
 use crate::error::{AlephError, Result};
+use crate::search::providers::base::build_client;
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
 
 /// Google Custom Search Engine provider
@@ -30,6 +31,34 @@ struct GoogleItem {
     snippet: Option<String>,
 }
 
+/// Sanitize a message by replacing occurrences of the API key.
+fn sanitize_api_key(msg: String, key: &str) -> String {
+    if key.is_empty() {
+        return msg;
+    }
+    msg.replace(key, "***REDACTED***")
+}
+
+/// Check HTTP response status with API-key sanitization in error messages.
+fn check_status_google(response: Response, provider_name: &str, api_key: &str) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        Ok(response)
+    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        let msg = sanitize_api_key(
+            format!("{} API error: {}", provider_name, status),
+            api_key,
+        );
+        Err(AlephError::authentication(provider_name, msg))
+    } else {
+        let msg = sanitize_api_key(
+            format!("{} API error: {}", provider_name, status),
+            api_key,
+        );
+        Err(AlephError::provider(msg))
+    }
+}
+
 impl GoogleProvider {
     pub fn new(api_key: impl Into<String>, engine_id: impl Into<String>) -> Result<Self> {
         let api_key = api_key.into();
@@ -46,10 +75,7 @@ impl GoogleProvider {
         Ok(Self {
             api_key,
             engine_id,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| AlephError::network(e.to_string()))?,
+            client: build_client()?,
         })
     }
 }
@@ -71,25 +97,20 @@ impl SearchProvider for GoogleProvider {
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
-            .map_err(|e| AlephError::network(e.to_string()))?;
+            .map_err(|e| {
+                let msg = sanitize_api_key(e.to_string(), &self.api_key);
+                AlephError::network(msg)
+            })?;
 
-        let status = response.status();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(AlephError::authentication(
-                    NAME,
-                    format!("{} API error: {}", NAME, status),
-                ));
-            }
-            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
-        }
+        let response = check_status_google(response, NAME, &self.api_key)?;
 
         let google_response: GoogleResponse = response
             .json()
             .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse Google response: {}", e)))?;
+            .map_err(|e| {
+                let msg = sanitize_api_key(e.to_string(), &self.api_key);
+                AlephError::provider(format!("Failed to parse Google response: {}", msg))
+            })?;
 
         let results = google_response
             .items
@@ -138,5 +159,20 @@ mod tests {
 
         let result2 = GoogleProvider::new("key".to_string(), "".to_string());
         assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_sanitize_api_key() {
+        let msg = "error for key=SECRET123".to_string();
+        let sanitized = sanitize_api_key(msg, "SECRET123");
+        assert!(!sanitized.contains("SECRET123"));
+        assert!(sanitized.contains("***REDACTED***"));
+    }
+
+    #[test]
+    fn test_sanitize_api_key_empty_key() {
+        let msg = "some error".to_string();
+        let sanitized = sanitize_api_key(msg.clone(), "");
+        assert_eq!(sanitized, msg);
     }
 }

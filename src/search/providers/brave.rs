@@ -1,4 +1,5 @@
 use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -42,10 +43,7 @@ impl BraveProvider {
 
         Ok(Self {
             api_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| AlephError::network(e.to_string()))?,
+            client: build_client()?,
         })
     }
 }
@@ -57,29 +55,20 @@ impl SearchProvider for BraveProvider {
             .client
             .get("https://api.search.brave.com/res/v1/web/search")
             .header("X-Subscription-Token", &self.api_key)
-            .query(&[("q", query), ("count", &options.validated_max_results().to_string())])
+            .query(&[(
+                "q",
+                query,
+            ), (
+                "count",
+                &options.validated_max_results().to_string(),
+            )])
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(AlephError::authentication(
-                    NAME,
-                    format!("{} API error: {}", NAME, status),
-                ));
-            }
-            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
-        }
-
-        let brave_response: BraveResponse = response
-            .json()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse Brave response: {}", e)))?;
+        let response = check_status(response, NAME)?;
+        let brave_response: BraveResponse = parse_json(response, NAME).await?;
 
         let results = brave_response
             .web
@@ -116,14 +105,14 @@ mod tests {
 
     #[test]
     fn test_brave_provider_creation() {
-        let provider = BraveProvider::new("BSA_test_key".to_string()).unwrap();
+        let provider = BraveProvider::new("BSA_test_key").unwrap();
         assert_eq!(provider.name(), "brave");
         assert!(provider.is_available());
     }
 
     #[test]
     fn test_brave_provider_rejects_empty_key() {
-        let result = BraveProvider::new("".to_string());
+        let result = BraveProvider::new("");
         assert!(result.is_err());
     }
 }

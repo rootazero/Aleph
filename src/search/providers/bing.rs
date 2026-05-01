@@ -1,4 +1,5 @@
 use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -43,10 +44,7 @@ impl BingProvider {
 
         Ok(Self {
             api_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| AlephError::network(e.to_string()))?,
+            client: build_client()?,
         })
     }
 }
@@ -58,29 +56,20 @@ impl SearchProvider for BingProvider {
             .client
             .get("https://api.bing.microsoft.com/v7.0/search")
             .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .query(&[("q", query), ("count", &options.validated_max_results().to_string())])
+            .query(&[(
+                "q",
+                query,
+            ), (
+                "count",
+                &options.validated_max_results().to_string(),
+            )])
             .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(AlephError::authentication(
-                    NAME,
-                    format!("{} API error: {}", NAME, status),
-                ));
-            }
-            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
-        }
-
-        let bing_response: BingResponse = response
-            .json()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse Bing response: {}", e)))?;
+        let response = check_status(response, NAME)?;
+        let bing_response: BingResponse = parse_json(response, NAME).await?;
 
         let results = bing_response
             .web_pages
@@ -117,14 +106,14 @@ mod tests {
 
     #[test]
     fn test_bing_provider_creation() {
-        let provider = BingProvider::new("ocp-apim-test-key".to_string()).unwrap();
+        let provider = BingProvider::new("ocp-apim-test-key").unwrap();
         assert_eq!(provider.name(), "bing");
         assert!(provider.is_available());
     }
 
     #[test]
     fn test_bing_provider_rejects_empty_key() {
-        let result = BingProvider::new("".to_string());
+        let result = BingProvider::new("");
         assert!(result.is_err());
     }
 }

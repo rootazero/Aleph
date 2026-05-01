@@ -1,8 +1,10 @@
 use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Tavily AI search provider
 ///
@@ -11,7 +13,7 @@ const NAME: &str = "tavily";
 
 #[derive(Debug)]
 pub struct TavilyProvider {
-    api_key: String,
+    api_key: Arc<str>,
     client: Client,
 }
 
@@ -44,17 +46,14 @@ struct TavilyResult {
 
 impl TavilyProvider {
     pub fn new(api_key: impl Into<String>) -> Result<Self> {
-        let api_key = api_key.into();
+        let api_key: String = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Tavily API key is required"));
         }
 
         Ok(Self {
-            api_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| AlephError::network(e.to_string()))?,
+            api_key: Arc::from(api_key.into_boxed_str()),
+            client: build_client()?,
         })
     }
 }
@@ -63,7 +62,7 @@ impl TavilyProvider {
 impl SearchProvider for TavilyProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let request_body = TavilyRequest {
-            api_key: self.api_key.clone(),
+            api_key: self.api_key.to_string(),
             query: query.to_string(),
             search_depth: if options.include_full_content {
                 "advanced".to_string()
@@ -88,25 +87,9 @@ impl SearchProvider for TavilyProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(AlephError::authentication(
-                    NAME,
-                    format!("{} API error: {}", NAME, status),
-                ));
-            }
-            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
-        }
+        let response = check_status(response, NAME)?;
+        let tavily_response: TavilyResponse = parse_json(response, NAME).await?;
 
-        let tavily_response: TavilyResponse = response
-            .json()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse Tavily response: {}", e)))?;
-
-        // Convert to unified format
         let results = tavily_response
             .results
             .into_iter()

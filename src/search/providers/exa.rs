@@ -1,4 +1,5 @@
 use crate::error::{AlephError, Result};
+use crate::search::providers::base::{build_client, check_status, parse_json};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -51,10 +52,7 @@ impl ExaProvider {
 
         Ok(Self {
             api_key,
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| AlephError::network(e.to_string()))?,
+            client: build_client()?,
         })
     }
 }
@@ -78,23 +76,8 @@ impl SearchProvider for ExaProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(AlephError::authentication(
-                    NAME,
-                    format!("{} API error: {}", NAME, status),
-                ));
-            }
-            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
-        }
-
-        let exa_response: ExaResponse = response
-            .json()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to parse Exa response: {}", e)))?;
+        let response = check_status(response, NAME)?;
+        let exa_response: ExaResponse = parse_json(response, NAME).await?;
 
         let results = exa_response
             .results
