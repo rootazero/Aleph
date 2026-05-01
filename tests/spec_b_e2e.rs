@@ -639,3 +639,44 @@ async fn session_end_hook_produces_summary() {
         "no extra LLM call from search"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 16 — per_session_dedup
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn per_session_dedup() {
+    let env = TestEnv::build().await;
+
+    // Seed 5 d0-style compactor facts in the same session, all matching the query.
+    for i in 0..5 {
+        let raw = RawMemory::new(
+            format!("Chunk {i} discusses deployment strategies"),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_agent("agent-1")
+        .with_session("big-sess")
+        .with_path(format!("aleph://session/big-sess/d0/{i}"));
+        env.seed_raw_memory(raw).await;
+    }
+
+    let tool = env.build_tool_with_assembler("agent-1");
+    let result = tool
+        .call(SessionSearchArgs {
+            query: "deployment".into(),
+            max_results: 10,
+        })
+        .await
+        .expect("call");
+
+    let big_sess_count = result
+        .hits
+        .iter()
+        .filter(|h| h.session_key == "big-sess")
+        .count();
+    assert_eq!(
+        big_sess_count, 1,
+        "session must appear at most once after dedup; got {} hits",
+        big_sess_count
+    );
+}
