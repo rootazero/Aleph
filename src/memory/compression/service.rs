@@ -16,8 +16,21 @@ use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock as TokioRwLock;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
+
+/// Hook fired after `compress_default_notes` succeeds for a single agent.
+///
+/// Spec A Task 18: lets `MemoryContextProvider` evict cached
+/// `<CuratedMemory>` snapshots so the next prompt-build round reads fresh
+/// state from disk.
+pub trait PostCompressionHook: Send + Sync {
+    fn on_compression_complete<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> futures::future::BoxFuture<'a, ()>;
+}
 
 /// Configuration for the compression service
 #[derive(Debug, Clone)]
@@ -61,6 +74,11 @@ pub struct CompressionService {
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
     profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
+    /// Hooks fired after `compress_default_notes` finishes successfully for an
+    /// agent. Wrapped in `RwLock` so `add_post_hook(&self)` works through
+    /// `Arc<CompressionService>` (the engine wraps the service in `Arc` before
+    /// the MCP is constructed; we register the hook later from agent_init).
+    post_hooks: TokioRwLock<Vec<Arc<dyn PostCompressionHook>>>,
 }
 
 impl CompressionService {
@@ -96,7 +114,19 @@ impl CompressionService {
             compound_ingestor: None,
             compound_enabled: false,
             profile_synthesizer: None,
+            post_hooks: TokioRwLock::new(Vec::new()),
         }
+    }
+
+    /// Register a [`PostCompressionHook`] that fires after each successful
+    /// per-agent `compress_default_notes` call.
+    ///
+    /// `&self` (not `&mut self`) so callers holding `Arc<CompressionService>`
+    /// can wire hooks AFTER the service has been wrapped — required because
+    /// the engine constructs `Arc<CompressionService>` before the MCP that
+    /// implements the hook is built.
+    pub async fn add_post_hook(&self, hook: Arc<dyn PostCompressionHook>) {
+        self.post_hooks.write().await.push(hook);
     }
 
     /// Attach an event-sourcing command handler.
@@ -155,6 +185,14 @@ impl CompressionService {
             total.facts_extracted += result.facts_extracted;
             total.facts_invalidated += result.facts_invalidated;
             total.duration_ms += result.duration_ms;
+
+            // Spec A Task 18: notify hooks (e.g. MemoryContextProvider) so
+            // cached <CuratedMemory> snapshots get evicted. Fire only on
+            // success; the `?` above already aborts on Err.
+            let hooks = self.post_hooks.read().await;
+            for hook in hooks.iter() {
+                hook.on_compression_complete(agent_id).await;
+            }
         }
         Ok(total)
     }

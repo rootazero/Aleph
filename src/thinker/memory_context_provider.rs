@@ -469,6 +469,21 @@ impl MemoryContextProvider {
             .retain(|(_, sk), _| sk != session_key);
     }
 
+    /// Drop every cached curated snapshot for `agent_id` across every
+    /// session_key. Spec A Task 18: fired after compression-run completes
+    /// for the agent, since compression mutates `MEMORY.md` / `USER.md` on
+    /// disk and any per-session cache must rebuild on the next prompt.
+    pub async fn invalidate_curated_for_agent(&self, agent_id: &str) {
+        self.curated_snapshots
+            .write()
+            .await
+            .retain(|(aid, _), _| aid != agent_id);
+        // The per-agent CuratedMemoryStore caches the last-loaded body in
+        // memory; drop it too so the next `get_or_load_curated_store` call
+        // re-reads MEMORY.md from disk.
+        self.curated_stores.remove(agent_id);
+    }
+
     /// Build a wiki orientation user-message for injection into the prompt.
     ///
     /// Returns `Ok(None)` when:
@@ -614,6 +629,45 @@ fn render_orientation_envelope(
         esc(&s.index_text),
         esc(&s.recent_log_tail)
     )
+}
+
+// Spec A Task 18 — bridge MemoryContextProvider into the compression
+// pipeline so cached `<CuratedMemory>` snapshots are evicted after
+// compression rewrites MEMORY.md / USER.md on disk.
+impl crate::memory::compression::PostCompressionHook for MemoryContextProvider {
+    fn on_compression_complete<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> futures::future::BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.invalidate_curated_for_agent(agent_id).await;
+        })
+    }
+}
+
+/// Process-wide handle used by the SessionEnd evict path.
+///
+/// `emit_session_end_raw_with_registry` lives in `gateway::session_manager::ops`
+/// and has 3 callsites + 2 test fixtures. Threading an optional
+/// `Arc<MemoryContextProvider>` argument through every caller would be a
+/// 5-file blast radius for what is essentially a single fire-and-forget
+/// invalidation. Using an opt-in `OnceCell` keeps the change surgical:
+/// `agent_init` registers the MCP once at startup, the session-end path
+/// reads the cell and spawns the eviction.
+static SESSION_END_MCP: tokio::sync::OnceCell<Arc<MemoryContextProvider>> =
+    tokio::sync::OnceCell::const_new();
+
+/// Register a `MemoryContextProvider` for SessionEnd-triggered curated
+/// invalidation. Idempotent; subsequent calls are a no-op (returns the
+/// `Err(_)` from `OnceCell::set` silently).
+pub fn register_session_end_mcp(mcp: Arc<MemoryContextProvider>) {
+    let _ = SESSION_END_MCP.set(mcp);
+}
+
+/// Read the registered MCP, if any. Used by
+/// `emit_session_end_raw_with_registry` to evict per-session snapshots.
+pub fn session_end_mcp() -> Option<Arc<MemoryContextProvider>> {
+    SESSION_END_MCP.get().cloned()
 }
 
 #[cfg(test)]
@@ -997,6 +1051,61 @@ mod curated_snapshot_tests {
         assert!(
             txt3.contains("fact three"),
             "after invalidate + store reset, must pick up disk change"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_curated_for_agent_drops_all_sessions_only_for_target() {
+        let dir = tempdir().unwrap();
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_curated_config(CuratedConfig {
+                    memory_char_limit: 200,
+                    user_char_limit: 200,
+                    legacy_warn_threshold: 0.95,
+                })
+                .with_curated_root_for_test(dir.path().to_path_buf());
+
+        // Pre-seed two agents, each with curated entries.
+        let a_dir = dir.path().join("agent-A");
+        let b_dir = dir.path().join("agent-B");
+        std::fs::create_dir_all(&a_dir).unwrap();
+        std::fs::create_dir_all(&b_dir).unwrap();
+        std::fs::write(a_dir.join("MEMORY.md"), "a-old\n§\n").unwrap();
+        std::fs::write(b_dir.join("MEMORY.md"), "b-old\n§\n").unwrap();
+
+        // Prime caches: 2 sessions for agent-A, 1 for agent-B.
+        provider
+            .build_curated_message("agent-A", "ses-1")
+            .await
+            .unwrap();
+        provider
+            .build_curated_message("agent-A", "ses-2")
+            .await
+            .unwrap();
+        provider
+            .build_curated_message("agent-B", "ses-1")
+            .await
+            .unwrap();
+
+        assert_eq!(provider.curated_snapshots.read().await.len(), 3);
+
+        // Invalidate ALL agent-A sessions; agent-B must remain.
+        provider.invalidate_curated_for_agent("agent-A").await;
+
+        let snaps = provider.curated_snapshots.read().await;
+        assert_eq!(snaps.len(), 1, "only agent-B's snapshot should survive");
+        assert!(
+            snaps.contains_key(&("agent-B".to_string(), "ses-1".to_string())),
+            "agent-B/ses-1 must still be cached"
+        );
+        assert!(
+            !snaps.contains_key(&("agent-A".to_string(), "ses-1".to_string())),
+            "agent-A/ses-1 must be evicted"
+        );
+        assert!(
+            !snaps.contains_key(&("agent-A".to_string(), "ses-2".to_string())),
+            "agent-A/ses-2 must be evicted"
         );
     }
 }

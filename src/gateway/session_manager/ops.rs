@@ -1271,6 +1271,18 @@ pub(crate) fn emit_session_end_raw_with_registry(
     .with_session(session_id.clone());
 
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
+        // Spec A Task 18: evict cached <CuratedMemory> snapshot for this
+        // session so the next prompt build re-reads MEMORY.md / USER.md
+        // from disk. Fire-and-forget; never block session-end on cache
+        // invalidation. The MCP is registered once at startup via
+        // `thinker::memory_context_provider::register_session_end_mcp`.
+        if let Some(mcp) = crate::thinker::memory_context_provider::session_end_mcp() {
+            let session_key = session_id.clone();
+            rt.spawn(async move {
+                mcp.invalidate_curated(&session_key).await;
+            });
+        }
+
         rt.spawn(async move {
             if let Some(reg) = registry {
                 let ctx = crate::memory::extensions::types::CaptureCtx {

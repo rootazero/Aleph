@@ -1371,6 +1371,22 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Spec A Task 17 — inject MCP into the tool registry so the
             // `remember` tool can resolve the per-agent CuratedMemoryStore.
             let _ = mcp_cell_for_tools.set(mcp.clone());
+
+            // Spec A Task 18 — wire post-compression invalidation:
+            //   1) compression run completes → MCP drops cached
+            //      <CuratedMemory> snapshots for that agent
+            //   2) session ends → MCP drops snapshots for that session_key
+            // Both hooks are fire-and-forget; cache freshness, never gating.
+            if let Some(ref cs) = compression_out {
+                let mcp_hook: std::sync::Arc<
+                    dyn alephcore::memory::compression::PostCompressionHook,
+                > = mcp.clone();
+                cs.add_post_hook(mcp_hook).await;
+            }
+            alephcore::thinker::memory_context_provider::register_session_end_mcp(
+                mcp.clone(),
+            );
+
             engine = engine.with_memory_context_provider(mcp);
         }
 

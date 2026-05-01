@@ -18,7 +18,7 @@ mod trigger;
 
 pub use extractor::FactExtractor;
 pub use scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
-pub use service::{CompressionConfig, CompressionService};
+pub use service::{CompressionConfig, CompressionService, PostCompressionHook};
 pub use signal_detector::{
     CompressionPriority, CompressionSignal, DetectionResult, SignalDetector, SignalKeywords,
 };
