@@ -55,6 +55,11 @@ impl LlmReranker for NoopReranker {
     }
 }
 
+/// Per-(agent_id, session_key) curated snapshot cache. Frozen until
+/// invalidation; see [`MemoryContextProvider::build_curated_message`].
+type CuratedSnapshotCache =
+    Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>;
+
 /// Provides pre-fetched memory context for prompt injection.
 pub struct MemoryContextProvider {
     assembler: Arc<dyn WorkingMemoryAssembler>,
@@ -72,7 +77,7 @@ pub struct MemoryContextProvider {
     profile: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
     /// Per-(agent_id, session_key) frozen snapshot. Built on first prompt
     /// build for the session; reused until evicted by compression / SessionEnd.
-    curated_snapshots: Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>,
+    curated_snapshots: CuratedSnapshotCache,
     /// Per-agent CuratedMemoryStore. Loaded lazily on first capture.
     curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
     /// Char-budget config for both MEMORY.md and USER.md rendering.
