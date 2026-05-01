@@ -4,6 +4,7 @@
 
 use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, SlotKind};
 use crate::config::types::memory::FallbackSkeleton;
+use crate::memory::context::FactSource;
 
 /// An un-rendered candidate before hydration — kept internal to the
 /// assembler module. Produced by `gather` (Task 7), consumed here and by
@@ -17,6 +18,10 @@ pub(crate) struct Candidate {
     pub relevance: f32,
     pub updated_at: i64,
     pub slot_hint: SlotKind,
+    /// Semantic source classification used by [`FactSourceFilter`] to
+    /// post-filter the candidate pool. Defaults to [`FactSource::Extracted`]
+    /// for all non-SessionCompressed raw memories and for note results.
+    pub fact_source: FactSource,
 }
 
 /// Pack `candidates` into skeleton slots using fixed budgets and the
@@ -93,6 +98,7 @@ mod tests {
             relevance: rel,
             updated_at: updated,
             slot_hint: slot,
+            fact_source: FactSource::Extracted,
         }
     }
 

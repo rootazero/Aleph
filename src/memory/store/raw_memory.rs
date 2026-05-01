@@ -256,6 +256,26 @@ pub trait RawMemoryStore: Send + Sync {
             .filter(|r| r.created_at > since_created_at)
             .collect())
     }
+
+    /// Get raw memories by storage source type, scoped to an agent.
+    /// Used for cross-session retrieval (e.g. all `SessionCompressed` summaries).
+    ///
+    /// Default impl fetches all unprocessed memories and filters client-side;
+    /// SQLite backend overrides with an efficient indexed query.
+    async fn get_raw_by_source(
+        &self,
+        source: RawMemorySource,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let token = source.to_persisted().0;
+        let all = self.get_unprocessed_raw_memories(agent_id, limit * 10).await?;
+        Ok(all
+            .into_iter()
+            .filter(|r| r.source.to_persisted().0 == token)
+            .take(limit)
+            .collect())
+    }
 }
 
 #[cfg(test)]

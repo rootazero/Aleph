@@ -186,6 +186,7 @@ impl MemoryContextProvider {
                 agent_id: &str,
                 _session_id: Option<&str>,
                 _budget: AssemblyBudget,
+                _filter: crate::memory::session_search_summary::FactSourceFilter,
             ) -> Result<MemoryEnvelope, crate::error::AlephError> {
                 Ok(MemoryEnvelope {
                     schema_version: "1.0".into(),
@@ -577,7 +578,13 @@ impl MemoryContextProvider {
         };
         let mut envelope = self
             .assembler
-            .assemble(query, agent_id, None, budget)
+            .assemble(
+                query,
+                agent_id,
+                None,
+                budget,
+                crate::memory::session_search_summary::FactSourceFilter::Any,
+            )
             .await?;
 
         let ext_ctx = crate::memory::extensions::RetrieveCtx {

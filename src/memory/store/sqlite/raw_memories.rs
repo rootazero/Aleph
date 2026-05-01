@@ -240,6 +240,39 @@ impl RawMemoryStore for SqliteMemoryBackend {
         }
         Ok(results)
     }
+
+    async fn get_raw_by_source(
+        &self,
+        source: RawMemorySource,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let (src_token, _) = source.to_persisted();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE source = ?1 AND agent_id = ?2 \
+                 ORDER BY created_at DESC \
+                 LIMIT ?3",
+            )
+            .map_err(|e| AlephError::config(format!("get_raw_by_source prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![src_token, agent_id, limit as i64], row_to_raw_memory)
+            .map_err(|e| AlephError::config(format!("get_raw_by_source query: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(
+                row.map_err(|e| AlephError::config(format!("get_raw_by_source row: {e}")))?,
+            );
+        }
+        Ok(results)
+    }
 }
 
 // ---------------------------------------------------------------------------

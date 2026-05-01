@@ -17,6 +17,7 @@ use alephcore::memory::assembler::{
     AssemblyBudget, HybridAssembler, ItemSource, MemoryEnvelope, UserProfileLoader,
     WorkingMemoryAssembler,
 };
+use alephcore::memory::session_search_summary::FactSourceFilter;
 use alephcore::memory::embedding_provider::EmbeddingProvider;
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::NoteIndexer;
@@ -281,13 +282,14 @@ async fn note_retrieval_default_behaviour_baseline() {
     // ---- Build HybridAssembler ----
     let assembler = build_assembler(backend, notes_dir);
 
-    // ---- Run with the CURRENT 4-arg signature ----
+    // ---- Run with the 5-arg signature (FactSourceFilter::Any = pre-Spec-B behaviour) ----
     let envelope = assembler
         .assemble(
             "deployment",
             "agent-1",
             Some("sess-baseline"),
             AssemblyBudget { total_tokens: 4000 },
+            FactSourceFilter::Any,
         )
         .await
         .expect("assemble must succeed");

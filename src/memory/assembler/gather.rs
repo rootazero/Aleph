@@ -4,9 +4,11 @@
 use super::envelope::{ItemSource, SlotKind};
 use super::fallback::Candidate;
 use super::profile::UserProfileLoader;
+use crate::memory::context::FactSource;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::session_resume::reader::SnapshotReader;
-use crate::memory::store::raw_memory::{RawMemory, RawMemoryStore};
+use crate::memory::session_search_summary::FactSourceFilter;
+use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::memory::store::MemoryBackend;
 use crate::memory::SqliteMemoryBackend;
 use crate::sync_primitives::Arc;
@@ -17,6 +19,7 @@ pub(crate) struct GatherInputs {
     pub agent_id: String,
     pub session_id: Option<String>,
     pub pool_limit: usize,
+    pub filter: FactSourceFilter,
 }
 
 pub(crate) struct Gatherer {
@@ -31,7 +34,7 @@ impl Gatherer {
         let (notes, snapshot, raws, profile) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(input.session_id.as_deref()),
-            self.fetch_raws(&input.agent_id, input.session_id.as_deref()),
+            self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             self.profile.load(&input.agent_id),
         );
 
@@ -51,8 +54,13 @@ impl Gatherer {
                 relevance: 1.0,
                 updated_at: chrono::Utc::now().timestamp(),
                 slot_hint: SlotKind::UserProfile,
+                fact_source: FactSource::Extracted,
             });
         }
+
+        // Post-gather filter: drop candidates that don't match the requested
+        // FactSourceFilter. FactSourceFilter::Any is a no-op (passes everything).
+        pool.retain(|c| input.filter.matches(c.fact_source));
         pool
     }
 
@@ -86,6 +94,7 @@ impl Gatherer {
                         relevance: sf.score,
                         updated_at: sf.fact.updated_at,
                         slot_hint: SlotKind::RelevantNotes,
+                        fact_source: FactSource::Extracted,
                     }
                 })
                 .collect(),
@@ -124,10 +133,25 @@ impl Gatherer {
             relevance: 0.9,
             updated_at: snap.created_at.timestamp(),
             slot_hint: SlotKind::SessionRecent,
+            fact_source: FactSource::Summary,
         }]
     }
 
-    async fn fetch_raws(&self, agent_id: &str, session_id: Option<&str>) -> Vec<Candidate> {
+    async fn fetch_raws(
+        &self,
+        agent_id: &str,
+        session_id: Option<&str>,
+        filter: &FactSourceFilter,
+    ) -> Vec<Candidate> {
+        // When filtering to SessionCompressed only and there is no active
+        // session, fetch all SessionCompressed rows for this agent (cross-
+        // session retrieval path).
+        if matches!(filter, FactSourceFilter::Only(FactSource::SessionCompressed))
+            && session_id.is_none()
+        {
+            return self.fetch_session_compressed(agent_id).await;
+        }
+
         let Some(sid) = session_id else {
             return Vec::new();
         };
@@ -144,10 +168,27 @@ impl Gatherer {
             }
         }
     }
+
+    /// Fetch all `SessionCompressed` raw memories for an agent, regardless of
+    /// session. Used by the cross-session `session_search` path.
+    async fn fetch_session_compressed(&self, agent_id: &str) -> Vec<Candidate> {
+        match self
+            .backend
+            .get_raw_by_source(RawMemorySource::SessionCompressed, agent_id, 20)
+            .await
+        {
+            Ok(raws) => raws.into_iter().map(raw_to_candidate).collect(),
+            Err(e) => {
+                warn!(error = %e, agent = agent_id, "assembler.gather: session_compressed fetch failed");
+                Vec::new()
+            }
+        }
+    }
 }
 
 fn raw_to_candidate(r: RawMemory) -> Candidate {
     let session_id = r.session_id.clone().unwrap_or_default();
+    let fact_source = raw_source_to_fact_source(&r.source);
     Candidate {
         id: format!("aleph://session/{session_id}/raw/{}", r.id),
         title: format!("Raw fragment {}", r.id),
@@ -159,6 +200,18 @@ fn raw_to_candidate(r: RawMemory) -> Candidate {
         relevance: 0.6,
         updated_at: r.created_at,
         slot_hint: SlotKind::RawFragments,
+        fact_source,
+    }
+}
+
+/// Map storage-layer [`RawMemorySource`] to semantic-layer [`FactSource`].
+///
+/// Only `SessionCompressed` has a meaningful 1:1 mapping. All other variants
+/// are transcript/tool-output-like content and map to `Extracted`.
+fn raw_source_to_fact_source(src: &RawMemorySource) -> FactSource {
+    match src {
+        RawMemorySource::SessionCompressed => FactSource::SessionCompressed,
+        _ => FactSource::Extracted,
     }
 }
 
@@ -181,5 +234,33 @@ mod tests {
             _ => panic!("expected ItemSource::Raw"),
         }
         assert_eq!(c.slot_hint, SlotKind::RawFragments);
+        assert_eq!(c.fact_source, FactSource::Extracted);
+    }
+
+    #[test]
+    fn session_compressed_maps_to_correct_fact_source() {
+        let raw = RawMemory::new(
+            "compressed summary".into(),
+            RawMemorySource::SessionCompressed,
+        )
+        .with_session("sess-2");
+        let c = raw_to_candidate(raw);
+        assert_eq!(c.fact_source, FactSource::SessionCompressed);
+    }
+
+    #[test]
+    fn raw_source_to_fact_source_mapping() {
+        assert_eq!(
+            raw_source_to_fact_source(&RawMemorySource::SessionCompressed),
+            FactSource::SessionCompressed
+        );
+        assert_eq!(
+            raw_source_to_fact_source(&RawMemorySource::Transcript),
+            FactSource::Extracted
+        );
+        assert_eq!(
+            raw_source_to_fact_source(&RawMemorySource::ToolOutput),
+            FactSource::Extracted
+        );
     }
 }

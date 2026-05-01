@@ -13,6 +13,7 @@ use super::rerank::{build_prompt, parse_response};
 use super::{AssemblyBudget, WorkingMemoryAssembler};
 use crate::config::types::memory::AssemblerConfig;
 use crate::error::AlephError;
+use crate::memory::session_search_summary::FactSourceFilter;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::session_resume::reader::SnapshotReader;
 use crate::memory::store::MemoryBackend;
@@ -201,6 +202,7 @@ impl WorkingMemoryAssembler for HybridAssembler {
         agent_id: &str,
         session_id: Option<&str>,
         budget: AssemblyBudget,
+        filter: FactSourceFilter,
     ) -> Result<MemoryEnvelope, AlephError> {
         let start = std::time::Instant::now();
 
@@ -221,7 +223,7 @@ impl WorkingMemoryAssembler for HybridAssembler {
             return Ok(env);
         }
 
-        // Stage 1: gather
+        // Stage 1: gather (with source filter applied post-gather)
         let gathered = self
             .gatherer
             .gather(&GatherInputs {
@@ -229,6 +231,7 @@ impl WorkingMemoryAssembler for HybridAssembler {
                 agent_id: agent_id.to_string(),
                 session_id: session_id.map(str::to_string),
                 pool_limit: self.config.candidate_pool_limit,
+                filter,
             })
             .await;
         let candidates_considered = gathered.len();

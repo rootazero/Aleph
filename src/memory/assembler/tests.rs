@@ -161,7 +161,7 @@ async fn path_tiny_pool_skips_llm() {
     let fx = fixture(reranker.clone(), default_cfg());
     let env = fx
         .assembler
-        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 })
+        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 }, crate::memory::session_search_summary::FactSourceFilter::Any)
         .await
         .unwrap();
     assert!(env.meta.used_fallback);
@@ -185,6 +185,7 @@ async fn path_llm_timeout_falls_back() {
             "default",
             Some("sess-a"),
             AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
         )
         .await
         .unwrap();
@@ -205,6 +206,7 @@ async fn path_llm_invalid_json_falls_back() {
             "default",
             Some("sess-b"),
             AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
         )
         .await
         .unwrap();
@@ -239,6 +241,7 @@ async fn path_happy_b_with_valid_response() {
             "default",
             Some("sess-d"),
             AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
         )
         .await
         .unwrap();
@@ -256,7 +259,7 @@ async fn path_disabled_config_short_circuits() {
     let fx = fixture(reranker.clone(), cfg);
     let env = fx
         .assembler
-        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 })
+        .assemble("q", "default", None, AssemblyBudget { total_tokens: 4000 }, crate::memory::session_search_summary::FactSourceFilter::Any)
         .await
         .unwrap();
     assert_eq!(env.meta.strategy, "disabled");
@@ -283,6 +286,7 @@ async fn path_force_fallback_bypasses_llm() {
             "default",
             Some("sess-e"),
             AssemblyBudget { total_tokens: 4000 },
+            crate::memory::session_search_summary::FactSourceFilter::Any,
         )
         .await
         .unwrap();
@@ -305,7 +309,7 @@ proptest! {
             let fx = fixture(reranker, default_cfg());
             let env = fx
                 .assembler
-                .assemble("q", "default", None, AssemblyBudget { total_tokens: budget })
+                .assemble("q", "default", None, AssemblyBudget { total_tokens: budget }, crate::memory::session_search_summary::FactSourceFilter::Any)
                 .await
                 .unwrap();
             let json = serde_json::to_string(&env).unwrap();

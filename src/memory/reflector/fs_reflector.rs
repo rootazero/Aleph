@@ -86,7 +86,13 @@ impl MemoryReflector {
 
         let envelope = self
             .assembler
-            .assemble(query, &opts.agent_id, opts.session_id.as_deref(), budget)
+            .assemble(
+                query,
+                &opts.agent_id,
+                opts.session_id.as_deref(),
+                budget,
+                crate::memory::session_search_summary::FactSourceFilter::Any,
+            )
             .await?;
 
         // Check emptiness: all slots must have zero items.

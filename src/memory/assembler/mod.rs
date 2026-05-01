@@ -25,6 +25,7 @@ pub use envelope::{
 pub use render::{render_envelope, render_with, RenderStyle};
 
 use crate::error::AlephError;
+use crate::memory::session_search_summary::FactSourceFilter;
 use async_trait::async_trait;
 
 /// Token budget passed into the assembler. `total_tokens` is the hard cap
@@ -47,5 +48,6 @@ pub trait WorkingMemoryAssembler: Send + Sync {
         agent_id: &str,
         session_id: Option<&str>,
         budget: AssemblyBudget,
+        filter: FactSourceFilter,
     ) -> Result<MemoryEnvelope, AlephError>;
 }
