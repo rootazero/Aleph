@@ -6,6 +6,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::memory::curated::CuratedConfig;
+
 // =============================================================================
 // MemoryInjectionMode
 // =============================================================================
@@ -199,6 +201,13 @@ pub struct MemoryConfig {
     /// Query filer configuration.
     #[serde(default)]
     pub query_filer: QueryFilerConfig,
+
+    // ========================================
+    // Curated Hot Memory (Spec A)
+    // ========================================
+    /// Curated hot memory zone configuration.
+    #[serde(default)]
+    pub curated: CuratedSection,
 }
 
 // =============================================================================
@@ -861,6 +870,42 @@ impl Default for MemoryConfig {
             profile: UserProfileConfig::default(),
             // Query filer (Spec 8)
             query_filer: QueryFilerConfig::default(),
+            // Curated hot memory (Spec A)
+            curated: CuratedSection::default(),
+        }
+    }
+}
+
+// =============================================================================
+// CuratedSection (Memory Evolution Spec A)
+// =============================================================================
+
+/// Toml section: `[memory.curated]`
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct CuratedSection {
+    pub memory_char_limit: usize,
+    pub user_char_limit: usize,
+    pub legacy_warn_threshold: f32,
+}
+
+impl Default for CuratedSection {
+    fn default() -> Self {
+        let c = CuratedConfig::default();
+        Self {
+            memory_char_limit: c.memory_char_limit,
+            user_char_limit: c.user_char_limit,
+            legacy_warn_threshold: c.legacy_warn_threshold,
+        }
+    }
+}
+
+impl From<CuratedSection> for CuratedConfig {
+    fn from(s: CuratedSection) -> Self {
+        Self {
+            memory_char_limit: s.memory_char_limit,
+            user_char_limit: s.user_char_limit,
+            legacy_warn_threshold: s.legacy_warn_threshold,
         }
     }
 }
@@ -1156,6 +1201,14 @@ mod tests {
         assert_eq!(c.total_budget_tokens, 4000);
         assert_eq!(c.rerank_timeout_ms, 800);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
+    }
+
+    #[test]
+    fn missing_curated_section_uses_defaults() {
+        let cfg = MemoryConfig::default();
+        assert_eq!(cfg.curated.memory_char_limit, 2_200);
+        assert_eq!(cfg.curated.user_char_limit, 1_375);
+        assert!((cfg.curated.legacy_warn_threshold - 0.95).abs() < 1e-6);
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod compression;
 pub mod content_scanner;
 pub mod context;
 pub mod context_comptroller;
+pub mod curated;
 pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
