@@ -152,7 +152,7 @@ impl ResilientExecutor {
                     let fallback_ctx = ctx.for_degradation();
                     match task.fallback(&fallback_ctx).await {
                         Ok(output) => {
-                            task.on_degraded(ctx, &reason);
+                            task.on_degraded(&fallback_ctx, &reason);
                             TaskOutcome::Degraded {
                                 result: output,
                                 reason,
@@ -165,9 +165,11 @@ impl ResilientExecutor {
                                 error = %e,
                                 "Fallback also failed"
                             );
-                            self.notify_failure(ctx, &format!("Fallback failed: {}", e));
+                            let error_msg = format!("Fallback failed: {}", e);
+                            task.on_failed(&fallback_ctx, &error_msg);
+                            self.notify_failure(&fallback_ctx, &error_msg);
                             TaskOutcome::Failed {
-                                error: format!("Fallback failed: {}", e),
+                                error: error_msg,
                                 attempts: ctx.attempt,
                                 last_attempt_duration: elapsed,
                             }
@@ -192,20 +194,31 @@ impl ResilientExecutor {
                 if task.has_fallback() {
                     let fallback_ctx = ctx.for_degradation();
                     match task.fallback(&fallback_ctx).await {
-                        Ok(output) => TaskOutcome::Degraded {
-                            result: output,
-                            reason,
-                            attempts: ctx.attempt,
-                        },
-                        Err(e) => TaskOutcome::Failed {
-                            error: e.to_string(),
-                            attempts: ctx.attempt,
-                            last_attempt_duration: elapsed,
-                        },
+                        Ok(output) => {
+                            task.on_degraded(&fallback_ctx, &reason);
+                            TaskOutcome::Degraded {
+                                result: output,
+                                reason,
+                                attempts: ctx.attempt,
+                            }
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Partial result failed: {}", e);
+                            task.on_failed(&fallback_ctx, &error_msg);
+                            self.notify_failure(&fallback_ctx, &error_msg);
+                            TaskOutcome::Failed {
+                                error: error_msg,
+                                attempts: ctx.attempt,
+                                last_attempt_duration: elapsed,
+                            }
+                        }
                     }
                 } else {
+                    let error_msg = "No partial result available";
+                    task.on_failed(ctx, error_msg);
+                    self.notify_failure(ctx, error_msg);
                     TaskOutcome::Failed {
-                        error: "No partial result available".to_string(),
+                        error: error_msg.to_string(),
                         attempts: ctx.attempt,
                         last_attempt_duration: elapsed,
                     }
@@ -228,12 +241,26 @@ impl ResilientExecutor {
             DegradationStrategy::NotifyAndFail { notify_channels: _ } => {
                 let error_msg = match &reason {
                     DegradationReason::RetriesExhausted { last_error, .. } => last_error.clone(),
-                    DegradationReason::Timeout { .. } => "Timeout".to_string(),
-                    _ => "Unknown error".to_string(),
+                    DegradationReason::Timeout { elapsed, limit } => {
+                        format!("Timeout after {:?} (limit: {:?})", elapsed, limit)
+                    }
+                    DegradationReason::ServiceUnavailable { service } => {
+                        format!("Service unavailable: {}", service)
+                    }
+                    DegradationReason::RateLimited { retry_after } => {
+                        if let Some(after) = retry_after {
+                            format!("Rate limited — retry after {:?}", after)
+                        } else {
+                            "Rate limited".to_string()
+                        }
+                    }
+                    DegradationReason::QuotaExceeded { resource } => {
+                        format!("Quota exceeded: {}", resource)
+                    }
+                    DegradationReason::Manual { reason } => reason.clone(),
                 };
 
                 self.notify_failure(ctx, &error_msg);
-
                 task.on_failed(ctx, &error_msg);
 
                 TaskOutcome::Failed {

@@ -91,14 +91,12 @@ impl PodcastTask {
 impl ResilientTask for PodcastTask {
     type Output = PodcastResult;
 
-    #[allow(clippy::needless_return)]
     fn execute<'a>(
         &'a self,
         _ctx: &'a TaskContext,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Output>> + Send + 'a>>
     {
         let title = self.title.clone();
-        let _content = self.content.clone();
 
         Box::pin(async move {
             // Simulate TTS generation (in real impl, call TTS API)
@@ -107,15 +105,14 @@ impl ResilientTask for PodcastTask {
             // For demonstration, simulate occasional failure
             #[cfg(test)]
             {
-                return Err(crate::error::AlephError::NetworkError {
+                Err(crate::error::AlephError::NetworkError {
                     message: "TTS service unavailable".to_string(),
                     suggestion: None,
-                });
+                })
             }
 
             #[cfg(not(test))]
             {
-                // Real TTS implementation would go here
                 Ok(PodcastResult::Audio {
                     title,
                     audio_url: "https://example.com/podcast.mp3".to_string(),
@@ -194,10 +191,21 @@ impl PodcastResult {
 /// Generate a markdown summary from content
 fn generate_markdown_summary(content: &str) -> String {
     // Simple summarization - in real impl, use LLM
-    let sentences: Vec<&str> = content.split('.').take(5).collect();
+    let sentences: Vec<&str> = content
+        .split('.')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .take(5)
+        .collect();
+
+    if sentences.is_empty() {
+        return "## Summary\n\n*No content available.*\n\n*This is a text summary because audio generation was unavailable.*".to_string();
+    }
+
+    let summary = sentences.join(". ");
     format!(
-        "## Summary\n\n{}\n\n*This is a text summary because audio generation was unavailable.*",
-        sentences.join(". ")
+        "## Summary\n\n{}.\n\n*This is a text summary because audio generation was unavailable.*",
+        summary
     )
 }
 
