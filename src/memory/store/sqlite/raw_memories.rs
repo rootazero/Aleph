@@ -76,6 +76,33 @@ impl RawMemoryStore for SqliteMemoryBackend {
         Ok(())
     }
 
+    async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError> {
+        let conn = lock_conn!(self)?;
+        let (src_token, src_detail) = raw.source.to_persisted();
+
+        conn.execute(
+            "INSERT OR IGNORE INTO raw_memories \
+             (id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, is_processed, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                raw.id,
+                raw.content,
+                src_token,
+                src_detail,
+                raw.agent_id,
+                raw.session_id,
+                raw.path,
+                raw.layer,
+                raw.attachment_text,
+                raw.is_processed as i64,
+                raw.created_at,
+            ],
+        )
+        .map_err(|e| AlephError::config(format!("insert_raw_memory_or_ignore failed: {e}")))?;
+
+        Ok(())
+    }
+
     async fn get_unprocessed_raw_memories(
         &self,
         agent_id: &str,

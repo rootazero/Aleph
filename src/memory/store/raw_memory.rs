@@ -202,6 +202,27 @@ pub trait RawMemoryStore: Send + Sync {
     /// Insert a raw memory record.
     async fn insert_raw_memory(&self, raw: &RawMemory) -> Result<(), AlephError>;
 
+    /// Like `insert_raw_memory`, but silently discards unique-constraint
+    /// violations (first writer wins). Callers must re-read after the call to
+    /// get the winning row when a race is possible.
+    ///
+    /// Default impl calls `insert_raw_memory` and swallows errors whose
+    /// message contains "UNIQUE constraint failed". SQLite backends override
+    /// this with `INSERT OR IGNORE` SQL for proper atomicity.
+    async fn insert_raw_memory_or_ignore(&self, raw: &RawMemory) -> Result<(), AlephError> {
+        match self.insert_raw_memory(raw).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("UNIQUE constraint failed") || msg.contains("unique constraint") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     /// Get unprocessed raw memories for an agent, ordered by created_at ASC.
     async fn get_unprocessed_raw_memories(
         &self,

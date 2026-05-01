@@ -122,4 +122,43 @@ pub trait SessionStore: Send + Sync {
     async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
     async fn set_running(&self, key: &SessionKey) -> Result<(), SessionStoreError>;
+
+    /// Load a windowed slice of the transcript for a session.
+    ///
+    /// `session_id` is the raw key string as stored in the messages table
+    /// (i.e. `SessionKey::to_key_string()`). `agent_id` is accepted for
+    /// interface symmetry; the default impl ignores it because `session_id`
+    /// already encodes the agent identity.
+    ///
+    /// Returns up to `max_turns` most-recent messages, further capped at
+    /// `max_chars` total content characters, in chronological (oldest-first)
+    /// order.
+    async fn load_window(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+        max_turns: usize,
+        max_chars: usize,
+    ) -> Result<Vec<(String, String)>, SessionStoreError> {
+        use crate::gateway::router::SessionKey;
+        // Reconstruct the SessionKey from the stored key string, falling back
+        // to a Main key if parsing fails (e.g. legacy or test key formats).
+        let key = SessionKey::parse(session_id).unwrap_or_else(|| SessionKey::Main {
+            agent_id: agent_id.to_string(),
+            main_key: session_id.to_string(),
+            epoch: 0,
+        });
+        let records = self.get_history(&key, Some(max_turns)).await?;
+        let mut pairs: Vec<(String, String)> = Vec::with_capacity(records.len());
+        let mut total_chars = 0usize;
+        for msg in records {
+            let chars = msg.content.len();
+            if total_chars + chars > max_chars && !pairs.is_empty() {
+                break;
+            }
+            total_chars += chars;
+            pairs.push((msg.role, msg.content));
+        }
+        Ok(pairs)
+    }
 }
