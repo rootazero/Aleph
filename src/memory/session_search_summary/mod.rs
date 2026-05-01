@@ -83,3 +83,5 @@ pub mod end_hook;
 pub mod filter;
 pub mod lookup;
 pub mod synthesizer;
+
+pub use filter::FactSourceFilter;
