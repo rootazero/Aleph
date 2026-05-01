@@ -1,8 +1,10 @@
 //! Identity file loader with mtime-based caching.
 //!
 //! Reads markdown files from the agent identity directory
-//! (`~/.aleph/agents/{agent_id}/`) — SOUL.md, AGENTS.md, MEMORY.md — with
-//! filesystem mtime caching to avoid re-reading unchanged files.
+//! (`~/.aleph/agents/{agent_id}/`) — SOUL.md, AGENTS.md — with
+//! filesystem mtime caching to avoid re-reading unchanged files. MEMORY.md
+//! lives alongside but is owned by the curated memory module
+//! (`src/memory/curated/`), not this loader.
 //!
 //! Identity files live under the agent directory, distinct from the agent's
 //! runtime workspace directory (`~/.aleph/workspaces/{agent_id}/`) which only
@@ -83,25 +85,6 @@ impl IdentityFileLoader {
         self.load(identity_dir, "AGENTS.md")
     }
 
-    /// Load `MEMORY.md` from the agent identity directory, truncated at a
-    /// char boundary.
-    ///
-    /// If the file content exceeds `max_chars`, the returned string is
-    /// truncated to the largest valid char boundary at or before `max_chars`.
-    pub fn load_memory_md(&mut self, identity_dir: &Path, max_chars: usize) -> Option<String> {
-        let content = self.load(identity_dir, "MEMORY.md")?;
-        if content.chars().count() <= max_chars {
-            Some(content)
-        } else {
-            // Truncate at the char boundary corresponding to max_chars characters
-            let byte_offset = content
-                .char_indices()
-                .nth(max_chars)
-                .map(|(i, _)| i)
-                .unwrap_or(content.len());
-            Some(content[..byte_offset].to_string())
-        }
-    }
 }
 
 impl Default for IdentityFileLoader {
@@ -135,26 +118,6 @@ mod tests {
         let mut loader = IdentityFileLoader::new();
         let content = loader.load(identity_dir, "DOES_NOT_EXIST.md");
         assert!(content.is_none());
-    }
-
-    #[test]
-    fn test_load_memory_md_with_truncation() {
-        let tmp = TempDir::new().unwrap();
-        let identity_dir = tmp.path();
-        // Write content longer than our max_chars
-        let long_content = "abcdefghij".repeat(10); // 100 chars
-        fs::write(identity_dir.join("MEMORY.md"), &long_content).unwrap();
-
-        let mut loader = IdentityFileLoader::new();
-
-        // No truncation needed
-        let full = loader.load_memory_md(identity_dir, 200).unwrap();
-        assert_eq!(full.len(), 100);
-
-        // Truncation at 50
-        let truncated = loader.load_memory_md(identity_dir, 50).unwrap();
-        assert_eq!(truncated.len(), 50);
-        assert_eq!(truncated, &long_content[..50]);
     }
 
     #[test]

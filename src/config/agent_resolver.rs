@@ -26,9 +26,6 @@ use crate::thinker::soul::SoulManifest;
 // Constants
 // =============================================================================
 
-/// Maximum characters for bootstrap file loading (MEMORY.md truncation).
-const DEFAULT_BOOTSTRAP_MAX_CHARS: usize = 20_000;
-
 /// Fallback model when no model is specified at any level.
 /// Empty string signals the provider registry to use the provider's own default model.
 const DEFAULT_MODEL: &str = "";
@@ -70,9 +67,6 @@ pub struct ResolvedAgent {
     /// Raw AGENTS.md content (if present in workspace)
     pub agents_md: Option<String>,
 
-    /// Raw MEMORY.md content, truncated to max chars (if present in workspace)
-    pub memory_md: Option<String>,
-
     /// Resolved AI model identifier
     pub model: String,
 
@@ -99,8 +93,9 @@ pub struct ResolvedAgent {
 /// Resolves agent definitions from configuration into runtime-ready structs.
 ///
 /// Merges `AgentDefinition` entries with `AgentDefaults`, `ProfileConfig`,
-/// and workspace files (SOUL.md, AGENTS.md, MEMORY.md) to produce fully
-/// resolved `ResolvedAgent` instances.
+/// and workspace files (SOUL.md, AGENTS.md) to produce fully resolved
+/// `ResolvedAgent` instances. MEMORY.md is loaded separately by the
+/// curated memory module — the resolver does not touch it.
 #[derive(Default)]
 pub struct AgentDefinitionResolver {
     identity_loader: IdentityFileLoader,
@@ -297,14 +292,12 @@ impl AgentDefinitionResolver {
             .or_else(|| defaults.skills_blacklist.clone())
             .unwrap_or_default();
 
-        // 6. Load SOUL.md, AGENTS.md, MEMORY.md from agent identity directory
+        // 6. Load SOUL.md, AGENTS.md from agent identity directory.
+        // MEMORY.md is owned by the curated memory module and read at prompt
+        // build time — see `MemoryContextProvider::build_curated_message`.
         let soul = self.identity_loader.load_soul(&agent_dir);
         let soul_md = self.identity_loader.load(&agent_dir, "SOUL.md");
         let agents_md = self.identity_loader.load_agents_md(&agent_dir);
-        let max_chars = defaults
-            .bootstrap_max_chars
-            .unwrap_or(DEFAULT_BOOTSTRAP_MAX_CHARS);
-        let memory_md = self.identity_loader.load_memory_md(&agent_dir, max_chars);
 
         // 7. Build ResolvedAgent
         let name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
@@ -323,7 +316,6 @@ impl AgentDefinitionResolver {
             soul,
             soul_md,
             agents_md,
-            memory_md,
             model,
             skills,
             skills_blacklist,
