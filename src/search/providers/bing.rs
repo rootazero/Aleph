@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// Bing Web Search API provider
-///
-/// Bing provides cost-effective search
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+
+/// Bing Web Search API provider
+///
+/// Bing provides cost-effective search
+const NAME: &str = "bing";
 
 pub struct BingProvider {
     api_key: String,
@@ -54,8 +56,8 @@ impl SearchProvider for BingProvider {
             .client
             .get("https://api.bing.microsoft.com/v7.0/search")
             .header("Ocp-Apim-Subscription-Key", &self.api_key)
-            .query(&[("q", query), ("count", &options.max_results.to_string())])
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .query(&[("q", query), ("count", &options.validated_max_results().to_string())])
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -85,7 +87,7 @@ impl SearchProvider for BingProvider {
                 relevance_score: None,
                 source_type: None,
                 full_content: None,
-                provider: Some("bing".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -93,7 +95,7 @@ impl SearchProvider for BingProvider {
     }
 
     fn name(&self) -> &str {
-        "bing"
+        NAME
     }
 
     fn is_available(&self) -> bool {

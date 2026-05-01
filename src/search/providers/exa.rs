@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// Exa.ai (formerly Metaphor) search provider
-///
-/// Exa provides semantic search capabilities
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+
+/// Exa.ai (formerly Metaphor) search provider
+///
+/// Exa provides semantic search capabilities
+const NAME: &str = "exa";
 
 pub struct ExaProvider {
     api_key: String,
@@ -60,7 +62,7 @@ impl SearchProvider for ExaProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let request_body = ExaRequest {
             query: query.to_string(),
-            num_results: options.max_results,
+            num_results: options.validated_max_results(),
             contents: ExaContents { text: true },
         };
 
@@ -69,7 +71,7 @@ impl SearchProvider for ExaProvider {
             .post("https://api.exa.ai/search")
             .header("x-api-key", &self.api_key)
             .json(&request_body)
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -97,7 +99,7 @@ impl SearchProvider for ExaProvider {
                 relevance_score: None,
                 source_type: None,
                 full_content: None,
-                provider: Some("exa".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -105,7 +107,7 @@ impl SearchProvider for ExaProvider {
     }
 
     fn name(&self) -> &str {
-        "exa"
+        NAME
     }
 
     fn is_available(&self) -> bool {

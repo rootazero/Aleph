@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// Brave Search API provider
-///
-/// Brave provides privacy-focused search with own index
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+
+/// Brave Search API provider
+///
+/// Brave provides privacy-focused search with own index
+const NAME: &str = "brave";
 
 pub struct BraveProvider {
     api_key: String,
@@ -53,8 +55,8 @@ impl SearchProvider for BraveProvider {
             .client
             .get("https://api.search.brave.com/res/v1/web/search")
             .header("X-Subscription-Token", &self.api_key)
-            .query(&[("q", query), ("count", &options.max_results.to_string())])
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .query(&[("q", query), ("count", &options.validated_max_results().to_string())])
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -84,7 +86,7 @@ impl SearchProvider for BraveProvider {
                 relevance_score: None,
                 source_type: None,
                 full_content: None,
-                provider: Some("brave".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -92,7 +94,7 @@ impl SearchProvider for BraveProvider {
     }
 
     fn name(&self) -> &str {
-        "brave"
+        NAME
     }
 
     fn is_available(&self) -> bool {

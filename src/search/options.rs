@@ -70,6 +70,16 @@ impl SearchOptions {
             ..Default::default()
         }
     }
+
+    /// Returns a validated timeout in seconds, ensuring it's at least 1
+    pub fn validated_timeout(&self) -> u64 {
+        self.timeout_seconds.max(1)
+    }
+
+    /// Returns validated max_results, capped at 50 and at least 1
+    pub fn validated_max_results(&self) -> usize {
+        self.max_results.max(1).min(50)
+    }
 }
 
 /// Quota information for rate-limited providers

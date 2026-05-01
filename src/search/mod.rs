@@ -2,6 +2,7 @@ mod options;
 mod provider;
 pub mod providers;
 mod registry;
+mod result;
 /// Search capability implementation
 ///
 /// This module provides real-time web search functionality for Aleph Agent,
@@ -45,9 +46,6 @@ mod registry;
 ///     Ok(())
 /// }
 /// ```
-// Core modules
-mod result;
-
 // Re-exports
 pub use options::{QuotaInfo, SearchOptions};
 pub use provider::SearchProvider;

@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// Tavily AI search provider
-///
-/// Tavily provides AI-optimized search results with clean, structured data
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+
+/// Tavily AI search provider
+///
+/// Tavily provides AI-optimized search results with clean, structured data
+const NAME: &str = "tavily";
 
 pub struct TavilyProvider {
     api_key: String,
@@ -67,7 +69,7 @@ impl SearchProvider for TavilyProvider {
                 "basic".to_string()
             },
             include_answer: false,
-            max_results: options.max_results,
+            max_results: options.validated_max_results(),
             include_raw_content: if options.include_full_content {
                 Some(true)
             } else {
@@ -79,7 +81,7 @@ impl SearchProvider for TavilyProvider {
             .client
             .post("https://api.tavily.com/search")
             .json(&request_body)
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -108,7 +110,7 @@ impl SearchProvider for TavilyProvider {
                 relevance_score: r.score,
                 source_type: None,
                 full_content: r.raw_content,
-                provider: Some("tavily".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -116,7 +118,7 @@ impl SearchProvider for TavilyProvider {
     }
 
     fn name(&self) -> &str {
-        "tavily"
+        NAME
     }
 
     fn is_available(&self) -> bool {

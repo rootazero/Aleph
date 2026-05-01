@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// Google Custom Search Engine provider
-///
-/// Google CSE provides comprehensive search coverage
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+
+/// Google Custom Search Engine provider
+///
+/// Google CSE provides comprehensive search coverage
+const NAME: &str = "google";
 
 pub struct GoogleProvider {
     api_key: String,
@@ -52,6 +54,8 @@ impl GoogleProvider {
 #[async_trait]
 impl SearchProvider for GoogleProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        // Google CSE API limits num parameter to maximum 10
+        let max_results = options.validated_max_results().min(10);
         let response = self
             .client
             .get("https://www.googleapis.com/customsearch/v1")
@@ -59,9 +63,9 @@ impl SearchProvider for GoogleProvider {
                 ("key", self.api_key.as_str()),
                 ("cx", self.engine_id.as_str()),
                 ("q", query),
-                ("num", &options.max_results.to_string()),
+                ("num", &max_results.to_string()),
             ])
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -90,7 +94,7 @@ impl SearchProvider for GoogleProvider {
                 relevance_score: None,
                 source_type: None,
                 full_content: None,
-                provider: Some("google".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -98,7 +102,7 @@ impl SearchProvider for GoogleProvider {
     }
 
     fn name(&self) -> &str {
-        "google"
+        NAME
     }
 
     fn is_available(&self) -> bool {

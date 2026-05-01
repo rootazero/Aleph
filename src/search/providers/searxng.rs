@@ -1,11 +1,13 @@
 use crate::error::{AlephError, Result};
 use crate::search::{SearchOptions, SearchProvider, SearchResult};
-/// SearXNG search provider
-///
-/// SearXNG is a privacy-first, self-hosted metasearch engine
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+
+/// SearXNG search provider
+///
+/// SearXNG is a privacy-first, self-hosted metasearch engine
+const NAME: &str = "searxng";
 
 pub struct SearxngProvider {
     base_url: String,
@@ -14,6 +16,7 @@ pub struct SearxngProvider {
 
 #[derive(Deserialize)]
 struct SearxngResponse {
+    #[serde(default)]
     results: Vec<SearxngResult>,
 }
 
@@ -49,8 +52,12 @@ impl SearchProvider for SearxngProvider {
         let response = self
             .client
             .get(&url)
-            .query(&[("q", query), ("format", "json")])
-            .timeout(std::time::Duration::from_secs(options.timeout_seconds))
+            .query(&[
+                ("q", query),
+                ("format", "json"),
+                ("count", &options.validated_max_results().to_string()),
+            ])
+            .timeout(std::time::Duration::from_secs(options.validated_timeout()))
             .send()
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
@@ -79,7 +86,7 @@ impl SearchProvider for SearxngProvider {
                 relevance_score: None,
                 source_type: None,
                 full_content: None,
-                provider: Some("searxng".to_string()),
+                provider: Some(NAME.to_string()),
             })
             .collect();
 
@@ -87,7 +94,7 @@ impl SearchProvider for SearxngProvider {
     }
 
     fn name(&self) -> &str {
-        "searxng"
+        NAME
     }
 
     fn is_available(&self) -> bool {

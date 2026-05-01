@@ -51,14 +51,21 @@ impl SearchRegistry {
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         // Try default provider
         if let Some(provider) = self.providers.get(&self.default_provider) {
-            match provider.search(query, options).await {
-                Ok(results) => return Ok(results),
-                Err(e) => {
-                    log::warn!(
-                        "Search failed with provider '{}': {}",
-                        self.default_provider,
-                        e
-                    );
+            if !provider.is_available() {
+                log::warn!(
+                    "Default provider '{}' is not available (missing configuration)",
+                    self.default_provider
+                );
+            } else {
+                match provider.search(query, options).await {
+                    Ok(results) => return Ok(results),
+                    Err(e) => {
+                        log::warn!(
+                            "Search failed with provider '{}': {}",
+                            self.default_provider,
+                            e
+                        );
+                    }
                 }
             }
         } else {
@@ -68,6 +75,13 @@ impl SearchRegistry {
         // Try fallback providers
         for provider_name in &self.fallback_providers {
             if let Some(provider) = self.providers.get(provider_name) {
+                if !provider.is_available() {
+                    log::warn!(
+                        "Fallback provider '{}' is not available (missing configuration)",
+                        provider_name
+                    );
+                    continue;
+                }
                 match provider.search(query, options).await {
                     Ok(results) => {
                         log::info!(
@@ -125,6 +139,16 @@ impl SearchRegistry {
                 return result;
             }
         };
+
+        // Skip test if provider is not configured
+        if !provider.is_available() {
+            return ProviderTestResult {
+                success: false,
+                latency_ms: 0,
+                error_message: format!("Provider '{}' is not configured (missing API key)", name),
+                error_type: "config".to_string(),
+            };
+        }
 
         // Execute test search
         let test_options = SearchOptions {
