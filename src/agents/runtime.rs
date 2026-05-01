@@ -150,10 +150,7 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
-        #[cfg(feature = "phase7_traffic_flip")]
         let result = self.execute_via_harness(&config).await;
-        #[cfg(not(feature = "phase7_traffic_flip"))]
-        let result = self.execute_legacy(&config).await;
 
         let duration_ms = start.elapsed().as_millis() as u64;
         let key_findings = match &result {

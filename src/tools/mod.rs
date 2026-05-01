@@ -59,7 +59,6 @@ pub mod middleware;
 pub mod registry;
 pub mod scoped;
 pub mod service;
-#[cfg(feature = "phase7_traffic_flip")]
 pub use scoped::ScopedToolService;
 
 pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};

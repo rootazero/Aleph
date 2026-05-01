@@ -21,11 +21,8 @@ mod types;
 
 pub mod allowlist_tool_service;
 pub mod background_tracker;
-#[cfg(feature = "phase7_traffic_flip")]
 pub mod runtime;
-#[cfg(feature = "phase7_traffic_flip")]
 pub mod subagent_spawner;
-#[cfg(feature = "phase7_traffic_flip")]
 pub mod subagent_tool;
 pub mod teammates;
 
@@ -45,7 +42,6 @@ pub mod sub_agents;
 pub mod swarm;
 
 pub use registry::{builtin_agents, AgentRegistry};
-#[cfg(feature = "phase7_traffic_flip")]
 pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, TranscriptOutcome};
 pub use types::{AgentDef, AgentMode, ContextMode};
 

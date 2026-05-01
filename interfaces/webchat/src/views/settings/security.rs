@@ -103,20 +103,31 @@ pub fn SecurityView() -> impl IntoView {
     });
 
     let save = move |_| {
-        if let Some(cfg) = config.get() {
-            spawn_local(async move {
-                saving.set(true);
+        let security_cfg = config.get();
+        let search_cfg = search_config.get();
+        spawn_local(async move {
+            saving.set(true);
+
+            if let Some(cfg) = security_cfg {
                 match SecurityConfigApi::update(&state, cfg).await {
                     Ok(_) => {
                         error.set(None);
                     }
                     Err(e) => {
-                        error.set(Some(format!("Failed to save: {}", e)));
+                        error.set(Some(format!("Failed to save security config: {}", e)));
                     }
                 }
-                saving.set(false);
-            });
-        }
+            }
+
+            match SearchConfigApi::update(&state, search_cfg).await {
+                Ok(_) => {}
+                Err(e) => {
+                    error.set(Some(format!("Failed to save PII config: {}", e)));
+                }
+            }
+
+            saving.set(false);
+        });
     };
 
     view! {
@@ -233,48 +244,6 @@ fn GatewaySecuritySettings(config: RwSignal<Option<SecurityConfig>>) -> impl Int
 #[component]
 fn NetworkAccessSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let i18n = use_i18n();
-    let state = expect_context::<DashboardState>();
-    let save_success = RwSignal::new(false);
-    let save_error = RwSignal::new(Option::<String>::None);
-    let saving = RwSignal::new(false);
-    let needs_restart = RwSignal::new(false);
-
-    let save_network = move |_| {
-        if let Some(cfg) = config.get() {
-            saving.set(true);
-            save_error.set(None);
-            spawn_local(async move {
-                match SecurityConfigApi::update(&state, cfg).await {
-                    Ok(result) => {
-                        saving.set(false);
-                        // Check if server returned needs_restart
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(
-                            &serde_json::to_string(&result).unwrap_or_default(),
-                        ) {
-                            if v.get("needs_restart")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                needs_restart.set(true);
-                            }
-                        }
-                        needs_restart.set(true);
-                        save_success.set(true);
-                        set_timeout(
-                            move || {
-                                save_success.set(false);
-                            },
-                            std::time::Duration::from_secs(5),
-                        );
-                    }
-                    Err(e) => {
-                        saving.set(false);
-                        save_error.set(Some(e));
-                    }
-                }
-            });
-        }
-    };
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
@@ -318,44 +287,6 @@ fn NetworkAccessSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoVi
                         }}
                     </p>
                 </div>
-
-                {move || {
-                    if needs_restart.get() {
-                        Some(view! {
-                            <div class="p-3 bg-warning-subtle border border-warning/20 rounded text-warning text-sm">
-                                {t!(i18n, settings.security.restart_required)}
-                            </div>
-                        })
-                    } else {
-                        None
-                    }
-                }}
-
-                {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
-                        {e}
-                    </div>
-                })}
-
-                {move || {
-                    if save_success.get() {
-                        Some(view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                {t!(i18n, common.saved)}
-                            </div>
-                        })
-                    } else {
-                        None
-                    }
-                }}
-
-                <button
-                    on:click=save_network
-                    disabled=move || saving.get()
-                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
-                >
-                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
-                </button>
             </div>
         </div>
     }
@@ -1392,48 +1323,7 @@ fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) -> impl Int
 
 #[component]
 fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
-    let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    let pii_enabled = RwSignal::new(config.get().pii_enabled);
-    let scrub_email = RwSignal::new(config.get().pii_scrub_email);
-    let scrub_phone = RwSignal::new(config.get().pii_scrub_phone);
-    let scrub_ssn = RwSignal::new(config.get().pii_scrub_ssn);
-    let scrub_credit_card = RwSignal::new(config.get().pii_scrub_credit_card);
-    let saving = RwSignal::new(false);
-    let save_error = RwSignal::new(Option::<String>::None);
-    let save_success = RwSignal::new(false);
-
-    let save_config_fn = StoredValue::new(move || {
-        saving.set(true);
-        save_error.set(None);
-        save_success.set(false);
-
-        let mut cfg = config.get();
-        cfg.pii_enabled = pii_enabled.get();
-        cfg.pii_scrub_email = scrub_email.get();
-        cfg.pii_scrub_phone = scrub_phone.get();
-        cfg.pii_scrub_ssn = scrub_ssn.get();
-        cfg.pii_scrub_credit_card = scrub_credit_card.get();
-
-        spawn_local(async move {
-            match SearchConfigApi::update(&state, cfg).await {
-                Ok(_) => {
-                    saving.set(false);
-                    save_success.set(true);
-                    set_timeout(
-                        move || {
-                            save_success.set(false);
-                        },
-                        std::time::Duration::from_secs(2),
-                    );
-                }
-                Err(e) => {
-                    saving.set(false);
-                    save_error.set(Some(e));
-                }
-            }
-        });
-    });
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
@@ -1443,8 +1333,11 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                 <label class="flex items-center space-x-3 cursor-pointer">
                     <input
                         type="checkbox"
-                        checked=move || pii_enabled.get()
-                        on:change=move |ev| pii_enabled.set(event_target_checked(&ev))
+                        checked=move || config.get().pii_enabled
+                        on:change=move |ev| {
+                            let val = event_target_checked(&ev);
+                            config.update(|cfg| cfg.pii_enabled = val);
+                        }
                         class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
@@ -1456,9 +1349,12 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     <label class="flex items-center space-x-2 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked=move || scrub_email.get()
-                            on:change=move |ev| scrub_email.set(event_target_checked(&ev))
-                            disabled=move || !pii_enabled.get()
+                            checked=move || config.get().pii_scrub_email
+                            on:change=move |ev| {
+                                let val = event_target_checked(&ev);
+                                config.update(|cfg| cfg.pii_scrub_email = val);
+                            }
+                            disabled=move || !config.get().pii_enabled
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
                         <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_email)}</span>
@@ -1467,9 +1363,12 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     <label class="flex items-center space-x-2 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked=move || scrub_phone.get()
-                            on:change=move |ev| scrub_phone.set(event_target_checked(&ev))
-                            disabled=move || !pii_enabled.get()
+                            checked=move || config.get().pii_scrub_phone
+                            on:change=move |ev| {
+                                let val = event_target_checked(&ev);
+                                config.update(|cfg| cfg.pii_scrub_phone = val);
+                            }
+                            disabled=move || !config.get().pii_enabled
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
                         <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_phone)}</span>
@@ -1478,9 +1377,12 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     <label class="flex items-center space-x-2 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked=move || scrub_ssn.get()
-                            on:change=move |ev| scrub_ssn.set(event_target_checked(&ev))
-                            disabled=move || !pii_enabled.get()
+                            checked=move || config.get().pii_scrub_ssn
+                            on:change=move |ev| {
+                                let val = event_target_checked(&ev);
+                                config.update(|cfg| cfg.pii_scrub_ssn = val);
+                            }
+                            disabled=move || !config.get().pii_enabled
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
                         <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_ssn)}</span>
@@ -1489,40 +1391,17 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     <label class="flex items-center space-x-2 cursor-pointer">
                         <input
                             type="checkbox"
-                            checked=move || scrub_credit_card.get()
-                            on:change=move |ev| scrub_credit_card.set(event_target_checked(&ev))
-                            disabled=move || !pii_enabled.get()
+                            checked=move || config.get().pii_scrub_credit_card
+                            on:change=move |ev| {
+                                let val = event_target_checked(&ev);
+                                config.update(|cfg| cfg.pii_scrub_credit_card = val);
+                            }
+                            disabled=move || !config.get().pii_enabled
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
                         <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_credit_card)}</span>
                     </label>
                 </div>
-
-                {move || save_error.get().map(|e| view! {
-                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
-                        {e}
-                    </div>
-                })}
-
-                {move || {
-                    if save_success.get() {
-                        Some(view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                {t!(i18n, common.saved)}
-                            </div>
-                        })
-                    } else {
-                        None
-                    }
-                }}
-
-                <button
-                    on:click=move |_| save_config_fn.with_value(|f| f())
-                    disabled=move || saving.get()
-                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
-                >
-                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
-                </button>
             </div>
         </div>
     }

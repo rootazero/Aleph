@@ -22,7 +22,6 @@ mod tests;
 
 pub use engine::ExecutionEngine;
 pub use simple::SimpleExecutionEngine;
-#[cfg(feature = "phase7_traffic_flip")]
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit

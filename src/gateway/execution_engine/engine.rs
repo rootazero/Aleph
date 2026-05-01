@@ -301,7 +301,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Create CancellationToken for fine-grained agent loop cancellation.
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.
-        let _cancel_token = CancellationToken::new();
+        let cancel_token = CancellationToken::new();
 
         // Atomically check concurrent run limit and register the run
         {
@@ -347,7 +347,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
-        let _trace_task_persisted = self
+        let trace_task_persisted = self
             .persist_run_task_started(&run_id, &request, &agent)
             .await;
 
@@ -514,7 +514,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs),
         ));
 
-        #[cfg(feature = "phase7_traffic_flip")]
         let result: Result<String, ExecutionError> = tokio::select! {
             result = self.run_agent_loop(
                 &run_id,
@@ -538,14 +537,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 warn!("Run {} timed out after {}s effective time", run_id, timeout_secs);
                 Err(ExecutionError::Timeout)
             }
-        };
-
-        #[cfg(not(feature = "phase7_traffic_flip"))]
-        let result: Result<String, ExecutionError> = {
-            let _ = (cancel_rx, deadline, timeout_secs);
-            Err(ExecutionError::Failed(
-                "ExecutionEngine requires phase7_traffic_flip feature".to_string(),
-            ))
         };
 
         // Update run state based on result

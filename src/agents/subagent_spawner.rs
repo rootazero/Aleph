@@ -10,12 +10,6 @@
 //! timeout + panic isolation, then walks the child session event log to
 //! synthesize a `LoopRunResult`.
 //!
-//! NOTE: This module is created in isolation during Phase 7 Task 5. Traffic
-//! hasn't been flipped yet — `AgentRuntime` still calls the legacy
-//! `run_subagent`. That swap happens in Task 6.
-
-#![cfg(feature = "phase7_traffic_flip")]
-
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
