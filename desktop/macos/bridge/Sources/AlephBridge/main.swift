@@ -32,8 +32,12 @@ func parseISO8601(_ string: String) -> Date? {
 }
 
 func escapeAppleScript(_ s: String) -> String {
-    return s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+    var result = s
+    result = result.replacingOccurrences(of: "\\", with: "\\\\")
+    result = result.replacingOccurrences(of: "\"", with: "\\\"")
+    result = result.replacingOccurrences(of: "\n", with: "\\n")
+    result = result.replacingOccurrences(of: "\r", with: "\\r")
+    return result
 }
 
 // MARK: - Legacy CLI root command (preserved for pim.rs compatibility)

@@ -45,7 +45,11 @@ impl AutomationCapability for MacOSAutomation {
                     .output()
                     .await
             }
-            ScriptLanguage::Shell => Command::new("bash").arg("-c").arg(source).output().await,
+            ScriptLanguage::Shell => {
+                // SECURITY: Executes arbitrary shell code. Callers must ensure
+                // `source` is trusted — never pass unvalidated user input.
+                Command::new("sh").arg("-c").arg(source).output().await
+            }
             #[allow(unreachable_patterns)]
             ScriptLanguage::PowerShell => {
                 return Err(DesktopError::NotImplemented(
