@@ -641,6 +641,21 @@ async fn session_end_hook_produces_summary() {
 }
 
 // ---------------------------------------------------------------------------
+// Helper for Task 17 — build a GatewayContext that only allows self-access.
+// Uses AgentToAgentPolicy::disabled() so agent-A cannot read agent-B's data.
+// ---------------------------------------------------------------------------
+
+fn build_restricted_context(env: &TestEnv) -> Arc<GatewayContext> {
+    let a2a_policy = Arc::new(AgentToAgentPolicy::disabled());
+    Arc::new(GatewayContext::new(
+        env.session_store.clone() as Arc<dyn SessionStore>,
+        Arc::new(AgentRegistry::new()),
+        Arc::new(MockExecutionAdapter) as Arc<dyn ExecutionAdapter>,
+        a2a_policy,
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Task 16 — per_session_dedup
 // ---------------------------------------------------------------------------
 
@@ -678,5 +693,49 @@ async fn per_session_dedup() {
         big_sess_count, 1,
         "session must appear at most once after dedup; got {} hits",
         big_sess_count
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 17 — a2a_filter_preserved
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a2a_filter_preserved() {
+    let env = TestEnv::build().await;
+
+    // Seed a SessionCompressed fact owned by agent-B.
+    let raw = RawMemory::new(
+        "Sensitive content from agent-B about deployment".to_string(),
+        RawMemorySource::SessionCompressed,
+    )
+    .with_agent("agent-B")
+    .with_session("agent-b-sess")
+    .with_path("aleph://session/agent-b-sess/d0/0");
+    env.seed_raw_memory(raw).await;
+
+    // Build a tool whose caller is agent-A with a restrictive (disabled) A2A policy.
+    // AgentToAgentPolicy::disabled() allows same-agent access only, so agent-A
+    // must NOT be able to see agent-B's data.
+    let restricted_ctx = build_restricted_context(&env);
+    let tool = SessionSearchTool::new(
+        restricted_ctx,
+        "agent-A",
+        Some(env.assembler.clone()),
+        Some(env.synthesizer.clone()),
+    );
+
+    let result = tool
+        .call(SessionSearchArgs {
+            query: "deployment".into(),
+            max_results: 5,
+        })
+        .await
+        .expect("call");
+
+    assert!(
+        result.hits.iter().all(|h| h.agent_id != "agent-B"),
+        "A2A filter must drop agent-B hits when caller is agent-A. Got hits: {:?}",
+        result.hits.iter().map(|h| (&h.agent_id, &h.session_key)).collect::<Vec<_>>()
     );
 }
