@@ -8,12 +8,15 @@
 use super::format::{serialize, ENTRY_DELIMITER};
 
 /// Char usage of a list of entries (after § serialization).
+///
+/// Counts `n` delimiters total: `n-1` between entries plus `1` trailing.
+/// Matches `format::serialize`, which emits a trailing `\n§\n` sentinel so
+/// the file is unambiguously distinguishable from legacy markdown on reload.
 pub fn used_chars(entries: &[String]) -> usize {
     if entries.is_empty() {
         return 0;
     }
-    entries.iter().map(|e| e.len()).sum::<usize>()
-        + ENTRY_DELIMITER.len() * entries.len().saturating_sub(1)
+    entries.iter().map(|e| e.len()).sum::<usize>() + ENTRY_DELIMITER.len() * entries.len()
 }
 
 /// Percentage of `limit` consumed (0..=100, capped at 100 for display).
@@ -66,23 +69,26 @@ mod tests {
     #[test]
     fn used_chars_counts_delimiters() {
         let e = vec!["a".to_string(), "b".to_string()];
-        // "a" + "\n§\n" (4 bytes: \n=1, §=2 [U+00A7=0xC2 0xA7], \n=1) + "b" = 1 + 4 + 1 = 6
-        assert_eq!(used_chars(&e), 6);
+        // serialize emits "a" + "\n§\n" + "b" + "\n§\n" (trailing sentinel).
+        // 1 + 4 + 1 + 4 = 10. Delim is 4 bytes (\n=1, §=2 [U+00A7=0xC2 0xA7], \n=1).
+        assert_eq!(used_chars(&e), 10);
     }
 
     #[test]
     fn header_under_limit() {
         let e = vec!["abc".to_string()];
+        // "abc" + trailing "\n§\n" = 3 + 4 = 7 bytes.
         let h = header(&e, 100, 0.95);
-        assert!(h.contains("3%"));
-        assert!(h.contains("3/100 chars"));
+        assert!(h.contains("7%"));
+        assert!(h.contains("7/100 chars"));
         assert!(!h.contains("OVER BUDGET"));
         assert!(!h.contains("NEAR LIMIT"));
     }
 
     #[test]
     fn header_near_limit() {
-        // 96 chars used out of 100 = 96% > 95% threshold
+        // "x"*96 + trailing "\n§\n" = 96 + 4 = 100 chars used (== limit, not over).
+        // 100% ≥ 95% threshold → NEAR LIMIT.
         let e = vec!["x".repeat(96)];
         let h = header(&e, 100, 0.95);
         assert!(h.contains("NEAR LIMIT"), "header was {h}");
@@ -98,8 +104,10 @@ mod tests {
 
     #[test]
     fn would_exceed_when_adding() {
-        let e = vec!["x".repeat(94)];
-        assert!(!would_exceed(&e, "ab", 100)); // 94 + 4 (\n§\n) + 2 = 100, not exceeding
-        assert!(would_exceed(&e, "abc", 100)); // 94 + 4 + 3 = 101, exceeding
+        let e = vec!["x".repeat(90)];
+        // Projected ["x"*90, "ab"] → 90 + 4 (between) + 2 + 4 (trailing) = 100, not exceeding.
+        assert!(!would_exceed(&e, "ab", 100));
+        // Projected ["x"*90, "abc"] → 90 + 4 + 3 + 4 = 101, exceeding.
+        assert!(would_exceed(&e, "abc", 100));
     }
 }

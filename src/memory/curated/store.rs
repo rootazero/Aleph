@@ -271,17 +271,14 @@ impl CuratedMemoryStore {
             entries,
             legacy: disk_legacy,
         } = load_body(&body);
-        // Preserve in-memory legacy flag: once we've curated the file (legacy=false
-        // in-memory), a single-entry write of "X" reads back as legacy=true since it
-        // lacks the `§` delimiter. Only adopt disk's legacy flag if our in-memory
-        // state still thinks the file is legacy (i.e., we haven't written yet).
-        let mem_legacy = self
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .legacy;
-        let legacy = mem_legacy && disk_legacy;
-        let mut working = StoreState { entries, legacy };
+        // With the trailing-`\n§\n` sentinel emitted by `format::serialize`,
+        // `load_body` is now correct on any reload (single-process or multi-
+        // process): a curated file always contains the delimiter, a legacy
+        // file never does. Trust disk.
+        let mut working = StoreState {
+            entries,
+            legacy: disk_legacy,
+        };
         mutate(&mut working)?;
         // Write back.
         let body = serialize(&working.entries);
@@ -323,7 +320,8 @@ mod tests {
         let r = s.add("hello").await.unwrap();
         assert_eq!(r.entries, vec!["hello"]);
         assert!(!r.legacy);
-        assert_eq!(r.usage_chars, 5);
+        // "hello" + trailing "\n§\n" sentinel = 5 + 4 = 9 chars used.
+        assert_eq!(r.usage_chars, 9);
     }
 
     #[tokio::test]

@@ -18,8 +18,18 @@ pub fn parse(body: &str) -> Vec<String> {
 }
 
 /// Serialize entries into a § -separated body. Empty input → empty string.
+///
+/// Non-empty serialization always appends a trailing `ENTRY_DELIMITER` so
+/// `body.contains("\n§\n")` is a reliable signal that the file is curated
+/// (not legacy markdown). `parse` filters trailing empty entries, so the
+/// round-trip property `parse(serialize(x)) == x` is preserved.
 pub fn serialize(entries: &[String]) -> String {
-    entries.join(ENTRY_DELIMITER)
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut body = entries.join(ENTRY_DELIMITER);
+    body.push_str(ENTRY_DELIMITER);
+    body
 }
 
 #[cfg(test)]
