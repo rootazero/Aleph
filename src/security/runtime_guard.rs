@@ -105,9 +105,9 @@ impl RuntimeSecurityGuard {
         config: SecurityGuardConfig,
     ) -> (Self, tokio::sync::mpsc::Receiver<AuditEntry>) {
         let exec_leak_detector = Arc::new(Mutex::new(ExecLeakDetector::default_patterns()));
-        let secret_leak_detector = Arc::new(Mutex::new(
-            SecretLeakDetector::with_custom_patterns(&config.custom_leak_patterns),
-        ));
+        let secret_leak_detector = Arc::new(Mutex::new(SecretLeakDetector::with_custom_patterns(
+            &config.custom_leak_patterns,
+        )));
         let pii_engine = if config.pii_filtering {
             PiiEngine::global().or_else(|| {
                 Some(Arc::new(RwLock::new(PiiEngine::new(
@@ -336,8 +336,11 @@ impl RuntimeSecurityGuard {
 
     /// Process inbound content received from LLM.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn process_inbound(&self, text: &str) -> Result<GuardResult, SecurityGuardError> {
-        let context = SecurityContext::default();
+    pub fn process_inbound(
+        &self,
+        text: &str,
+        context: &SecurityContext,
+    ) -> Result<GuardResult, SecurityGuardError> {
         if !self.config.leak_detection {
             return Ok(GuardResult::Clean {
                 text: text.to_string(),
@@ -367,7 +370,7 @@ impl RuntimeSecurityGuard {
         } = secret_scan
         {
             self.log_audit(
-                &context,
+                context,
                 AuditEventType::EnvInjectionDetected,
                 AuditSeverity::Critical,
                 format!("inbound secret leak blocked: {}", reason),
@@ -384,7 +387,7 @@ impl RuntimeSecurityGuard {
                 exec_scan.findings.len()
             );
             self.log_audit(
-                &context,
+                context,
                 AuditEventType::ExecBlocked,
                 AuditSeverity::Critical,
                 detail,
@@ -397,7 +400,7 @@ impl RuntimeSecurityGuard {
 
         if exec_scan.has_warnings() {
             self.log_audit(
-                &context,
+                context,
                 AuditEventType::LeakWarning,
                 AuditSeverity::Warn,
                 "inbound leak detector warning".to_string(),
@@ -415,7 +418,7 @@ impl RuntimeSecurityGuard {
                 let result = engine_guard.filter(text);
                 if result.blocked_count > 0 {
                     self.log_audit(
-                        &context,
+                        context,
                         AuditEventType::PiiDetected,
                         AuditSeverity::Critical,
                         format!("inbound PII redacted; {} blocks", result.blocked_count),
@@ -429,7 +432,7 @@ impl RuntimeSecurityGuard {
                     });
                 } else if result.warned_count > 0 {
                     self.log_audit(
-                        &context,
+                        context,
                         AuditEventType::PiiDetected,
                         AuditSeverity::Warn,
                         format!("inbound PII warning; {} warnings", result.warned_count),
@@ -560,7 +563,8 @@ mod tests {
 
         // Then simulate LLM echoing the exact secret value back
         let inbound = "Your API key is sk-ant-test12345678901234567890";
-        let result = guard.process_inbound(inbound).unwrap();
+        let context = SecurityContext::default();
+        let result = guard.process_inbound(inbound, &context).unwrap();
 
         match result {
             GuardResult::Blocked { .. } => {
@@ -574,8 +578,9 @@ mod tests {
     #[test]
     fn test_inbound_clean_for_normal_text() {
         let guard = RuntimeSecurityGuard::default_guard();
+        let context = SecurityContext::default();
         let result = guard
-            .process_inbound("Hello, this is normal text.")
+            .process_inbound("Hello, this is normal text.", &context)
             .unwrap();
         assert!(
             matches!(result, GuardResult::Clean { .. }),

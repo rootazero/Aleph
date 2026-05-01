@@ -280,10 +280,17 @@ fn collect_string_values(v: &Value, out: &mut String) {
 fn default_blocked_patterns() -> Vec<String> {
     vec![
         r"rm\s+-rf\s+/".to_string(),
+        r"rm\s+-f\s+-r\s+/".to_string(),
+        r"rm\s+-r\s+-f\s+/".to_string(),
         r"(?i)drop\s+database".to_string(),
         r"mkfs\.".to_string(),
         r"dd\s+if=.*of=/dev/".to_string(),
         r">\s*/dev/sd".to_string(),
+        r">\s*/dev/nvme".to_string(),
+        r">\s*/dev/vd".to_string(),
+        r">\s*/dev/mmcblk".to_string(),
+        r">\s*/dev/loop".to_string(),
+        r">\s*/dev/xvd".to_string(),
     ]
 }
 
@@ -411,6 +418,34 @@ mod tests {
             ToolCall {
                 name: "shell".to_string(),
                 input: json!({ "command": "> /dev/sda" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "> /dev/nvme0n1" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "> /dev/vda" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "> /dev/mmcblk0" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "> /dev/loop0" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "> /dev/xvda" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "rm -f -r /" }),
+            },
+            ToolCall {
+                name: "shell".to_string(),
+                input: json!({ "command": "rm -r -f /" }),
             },
         ];
         for call in &dangerous_calls {
@@ -686,5 +721,19 @@ mod tests {
             input: json!({}),
         };
         assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn invalid_regex_is_skipped_without_panic() {
+        let guard = SafetyGuard::new(
+            vec![r"[invalid".to_string(), r"rm\s+-rf\s+/".to_string()],
+            HashMap::new(),
+            PermissionAction::Allow,
+        );
+        let call = ToolCall {
+            name: "shell".to_string(),
+            input: json!({ "command": "rm -rf /" }),
+        };
+        assert!(matches!(guard.check(&call), Err(SafetyError::Blocked { .. })));
     }
 }

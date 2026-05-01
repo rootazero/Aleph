@@ -231,12 +231,20 @@ pub async fn safe_fetch(
             strip_auth_headers(&mut current_headers);
         }
 
-        // POST → GET on 301/302/303
+        // POST → GET on 301/302/303; 307/308 preserve method and body per RFC
         let status = response.status();
-        if matches!(
+        let preserve_method_and_body = matches!(
             status,
-            StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
-        ) && current_method == Method::POST
+            StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
+        );
+        if !preserve_method_and_body
+            && matches!(
+                status,
+                StatusCode::MOVED_PERMANENTLY
+                    | StatusCode::FOUND
+                    | StatusCode::SEE_OTHER
+            )
+            && current_method == Method::POST
         {
             current_method = Method::GET;
         }
@@ -252,7 +260,12 @@ pub async fn safe_fetch(
 
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         req_builder = req_builder.headers(current_headers.clone());
-        // Body is not forwarded on redirects (POST→GET drops body)
+        // Body is forwarded only on 307/308; POST→GET on 301/302/303 drops body
+        if preserve_method_and_body {
+            if let Some(body) = &request.body {
+                req_builder = req_builder.body(body.clone());
+            }
+        }
 
         response = req_builder
             .send()

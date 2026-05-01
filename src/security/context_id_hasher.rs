@@ -10,7 +10,7 @@ pub struct ContextIdHasher;
 impl ContextIdHasher {
     pub fn hash(input: &str) -> String {
         let digest = Sha256::digest(input.as_bytes());
-        let prefix = u32::from_be_bytes(digest[0..4].try_into().expect("4 bytes"));
+        let prefix = u32::from_be_bytes(digest[0..4].try_into().unwrap_or([0; 4]));
         format!("ctx:{:08x}", prefix)
     }
 }

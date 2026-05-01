@@ -183,6 +183,36 @@ mod tests {
     }
 
     #[test]
+    fn turn_ended_cancelled_does_not_increment_completed_turns() {
+        let mut s = SessionState::default();
+        let tid = uuid::Uuid::new_v4();
+        s.apply(&turn_started(tid));
+        s.apply(&SessionEvent::TurnEnded {
+            turn_id: tid,
+            outcome: TurnOutcome::Cancelled,
+            at: now_ms(),
+        });
+        assert!(s.current_turn.is_none());
+        assert_eq!(s.completed_turns, 0);
+    }
+
+    #[test]
+    fn turn_ended_errored_does_not_increment_completed_turns() {
+        let mut s = SessionState::default();
+        let tid = uuid::Uuid::new_v4();
+        s.apply(&turn_started(tid));
+        s.apply(&SessionEvent::TurnEnded {
+            turn_id: tid,
+            outcome: TurnOutcome::Errored {
+                kind: crate::session::events::ErrorKind::Tool,
+            },
+            at: now_ms(),
+        });
+        assert!(s.current_turn.is_none());
+        assert_eq!(s.completed_turns, 0);
+    }
+
+    #[test]
     fn tool_call_lifecycle_tracks_pending() {
         let mut s = SessionState::default();
         let tid = uuid::Uuid::new_v4();

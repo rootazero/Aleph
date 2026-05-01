@@ -148,7 +148,7 @@ impl SessionEventStore for SqliteEventStore {
         created_at_ms: i64,
     ) -> Result<(), SessionError> {
         let payload = serde_json::to_string(event)?;
-        let session_key = session_id_to_string(session_id);
+        let session_key = session_id_to_string(session_id)?;
         let turn_id = extract_turn_id(event).map(|u| u.to_string());
         let event_type = event_type_tag(event);
         let seq_i64 = seq as i64;
@@ -185,7 +185,7 @@ impl SessionEventStore for SqliteEventStore {
         from: Option<EventSeq>,
         to: Option<EventSeq>,
     ) -> Result<Vec<SessionEventRecord>, SessionError> {
-        let session_key = session_id_to_string(session_id);
+        let session_key = session_id_to_string(session_id)?;
         let from_val = from.unwrap_or(0) as i64;
         let to_val = to.map(|v| v as i64).unwrap_or(i64::MAX);
 
@@ -223,7 +223,7 @@ impl SessionEventStore for SqliteEventStore {
     }
 
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError> {
-        let session_key = session_id_to_string(session_id);
+        let session_key = session_id_to_string(session_id)?;
 
         let conn = self.conn.lock().await;
         let max_seq: Option<i64> = conn
@@ -249,8 +249,9 @@ impl SessionEventStore for SqliteEventStore {
 /// Uses `serde_json::to_string` so the persisted form round-trips losslessly
 /// through `serde` and remains stable against any future `Display`
 /// refactors on `SessionKey`.
-fn session_id_to_string(id: &SessionId) -> String {
-    serde_json::to_string(id).unwrap_or_default()
+fn session_id_to_string(id: &SessionId) -> Result<String, SessionError> {
+    serde_json::to_string(id)
+        .map_err(|e| SessionError::Storage(format!("failed to serialize session_id: {e}")))
 }
 
 /// Extract the `turn_id` from any `SessionEvent` variant that carries one,

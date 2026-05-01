@@ -210,5 +210,8 @@ pub fn now_ms() -> Timestamp {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "System clock went backwards — returning 0");
+            0
+        })
 }

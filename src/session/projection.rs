@@ -98,4 +98,27 @@ mod tests {
         assert_eq!(msgs[0].role, MessageRole::User);
         assert_eq!(msgs[1].role, MessageRole::Assistant);
     }
+
+    #[test]
+    fn projects_system_message() {
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![rec(
+            1,
+            SessionEvent::SystemMessage {
+                turn_id: tid,
+                content: "sys prompt".into(),
+                at: now_ms(),
+            },
+        )];
+        let msgs = project_messages(&events);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, MessageRole::System);
+        assert_eq!(msgs[0].text, "sys prompt");
+    }
+
+    #[test]
+    fn empty_events_yield_empty_messages() {
+        let msgs: Vec<ProjectedMessage> = project_messages(&[]);
+        assert!(msgs.is_empty());
+    }
 }
