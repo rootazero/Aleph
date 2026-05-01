@@ -654,8 +654,20 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .and_then(|h| h.try_read().ok())
                     .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
                     .unwrap_or_else(|| "main".to_string());
-                let tool =
-                    crate::builtin_tools::SessionSearchTool::new(Arc::clone(context), caller_id);
+                // Assembler from MCP (None if not yet injected → call_impl falls back to raw FTS5).
+                let assembler = self
+                    .memory_context_provider
+                    .get()
+                    .map(|mcp| mcp.assembler());
+                // SummarySynthesizer from SessionEndSummarizer global cell (None if no AiProvider).
+                let synthesizer = crate::thinker::memory_context_provider::session_end_summarizer()
+                    .map(|s| s.synthesizer.clone());
+                let tool = crate::builtin_tools::SessionSearchTool::new(
+                    Arc::clone(context),
+                    caller_id,
+                    assembler,
+                    synthesizer,
+                );
                 tool.call_json(arguments).await
             }),
 
