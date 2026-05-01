@@ -257,6 +257,19 @@ pub trait RawMemoryStore: Send + Sync {
             .collect())
     }
 
+    /// Returns the single `RawMemory` row whose `(agent_id, path)` matches
+    /// exactly, or `Ok(None)` if no such row exists. Default impl reuses
+    /// `get_raw_by_path_prefix` and filters in-Rust; the SQLite backend
+    /// overrides with an indexed exact-match SELECT for efficiency.
+    async fn find_by_path(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Option<RawMemory>, AlephError> {
+        let candidates = self.get_raw_by_path_prefix(path, agent_id, 4).await?;
+        Ok(candidates.into_iter().find(|r| r.path.as_deref() == Some(path)))
+    }
+
     /// Get raw memories by storage source type, scoped to an agent.
     /// Used for cross-session retrieval (e.g. all `SessionCompressed` summaries).
     ///

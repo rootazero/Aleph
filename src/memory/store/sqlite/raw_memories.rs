@@ -241,6 +241,31 @@ impl RawMemoryStore for SqliteMemoryBackend {
         Ok(results)
     }
 
+    async fn find_by_path(&self, path: &str, agent_id: &str) -> Result<Option<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE path = ?1 AND agent_id = ?2 \
+                 LIMIT 1",
+            )
+            .map_err(|e| AlephError::config(format!("find_by_path prepare: {e}")))?;
+
+        let mut rows = stmt
+            .query_map(params![path, agent_id], row_to_raw_memory)
+            .map_err(|e| AlephError::config(format!("find_by_path query: {e}")))?;
+
+        match rows.next() {
+            Some(row) => Ok(Some(
+                row.map_err(|e| AlephError::config(format!("find_by_path row: {e}")))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     async fn get_raw_by_source(
         &self,
         source: RawMemorySource,

@@ -85,3 +85,4 @@ pub mod lookup;
 pub mod synthesizer;
 
 pub use filter::FactSourceFilter;
+pub use lookup::retrieve_summary_fact;
