@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 pub fn format_timestamp(timestamp: i64) -> String {
     DateTime::<Utc>::from_timestamp(timestamp, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "Unknown".to_string())
+        .unwrap_or("Unknown".to_string())
 }
 
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
@@ -20,13 +20,13 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 }
 
 pub fn escape_markdown(text: &str) -> String {
-    text.replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
-        .replace('`', "\\`")
+    text.chars()
+        .flat_map(|c| match c {
+            '[' | ']' | '(' | ')' | '*' | '_' | '`' => ['\\', c],
+            _ => ['\0', c],
+        })
+        .filter(|&c| c != '\0')
+        .collect()
 }
 
 #[cfg(test)]

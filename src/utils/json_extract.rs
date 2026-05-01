@@ -129,8 +129,7 @@ fn extract_from_generic_code_block(response: &str) -> Option<String> {
         if let Some(end) = response[content_start..].find(marker) {
             let content = &response[content_start..content_start + end];
             let trimmed = content.trim();
-            // Only return if it looks like JSON
-            if trimmed.starts_with('{') {
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
                 return Some(trimmed.to_string());
             }
         }

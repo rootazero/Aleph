@@ -25,44 +25,22 @@ static PII_PATTERNS: OnceLock<PiiPatterns> = OnceLock::new();
 /// Get or initialize PII patterns
 fn get_patterns() -> &'static PiiPatterns {
     PII_PATTERNS.get_or_init(|| PiiPatterns {
-        // Email addresses (RFC 5322 simplified)
-        email: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(),
-
-        // Phone numbers (various formats)
-        // Matches: (123) 456-7890, 123-456-7890, 123.456.7890, 1234567890, +1-123-456-7890
-        phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap(),
-
-        // SSN (Social Security Number)
-        ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
-
-        // Credit card numbers (simple pattern: 4 groups of 4 digits)
-        credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap(),
-
-        // API keys (OpenAI, Anthropic, Tavily, Google, xAI, etc.)
-        // Matches: sk-..., sk-ant-..., tvly-..., xai-..., AIza..., Bearer ...
-        // Pattern explanation:
-        // - sk-[...]{20,}: OpenAI keys (sk-proj..., sk-...)
-        // - sk-ant-[...]{20,}: Anthropic keys
-        // - tvly-[...]{20,}: Tavily keys
-        // - xai-[...]{20,}: xAI keys
-        // - AIza[...]{30,}: Google API keys
-        // - Bearer [token]: OAuth/JWT tokens
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
-
-        // Chinese mobile phone numbers
-        // Matches: 13812345678, 15987654321, 18612345678
-        // Pattern: 1 followed by 3-9, then 9 more digits
-        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
-
-        // Chinese ID card numbers
-        // Matches: 310101199001011234, 31010119900101123X
-        // Pattern: 17 digits + check digit (digit or X/x)
-        china_id: Regex::new(r"\b\d{17}[\dXx]\b").unwrap(),
-
-        // Bank card numbers (16-19 digits)
-        // Matches: 6222021234567890123, 4111111111111111
-        // Note: Applied after credit_card to avoid overlap
-        bank_card: Regex::new(r"\b\d{16,19}\b").unwrap(),
+        email: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+            .expect("email regex should be valid"),
+        phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")
+            .expect("phone regex should be valid"),
+        ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
+            .expect("ssn regex should be valid"),
+        credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b")
+            .expect("credit_card regex should be valid"),
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b")
+            .expect("api_key regex should be valid"),
+        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b")
+            .expect("china_mobile regex should be valid"),
+        china_id: Regex::new(r"\b\d{17}[\dXx]\b")
+            .expect("china_id regex should be valid"),
+        bank_card: Regex::new(r"\b\d{16,19}\b")
+            .expect("bank_card regex should be valid"),
     })
 }
 
