@@ -13,7 +13,7 @@ use super::types::SecretError;
 /// Trait for resolving decrypted secrets by name.
 /// Implemented by SharedTokenManager and test mocks.
 pub trait SecretResolver {
-    fn resolve_secret(&self, name: &str) -> Result<String, SecretError>;
+    fn resolve_secret(&self, name: &str) -> Result<DecryptedSecret, SecretError>;
 }
 
 /// Intent for what should be signed.
@@ -95,7 +95,8 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
     /// Get the Ethereum address for a secret.
     pub fn get_address(&self, secret_name: &str) -> Result<[u8; 20], SecretError> {
         let secret = self.resolver.resolve_secret(secret_name)?;
-        let signing_key = parse_private_key(&secret)?;
+        let key_str = secret.expose();
+        let signing_key = parse_private_key(key_str)?;
         let verifying_key = signing_key.verifying_key();
         Ok(eth_address_from_pubkey(verifying_key))
     }
@@ -107,7 +108,8 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
         intent: &SignIntent,
     ) -> Result<SignedResult, SecretError> {
         let secret = self.resolver.resolve_secret(secret_name)?;
-        let signing_key = parse_private_key(&secret)?;
+        let key_str = secret.expose();
+        let signing_key = parse_private_key(key_str)?;
         let verifying_key = signing_key.verifying_key();
         let address = eth_address_from_pubkey(verifying_key);
 
@@ -224,12 +226,12 @@ mod tests {
     }
 
     impl SecretResolver for MockResolver {
-        fn resolve_secret(&self, name: &str) -> Result<String, SecretError> {
+        fn resolve_secret(&self, name: &str) -> Result<DecryptedSecret, SecretError> {
             self.secrets
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(name)
-                .cloned()
+                .map(|v| DecryptedSecret::new(v.as_str()))
                 .ok_or_else(|| SecretError::NotFound(name.to_string()))
         }
     }

@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
+use secrecy::{ExposeSecret, SecretString};
 use tracing::debug;
 
 use super::{ProviderStatus, SecretMetadata, SecretProvider};
@@ -16,7 +17,7 @@ use crate::secrets::types::{DecryptedSecret, SecretError};
 /// Authentication can be via interactive `op signin` or a service account token.
 pub struct OnePasswordProvider {
     account: Option<String>,
-    service_account_token: Option<String>,
+    service_account_token: Option<SecretString>,
 }
 
 impl OnePasswordProvider {
@@ -24,7 +25,7 @@ impl OnePasswordProvider {
     ///
     /// - `account`: Optional 1Password account shorthand (passed as `--account`).
     /// - `service_account_token`: Optional service account token (set as `OP_SERVICE_ACCOUNT_TOKEN`).
-    pub fn new(account: Option<String>, service_account_token: Option<String>) -> Self {
+    pub fn new(account: Option<String>, service_account_token: Option<SecretString>) -> Self {
         Self {
             account,
             service_account_token,
@@ -38,7 +39,7 @@ impl OnePasswordProvider {
             cmd.arg("--account").arg(account);
         }
         if let Some(ref token) = self.service_account_token {
-            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token);
+            cmd.env("OP_SERVICE_ACCOUNT_TOKEN", token.expose_secret());
         }
         cmd
     }

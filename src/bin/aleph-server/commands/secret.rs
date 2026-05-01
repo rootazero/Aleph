@@ -183,7 +183,8 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
                 let token = provider_config
                     .service_account_token_env
                     .as_ref()
-                    .and_then(|env_name| std::env::var(env_name).ok());
+                    .and_then(|env_name| std::env::var(env_name).ok())
+                    .map(secrecy::SecretString::from);
                 let op = OnePasswordProvider::new(provider_config.account.clone(), token);
 
                 let rt = tokio::runtime::Runtime::new()?;
