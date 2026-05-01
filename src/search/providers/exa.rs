@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Exa provides semantic search capabilities
 const NAME: &str = "exa";
 
+#[derive(Debug)]
 pub struct ExaProvider {
     api_key: String,
     client: Client,
@@ -42,7 +43,8 @@ struct ExaResult {
 }
 
 impl ExaProvider {
-    pub fn new(api_key: String) -> Result<Self> {
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Exa API key is required"));
         }
@@ -76,11 +78,17 @@ impl SearchProvider for ExaProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "Exa API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let exa_response: ExaResponse = response

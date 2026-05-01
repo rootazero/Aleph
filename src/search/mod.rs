@@ -67,14 +67,100 @@ pub struct ProviderTestResult {
     pub error_type: String,
 }
 
+/// Supported search provider types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchProviderType {
+    /// Tavily AI-optimized search
+    Tavily,
+    /// Brave privacy-focused search
+    Brave,
+    /// SearXNG self-hosted metasearch
+    Searxng,
+    /// Google Custom Search Engine
+    Google,
+    /// Bing Web Search
+    Bing,
+    /// Exa.ai semantic search
+    Exa,
+}
+
+impl SearchProviderType {
+    /// Returns the string identifier for this provider type
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SearchProviderType::Tavily => "tavily",
+            SearchProviderType::Brave => "brave",
+            SearchProviderType::Searxng => "searxng",
+            SearchProviderType::Google => "google",
+            SearchProviderType::Bing => "bing",
+            SearchProviderType::Exa => "exa",
+        }
+    }
+}
+
+impl std::fmt::Display for SearchProviderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for SearchProviderType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "tavily" => Ok(SearchProviderType::Tavily),
+            "brave" => Ok(SearchProviderType::Brave),
+            "searxng" => Ok(SearchProviderType::Searxng),
+            "google" => Ok(SearchProviderType::Google),
+            "bing" => Ok(SearchProviderType::Bing),
+            "exa" => Ok(SearchProviderType::Exa),
+            _ => Err(format!("Unknown provider type: {}", s)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_type_round_trip() {
+        for variant in [
+            SearchProviderType::Tavily,
+            SearchProviderType::Brave,
+            SearchProviderType::Searxng,
+            SearchProviderType::Google,
+            SearchProviderType::Bing,
+            SearchProviderType::Exa,
+        ] {
+            let s = variant.as_str();
+            let parsed: SearchProviderType = s.parse().unwrap();
+            assert_eq!(parsed, variant);
+        }
+    }
+
+    #[test]
+    fn test_provider_type_display() {
+        assert_eq!(SearchProviderType::Tavily.to_string(), "tavily");
+        assert_eq!(SearchProviderType::Google.to_string(), "google");
+    }
+
+    #[test]
+    fn test_provider_type_rejects_unknown() {
+        let result: Result<SearchProviderType, _> = "unknown".parse();
+        assert!(result.is_err());
+    }
+}
+
 /// Configuration for ad-hoc search provider testing
 ///
 /// This allows testing provider credentials without saving to config file.
 /// Used by the UI to validate provider settings before committing changes.
 #[derive(Debug, Clone)]
 pub struct SearchProviderTestConfig {
-    /// Provider type: "tavily", "brave", "searxng", "google", "bing", "exa"
-    pub provider_type: String,
+    /// Provider type
+    pub provider_type: SearchProviderType,
     /// API key (required for most providers)
     pub api_key: Option<String>,
     /// Base URL (required for SearXNG)

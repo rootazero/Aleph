@@ -7,18 +7,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchOptions {
     /// Language code (ISO 639-1: "en", "zh", "ja", etc.)
+    /// NOTE: Not yet implemented by any provider. Reserved for future use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
     /// Region code (ISO 3166-1 alpha-2: "US", "CN", "JP", etc.)
+    /// NOTE: Not yet implemented by any provider. Reserved for future use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
 
     /// Date range filter ("day", "week", "month", "year")
+    /// NOTE: Not yet implemented by any provider. Reserved for future use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_range: Option<String>,
 
     /// Enable safe search (adult content filtering)
+    /// NOTE: Not yet implemented by any provider. Reserved for future use.
     #[serde(default = "default_safe_search")]
     pub safe_search: bool,
 
@@ -152,5 +156,41 @@ mod tests {
         assert!(quota.remaining.is_none());
         assert!(quota.limit.is_none());
         assert!(quota.reset_at.is_none());
+    }
+
+    #[test]
+    fn test_validated_timeout_bounds() {
+        let options = SearchOptions {
+            timeout_seconds: 0,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_timeout(), 1);
+
+        let options = SearchOptions {
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_timeout(), 5);
+    }
+
+    #[test]
+    fn test_validated_max_results_bounds() {
+        let options = SearchOptions {
+            max_results: 0,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_max_results(), 1);
+
+        let options = SearchOptions {
+            max_results: 100,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_max_results(), 50);
+
+        let options = SearchOptions {
+            max_results: 10,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_max_results(), 10);
     }
 }

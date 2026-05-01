@@ -9,6 +9,7 @@ use serde::Deserialize;
 /// Brave provides privacy-focused search with own index
 const NAME: &str = "brave";
 
+#[derive(Debug)]
 pub struct BraveProvider {
     api_key: String,
     client: Client,
@@ -33,7 +34,8 @@ struct BraveResult {
 }
 
 impl BraveProvider {
-    pub fn new(api_key: String) -> Result<Self> {
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Brave API key is required"));
         }
@@ -61,11 +63,17 @@ impl SearchProvider for BraveProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "Brave API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let brave_response: BraveResponse = response

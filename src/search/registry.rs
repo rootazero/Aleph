@@ -21,18 +21,24 @@ pub struct SearchRegistry {
 
 impl SearchRegistry {
     /// Create an empty registry
-    pub fn new(default_provider: String) -> Self {
+    pub fn new(default_provider: impl Into<String>) -> Self {
         Self {
             providers: HashMap::new(),
-            default_provider,
+            default_provider: default_provider.into(),
             fallback_providers: Vec::new(),
             test_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Add a provider to the registry
+    ///
+    /// Invalidates any cached test results for this provider name
+    /// to ensure stale results are not returned after configuration changes.
     pub fn add_provider(&mut self, name: String, provider: Arc<dyn SearchProvider>) {
-        self.providers.insert(name, provider);
+        self.providers.insert(name.clone(), provider);
+        // Invalidate cached test result for this provider
+        let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.remove(&name);
     }
 
     /// Set fallback providers
@@ -47,39 +53,46 @@ impl SearchRegistry {
 
     /// Execute search with fallback logic
     ///
-    /// Tries default provider first, then falls back to alternatives if it fails
+    /// Tries default provider first, then falls back to alternatives if it fails.
+    /// Aggregates error messages from all attempted providers.
     pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        let mut errors: Vec<String> = Vec::new();
+
         // Try default provider
         if let Some(provider) = self.providers.get(&self.default_provider) {
             if !provider.is_available() {
-                log::warn!(
+                let msg = format!(
                     "Default provider '{}' is not available (missing configuration)",
                     self.default_provider
                 );
+                log::warn!("{}", msg);
+                errors.push(msg);
             } else {
                 match provider.search(query, options).await {
                     Ok(results) => return Ok(results),
                     Err(e) => {
-                        log::warn!(
-                            "Search failed with provider '{}': {}",
-                            self.default_provider,
-                            e
-                        );
+                        let msg = format!("Provider '{}' failed: {}", self.default_provider, e);
+                        log::warn!("Search {}", msg);
+                        errors.push(msg);
                     }
                 }
             }
         } else {
-            log::error!("Default provider '{}' not found", self.default_provider);
+            let msg = format!("Default provider '{}' not found", self.default_provider);
+            log::error!("{}", msg);
+            errors.push(msg);
         }
 
         // Try fallback providers
         for provider_name in &self.fallback_providers {
             if let Some(provider) = self.providers.get(provider_name) {
                 if !provider.is_available() {
-                    log::warn!(
+                    let msg = format!(
                         "Fallback provider '{}' is not available (missing configuration)",
                         provider_name
                     );
+                    log::warn!("{}", msg);
+                    errors.push(msg);
                     continue;
                 }
                 match provider.search(query, options).await {
@@ -91,15 +104,20 @@ impl SearchRegistry {
                         return Ok(results);
                     }
                     Err(e) => {
-                        log::warn!("Fallback provider '{}' failed: {}", provider_name, e);
+                        let msg = format!("Provider '{}' failed: {}", provider_name, e);
+                        log::warn!("Search {}", msg);
+                        errors.push(msg);
                     }
                 }
             }
         }
 
-        Err(AlephError::provider(
-            "All search providers failed".to_string(),
-        ))
+        let summary = if errors.is_empty() {
+            "All search providers failed".to_string()
+        } else {
+            format!("All search providers failed: {}", errors.join("; "))
+        };
+        Err(AlephError::provider(summary))
     }
 
     /// Test a search provider connection
@@ -169,21 +187,12 @@ impl SearchRegistry {
                 }
             }
             Err(e) => {
-                // Classify error type
-                let error_str = e.to_string().to_lowercase();
-                let error_type = if error_str.contains("auth")
-                    || error_str.contains("401")
-                    || error_str.contains("403")
-                    || error_str.contains("unauthorized")
-                {
-                    "auth"
-                } else if error_str.contains("network")
-                    || error_str.contains("timeout")
-                    || error_str.contains("connection")
-                {
-                    "network"
-                } else {
-                    "config"
+                let error_type = match e {
+                    AlephError::AuthenticationError { .. } => "auth",
+                    AlephError::NetworkError { .. } | AlephError::Timeout { .. } => {
+                        "network"
+                    }
+                    _ => "config",
                 };
 
                 ProviderTestResult {
@@ -195,8 +204,8 @@ impl SearchRegistry {
             }
         };
 
-        // Cache result
-        {
+        // Cache only successful results; failures are retried on next call
+        if result.success {
             let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(name.to_string(), (result.clone(), Instant::now()));
         }
@@ -208,7 +217,6 @@ impl SearchRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::search::providers::TavilyProvider;
 
     /// Mock provider for testing
     struct MockProvider {
@@ -268,12 +276,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_add_provider() {
-        let mut registry = SearchRegistry::new("tavily".to_string());
-        let provider = TavilyProvider::new("test-key".to_string()).unwrap();
+        let mut registry = SearchRegistry::new("mock".to_string());
+        let provider = MockProvider::new("mock", false, 3);
 
-        registry.add_provider("tavily".to_string(), Arc::new(provider));
+        registry.add_provider("mock".to_string(), Arc::new(provider));
 
-        assert!(registry.get_provider("tavily").is_some());
+        assert!(registry.get_provider("mock").is_some());
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ use serde::Deserialize;
 /// Bing provides cost-effective search
 const NAME: &str = "bing";
 
+#[derive(Debug)]
 pub struct BingProvider {
     api_key: String,
     client: Client,
@@ -34,7 +35,8 @@ struct BingWebPage {
 }
 
 impl BingProvider {
-    pub fn new(api_key: String) -> Result<Self> {
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Bing API key is required"));
         }
@@ -62,11 +64,17 @@ impl SearchProvider for BingProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "Bing API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let bing_response: BingResponse = response

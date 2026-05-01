@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Tavily provides AI-optimized search results with clean, structured data
 const NAME: &str = "tavily";
 
+#[derive(Debug)]
 pub struct TavilyProvider {
     api_key: String,
     client: Client,
@@ -42,7 +43,8 @@ struct TavilyResult {
 }
 
 impl TavilyProvider {
-    pub fn new(api_key: String) -> Result<Self> {
+    pub fn new(api_key: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Tavily API key is required"));
         }
@@ -86,11 +88,17 @@ impl SearchProvider for TavilyProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "Tavily API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let tavily_response: TavilyResponse = response

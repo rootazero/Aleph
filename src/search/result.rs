@@ -45,11 +45,11 @@ pub struct SearchResult {
 
 impl SearchResult {
     /// Create a basic search result (for testing/mocking)
-    pub fn new(title: String, url: String, snippet: String) -> Self {
+    pub fn new(title: impl Into<String>, url: impl Into<String>, snippet: impl Into<String>) -> Self {
         Self {
-            title,
-            url,
-            snippet,
+            title: title.into(),
+            url: url.into(),
+            snippet: snippet.into(),
             published_date: None,
             relevance_score: None,
             source_type: None,

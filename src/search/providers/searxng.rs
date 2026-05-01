@@ -9,6 +9,7 @@ use serde::Deserialize;
 /// SearXNG is a privacy-first, self-hosted metasearch engine
 const NAME: &str = "searxng";
 
+#[derive(Debug)]
 pub struct SearxngProvider {
     base_url: String,
     client: Client,
@@ -29,13 +30,21 @@ struct SearxngResult {
 }
 
 impl SearxngProvider {
-    pub fn new(base_url: String) -> Result<Self> {
+    pub fn new(base_url: impl Into<String>) -> Result<Self> {
+        let base_url = base_url.into();
         if base_url.is_empty() {
             return Err(AlephError::invalid_config("SearXNG base URL is required"));
         }
 
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+            return Err(AlephError::invalid_config(
+                "SearXNG base URL must use http:// or https:// scheme",
+            ));
+        }
+
         Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: trimmed,
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
@@ -62,11 +71,17 @@ impl SearchProvider for SearxngProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "SearXNG API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let searxng_response: SearxngResponse = response.json().await.map_err(|e| {
@@ -123,5 +138,19 @@ mod tests {
     fn test_searxng_provider_trims_trailing_slash() {
         let provider = SearxngProvider::new("http://localhost:8080/".to_string()).unwrap();
         assert_eq!(provider.base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_searxng_provider_rejects_invalid_scheme() {
+        let result = SearxngProvider::new("ftp://localhost:8080".to_string());
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("must use http:// or https://"));
+    }
+
+    #[test]
+    fn test_searxng_provider_accepts_https() {
+        let provider = SearxngProvider::new("https://searx.example.com".to_string()).unwrap();
+        assert_eq!(provider.base_url, "https://searx.example.com");
     }
 }

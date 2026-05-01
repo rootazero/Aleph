@@ -9,6 +9,7 @@ use serde::Deserialize;
 /// Google CSE provides comprehensive search coverage
 const NAME: &str = "google";
 
+#[derive(Debug)]
 pub struct GoogleProvider {
     api_key: String,
     engine_id: String,
@@ -30,7 +31,9 @@ struct GoogleItem {
 }
 
 impl GoogleProvider {
-    pub fn new(api_key: String, engine_id: String) -> Result<Self> {
+    pub fn new(api_key: impl Into<String>, engine_id: impl Into<String>) -> Result<Self> {
+        let api_key = api_key.into();
+        let engine_id = engine_id.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Google API key is required"));
         }
@@ -70,11 +73,17 @@ impl SearchProvider for GoogleProvider {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(AlephError::provider(format!(
-                "Google API error: {}",
-                response.status()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return Err(AlephError::authentication(
+                    NAME,
+                    format!("{} API error: {}", NAME, status),
+                ));
+            }
+            return Err(AlephError::provider(format!("{} API error: {}", NAME, status)));
         }
 
         let google_response: GoogleResponse = response
