@@ -8,7 +8,8 @@ use crate::secrets::injection::{AsyncSecretResolver, InjectedSecret};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector as SecretLeakDetector};
 use crate::security::audit::{AuditEntry, AuditEventType, AuditSeverity, SecurityAuditLog};
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::sync_primitives::{Arc, Mutex, RwLock};
+use crate::sync_primitives::{Arc, RwLock};
+use tokio::sync::Mutex;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -179,10 +180,7 @@ impl RuntimeSecurityGuard {
                         resolved_map.insert(secret_ref.raw.clone(), value.to_string());
                     }
                     {
-                        let mut detector = self
-                            .secret_leak_detector
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let mut detector = self.secret_leak_detector.lock().await;
                         for secret in &injected {
                             detector.register_injected(std::slice::from_ref(secret), &[]);
                         }
@@ -195,18 +193,12 @@ impl RuntimeSecurityGuard {
         // 2. Leak Detection (on text still containing placeholders)
         if self.config.leak_detection {
             let exec_scan = {
-                let detector = self
-                    .exec_leak_detector
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let detector = self.exec_leak_detector.lock().await;
                 detector.scan_outbound(&current_text)
             };
 
             let secret_scan = {
-                let detector = self
-                    .secret_leak_detector
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let detector = self.secret_leak_detector.lock().await;
                 detector.scan_outbound(&current_text)
             };
 
@@ -336,7 +328,7 @@ impl RuntimeSecurityGuard {
 
     /// Process inbound content received from LLM.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn process_inbound(
+    pub async fn process_inbound(
         &self,
         text: &str,
         context: &SecurityContext,
@@ -348,18 +340,12 @@ impl RuntimeSecurityGuard {
         }
 
         let exec_scan = {
-            let detector = self
-                .exec_leak_detector
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let detector = self.exec_leak_detector.lock().await;
             detector.scan_inbound(text)
         };
 
         let secret_scan = {
-            let detector = self
-                .secret_leak_detector
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let detector = self.secret_leak_detector.lock().await;
             detector.scan_inbound(text)
         };
 
@@ -454,11 +440,8 @@ impl RuntimeSecurityGuard {
     }
 
     /// Clear tracked injected secrets (call at end of request/session).
-    pub fn clear_injected_secrets(&self) {
-        let mut detector = self
-            .secret_leak_detector
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+    pub async fn clear_injected_secrets(&self) {
+        let mut detector = self.secret_leak_detector.lock().await;
         detector.clear();
     }
 }
@@ -564,7 +547,7 @@ mod tests {
         // Then simulate LLM echoing the exact secret value back
         let inbound = "Your API key is sk-ant-test12345678901234567890";
         let context = SecurityContext::default();
-        let result = guard.process_inbound(inbound, &context).unwrap();
+        let result = guard.process_inbound(inbound, &context).await.unwrap();
 
         match result {
             GuardResult::Blocked { .. } => {
@@ -575,12 +558,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_inbound_clean_for_normal_text() {
+    #[tokio::test]
+    async fn test_inbound_clean_for_normal_text() {
         let guard = RuntimeSecurityGuard::default_guard();
         let context = SecurityContext::default();
         let result = guard
             .process_inbound("Hello, this is normal text.", &context)
+            .await
             .unwrap();
         assert!(
             matches!(result, GuardResult::Clean { .. }),

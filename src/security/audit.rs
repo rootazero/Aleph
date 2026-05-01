@@ -4,8 +4,11 @@
 //! Uses async channel for non-blocking writes from hot paths.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{error, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditEventType {
@@ -78,17 +81,30 @@ pub struct AuditEntry {
 #[derive(Clone)]
 pub struct SecurityAuditLog {
     sender: mpsc::Sender<AuditEntry>,
+    dropped_count: Arc<AtomicU64>,
 }
 
 impl SecurityAuditLog {
     pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<AuditEntry>) {
         let (sender, receiver) = mpsc::channel(buffer_size);
-        (Self { sender }, receiver)
+        (
+            Self {
+                sender,
+                dropped_count: Arc::new(AtomicU64::new(0)),
+            },
+            receiver,
+        )
     }
 
     pub fn log(&self, entry: AuditEntry) {
         if let Err(e) = self.sender.try_send(entry) {
-            warn!("Security audit log channel full, dropping entry: {}", e);
+            let count = self.dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
+            if count == 1 || count % 100 == 0 {
+                error!(
+                    "Security audit log channel full, dropping entry (total dropped: {}): {}",
+                    count, e
+                );
+            }
         }
     }
 
@@ -100,6 +116,11 @@ impl SecurityAuditLog {
             session_id: None,
             detail,
         });
+    }
+
+    /// Returns the number of audit entries dropped due to channel backpressure.
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count.load(Ordering::Relaxed)
     }
 }
 
@@ -153,12 +174,13 @@ mod tests {
             AuditSeverity::Critical,
             "first".into(),
         );
-        // This should drop without panic
+        // Channel has capacity 1; second message should be dropped.
         log.log_event(
             AuditEventType::AuthFailure,
             AuditSeverity::Critical,
             "second".into(),
         );
+        assert_eq!(log.dropped_count(), 1);
     }
 
     #[test]
