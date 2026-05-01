@@ -134,10 +134,12 @@ pub struct PromptBuilder {
     /// Optional soul manifest for identity/personality.
     /// When set, `build_system_prompt` uses the Soul assembly path.
     soul: Option<SoulManifest>,
-    /// Loaded identity files (SOUL.md, IDENTITY.md, MEMORY.md, …) from
-    /// `~/.aleph/agents/{agent_id}/`. When set, these are threaded into every
-    /// `LayerInput` so `SoulLayer`, `IdentityFilesLayer`, `ProfileLayer`, and
-    /// `CustomInstructionsLayer` can read their respective files.
+    /// Loaded identity files (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md,
+    /// HEARTBEAT.md) from `~/.aleph/agents/{agent_id}/`. When set, these are
+    /// threaded into every `LayerInput` so `SoulLayer`, `IdentityFilesLayer`,
+    /// `ProfileLayer`, and `CustomInstructionsLayer` can read their respective
+    /// files. MEMORY.md is **not** included here — it's owned by the curated
+    /// memory module and threaded in via `curated_memory_envelope`.
     identity_files: Option<IdentityFiles>,
     /// Pre-rendered memory XML from `MemoryContextProvider::build_memory_user_message`.
     ///
@@ -187,9 +189,10 @@ impl PromptBuilder {
 
     /// Attach identity files loaded from the agent identity directory.
     ///
-    /// Identity files (SOUL.md, IDENTITY.md, AGENTS.md, MEMORY.md, etc.)
-    /// live under `~/.aleph/agents/{agent_id}/` — NOT under
+    /// Identity files (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md,
+    /// HEARTBEAT.md) live under `~/.aleph/agents/{agent_id}/` — NOT under
     /// `~/.aleph/workspaces/{agent_id}/` (which is the runtime work directory).
+    /// MEMORY.md lives alongside but is loaded by the curated memory module.
     ///
     /// When set, `build_system_prompt` threads these files into the layer
     /// input so `SoulLayer`, `IdentityFilesLayer`, and related layers can

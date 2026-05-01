@@ -79,8 +79,10 @@ pub struct LayerInput<'a> {
     pub mode: PromptMode,
     /// Per-request inbound context (sender, channel, session metadata)
     pub inbound: Option<&'a InboundContext>,
-    /// Loaded agent identity files (SOUL.md, IDENTITY.md, MEMORY.md, …)
-    /// from `~/.aleph/agents/{agent_id}/`.
+    /// Loaded agent identity files (SOUL.md, IDENTITY.md, AGENTS.md,
+    /// TOOLS.md, HEARTBEAT.md) from `~/.aleph/agents/{agent_id}/`.
+    /// MEMORY.md is owned by the curated memory module and flows in via
+    /// `curated_memory_envelope`, not this list.
     pub identity_files: Option<&'a IdentityFiles>,
     /// Pre-rendered memory XML from `MemoryContextProvider::build_memory_user_message`.
     ///

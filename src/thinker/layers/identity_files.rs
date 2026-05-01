@@ -2,7 +2,8 @@
 //!
 //! SOUL.md is handled by SoulLayer (priority 50), AGENTS.md by ProfileLayer
 //! (priority 75). This layer injects the rest: IDENTITY.md, TOOLS.md,
-//! MEMORY.md, HEARTBEAT.md.
+//! HEARTBEAT.md. MEMORY.md is owned by `CuratedMemoryLayer` (Stable) and
+//! never flows through this Dynamic layer.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -126,7 +127,6 @@ mod tests {
             make_file("IDENTITY.md", "identity content"),
             make_file("AGENTS.md", "agents content"),
             make_file("TOOLS.md", "tools content"),
-            make_file("MEMORY.md", "memory content"),
             make_file("HEARTBEAT.md", "heartbeat content"),
         ]);
 
@@ -142,8 +142,6 @@ mod tests {
         assert!(out.contains("identity content"));
         assert!(out.contains("### TOOLS.md"));
         assert!(out.contains("tools content"));
-        assert!(out.contains("### MEMORY.md"));
-        assert!(out.contains("memory content"));
         assert!(out.contains("### HEARTBEAT.md"));
         assert!(out.contains("heartbeat content"));
 
@@ -173,7 +171,7 @@ mod tests {
         let ws = make_identity(vec![
             make_empty_file("IDENTITY.md"),
             make_file("TOOLS.md", "has content"),
-            make_empty_file("MEMORY.md"),
+            make_empty_file("HEARTBEAT.md"),
         ]);
 
         let input = LayerInput::basic(&config, &[]).with_identity_files(&ws);
@@ -182,7 +180,7 @@ mod tests {
 
         assert!(out.contains("### TOOLS.md"));
         assert!(!out.contains("### IDENTITY.md"));
-        assert!(!out.contains("### MEMORY.md"));
+        assert!(!out.contains("### HEARTBEAT.md"));
     }
 
     #[test]

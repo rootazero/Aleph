@@ -25,12 +25,15 @@ use crate::config::types::agents_def::{
 // =============================================================================
 
 /// Identity files recognized in agent directories.
+///
+/// Note: `MEMORY.md` lives alongside but is owned by the curated memory
+/// module — it is not flagged as a bootstrap file here, matching the
+/// `IDENTITY_FILE_NAMES` list in `src/thinker/identity_files.rs`.
 pub(super) const BOOTSTRAP_FILES: &[&str] = &[
     "SOUL.md",
     "IDENTITY.md",
     "AGENTS.md",
     "TOOLS.md",
-    "MEMORY.md",
     "HEARTBEAT.md",
 ];
 
