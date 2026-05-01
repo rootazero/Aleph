@@ -1387,6 +1387,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 mcp.clone(),
             );
 
+            // Spec B Task 9 — register SessionEndSummarizer for on-session-end
+            // summary production. Requires an AiProvider for the synthesizer
+            // fallback path; skip silently if none is configured.
+            if let Some(ref prov) = default_prov {
+                use alephcore::memory::assembler::hybrid::AiProviderReranker;
+                use alephcore::memory::session_search_summary::{
+                    end_hook::SessionEndSummarizer, synthesizer::SummarySynthesizer,
+                };
+                let summary_llm: std::sync::Arc<
+                    dyn alephcore::memory::session_search_summary::synthesizer::SummaryLlm,
+                > = AiProviderReranker::new(prov.clone());
+                let synthesizer = std::sync::Arc::new(SummarySynthesizer::new(
+                    memory_db.clone()
+                        as std::sync::Arc<
+                            dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+                        >,
+                    session_store.clone(),
+                    summary_llm,
+                ));
+                let summarizer = std::sync::Arc::new(SessionEndSummarizer {
+                    store: memory_db.clone()
+                        as std::sync::Arc<
+                            dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+                        >,
+                    synthesizer,
+                });
+                alephcore::thinker::memory_context_provider::register_session_end_summarizer(
+                    summarizer,
+                );
+            }
+
             engine = engine.with_memory_context_provider(mcp);
         }
 

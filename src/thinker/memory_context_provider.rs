@@ -682,6 +682,31 @@ pub fn session_end_mcp() -> Option<Arc<MemoryContextProvider>> {
     SESSION_END_MCP.get().cloned()
 }
 
+/// Process-wide handle used by the SessionEnd summarization path (Spec B).
+///
+/// Mirrors the `SESSION_END_MCP` pattern: registered once at startup by
+/// `agent_init`, consumed fire-and-forget at session-end in
+/// `emit_session_end_raw_with_registry`. The two cells are kept separate so
+/// Spec A (cache invalidation) and Spec B (summary production) remain
+/// independently removable.
+static SESSION_END_SUMMARIZER: tokio::sync::OnceCell<
+    Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
+> = tokio::sync::OnceCell::const_new();
+
+/// Register a `SessionEndSummarizer` for Spec B on-session-end hook firing.
+/// Idempotent; subsequent calls are a no-op.
+pub fn register_session_end_summarizer(
+    summarizer: Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>,
+) {
+    let _ = SESSION_END_SUMMARIZER.set(summarizer);
+}
+
+/// Read the registered `SessionEndSummarizer`, if any.
+pub fn session_end_summarizer(
+) -> Option<Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>> {
+    SESSION_END_SUMMARIZER.get().cloned()
+}
+
 #[cfg(test)]
 mod spec3_tests {
     use super::*;

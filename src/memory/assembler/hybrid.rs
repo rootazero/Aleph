@@ -59,6 +59,16 @@ impl LlmReranker for AiProviderReranker {
     }
 }
 
+/// Spec B: reuse `AiProviderReranker` as a `SummaryLlm` by delegating to
+/// `LlmReranker::complete` with no model override. This avoids a separate
+/// wrapper struct and keeps the two traits in sync automatically.
+#[async_trait]
+impl crate::memory::session_search_summary::synthesizer::SummaryLlm for AiProviderReranker {
+    async fn complete(&self, prompt: &str) -> Result<String, AlephError> {
+        <Self as LlmReranker>::complete(self, prompt, None).await
+    }
+}
+
 pub struct HybridAssembler {
     gatherer: Gatherer,
     reranker: Arc<dyn LlmReranker>,

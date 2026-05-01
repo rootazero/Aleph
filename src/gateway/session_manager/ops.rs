@@ -1283,6 +1283,27 @@ pub(crate) fn emit_session_end_raw_with_registry(
             });
         }
 
+        // Spec B Task 9: fire SessionEndSummarizer fire-and-forget alongside
+        // Spec A's curated-invalidate. Non-fatal — a failure here must never
+        // block or surface to the user.
+        if let Some(summarizer) =
+            crate::thinker::memory_context_provider::session_end_summarizer()
+        {
+            let b_agent_id = agent_id.clone();
+            let b_session_id = session_id.clone();
+            rt.spawn(async move {
+                if let Err(e) = summarizer.produce(&b_agent_id, &b_session_id).await {
+                    tracing::warn!(
+                        target: "spec_b.end_hook",
+                        agent_id = %b_agent_id,
+                        session_id = %b_session_id,
+                        error = %e,
+                        "session-end summarization failed (non-fatal)"
+                    );
+                }
+            });
+        }
+
         rt.spawn(async move {
             if let Some(reg) = registry {
                 let ctx = crate::memory::extensions::types::CaptureCtx {
