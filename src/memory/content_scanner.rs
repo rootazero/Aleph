@@ -51,9 +51,39 @@ static PROMPT_INJECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
     .expect("prompt injection regex must compile")
 });
 
+static DECEPTION_HIDE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bdo\s+not\s+tell\s+(?:the\s+user|anyone)")
+        .expect("deception hide regex must compile")
+});
+
+static SYS_PROMPT_OVERRIDE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bsystem\s+prompt\s+(?:override|bypass|hijack)")
+        .expect("sys prompt override regex must compile")
+});
+
+static DISREGARD_RULES_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bdisregard\s+(?:your|all|any|the)\s+(?:instructions|rules|guidelines)")
+        .expect("disregard rules regex must compile")
+});
+
+static BYPASS_RESTRICTIONS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\bact\s+as\s+(?:if|though)\s+you\s+(?:have\s+no|don'?t\s+have)\s+(?:restrictions|limits|limitations|rules)",
+    )
+    .expect("bypass restrictions regex must compile")
+});
+
 static DATA_EXFILTRATION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:curl\s+.*api[_\-]?key|curl\s+.*token|wget\s+.*token|cat\s+.*/\.env)")
         .expect("data exfiltration regex must compile")
+});
+
+static SSH_BACKDOOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bauthorized_keys\b").expect("ssh backdoor regex must compile")
+});
+
+static SSH_ACCESS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:\$HOME|~)/\.ssh\b").expect("ssh access regex must compile")
 });
 
 /// Scan content for malicious patterns before persisting to memory.
@@ -71,11 +101,39 @@ pub fn scan_content(content: &str) -> ScanVerdict {
         }
     }
 
-    // 2. Prompt injection check
+    // 2. Prompt injection / role hijack family
     if PROMPT_INJECTION_RE.is_match(content) {
         return ScanVerdict::Rejected {
             reason: "Content contains prompt injection pattern".to_string(),
             pattern: "prompt_injection",
+        };
+    }
+
+    if SYS_PROMPT_OVERRIDE_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content contains system-prompt override pattern".to_string(),
+            pattern: "sys_prompt_override",
+        };
+    }
+
+    if DISREGARD_RULES_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content asks to disregard rules/instructions".to_string(),
+            pattern: "disregard_rules",
+        };
+    }
+
+    if BYPASS_RESTRICTIONS_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content asks to bypass restrictions".to_string(),
+            pattern: "bypass_restrictions",
+        };
+    }
+
+    if DECEPTION_HIDE_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content asks to deceive or hide from the user".to_string(),
+            pattern: "deception_hide",
         };
     }
 
@@ -84,6 +142,21 @@ pub fn scan_content(content: &str) -> ScanVerdict {
         return ScanVerdict::Rejected {
             reason: "Content contains data exfiltration pattern".to_string(),
             pattern: "data_exfiltration",
+        };
+    }
+
+    // 4. SSH credential / backdoor patterns
+    if SSH_BACKDOOR_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content references authorized_keys (SSH backdoor)".to_string(),
+            pattern: "ssh_backdoor",
+        };
+    }
+
+    if SSH_ACCESS_RE.is_match(content) {
+        return ScanVerdict::Rejected {
+            reason: "Content references ~/.ssh credential path".to_string(),
+            pattern: "ssh_access",
         };
     }
 
