@@ -204,6 +204,7 @@ fn envelope_to_snapshot_json(envelope: &MemoryEnvelope) -> String {
                         ItemSource::Raw {
                             raw_id: _,
                             session_id,
+                            ..
                         } => {
                             // Redact raw_id (UUID) — it changes every run.
                             json!({"kind": "raw", "raw_id": "<redacted>", "session_id": session_id})

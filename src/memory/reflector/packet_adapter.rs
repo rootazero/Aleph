@@ -180,6 +180,7 @@ mod tests {
             source: ItemSource::Raw {
                 raw_id: "frag-1".to_string(),
                 session_id: "session-abc".to_string(),
+                path: None,
             },
             relevance: 0.55,
             tokens: 10,

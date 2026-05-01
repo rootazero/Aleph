@@ -51,7 +51,14 @@ pub struct EnvelopeItem {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ItemSource {
     Note { path: String, category: String },
-    Raw { raw_id: String, session_id: String },
+    Raw {
+        raw_id: String,
+        session_id: String,
+        /// Original storage path (e.g. `aleph://session/{sid}/end-summary`).
+        /// `None` for synthetic candidates built without a stored path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     Summary { layer: String, session_id: String },
 }
 
@@ -158,6 +165,7 @@ mod tests {
         let src = ItemSource::Raw {
             raw_id: "xyz".into(),
             session_id: "abc".into(),
+            path: None,
         };
         let json = serde_json::to_value(&src).unwrap();
         assert_eq!(json["kind"], "raw");

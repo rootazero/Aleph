@@ -139,12 +139,11 @@ impl SessionSearchTool {
                                 format!("aleph://session/{}/{}", session_id, layer);
                             (session_id.clone(), path)
                         }
-                        ItemSource::Raw { session_id, raw_id } => {
-                            let path = format!(
-                                "aleph://session/{}/raw/{}",
-                                session_id, raw_id
-                            );
-                            (session_id.clone(), path)
+                        ItemSource::Raw { session_id, raw_id, path } => {
+                            let fact_path = path.clone().unwrap_or_else(|| {
+                                format!("aleph://session/{}/raw/{}", session_id, raw_id)
+                            });
+                            (session_id.clone(), fact_path)
                         }
                         ItemSource::Note { .. } => return None,
                     };

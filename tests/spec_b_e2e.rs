@@ -37,6 +37,7 @@ use alephcore::memory::note_retrieval::NoteFactRetrieval;
 use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::synthesizer::{SummaryLlm, SummarySynthesizer};
+use alephcore::memory::session_search_summary::end_hook::SessionEndSummarizer;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::memory::SqliteMemoryBackend;
 use alephcore::tools::AlephTool;
@@ -449,6 +450,15 @@ impl TestEnv {
             .await
             .expect("seed_raw_memory");
     }
+
+    /// Create a SessionEndSummarizer wired with this environment's store and synthesizer.
+    /// Used to test the session-end hook in isolation (Task 15).
+    pub fn session_end_summarizer(&self) -> Arc<SessionEndSummarizer> {
+        Arc::new(SessionEndSummarizer {
+            store: self.raw_store.clone(),
+            synthesizer: self.synthesizer.clone(),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -572,5 +582,60 @@ async fn compactor_session_uses_compressed_facts() {
         0,
         "no LLM call expected for compactor-source hit; got {}",
         env.mock_llm.call_count()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 15 — session_end_hook_produces_summary
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn session_end_hook_produces_summary() {
+    let env = TestEnv::build().await;
+    env.seed_session(
+        "agent-1",
+        "ended-sess",
+        &[("user", "Status report?"), ("assistant", "All green.")],
+    );
+    env.mock_llm
+        .set_response("<summary>\n## Primary Request\nStatus report\n</summary>");
+
+    // Step 1: directly fire the session-end hook.
+    let summarizer = env.session_end_summarizer();
+    summarizer
+        .produce("agent-1", "ended-sess")
+        .await
+        .expect("produce");
+    assert_eq!(
+        env.mock_llm.call_count(),
+        1,
+        "session_end fired one LLM call"
+    );
+
+    // Step 2: now session_search should serve the SessionEnd-source hit, no further LLM call.
+    let tool = env.build_tool_with_assembler("agent-1");
+    let result = tool
+        .call(SessionSearchArgs {
+            query: "status".into(),
+            max_results: 5,
+        })
+        .await
+        .expect("call");
+
+    let hit = result
+        .hits
+        .iter()
+        .find(|h| h.session_key == "ended-sess")
+        .expect("ended-sess hit");
+    assert_eq!(
+        hit.source,
+        SummarySource::SessionEnd,
+        "expected SessionEnd source (matched /end-summary path), got {:?}",
+        hit.source
+    );
+    assert_eq!(
+        env.mock_llm.call_count(),
+        1,
+        "no extra LLM call from search"
     );
 }

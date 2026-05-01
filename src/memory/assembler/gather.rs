@@ -189,6 +189,7 @@ impl Gatherer {
 fn raw_to_candidate(r: RawMemory) -> Candidate {
     let session_id = r.session_id.clone().unwrap_or_default();
     let fact_source = raw_source_to_fact_source(&r.source);
+    let path = r.path.clone();
     Candidate {
         id: format!("aleph://session/{session_id}/raw/{}", r.id),
         title: format!("Raw fragment {}", r.id),
@@ -196,6 +197,7 @@ fn raw_to_candidate(r: RawMemory) -> Candidate {
         source: ItemSource::Raw {
             raw_id: r.id,
             session_id,
+            path,
         },
         relevance: 0.6,
         updated_at: r.created_at,
