@@ -1,4 +1,11 @@
-//! Atomic file write via temp + rename. Cross-process safe.
+//! Atomic file write via temp + rename.
+//!
+//! On POSIX (Linux, macOS) `rename(2)` over an existing target on the same
+//! filesystem is atomic — readers see either the previous complete content
+//! or the new complete content, never a partial write. On Windows the
+//! replacement is best-effort and may briefly be observable as a missing
+//! target. The temp file is created alongside `path` so the rename never
+//! crosses a filesystem boundary.
 
 use crate::error::AlephError;
 use std::path::{Path, PathBuf};
