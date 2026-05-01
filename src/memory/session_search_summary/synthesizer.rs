@@ -121,43 +121,45 @@ impl SummarySynthesizer {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Test support — pub(crate) stubs reused by integration tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
+pub(crate) mod test_support {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
 
     use async_trait::async_trait;
 
+    use crate::error::AlephError;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::SessionState;
     use crate::gateway::session_store::error::SessionStoreError;
     use crate::gateway::session_store::types::*;
-    use crate::memory::store::sqlite::SqliteMemoryBackend;
+    use crate::gateway::session_store::SessionStore;
+    use crate::sync_primitives::Arc;
+
+    use super::SummaryLlm;
 
     // -----------------------------------------------------------------------
     // MockSummaryLlm
     // -----------------------------------------------------------------------
 
-    struct MockSummaryLlm {
-        response: String,
-        call_count: AtomicUsize,
+    pub(crate) struct MockSummaryLlm {
+        pub(crate) response: String,
+        pub(crate) call_count: AtomicUsize,
     }
 
     impl MockSummaryLlm {
-        fn with_response(s: impl Into<String>) -> Arc<Self> {
+        pub(crate) fn with_response(s: impl Into<String>) -> Arc<Self> {
             Arc::new(Self {
                 response: s.into(),
                 call_count: AtomicUsize::new(0),
             })
         }
 
-        fn call_count(&self) -> usize {
+        pub(crate) fn call_count(&self) -> usize {
             self.call_count.load(Ordering::SeqCst)
         }
     }
@@ -175,19 +177,19 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Minimal in-memory SessionStore for tests.
-    struct InMemorySessionStore {
+    pub(crate) struct InMemorySessionStore {
         // (agent_id, session_id) -> Vec<(role, content)>
-        messages: StdMutex<HashMap<(String, String), Vec<(String, String)>>>,
+        pub(crate) messages: StdMutex<HashMap<(String, String), Vec<(String, String)>>>,
     }
 
     impl InMemorySessionStore {
-        fn new() -> Arc<Self> {
+        pub(crate) fn new() -> Arc<Self> {
             Arc::new(Self {
                 messages: StdMutex::new(HashMap::new()),
             })
         }
 
-        fn with_messages(
+        pub(crate) fn with_messages(
             self: Arc<Self>,
             agent_id: &str,
             session_id: &str,
@@ -425,12 +427,26 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Helper: in-memory raw memory store
+    // Helper: in-memory raw memory store (pub(crate) for integration tests)
     // -----------------------------------------------------------------------
 
-    fn make_store() -> Arc<dyn RawMemoryStore> {
+    pub(crate) fn make_store() -> Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> {
+        use crate::memory::store::sqlite::SqliteMemoryBackend;
         Arc::new(SqliteMemoryBackend::in_memory().expect("in-memory backend"))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{InMemorySessionStore, MockSummaryLlm, make_store};
+    use super::*;
+
+    use crate::gateway::session_store::SessionStore;
+    use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
     // -----------------------------------------------------------------------
     // Test 1: returns existing fact when summary already present
