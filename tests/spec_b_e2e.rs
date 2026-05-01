@@ -19,6 +19,7 @@ use alephcore::builtin_tools::session_search::{
 };
 use alephcore::builtin_tools::session_search::SummarySource;
 use alephcore::AlephError;
+use alephcore::AssemblerConfig;
 use alephcore::gateway::agent_instance::AgentRegistry;
 use alephcore::gateway::context::GatewayContext;
 use alephcore::gateway::execution_adapter::ExecutionAdapter;
@@ -30,10 +31,49 @@ use alephcore::gateway::session_store::error::SessionStoreError;
 use alephcore::gateway::session_store::types::*;
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{AgentInstance, EventEmitter};
+use alephcore::memory::assembler::{HybridAssembler, LlmReranker, UserProfileLoader, WorkingMemoryAssembler};
+use alephcore::memory::embedding_provider::EmbeddingProvider;
+use alephcore::memory::note_retrieval::NoteFactRetrieval;
+use alephcore::memory::notes::NoteIndexer;
+use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::synthesizer::{SummaryLlm, SummarySynthesizer};
-use alephcore::memory::store::raw_memory::{RawMemory, RawMemoryStore};
+use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use alephcore::memory::SqliteMemoryBackend;
 use alephcore::tools::AlephTool;
+
+// ---------------------------------------------------------------------------
+// NeverCalledReranker — stub reranker; skeleton path never calls it
+// ---------------------------------------------------------------------------
+
+struct NeverCalledReranker;
+
+#[async_trait]
+impl LlmReranker for NeverCalledReranker {
+    async fn complete(&self, _prompt: &str, _model: Option<&str>) -> Result<String, AlephError> {
+        Err(AlephError::config(
+            "NeverCalledReranker must not be invoked".to_string(),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ZeroEmbedder — all embeddings are 768-dim zero vectors
+// ---------------------------------------------------------------------------
+
+struct ZeroEmbedder;
+
+#[async_trait]
+impl EmbeddingProvider for ZeroEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+        Ok(vec![0.0_f32; 768])
+    }
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+        Ok(texts.iter().map(|_| vec![0.0_f32; 768]).collect())
+    }
+    fn dimensions(&self) -> usize { 768 }
+    fn model_name(&self) -> &str { "zero" }
+    fn provider_id(&self) -> &str { "zero" }
+}
 
 // ---------------------------------------------------------------------------
 // MockExecutionAdapter — no-op, satisfies the trait bound on GatewayContext
@@ -295,14 +335,18 @@ pub struct TestEnv {
     pub session_store: Arc<E2eSessionStore>,
     pub mock_llm: Arc<MockSummaryLlm>,
     pub synthesizer: Arc<SummarySynthesizer>,
+    pub assembler: Arc<dyn WorkingMemoryAssembler>,
     pub context: Arc<GatewayContext>,
 }
 
 impl TestEnv {
     pub async fn build() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let db_path = tmp.path().join("raw.db");
+        let notes_dir = tmp.path().join("notes");
+        std::fs::create_dir_all(&notes_dir).expect("notes dir");
         let raw_store = Arc::new(
-            SqliteMemoryBackend::new(&tmp.path().join("raw.db"))
+            SqliteMemoryBackend::new(&db_path)
                 .expect("SqliteMemoryBackend"),
         );
         // Keep the tempdir alive for the lifetime of the TestEnv.
@@ -317,6 +361,35 @@ impl TestEnv {
             mock_llm.clone(),
         ));
 
+        // Build HybridAssembler with force_fallback=true (skeleton path, zero LLM calls).
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(ZeroEmbedder);
+        let indexer = Arc::new(NoteIndexer::new(notes_dir.clone(), raw_store.clone()));
+        let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
+        let snap_dir = notes_dir.join("_snapshots");
+        std::fs::create_dir_all(&snap_dir).expect("snap dir");
+        let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
+        let profile = UserProfileLoader::new(notes_dir);
+        let reranker: Arc<dyn LlmReranker> = Arc::new(NeverCalledReranker);
+        let assembler_cfg = AssemblerConfig {
+            enabled: true,
+            total_budget_tokens: 4000,
+            candidate_pool_limit: 20,
+            rerank_timeout_ms: 200,
+            rerank_model: None,
+            render_style: Default::default(),
+            force_fallback: true,
+            fallback_skeleton: Default::default(),
+            assembly_log: Default::default(),
+        };
+        let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
+            retrieval,
+            snapshots,
+            raw_store.clone(),
+            profile,
+            reranker,
+            assembler_cfg,
+        ));
+
         let agent_registry = Arc::new(AgentRegistry::new());
         let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
         let a2a_policy = Arc::new(AgentToAgentPolicy::permissive());
@@ -328,7 +401,7 @@ impl TestEnv {
             a2a_policy,
         ));
 
-        Self { raw_store, session_store, mock_llm, synthesizer, context }
+        Self { raw_store, session_store, mock_llm, synthesizer, assembler, context }
     }
 
     /// Build a `SessionSearchTool` for the given caller agent with no assembler.
@@ -341,6 +414,17 @@ impl TestEnv {
             caller,
             None,                           // skip primary assembler path
             Some(self.synthesizer.clone()), // enable lazy synthesis
+        )
+    }
+
+    /// Build a `SessionSearchTool` for the given caller agent with the assembler wired in.
+    /// Exercises the primary summary-driven retrieval path (Task 14+).
+    pub fn build_tool_with_assembler(&self, caller: &str) -> SessionSearchTool {
+        SessionSearchTool::new(
+            self.context.clone(),
+            caller,
+            Some(self.assembler.clone()),
+            Some(self.synthesizer.clone()),
         )
     }
 
@@ -434,5 +518,59 @@ async fn fresh_short_session_lazy_synthesis() {
         env.mock_llm.call_count(),
         1,
         "no additional LLM call on second invocation — cache must be hit"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 14 — compactor_session_uses_compressed_facts
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn compactor_session_uses_compressed_facts() {
+    let env = TestEnv::build().await;
+
+    // Seed a single d1-style compactor fact for "long-sess".
+    // agent_id must match the caller so fetch_session_compressed finds it.
+    let raw = RawMemory::new(
+        "Rust deployment uses cargo and kubectl in the production path".to_string(),
+        RawMemorySource::SessionCompressed,
+    )
+    .with_agent("agent-1")
+    .with_session("long-sess")
+    .with_path("aleph://session/long-sess/d1/0");
+    env.seed_raw_memory(raw).await;
+
+    let tool = env.build_tool_with_assembler("agent-1");
+
+    let result = tool
+        .call(SessionSearchArgs {
+            query: "deployment".into(),
+            max_results: 5,
+        })
+        .await
+        .expect("call");
+
+    let hit = result
+        .hits
+        .iter()
+        .find(|h| h.session_key == "long-sess")
+        .expect("expected a hit for long-sess");
+
+    assert_eq!(
+        hit.source,
+        SummarySource::Compactor,
+        "expected Compactor source, got {:?}",
+        hit.source
+    );
+    assert!(
+        hit.summary.contains("deployment") || hit.summary.contains("Rust"),
+        "expected summary to mention seeded content, got: {}",
+        hit.summary
+    );
+    assert_eq!(
+        env.mock_llm.call_count(),
+        0,
+        "no LLM call expected for compactor-source hit; got {}",
+        env.mock_llm.call_count()
     );
 }
