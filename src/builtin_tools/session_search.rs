@@ -27,14 +27,27 @@ fn default_max_results() -> usize {
     5
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub enum SummarySource {
+    /// Reused from the existing session_compactor d{depth}/{seq} facts.
+    Compactor,
+    /// Produced by the on_session_end hook backstop.
+    SessionEnd,
+    /// Synthesized at query time as a fallback for in-flight short sessions.
+    Lazy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionSearchHit {
     pub session_key: String,
     pub agent_id: String,
     pub topic: Option<String>,
-    pub role: String,
-    pub content: String,
+    /// Synthesized excerpt of the matched session (≤ 1500 chars).
+    pub summary: String,
+    /// 0-2 raw FTS5 snippets from the session's transcript (≤ 200 chars each).
+    pub evidence_quotes: Vec<String>,
     pub timestamp: i64,
+    pub source: SummarySource,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,9 +118,10 @@ impl SessionSearchTool {
                 session_key: r.session_key,
                 agent_id: r.agent_id,
                 topic: r.topic,
-                role: r.role,
-                content: r.content,
+                summary: r.content,
+                evidence_quotes: vec![],
                 timestamp: r.timestamp,
+                source: SummarySource::Compactor,
             })
             .collect();
 
