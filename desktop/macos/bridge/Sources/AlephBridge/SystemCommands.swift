@@ -17,12 +17,10 @@ extension AlephBridge {
                 let info = ProcessInfo.processInfo
                 let osVersion = info.operatingSystemVersionString
                 let hostname = info.hostName
-                let username = NSUserName()
 
                 printJSON([
                     "os_version": osVersion,
                     "hostname": hostname,
-                    "username": username,
                 ])
             }
         }

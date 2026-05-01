@@ -370,7 +370,14 @@ mod tests {
         // PermissionMissing holds Box
         let guide = PermissionGuide {
             kind: PermissionKind::Accessibility,
+            status: aleph_protocol::desktop_bridge::methods::perm::PermissionStatus {
+                kind: PermissionKind::Accessibility,
+                granted: false,
+                can_request_programmatically: false,
+                restricted: false,
+            },
             deep_link: "x-apple.systempreferences".into(),
+            human_readable_steps: vec!["Open System Preferences".into()],
             rationale: "test".into(),
         };
         let perm_event = HotkeyEvent::PermissionMissing(Box::new(guide));
@@ -382,9 +389,8 @@ mod tests {
         let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
         let (listener, _rx) = HotkeyListener::new(bridge);
         let listener = listener
-            .register(1, 49, NSEventModifierFlags::Command.0, false)
-            .register(2, 0x38, NSEventModifierFlags::Shift.0, true);
-        // If this compiles, chaining works. Add a compile-time check via getter.
+            .register(1, 49, NSEventModifierFlags::Command.0 as u64, false)
+            .register(2, 0x38, NSEventModifierFlags::Shift.0 as u64, true);
         assert!(listener.hotkeys.len() == 2);
         assert_eq!(listener.hotkeys[0].id, 1);
         assert_eq!(listener.hotkeys[0].key_code, 49);
@@ -399,8 +405,8 @@ mod tests {
         let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
         let (listener, _rx) = HotkeyListener::new(bridge);
         let listener = listener
-            .register(1, 49, NSEventModifierFlags::Command.0, false)
-            .register(2, 0x38, NSEventModifierFlags::Shift.0, true);
+            .register(1, 49, NSEventModifierFlags::Command.0 as u64, false)
+            .register(2, 0x38, NSEventModifierFlags::Shift.0 as u64, true);
         let snapshot = listener.snapshot_registrations();
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot[0].0, 1); // id

@@ -12,7 +12,10 @@ extension AlephBridge {
 
         // Run an AppleScript and return the result string, or call printError on failure.
         static func runAppleScript(_ source: String) -> String {
-            let script = NSAppleScript(source: source)!
+            guard let script = NSAppleScript(source: source) else {
+                printError("Failed to create AppleScript")
+                return ""
+            }
             var errorInfo: NSDictionary?
             let result = script.executeAndReturnError(&errorInfo)
             if let err = errorInfo {
