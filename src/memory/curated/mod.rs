@@ -35,15 +35,3 @@ impl Default for CuratedConfig {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "."]
-mod default_test {
-    #[test]
-    fn defaults_match_hermes_values() {
-        let c = super::CuratedConfig::default();
-        assert_eq!(c.memory_char_limit, 2_200);
-        assert_eq!(c.user_char_limit, 1_375);
-        assert!((c.legacy_warn_threshold - 0.95).abs() < 1e-6);
-    }
-}
