@@ -416,6 +416,18 @@ The memory pipeline exposes three hook points — `on_retrieve`, `on_capture`, a
 - **`ContextComptroller.token_budget` is the last gate.** Default 100 000. If tool callers over-fetch, shrink the budget before shrinking `max_results` — the comptroller keeps the highest-scoring facts and reports `tokens_saved`.
 - **`similarity_threshold` on `RippleConfig` controls graph reach.** 0.7 is the BFS floor. Raise for tighter clusters, lower to let ripples travel further.
 
+## 16. Cross-session summary retrieval (Spec B)
+
+The `session_search` tool returns one synthesized excerpt per matched session,
+plus 0-2 raw evidence quotes for grounding. Summaries come from three
+coordinated paths: existing compactor d0/d1/d2 facts, the on_session_end
+backstop, and a lazy on-read fallback for short in-flight sessions. All three
+write the same canonical fact at `aleph://session/{sid}/end-summary` (compactor
+variants live at `aleph://session/{sid}/d{depth}/{seq}`). The wiki/note
+retrieval path (default `FactSourceFilter::Any`) is unaffected — the new
+filter is only passed by `session_search` itself, leaving every other
+HybridAssembler caller's behaviour byte-identical.
+
 ## See Also
 
 - [Knowledge Notes (L1)](NOTES.md) — the markdown + SQLite substrate that hybrid search reads from.

@@ -144,7 +144,7 @@ Closes the remaining Hermes-vs-Aleph gaps surfaced after the 4-spec roadmap ship
 | Spec | 状态 | 设计文档 | 实施计划 | 完成日期 |
 |------|------|----------|----------|----------|
 | A. Curated Hot Memory + Frozen Snapshot + `remember` tool | ✅ shipped | [design](2026-05-01-memory-evolution-spec-a-curated-hot-snapshot-design.md) | [plan](../plans/2026-05-01-memory-evolution-spec-a-curated-hot-snapshot.md) | 2026-05-01 |
-| B. `session_search` summarization pipeline | ⏸ pending | — | — | — |
+| B. `session_search` summarization pipeline | ✅ shipped | [design](2026-05-01-memory-evolution-spec-b-session-search-summarization-design.md) | [plan](../plans/2026-05-01-memory-evolution-spec-b-session-search-summarization.md) | 2026-05-01 |
 | C. Cross-process safety beyond curated layer | ⏸ pending | — | — | — |
 
 > 每个 spec 完成后回到本文档更新状态栏和文档链接。
