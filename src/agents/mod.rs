@@ -50,6 +50,7 @@ pub use runtime::{AgentRuntime, AgentRuntimeConfig, SubagentTranscript, Transcri
 pub use types::{AgentDef, AgentMode, ContextMode};
 
 // Re-export rig module types for convenience
+#[allow(deprecated)]
 pub use rig::{
     create_builtin_tool_server, create_builtin_tools_list, AgentConfig, BuiltinToolConfig,
     ChatMessage, ConversationHistory, MessageRole, RigAgentConfig, ToolCallInfo, ToolCallResult,

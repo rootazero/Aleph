@@ -11,8 +11,8 @@
 
 #![cfg(feature = "phase7_traffic_flip")]
 
-use std::collections::BTreeSet;
 use crate::sync_primitives::Arc;
+use std::collections::BTreeSet;
 
 use crate::agents::subagent_tool::SubagentTool;
 use crate::tools::refresh::ToolRefreshSource;

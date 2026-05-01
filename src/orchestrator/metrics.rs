@@ -106,6 +106,7 @@ impl OrchestratorMetrics {
 
 /// Per-flow metrics tracker.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct FlowMetrics {
     flow_id: Arc<str>,
     started_at: Instant,

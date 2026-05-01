@@ -56,14 +56,18 @@ impl SandboxCapabilities {
     /// For filesystem paths, both paths are normalized (resolving `.` and `..`)
     /// before the prefix check to prevent path traversal bypasses.
     pub fn is_within(&self, baseline: &Self) -> bool {
-        let fs_read_ok = self
-            .fs_read
-            .iter()
-            .all(|p| baseline.fs_read.iter().any(|b| path_starts_with_normalized(p, b)));
-        let fs_write_ok = self
-            .fs_write
-            .iter()
-            .all(|p| baseline.fs_write.iter().any(|b| path_starts_with_normalized(p, b)));
+        let fs_read_ok = self.fs_read.iter().all(|p| {
+            baseline
+                .fs_read
+                .iter()
+                .any(|b| path_starts_with_normalized(p, b))
+        });
+        let fs_write_ok = self.fs_write.iter().all(|p| {
+            baseline
+                .fs_write
+                .iter()
+                .any(|b| path_starts_with_normalized(p, b))
+        });
         let net_ok = network_within(&self.network, &baseline.network);
         let spawn_ok = !self.spawn_subprocess || baseline.spawn_subprocess;
         fs_read_ok && fs_write_ok && net_ok && spawn_ok

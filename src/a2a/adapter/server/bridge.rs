@@ -320,10 +320,7 @@ mod tests {
             _agent: Arc<AgentInstance>,
             _emitter: Arc<dyn EventEmitter + Send + Sync>,
         ) -> Result<(), ExecutionError> {
-            self.calls
-                .lock()
-                .await
-                .push(request.run_id);
+            self.calls.lock().await.push(request.run_id);
             if self.should_fail {
                 Err(ExecutionError::Failed("Mock execution failure".to_string()))
             } else {

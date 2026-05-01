@@ -48,6 +48,7 @@ pub struct GatewayTraceSink {
 }
 
 impl GatewayTraceSink {
+    #[allow(dead_code)]
     pub fn new(handle: Arc<dyn TraceFlushHandle>) -> Self {
         Self { handle }
     }
@@ -74,8 +75,8 @@ impl TraceSink for GatewayTraceSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use crate::sync_primitives::Arc;
 
     struct CountingHandle {
         traces: AtomicUsize,

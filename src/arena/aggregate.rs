@@ -185,7 +185,10 @@ impl SharedArena {
         completed: Option<usize>,
     ) -> Result<(), String> {
         if !self.slots.contains_key(agent_id) {
-            return Err(format!("Agent '{}' is not a participant in this arena", agent_id));
+            return Err(format!(
+                "Agent '{}' is not a participant in this arena",
+                agent_id
+            ));
         }
 
         let agent_prog = self

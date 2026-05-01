@@ -346,3 +346,84 @@ impl Drop for HotkeyListener {
         self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hotkey_event_debug_clone_send_sync() {
+        // HotkeyEvent must be Send + Sync so it can cross task boundaries.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<HotkeyEvent>();
+
+        // Debug round-trip
+        let event = HotkeyEvent::Pressed(42);
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("Pressed"));
+        assert!(debug.contains("42"));
+
+        // Clone
+        let event2 = event.clone();
+        assert!(matches!(event2, HotkeyEvent::Pressed(42)));
+
+        // PermissionMissing holds Box
+        let guide = PermissionGuide {
+            kind: PermissionKind::Accessibility,
+            deep_link: "x-apple.systempreferences".into(),
+            rationale: "test".into(),
+        };
+        let perm_event = HotkeyEvent::PermissionMissing(Box::new(guide));
+        assert!(matches!(perm_event, HotkeyEvent::PermissionMissing(_)));
+    }
+
+    #[test]
+    fn test_register_returns_self_for_chaining() {
+        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
+        let (listener, _rx) = HotkeyListener::new(bridge);
+        let listener = listener
+            .register(1, 49, NSEventModifierFlags::Command.0, false)
+            .register(2, 0x38, NSEventModifierFlags::Shift.0, true);
+        // If this compiles, chaining works. Add a compile-time check via getter.
+        assert!(listener.hotkeys.len() == 2);
+        assert_eq!(listener.hotkeys[0].id, 1);
+        assert_eq!(listener.hotkeys[0].key_code, 49);
+        assert!(!listener.hotkeys[0].track_hold);
+        assert_eq!(listener.hotkeys[1].id, 2);
+        assert_eq!(listener.hotkeys[1].key_code, 0x38);
+        assert!(listener.hotkeys[1].track_hold);
+    }
+
+    #[test]
+    fn test_snapshot_registrations() {
+        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
+        let (listener, _rx) = HotkeyListener::new(bridge);
+        let listener = listener
+            .register(1, 49, NSEventModifierFlags::Command.0, false)
+            .register(2, 0x38, NSEventModifierFlags::Shift.0, true);
+        let snapshot = listener.snapshot_registrations();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].0, 1); // id
+        assert_eq!(snapshot[0].1, 49); // key_code
+        assert_eq!(snapshot[1].0, 2);
+        assert_eq!(snapshot[1].1, 0x38);
+    }
+
+    #[test]
+    fn test_modifier_mask_contains_expected_bits() {
+        let mask = MODIFIER_MASK;
+        assert!(mask.contains(NSEventModifierFlags::Shift));
+        assert!(mask.contains(NSEventModifierFlags::Control));
+        assert!(mask.contains(NSEventModifierFlags::Option));
+        assert!(mask.contains(NSEventModifierFlags::Command));
+    }
+
+    #[test]
+    fn test_listener_stop_clears_monitors() {
+        let bridge = Arc::new(SwiftBridge::new(std::path::PathBuf::from("/dev/null")));
+        let (mut listener, _rx) = HotkeyListener::new(bridge);
+        // Without start(), monitors is empty; stop() should be safe to call.
+        listener.stop();
+        assert!(listener.monitors.is_empty());
+    }
+}

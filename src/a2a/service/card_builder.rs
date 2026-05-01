@@ -15,10 +15,11 @@ impl CardBuilder {
             .clone()
             .unwrap_or_else(|| "Aleph".to_string());
         let description = config.card_description.clone();
-        let version = config
-            .card_version
-            .clone()
-            .unwrap_or_else(|| option_env!("ALEPH_VERSION").unwrap_or("unknown").to_string());
+        let version = config.card_version.clone().unwrap_or_else(|| {
+            option_env!("ALEPH_VERSION")
+                .unwrap_or("unknown")
+                .to_string()
+        });
 
         let skills: Vec<AgentSkill> = config
             .skills

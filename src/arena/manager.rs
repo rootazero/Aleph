@@ -122,7 +122,9 @@ impl ArenaManager {
         let shared = self.arenas.get(arena_id)?;
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());
 
-        let slot_summaries: Vec<Value> = arena.slots().values()
+        let slot_summaries: Vec<Value> = arena
+            .slots()
+            .values()
             .map(|slot| {
                 json!({
                     "agent_id": slot.agent_id,

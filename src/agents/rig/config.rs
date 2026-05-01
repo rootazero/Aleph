@@ -20,7 +20,10 @@ pub struct RigAgentConfig {
     /// supported providers so a config can target any of them; the actual
     /// LLM API call is responsible for provider-specific clamping
     /// (Anthropic accepts 0.0-1.0, OpenAI/Gemini accept 0.0-2.0).
-    #[serde(default = "default_temperature", deserialize_with = "deserialize_temperature")]
+    #[serde(
+        default = "default_temperature",
+        deserialize_with = "deserialize_temperature"
+    )]
     pub temperature: f32,
     /// Max tokens
     #[serde(default = "default_max_tokens")]

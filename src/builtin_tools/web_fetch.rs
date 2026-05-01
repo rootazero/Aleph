@@ -41,17 +41,15 @@ pub enum Extractor {
 // Pre-compiled regexes for HTML cleaning (compiled once, reused forever)
 // ---------------------------------------------------------------------------
 
-static RE_COMMENTS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").expect("valid regex"));
+static RE_COMMENTS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<!--.*?-->").expect("valid regex"));
 static RE_SCRIPT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").expect("valid regex"));
 static RE_STYLE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").expect("valid regex"));
 static RE_NOSCRIPT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").expect("valid regex"));
-static RE_HIDDEN_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").expect("valid regex")
-});
+static RE_HIDDEN_ATTR: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").expect("valid regex"));
 static RE_ARIA_HIDDEN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
         .expect("valid regex")
@@ -68,8 +66,7 @@ static RE_SR_CLASSES: Lazy<Regex> = Lazy::new(|| {
     )
     .expect("valid regex")
 });
-static RE_STRIP_TAGS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
+static RE_STRIP_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").expect("valid regex"));
 
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

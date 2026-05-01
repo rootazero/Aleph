@@ -82,9 +82,7 @@ impl ShellSecurityConfig {
     ///
     /// Returns `Ok(None)` if custom patterns are disabled.
     /// Returns `Ok(Some(...))` with compiled patterns if enabled.
-    pub fn compile_patterns(
-        &self,
-    ) -> Result<Option<CompiledCustomPatterns>, regex::Error> {
+    pub fn compile_patterns(&self) -> Result<Option<CompiledCustomPatterns>, regex::Error> {
         if !self.enable_custom_patterns {
             return Ok(None);
         }

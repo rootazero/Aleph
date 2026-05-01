@@ -157,6 +157,8 @@ impl PreflightStage for AutocompactStage {
         messages.splice(summary_start..summary_end, std::iter::once(compact_msg));
 
         // Update cooldown tracking (monotonic invocation count).
+        // Store current_invocation + 1 so the cooldown check correctly
+        // counts the interval from this compaction to the next call.
         self.last_compact_turn
             .store(current_invocation + 1, Ordering::Release);
 

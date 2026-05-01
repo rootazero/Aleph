@@ -3,6 +3,8 @@
 //! Provides CRUD functions for persisting arenas, slots, and artifacts
 //! to the StateDatabase.
 
+#![allow(dead_code)]
+
 use super::types::{ArenaId, ArenaManifest, ArenaStatus, ArtifactId, ArtifactKind};
 use crate::resilience::database::StateDatabase;
 use chrono::Utc;

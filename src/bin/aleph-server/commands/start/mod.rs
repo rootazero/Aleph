@@ -529,11 +529,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let sandbox: Arc<dyn alephcore::sandbox::Sandbox> = {
-        use alephcore::sandbox::{build_sandbox, create_platform_driver_from_config};
         use alephcore::sandbox::rate_limit::SandboxRateLimitConfig;
+        use alephcore::sandbox::{build_sandbox, create_platform_driver_from_config};
 
         let os_driver = create_platform_driver_from_config(&loaded_app_config.sandbox);
-        build_sandbox(&loaded_app_config.sandbox, os_driver, approval_gate.clone(), SandboxRateLimitConfig::from(loaded_app_config.sandbox.rate_limit.clone()))
+        build_sandbox(
+            &loaded_app_config.sandbox,
+            os_driver,
+            approval_gate.clone(),
+            SandboxRateLimitConfig::from(loaded_app_config.sandbox.rate_limit.clone()),
+        )
     };
     if !args.daemon {
         if loaded_app_config.sandbox.enabled {
@@ -899,7 +904,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     match HeartbeatStore::open(&hb_db_path) {
                         Ok(store) => {
                             let svc = HeartbeatService::new(store, hb_config);
-                            let shared: SharedHeartbeatService = Arc::new(tokio::sync::Mutex::new(svc));
+                            let shared: SharedHeartbeatService =
+                                Arc::new(tokio::sync::Mutex::new(svc));
                             register_heartbeat_handlers(&mut server, &shared, args.daemon);
                             Some(shared)
                         }
@@ -913,7 +919,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
                 Err(e) => {
                     if !args.daemon {
-                        eprintln!("Warning: Failed to resolve data directory: {}. Heartbeat disabled.", e);
+                        eprintln!(
+                            "Warning: Failed to resolve data directory: {}. Heartbeat disabled.",
+                            e
+                        );
                     }
                     tracing::warn!(error = %e, "Failed to resolve data directory; heartbeat disabled");
                     None
@@ -984,12 +993,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.artifact_store.clone(),
         agent_result.event_store.clone(),
     ) {
-        use alephcore::event::{AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus};
+        use alephcore::event::{
+            AlephEvent, EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
+        };
         use alephcore::teams::events::TeamEventLogger;
         use alephcore::teams::kanban::unblocker::KanbanAutoUnblocker;
 
-        let artifact_store_concrete = Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
-            .expect("artifact_store must be SqliteArtifactStore");
+        let artifact_store_concrete =
+            Arc::downcast::<alephcore::teams::artifacts::SqliteArtifactStore>(artifact_store)
+                .expect("artifact_store must be SqliteArtifactStore");
         let kanban_handler = Arc::new(KanbanAutoUnblocker::new(artifact_store_concrete));
         let team_logger = Arc::new(TeamEventLogger::new(event_store));
         let dummy_bus = EventBus::new();

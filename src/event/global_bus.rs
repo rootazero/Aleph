@@ -324,8 +324,7 @@ impl GlobalBus {
         // Use block_in_place to safely acquire the write lock from any context.
         // This prevents panics when called from an async runtime while still
         // allowing use from synchronous code.
-        let mut subscriptions =
-            tokio::task::block_in_place(|| self.subscriptions.blocking_write());
+        let mut subscriptions = tokio::task::block_in_place(|| self.subscriptions.blocking_write());
         subscriptions.insert(id.clone(), subscription);
 
         debug!(subscription_id = %id, "Added global event subscription");

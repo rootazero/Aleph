@@ -23,7 +23,9 @@ func registerAxHandlers(_ router: Router) async {
     await router.register("ax.query_tree") { params in
         try requireAxTrusted()
         let args = try decodeCodable(params, as: QueryTreeParams.self)
-        let depth = args.max_depth ?? 6
+        // Cap depth to prevent unbounded AX tree traversal (information disclosure / OOM).
+        let MAX_QUERY_DEPTH = 20
+        let depth = min(args.max_depth ?? 6, MAX_QUERY_DEPTH)
         let el = await querier.queryTree(
             pid: args.pid.map { pid_t($0) },
             maxDepth: depth

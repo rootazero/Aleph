@@ -301,18 +301,12 @@ mod tests {
         "#;
         let config: SecretsConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.custom_leak_patterns.len(), 2);
-        assert_eq!(
-            config.custom_leak_patterns[0].name,
-            "Internal API Token"
-        );
+        assert_eq!(config.custom_leak_patterns[0].name, "Internal API Token");
         assert_eq!(
             config.custom_leak_patterns[0].pattern,
             "internal-[a-z0-9]{32}"
         );
-        assert_eq!(
-            config.custom_leak_patterns[1].name,
-            "Service Key"
-        );
+        assert_eq!(config.custom_leak_patterns[1].name, "Service Key");
     }
 
     #[test]

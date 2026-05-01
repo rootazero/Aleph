@@ -8,15 +8,15 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{info, error};
+use tracing::{error, info};
 
+use super::super::agent_instance::AgentRegistry;
 use super::super::event_bus::GatewayEventBus;
 use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, StreamEvent};
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use super::super::router::{AgentRouter, SessionKey};
-use super::super::agent_instance::AgentRegistry;
 use super::super::execution_adapter::ExecutionAdapter;
 use super::super::execution_engine::RunRequest;
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::router::{AgentRouter, SessionKey};
 use super::parse_params;
 
 /// A file attachment sent with a message
@@ -440,14 +440,16 @@ pub async fn handle_generate_title(request: JsonRpcRequest) -> JsonRpcResponse {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use chrono::Utc;
+    use super::*;
     use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
     use crate::gateway::event_emitter::EventEmitter;
-    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus as EngineRunStatus, RunState};
+    use crate::gateway::execution_engine::{
+        ExecutionError, RunRequest, RunState, RunStatus as EngineRunStatus,
+    };
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
     use crate::gateway::session_store::SessionStore;
-    use super::*;
+    use async_trait::async_trait;
+    use chrono::Utc;
 
     /// Build a registry containing a "main" AgentInstance backed by a tempdir
     /// FileSessionStore. Holds onto the TempDir so callers can keep it alive

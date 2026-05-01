@@ -14,8 +14,8 @@ use alephcore::memory::dreaming::strategy::DreamStrategy;
 use alephcore::memory::dreaming::validation::{
     check_duplicate_hashes, run_l1_validation, DreamValidationReport, ValidationTier,
 };
-use alephcore::DreamingConfig;
 use alephcore::memory::dreaming::{DreamPipeline, DreamReport};
+use alephcore::DreamingConfig;
 
 /// Full evolution cycle: signals → select → gate → validate → log.
 #[tokio::test]

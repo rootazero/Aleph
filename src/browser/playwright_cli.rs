@@ -164,7 +164,12 @@ impl PlaywrightCliDriver {
     }
 }
 
-fn classify_stderr(stderr: &str, exit_code: i32, session_key: &str, timeout_ms: u64) -> BrowserError {
+fn classify_stderr(
+    stderr: &str,
+    exit_code: i32,
+    session_key: &str,
+    timeout_ms: u64,
+) -> BrowserError {
     let s = stderr.to_lowercase();
     if s.contains("no session") || s.contains("browser not open") {
         BrowserError::NoSession(session_key.to_string())

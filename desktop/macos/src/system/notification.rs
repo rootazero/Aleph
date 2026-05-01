@@ -33,3 +33,26 @@ pub async fn send_notification(title: &str, body: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_send_notification_happy_path() {
+        let result = send_notification("test title", "test body").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_notification_escapes_backslash() {
+        let result = send_notification(r"has\backslash", "body").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_notification_escapes_quotes() {
+        let result = send_notification("title with \"quotes\"", "body").await;
+        assert!(result.is_ok());
+    }
+}

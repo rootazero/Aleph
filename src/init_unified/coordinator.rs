@@ -336,7 +336,10 @@ impl InitializationCoordinator {
         // Initialize and validate skills system
         let system = SkillSystem::new();
         system.init(vec![skills_dir.clone()]).await.map_err(|e| {
-            InitError::new("skills", format!("Failed to initialize skill system: {}", e))
+            InitError::new(
+                "skills",
+                format!("Failed to initialize skill system: {}", e),
+            )
         })?;
 
         let skill_count = system.list_skills().await.len();

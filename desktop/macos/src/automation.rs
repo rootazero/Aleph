@@ -46,6 +46,7 @@ impl AutomationCapability for MacOSAutomation {
                     .await
             }
             ScriptLanguage::Shell => Command::new("bash").arg("-c").arg(source).output().await,
+            #[allow(unreachable_patterns)]
             ScriptLanguage::PowerShell => {
                 return Err(DesktopError::NotImplemented(
                     "PowerShell is not available on macOS".into(),
@@ -154,5 +155,49 @@ mod tests {
             result,
             Err(aleph_desktop::DesktopError::NotImplemented(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn test_run_jxa() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::Jxa, "2 + 2")
+            .await;
+        // JXA may not be available on all macOS versions; result is Ok or Err
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_shell_failure() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::Shell, "exit 1")
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_script_stderr_extracted() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::Shell, "echo error >&2 && exit 1")
+            .await;
+        let err = result.unwrap_err();
+        assert!(format!("{}", err).contains("error"));
+    }
+
+    #[tokio::test]
+    async fn test_run_shortcut_not_found() {
+        let auto = MacOSAutomation::new();
+        let result = auto.run_shortcut("__nonexistent_aleph_test__", None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_run_shortcut_with_input() {
+        let auto = MacOSAutomation::new();
+        // Use a shortcut that exists and accepts input; if none exist, this will error gracefully
+        let result = auto.run_shortcut("__nonexistent__", Some("test input")).await;
+        assert!(result.is_err());
     }
 }

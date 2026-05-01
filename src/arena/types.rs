@@ -581,7 +581,9 @@ mod tests {
             None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Coordinator 'agent-c' must be one of the participants"));
+        assert!(result
+            .unwrap_err()
+            .contains("Coordinator 'agent-c' must be one of the participants"));
 
         // Coordinator in agent_ids should succeed
         let result = ArenaManifest::build(

@@ -28,5 +28,6 @@ mod types;
 
 pub use config::RigAgentConfig;
 pub use message_history::{ChatMessage, ConversationHistory, MessageRole};
+#[allow(deprecated)]
 pub use tools::{create_builtin_tool_server, create_builtin_tools_list, BuiltinToolConfig};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};

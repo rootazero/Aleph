@@ -117,8 +117,7 @@ pub struct BuiltinToolRegistry {
     /// Phase 3 self-evolution path α — records user-correction signals into
     /// raw_memory under aleph://correction/{id}. Optional because it requires
     /// a memory backend (Arc<dyn RawMemoryStore>).
-    pub(crate) flag_user_correction_tool:
-        Option<crate::builtin_tools::FlagUserCorrectionTool>,
+    pub(crate) flag_user_correction_tool: Option<crate::builtin_tools::FlagUserCorrectionTool>,
     /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)

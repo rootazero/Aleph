@@ -1,4 +1,5 @@
 //! Single-step executor for Agent Loop
+#![allow(dead_code)]
 //!
 //! This module provides a simplified executor that executes a single tool call
 //! and returns the result. It is designed for use with the Agent Loop architecture

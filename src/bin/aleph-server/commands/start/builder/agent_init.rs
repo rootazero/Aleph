@@ -136,7 +136,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 if !daemon {
                                     println!("  Coord task store initialized (SQLite)");
                                 }
-                                Some(store as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>)
+                                Some(
+                                    store
+                                        as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
+                                )
                             }
                             Err(e) => {
                                 if !daemon {
@@ -296,45 +299,51 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }};
                 }
 
-                let artifact_store: Option<Arc<SqliteArtifactStore>> = match rusqlite::Connection::open(&db_path) {
-                    Ok(conn) => {
-                        if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
-                            if !daemon {
-                                eprintln!("Warning: Failed to set WAL mode for Artifact store: {}", e);
-                            }
-                        }
-                        let store = Arc::new(SqliteArtifactStore::new(conn));
-                        let store_concrete = store.clone();
-                        match tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(store_concrete.migrate())
-                        }) {
-                            Ok(()) => {
-                                if !daemon {
-                                    println!("  Artifact store initialized (SQLite)");
-                                }
-                                Some(store as Arc<SqliteArtifactStore>)
-                            }
-                            Err(e) => {
+                let artifact_store: Option<Arc<SqliteArtifactStore>> =
+                    match rusqlite::Connection::open(&db_path) {
+                        Ok(conn) => {
+                            if let Err(e) = conn
+                                .execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+                            {
                                 if !daemon {
                                     eprintln!(
-                                        "Warning: Artifact store migration failed: {}. Related tools disabled.",
+                                        "Warning: Failed to set WAL mode for Artifact store: {}",
                                         e
                                     );
                                 }
-                                None
+                            }
+                            let store = Arc::new(SqliteArtifactStore::new(conn));
+                            let store_concrete = store.clone();
+                            match tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(store_concrete.migrate())
+                            }) {
+                                Ok(()) => {
+                                    if !daemon {
+                                        println!("  Artifact store initialized (SQLite)");
+                                    }
+                                    Some(store as Arc<SqliteArtifactStore>)
+                                }
+                                Err(e) => {
+                                    if !daemon {
+                                        eprintln!(
+                                        "Warning: Artifact store migration failed: {}. Related tools disabled.",
+                                        e
+                                    );
+                                    }
+                                    None
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        if !daemon {
-                            eprintln!(
+                        Err(e) => {
+                            if !daemon {
+                                eprintln!(
                                 "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
                                 e
                             );
+                            }
+                            None
                         }
-                        None
-                    }
-                };
+                    };
                 let ev = init_store!(
                     SqliteEventLogStore,
                     dyn alephcore::teams::events::EventLogStore,
@@ -353,7 +362,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     "Session store",
                     db_path
                 );
-                let artifact_store_trait: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>> = artifact_store.as_ref().map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
+                let artifact_store_trait: Option<
+                    Arc<dyn alephcore::teams::artifacts::ArtifactStore>,
+                > = artifact_store
+                    .as_ref()
+                    .map(|s| Arc::clone(s) as Arc<dyn alephcore::teams::artifacts::ArtifactStore>);
                 (artifact_store_trait, ev, m, s)
             }
             Err(e) => {
@@ -1105,8 +1118,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // Wire LLM classify function using the default provider
             if app_config.task_routing.enable_llm_fallback {
                 let classify_provider = provider_registry.default_provider();
-                let classify_fn: alephcore::routing::composite_router::LlmClassifyFn =
-                    Arc::new(move |msg: &str| {
+                let classify_fn: alephcore::routing::composite_router::LlmClassifyFn = Arc::new(
+                    move |msg: &str| {
                         let provider = classify_provider.clone();
                         let prompt = alephcore::routing::llm_classifier::build_classify_prompt(msg);
                         Box::pin(async move {
@@ -1127,7 +1140,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 }
                             }
                         })
-                    });
+                    },
+                );
                 router = router.with_llm_classify_fn(classify_fn);
                 tracing::info!(
                     subsystem = "task_router",
@@ -1276,7 +1290,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     None
                 };
 
-                Some(super::init_compression_service(
+                super::init_compression_service(
                     memory_db,
                     prov.clone(),
                     emb.clone(),
@@ -1285,8 +1299,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     command_handler.clone(),
                     compound_ingestor,
                     profile_synth.clone(),
-                ))
-            }).flatten()
+                )
+            })
         } else {
             None
         };
@@ -1631,8 +1645,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             );
             println!();
         }
-        use alephcore::gateway::execution_engine::SimpleExecutionEngine;
         use alephcore::gateway::execution_engine::ExecutionEngineConfig;
+        use alephcore::gateway::execution_engine::SimpleExecutionEngine;
 
         let simple_engine = Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default()));
         let simple_adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = simple_engine;
@@ -2028,7 +2042,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     }
 
     AgentHandlersResult {
-        _run_manager: run_manager.expect("run_manager must be set in both real and simulated modes"),
+        _run_manager: run_manager
+            .expect("run_manager must be set in both real and simulated modes"),
         execution_adapter: exec_adapter,
         agent_registry: agent_reg,
         default_provider: default_prov,

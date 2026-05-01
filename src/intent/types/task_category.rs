@@ -143,7 +143,10 @@ mod tests {
     fn test_task_category_display_trait() {
         assert_eq!(format!("{}", TaskCategory::General), "general");
         assert_eq!(format!("{}", TaskCategory::FileOperation), "file_operation");
-        assert_eq!(format!("{}", TaskCategory::ImageGeneration), "image_generation");
+        assert_eq!(
+            format!("{}", TaskCategory::ImageGeneration),
+            "image_generation"
+        );
         assert_eq!(format!("{}", TaskCategory::WebSearch), "web_search");
     }
 

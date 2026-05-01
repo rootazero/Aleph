@@ -10,15 +10,21 @@ impl AgentManager {
     /// Validate agent_id: only alphanumeric, underscore, hyphen
     pub(super) fn validate_agent_id(&self, agent_id: &str) -> Result<()> {
         if agent_id.is_empty() {
-            return Err(AlephError::invalid_config("agent_id must not be empty".to_string()));
+            return Err(AlephError::invalid_config(
+                "agent_id must not be empty".to_string(),
+            ));
         }
         if agent_id.len() > super::MAX_ID_LENGTH {
             return Err(AlephError::invalid_config(format!(
                 "agent_id '{}' exceeds max length {}",
-                agent_id, super::MAX_ID_LENGTH
+                agent_id,
+                super::MAX_ID_LENGTH
             )));
         }
-        if !agent_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        if !agent_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
             return Err(AlephError::invalid_config(format!(
                 "Invalid agent_id '{}': must be alphanumeric, '_', or '-'",
                 agent_id

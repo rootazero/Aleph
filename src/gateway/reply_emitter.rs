@@ -1705,7 +1705,9 @@ mod tests {
             registry,
             route.clone(),
             "run-123".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<
+                crate::gateway::media::MediaItem,
+            >::new())),
         );
 
         assert_eq!(emitter.run_id(), "run-123");
@@ -1733,7 +1735,9 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
-            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<
+                crate::gateway::media::MediaItem,
+            >::new())),
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -1749,7 +1753,9 @@ mod tests {
             registry,
             route,
             "run-789".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<
+                crate::gateway::media::MediaItem,
+            >::new())),
         );
 
         assert_eq!(emitter.next_seq(), 0);
@@ -1766,7 +1772,9 @@ mod tests {
             registry,
             route,
             "run-test".to_string(),
-            Arc::new(tokio::sync::Mutex::new(Vec::<crate::gateway::media::MediaItem>::new())),
+            Arc::new(tokio::sync::Mutex::new(Vec::<
+                crate::gateway::media::MediaItem,
+            >::new())),
         );
 
         emitter.buffer.lock().await.push_str("Hello ");

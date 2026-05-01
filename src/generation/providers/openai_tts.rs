@@ -867,10 +867,8 @@ mod tests {
     #[test]
     fn test_parse_error_response_auth() {
         let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
-        let error = provider.parse_error_response(
-            reqwest::StatusCode::UNAUTHORIZED,
-            "Unauthorized",
-        );
+        let error =
+            provider.parse_error_response(reqwest::StatusCode::UNAUTHORIZED, "Unauthorized");
 
         assert!(matches!(error, GenerationError::AuthenticationError { .. }));
     }

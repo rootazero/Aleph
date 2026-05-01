@@ -209,7 +209,10 @@ mod tests {
 
     #[test]
     fn direct_tool_source_display() {
-        assert_eq!(format!("{}", DirectToolSource::SlashCommand), "slash_command");
+        assert_eq!(
+            format!("{}", DirectToolSource::SlashCommand),
+            "slash_command"
+        );
         assert_eq!(format!("{}", DirectToolSource::Skill), "skill");
         assert_eq!(format!("{}", DirectToolSource::Mcp), "mcp");
         assert_eq!(format!("{}", DirectToolSource::Custom), "custom");

@@ -14,8 +14,12 @@ pub enum RawMemorySource {
 
     // Spec 1 — Memory Capture Hooks.
     PreCompress,
-    Delegation { child_agent_id: String },
-    SessionEnd { reason: SessionEndReason },
+    Delegation {
+        child_agent_id: String,
+    },
+    SessionEnd {
+        reason: SessionEndReason,
+    },
 
     // Phase 3 self-evolution — user-correction signal written by the
     // `flag_user_correction` tool. `severity` is a String round-tripped

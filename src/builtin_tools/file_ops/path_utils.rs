@@ -190,9 +190,13 @@ fn safe_normalize(path: &Path) -> Result<PathBuf, String> {
             break;
         }
     }
-    let mut result = existing
-        .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize ancestor '{}': {}", existing.display(), e))?;
+    let mut result = existing.canonicalize().map_err(|e| {
+        format!(
+            "Failed to canonicalize ancestor '{}': {}",
+            existing.display(),
+            e
+        )
+    })?;
     for component in remaining.into_iter().rev() {
         if component == ".." {
             result.pop();

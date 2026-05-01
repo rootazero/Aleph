@@ -217,7 +217,9 @@ impl ConfigApprovalPolicy {
     fn config_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| {
-                warn!("Cannot determine home directory; approval policy will use temp dir fallback");
+                warn!(
+                    "Cannot determine home directory; approval policy will use temp dir fallback"
+                );
                 std::env::temp_dir()
             })
             .join(".aleph")

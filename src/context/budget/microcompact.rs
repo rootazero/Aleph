@@ -81,9 +81,7 @@ impl PreflightStage for MicrocompactStage {
                 let content_hash = simple_hash(&content);
                 let key = (simple_hash(name), content_hash);
 
-                let entry = cache.entry(key).or_insert(CacheEntry {
-                    newest_index: idx,
-                });
+                let entry = cache.entry(key).or_insert(CacheEntry { newest_index: idx });
 
                 // Update if this occurrence is newer (same key means same content)
                 if idx > entry.newest_index {

@@ -354,7 +354,10 @@ impl McpClient {
         if let Some(connection) = servers.get(server) {
             connection.subscribe_resource(uri).await
         } else {
-            Err(AlephError::NotFound(format!("Server not found: {}", server)))
+            Err(AlephError::NotFound(format!(
+                "Server not found: {}",
+                server
+            )))
         }
     }
 
@@ -364,7 +367,10 @@ impl McpClient {
         if let Some(connection) = servers.get(server) {
             connection.unsubscribe_resource(uri).await
         } else {
-            Err(AlephError::NotFound(format!("Server not found: {}", server)))
+            Err(AlephError::NotFound(format!(
+                "Server not found: {}",
+                server
+            )))
         }
     }
 
@@ -575,7 +581,10 @@ impl McpClient {
                                     if let Some(id) = rid.as_u64() {
                                         match serde_json::to_value(&response) {
                                             Ok(result) => {
-                                                if let Err(e) = transport.send_sampling_response(id, result).await {
+                                                if let Err(e) = transport
+                                                    .send_sampling_response(id, result)
+                                                    .await
+                                                {
                                                     tracing::error!(
                                                         server = %server,
                                                         request_id = %id,

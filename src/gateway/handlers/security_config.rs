@@ -424,7 +424,10 @@ fn write_shell_security_to_toml(
                 .iter()
                 .map(|p| {
                     let mut table = toml::Table::new();
-                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(p.pattern.clone()),
+                    );
                     if let Some(ref reason) = p.reason {
                         table.insert("reason".to_string(), toml::Value::String(reason.clone()));
                     }
@@ -442,7 +445,10 @@ fn write_shell_security_to_toml(
                 .iter()
                 .map(|p| {
                     let mut table = toml::Table::new();
-                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(p.pattern.clone()),
+                    );
                     if let Some(ref reason) = p.reason {
                         table.insert("reason".to_string(), toml::Value::String(reason.clone()));
                     }
@@ -460,7 +466,10 @@ fn write_shell_security_to_toml(
                 .iter()
                 .map(|p| {
                     let mut table = toml::Table::new();
-                    table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                    table.insert(
+                        "pattern".to_string(),
+                        toml::Value::String(p.pattern.clone()),
+                    );
                     if let Some(ref reason) = p.reason {
                         table.insert("reason".to_string(), toml::Value::String(reason.clone()));
                     }
@@ -479,8 +488,7 @@ fn write_shell_security_to_toml(
         toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     let temp_path = path.with_extension("shell_tmp");
-    std::fs::write(&temp_path, &new_contents)
-        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
     std::fs::rename(&temp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
         format!("Failed to rename: {e}")
@@ -509,29 +517,36 @@ fn write_custom_pii_rules_to_toml(
             .map(|r| {
                 let mut table = toml::Table::new();
                 table.insert("name".to_string(), toml::Value::String(r.name.clone()));
-                table.insert("pattern".to_string(), toml::Value::String(r.pattern.clone()));
+                table.insert(
+                    "pattern".to_string(),
+                    toml::Value::String(r.pattern.clone()),
+                );
                 table.insert(
                     "placeholder".to_string(),
                     toml::Value::String(r.placeholder.clone()),
                 );
                 table.insert(
                     "severity".to_string(),
-                    toml::Value::String(match r.severity {
-                        CustomPiiSeverity::Low => "low",
-                        CustomPiiSeverity::Medium => "medium",
-                        CustomPiiSeverity::High => "high",
-                        CustomPiiSeverity::Critical => "critical",
-                    }
-                    .to_string()),
+                    toml::Value::String(
+                        match r.severity {
+                            CustomPiiSeverity::Low => "low",
+                            CustomPiiSeverity::Medium => "medium",
+                            CustomPiiSeverity::High => "high",
+                            CustomPiiSeverity::Critical => "critical",
+                        }
+                        .to_string(),
+                    ),
                 );
                 table.insert(
                     "action".to_string(),
-                    toml::Value::String(match r.action {
-                        PiiAction::Block => "block",
-                        PiiAction::Warn => "warn",
-                        PiiAction::Off => "off",
-                    }
-                    .to_string()),
+                    toml::Value::String(
+                        match r.action {
+                            PiiAction::Block => "block",
+                            PiiAction::Warn => "warn",
+                            PiiAction::Off => "off",
+                        }
+                        .to_string(),
+                    ),
                 );
                 toml::Value::Table(table)
             })
@@ -548,8 +563,7 @@ fn write_custom_pii_rules_to_toml(
         toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     let temp_path = path.with_extension("pii_tmp");
-    std::fs::write(&temp_path, &new_contents)
-        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
     std::fs::rename(&temp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
         format!("Failed to rename: {e}")
@@ -592,7 +606,10 @@ fn write_secrets_protection_to_toml(
             .map(|p| {
                 let mut table = toml::Table::new();
                 table.insert("name".to_string(), toml::Value::String(p.name.clone()));
-                table.insert("pattern".to_string(), toml::Value::String(p.pattern.clone()));
+                table.insert(
+                    "pattern".to_string(),
+                    toml::Value::String(p.pattern.clone()),
+                );
                 toml::Value::Table(table)
             })
             .collect();
@@ -611,8 +628,7 @@ fn write_secrets_protection_to_toml(
         toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     let temp_path = path.with_extension("secrets_tmp");
-    std::fs::write(&temp_path, &new_contents)
-        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
     std::fs::rename(&temp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
         format!("Failed to rename: {e}")
@@ -882,9 +898,7 @@ pub async fn handle_update(
     }
 
     // Write shell security config
-    if let Err(e) =
-        write_shell_security_to_toml(&config_path, &security_config.shell_security)
-    {
+    if let Err(e) = write_shell_security_to_toml(&config_path, &security_config.shell_security) {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -893,8 +907,7 @@ pub async fn handle_update(
     }
 
     // Write custom PII rules
-    if let Err(e) =
-        write_custom_pii_rules_to_toml(&config_path, &security_config.custom_pii_rules)
+    if let Err(e) = write_custom_pii_rules_to_toml(&config_path, &security_config.custom_pii_rules)
     {
         return JsonRpcResponse::error(
             request.id,
@@ -1027,9 +1040,15 @@ pub struct WindowConfigSchema {
     pub burst_allow: u32,
 }
 
-fn default_max_requests() -> u32 { 60 }
-fn default_window_secs() -> u64 { 60 }
-fn default_burst_allow() -> u32 { 20 }
+fn default_max_requests() -> u32 {
+    60
+}
+fn default_window_secs() -> u64 {
+    60
+}
+fn default_burst_allow() -> u32 {
+    20
+}
 
 /// Sandbox rate limit configuration (mirrors SandboxRateLimitConfigSchema from sandbox/config.rs).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1048,12 +1067,40 @@ pub struct SandboxRateLimitConfigSchema {
     pub admin: WindowConfigSchema,
 }
 
-fn default_rate_limit_enabled() -> bool { true }
-fn default_rate_limit_exempt_loopback() -> bool { true }
-fn default_rate_limit_read() -> WindowConfigSchema { WindowConfigSchema { max_requests: 60, window_secs: 60, burst_allow: 20 } }
-fn default_rate_limit_write() -> WindowConfigSchema { WindowConfigSchema { max_requests: 30, window_secs: 60, burst_allow: 10 } }
-fn default_rate_limit_dangerous() -> WindowConfigSchema { WindowConfigSchema { max_requests: 10, window_secs: 60, burst_allow: 5 } }
-fn default_rate_limit_admin() -> WindowConfigSchema { WindowConfigSchema { max_requests: 5, window_secs: 60, burst_allow: 2 } }
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+fn default_rate_limit_exempt_loopback() -> bool {
+    true
+}
+fn default_rate_limit_read() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 60,
+        window_secs: 60,
+        burst_allow: 20,
+    }
+}
+fn default_rate_limit_write() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 30,
+        window_secs: 60,
+        burst_allow: 10,
+    }
+}
+fn default_rate_limit_dangerous() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 10,
+        window_secs: 60,
+        burst_allow: 5,
+    }
+}
+fn default_rate_limit_admin() -> WindowConfigSchema {
+    WindowConfigSchema {
+        max_requests: 5,
+        window_secs: 60,
+        burst_allow: 2,
+    }
+}
 
 /// Read sandbox rate limit config from [sandbox.rate_limit] in config TOML.
 fn read_sandbox_rate_limit_from_toml(patcher: &ConfigPatcher) -> SandboxRateLimitConfigSchema {
@@ -1062,23 +1109,45 @@ fn read_sandbox_rate_limit_from_toml(patcher: &ConfigPatcher) -> SandboxRateLimi
         if let Ok(table) = contents.parse::<toml::Table>() {
             if let Some(sandbox) = table.get("sandbox").and_then(|v| v.as_table()) {
                 if let Some(rate_limit) = sandbox.get("rate_limit").and_then(|v| v.as_table()) {
-                    fn get_bool(t: &toml::map::Map<String, toml::Value>, key: &str, default: bool) -> bool {
+                    fn get_bool(
+                        t: &toml::map::Map<String, toml::Value>,
+                        key: &str,
+                        default: bool,
+                    ) -> bool {
                         t.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
                     }
-                    fn get_u32(t: &toml::map::Map<String, toml::Value>, key: &str, default: u32) -> u32 {
-                        t.get(key).and_then(|v| v.as_integer()).map(|v| v as u32).unwrap_or(default)
+                    fn get_u32(
+                        t: &toml::map::Map<String, toml::Value>,
+                        key: &str,
+                        default: u32,
+                    ) -> u32 {
+                        t.get(key)
+                            .and_then(|v| v.as_integer())
+                            .map(|v| v as u32)
+                            .unwrap_or(default)
                     }
-                    fn get_u64(t: &toml::map::Map<String, toml::Value>, key: &str, default: u64) -> u64 {
-                        t.get(key).and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(default)
+                    fn get_u64(
+                        t: &toml::map::Map<String, toml::Value>,
+                        key: &str,
+                        default: u64,
+                    ) -> u64 {
+                        t.get(key)
+                            .and_then(|v| v.as_integer())
+                            .map(|v| v as u64)
+                            .unwrap_or(default)
                     }
-                    fn get_window(t: &toml::map::Map<String, toml::Value>, key: &str) -> WindowConfigSchema {
-                        t.get(key).and_then(|v| v.as_table()).map(|w| {
-                            WindowConfigSchema {
+                    fn get_window(
+                        t: &toml::map::Map<String, toml::Value>,
+                        key: &str,
+                    ) -> WindowConfigSchema {
+                        t.get(key)
+                            .and_then(|v| v.as_table())
+                            .map(|w| WindowConfigSchema {
                                 max_requests: get_u32(w, "max_requests", 60),
                                 window_secs: get_u64(w, "window_secs", 60),
                                 burst_allow: get_u32(w, "burst_allow", 20),
-                            }
-                        }).unwrap_or_default()
+                            })
+                            .unwrap_or_default()
                     }
                     return SandboxRateLimitConfigSchema {
                         enabled: get_bool(rate_limit, "enabled", true),
@@ -1116,14 +1185,30 @@ fn write_sandbox_rate_limit_to_toml(
 
         if let toml::Value::Table(rl_table) = rate_limit {
             rl_table.insert("enabled".to_string(), toml::Value::Boolean(config.enabled));
-            rl_table.insert("exempt_loopback".to_string(), toml::Value::Boolean(config.exempt_loopback));
+            rl_table.insert(
+                "exempt_loopback".to_string(),
+                toml::Value::Boolean(config.exempt_loopback),
+            );
 
-            for (key, window) in [("read", &config.read), ("write", &config.write),
-                ("dangerous", &config.dangerous), ("admin", &config.admin)] {
+            for (key, window) in [
+                ("read", &config.read),
+                ("write", &config.write),
+                ("dangerous", &config.dangerous),
+                ("admin", &config.admin),
+            ] {
                 let mut w = toml::Table::new();
-                w.insert("max_requests".to_string(), toml::Value::Integer(window.max_requests as i64));
-                w.insert("window_secs".to_string(), toml::Value::Integer(window.window_secs as i64));
-                w.insert("burst_allow".to_string(), toml::Value::Integer(window.burst_allow as i64));
+                w.insert(
+                    "max_requests".to_string(),
+                    toml::Value::Integer(window.max_requests as i64),
+                );
+                w.insert(
+                    "window_secs".to_string(),
+                    toml::Value::Integer(window.window_secs as i64),
+                );
+                w.insert(
+                    "burst_allow".to_string(),
+                    toml::Value::Integer(window.burst_allow as i64),
+                );
                 rl_table.insert(key.to_string(), toml::Value::Table(w));
             }
         }

@@ -35,5 +35,25 @@ private func transcribeArgs(from params: JSONValue?) throws -> (String, String) 
             data: nil
         )
     }
+    // Reject path traversal attempts.
+    guard !path.contains("..") else {
+        throw RpcError(
+            code: -32602,
+            message: "media.speech.transcribe_file: 'audio_path' must not contain '..'",
+            data: nil
+        )
+    }
+    let mediaDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".aleph/data/_media")
+    let audioURL = URL(fileURLWithPath: path)
+    let resolvedAudio = audioURL.resolvingSymlinksInPath()
+    let resolvedMedia = mediaDir.resolvingSymlinksInPath()
+    guard resolvedAudio.path.hasPrefix(resolvedMedia.path) else {
+        throw RpcError(
+            code: -32602,
+            message: "media.speech.transcribe_file: 'audio_path' must be inside ~/.aleph/data/_media/",
+            data: nil
+        )
+    }
     return (path, lang)
 }

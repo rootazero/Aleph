@@ -73,7 +73,7 @@ pub fn resolve_route(
     let candidates: Vec<&RouteBinding> = bindings
         .iter()
         .filter(|b| matches_channel(&b.match_rule, &channel))
-        .filter(|b| matches_account(&b.match_rule, &account_id))
+        .filter(|b| matches_account(&b.match_rule, account_id))
         .collect();
 
     let build =

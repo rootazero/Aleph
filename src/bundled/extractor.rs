@@ -205,8 +205,7 @@ fn prune_stale_entries(dir: &Dir, target: &Path) -> std::io::Result<()> {
             }
         }
     } else {
-        read_err = Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        read_err = Some(std::io::Error::other(
             "Failed to read target directory for pruning",
         ));
     }

@@ -277,7 +277,12 @@ mod tests {
 
     #[test]
     fn severity_serde_roundtrip_all_variants() {
-        for s in [Severity::Low, Severity::Med, Severity::High, Severity::Critical] {
+        for s in [
+            Severity::Low,
+            Severity::Med,
+            Severity::High,
+            Severity::Critical,
+        ] {
             let j = serde_json::to_string(&s).unwrap();
             let back: Severity = serde_json::from_str(&j).unwrap();
             assert_eq!(s, back);
@@ -304,7 +309,10 @@ mod tests {
             "old notes get confidence=1.0"
         );
         assert_eq!(n.severity, Severity::Low, "old notes get severity=Low");
-        assert!(n.source_facts.is_empty(), "old notes get empty source_facts");
+        assert!(
+            n.source_facts.is_empty(),
+            "old notes get empty source_facts"
+        );
     }
 
     #[test]
@@ -313,17 +321,21 @@ mod tests {
         let n = KnowledgeNote::from_markdown("new-note", md).expect("must parse");
         assert!((n.confidence - 0.85).abs() < 1e-6);
         assert_eq!(n.severity, Severity::High);
-        assert_eq!(
-            n.source_facts,
-            vec!["synthesis/learning-syn".to_string()]
-        );
+        assert_eq!(n.source_facts, vec!["synthesis/learning-syn".to_string()]);
     }
 
     #[test]
     fn knowledge_note_default_has_legacy_safe_values() {
         let n = KnowledgeNote::default();
-        assert_eq!(n.confidence, 1.0, "Default confidence must be 1.0 (legacy-safe)");
-        assert_eq!(n.severity, Severity::Low, "Default severity must be Low (legacy-safe)");
+        assert_eq!(
+            n.confidence, 1.0,
+            "Default confidence must be 1.0 (legacy-safe)"
+        );
+        assert_eq!(
+            n.severity,
+            Severity::Low,
+            "Default severity must be Low (legacy-safe)"
+        );
         assert!(n.source_facts.is_empty());
     }
 

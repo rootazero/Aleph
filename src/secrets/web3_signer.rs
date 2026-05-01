@@ -1,4 +1,5 @@
 //! EVM-compatible signing module.
+#![allow(dead_code)]
 //!
 //! Signs messages and transactions using secp256k1 private keys
 //! stored in the encrypted vault (via SharedTokenManager). Private keys
@@ -8,7 +9,7 @@
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::fmt;
 
-use super::types::SecretError;
+use super::types::{DecryptedSecret, SecretError};
 
 /// Trait for resolving decrypted secrets by name.
 /// Implemented by SharedTokenManager and test mocks.

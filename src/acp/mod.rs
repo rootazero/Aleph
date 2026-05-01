@@ -8,9 +8,9 @@ use crate::sync_primitives::Arc;
 pub mod adapter;
 pub mod adapters;
 pub mod manager;
-pub mod output_format;
 #[cfg(test)]
 pub mod mock_server;
+pub mod output_format;
 pub mod protocol;
 pub mod session;
 pub mod transport;

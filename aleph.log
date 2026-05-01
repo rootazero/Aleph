@@ -1,0 +1,567 @@
+PII filtering engine initialized (enabled: true)
+╔═══════════════════════════════════════════════╗
+║         Aleph Gateway v2026.04.27           ║
+╠═══════════════════════════════════════════════╣
+║  WebSocket: ws://127.0.0.1:18790          ║
+║  Protocol:  JSON-RPC 2.0                      ║
+╚═══════════════════════════════════════════════╝
+
+Available methods:
+  - health    : Check server health status
+  - echo      : Echo back parameters (testing)
+  - version   : Get server version info
+  - agent.run : Execute agent request with streaming
+
+Agents: ["main"]
+
+2026-04-29 09:40:22.412 INFO  alephcore::providers::protocols::loader: Protocols directory does not exist, skipping hot reload, dir="/Users/zouguojun/.aleph/protocols"
+2026-04-29 09:40:22.415 INFO  alephcore::config::load: Found config file, loading, path=/Users/zouguojun/.aleph/config.toml
+2026-04-29 09:40:22.418 WARN  alephcore::config::validate: No routing rules configured. All requests will use default_provider (if set). Recommendation: Add routing rules to enable context-aware routing
+2026-04-29 09:40:22.418 INFO  alephcore::config::validate: Config validation completed successfully, providers_count=4, rules_count=0
+2026-04-29 09:40:22.418 INFO  alephcore::config::load: Config loaded and validated successfully, path=/Users/zouguojun/.aleph/config.toml, providers_count=4, rules_count=0, memory_enabled=true, embedding_providers_count=1, active_embedding_provider=DMXem
+Extension manager initialized
+ToolService chain assembled (Phase 2)
+  ExtensionManager: tool registry wired
+2026-04-29 09:40:22.419 WARN  aleph_server::commands::start: ApprovalGate has no ApprovalRequester wired — elevated-capability sandbox escalations and Ask-tier tool calls will be denied until `ChannelApprovalBridgeAdapter` is threaded through the shared ChannelRegistry + ExecApprovalManager at boot. Baseline-capability commands are unaffected.
+Sandbox: WorkspaceSandbox rooted at /Users/zouguojun/.aleph/workspaces
+2026-04-29 09:40:22.419 INFO  aleph_server::commands::start: wired LayeredPermissionResolver into PermissionLayer with global tool permissions (per-agent overrides plug in at Phase 4 session activation), default=Allow, overrides=0
+Desktop capabilities: in-process (native)
+2026-04-29 09:40:22.425 INFO  alephcore::memory::store::sqlite: SqliteMemoryBackend initialized, path=/Users/zouguojun/.aleph/data/memory.db
+Memory backend initialized (SQLite + sqlite-vec)
+2026-04-29 09:40:22.425 INFO  alephcore::gateway::session_store::file_backend: FileSessionStore initialized: "/Users/zouguojun/.aleph/data/sessions"
+Migrating legacy SQLite sessions to file backend ...
+2026-04-29 09:40:22.425 INFO  alephcore::gateway::session_store::migration: Starting session migration from "/Users/zouguojun/.aleph/data/sessions.db" ...
+Warning: Session migration failed: Configuration/Database error: Row error: Invalid column type Null at index: 11, name: input_tokens
+Session store initialized (file backend)
+2026-04-29 09:40:22.427 INFO  alephcore::gateway::security::store: Security schema migration complete
+2026-04-29 09:40:22.428 INFO  alephcore::gateway::mdns_broadcaster: mDNS service registered: aleph on port 18790 (_aleph._tcp.local.)
+2026-04-29 09:40:22.428 INFO  aleph_server::commands::start::builder::subsystems: mDNS service discovery enabled
+2026-04-29 09:40:22.428 INFO  alephcore::gateway::security::shared_token: SharedTokenManager: restored persisted HMAC secret from DB
+2026-04-29 09:40:22.428 INFO  alephcore::gateway::security::shared_token: SharedTokenManager: loaded existing token from DB
+2026-04-29 09:40:22.428 INFO  aleph_server::commands::start::builder::subsystems: ========================================
+2026-04-29 09:40:22.428 INFO  aleph_server::commands::start::builder::subsystems:   Access token (existing): aleph-9976129a-407d-4893-a96c-6467b24bedac
+2026-04-29 09:40:22.429 INFO  aleph_server::commands::start::builder::subsystems: ========================================
+Auth methods:
+  - connect         : Authenticate connection
+  - pairing.approve : Approve device pairing
+  - pairing.reject  : Reject device pairing
+  - pairing.list    : List pending pairings
+  - devices.list    : List approved devices
+  - devices.revoke  : Revoke device access
+
+  Agent 'main': workspace=/Users/zouguojun/.aleph/workspaces/main
+  Agent 'agent-73f36847': workspace=/Users/zouguojun/.aleph/workspaces/agent-73f36847
+  Agent 'codev': workspace=/Users/zouguojun/.aleph/workspaces/codev
+  Agent 'coding': workspace=/Users/zouguojun/.aleph/workspaces/coding
+  Agent 'cowork': workspace=/Users/zouguojun/.aleph/workspaces/cowork
+  Agent 'fundamental_analyst': workspace=/Users/zouguojun/.aleph/workspaces/fundamental_analyst
+  Agent 'growth_analyst': workspace=/Users/zouguojun/.aleph/workspaces/growth_analyst
+  Agent 'risk_analyst': workspace=/Users/zouguojun/.aleph/workspaces/risk_analyst
+  Agent 'analyst_aapl': workspace=/Users/zouguojun/.aleph/workspaces/analyst_aapl
+  Agent 'analyst_msft': workspace=/Users/zouguojun/.aleph/workspaces/analyst_msft
+  Agent 'analyst_nvda': workspace=/Users/zouguojun/.aleph/workspaces/analyst_nvda
+  Agent 'aapl_analyst': workspace=/Users/zouguojun/.aleph/workspaces/aapl_analyst
+  Agent 'msft_analyst': workspace=/Users/zouguojun/.aleph/workspaces/msft_analyst
+  Agent 'nvda_analyst': workspace=/Users/zouguojun/.aleph/workspaces/nvda_analyst
+  Agent 'analyst_tsla': workspace=/Users/zouguojun/.aleph/workspaces/analyst_tsla
+  Agent 'macro_analyst': workspace=/Users/zouguojun/.aleph/workspaces/macro_analyst
+  Agent 'market_data_analyst': workspace=/Users/zouguojun/.aleph/workspaces/market_data_analyst
+  Agent 'risk_critic': workspace=/Users/zouguojun/.aleph/workspaces/risk_critic
+  Agent 'market_researcher': workspace=/Users/zouguojun/.aleph/workspaces/market_researcher
+  Agent 'valuation_analyst': workspace=/Users/zouguojun/.aleph/workspaces/valuation_analyst
+  Agent 'test-memory-validation': workspace=/Users/zouguojun/.aleph/workspaces/test-memory-validation
+2026-04-29 09:40:22.434 INFO  alephcore::gateway::agent_env: AgentEnvStore initialized: "/Users/zouguojun/.aleph/data/agent_envs.db"
+Workspace manager initialized (SQLite persistence)
+2026-04-29 09:40:22.436 INFO  alephcore::acp::session: ACP session spawned, harness_id=gemini, executable=gemini
+2026-04-29 09:40:22.541 INFO  aleph_server::commands::start: runtime warmup: all capabilities ready
+2026-04-29 09:40:30.498 INFO  alephcore::acp::session: ACP session initialized, harness_id=gemini
+2026-04-29 09:40:32.186 INFO  alephcore::acp::session: ACP session loaded, harness_id=gemini, session_id=e558ed53-e3ef-44ea-bd45-ba5f632de8e8
+2026-04-29 09:40:32.186 INFO  alephcore::acp::manager: Restored ACP session, harness_id=gemini
+2026-04-29 09:40:32.186 INFO  alephcore::acp::manager: Restored ACP sessions from disk, count=1
+ACP harness manager initialized
+2026-04-29 09:40:32.192 INFO  alephcore::tasks::cron::store: Cron store loaded, count=2, path=/Users/zouguojun/.aleph/data/cron.db
+Cron service: enabled (RPC handlers registered)
+
+Heartbeat service: disabled
+
+  Coord task store initialized (SQLite)
+  Team store initialized (SQLite)
+Warning: Artifact store migration failed: Configuration/Database error: ArtifactStore: no such column: status in 
+            CREATE INDEX IF NOT EXISTS idx_task_artifacts_status
+                ON task_artifacts(task_id, status);
+            CREATE INDEX IF NOT EXISTS idx_task_artifacts_assignee
+                ON task_artifacts(assignee);
+
+            -- Junction table for explicit dependency tracking (replaces LIKE-based JSON matching)
+            CREATE TABLE IF NOT EXISTS task_artifact_dependencies (
+                artifact_id    TEXT NOT NULL,
+                depends_on    TEXT NOT NULL,
+                PRIMARY KEY (artifact_id, depends_on),
+                FOREIGN KEY (artifact_id) REFERENCES task_artifacts(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tad_depends_on
+                ON task_artifact_dependencies(depends_on);
+             at offset 109. Related tools disabled.
+  Event log store initialized (SQLite)
+  Message store initialized (SQLite)
+  Session store initialized (SQLite)
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::coordinator: Initializing swarm coordinator
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::coordinator: Swarm coordinator initialized
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::coordinator: Starting swarm coordinator background tasks
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::coordinator: Swarm coordinator background tasks started
+  Swarm coordinator started
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::aggregator: Starting semantic aggregator
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::context_injector: Starting context injector
+2026-04-29 09:40:32.195 INFO  alephcore::agents::swarm::collective_memory: Starting collective memory
+2026-04-29 09:40:32.196 INFO  alephcore::agents::swarm::bus: New subscriber for important events
+2026-04-29 09:40:32.196 INFO  alephcore::agents::swarm::bus: New subscriber for info events
+2026-04-29 09:40:32.196 INFO  alephcore::agents::swarm::bus: New subscriber for critical events
+2026-04-29 09:40:32.196 INFO  alephcore::agents::swarm::bus: New subscriber for info events
+2026-04-29 09:40:32.196 INFO  alephcore::agents::swarm::aggregator: Starting intelligence layer
+2026-04-29 09:40:32.201 INFO  aleph_server::commands::start::builder::agent_init: Registered generation provider, provider=T8StariMage, gen_type=Image
+2026-04-29 09:40:32.201 INFO  aleph_server::commands::start::builder::agent_init: Registered generation provider, provider=T8StarVideo, gen_type=Video
+2026-04-29 09:40:32.201 WARN  alephcore::generation::providers::openai_tts: Unknown TTS voice — proceeding anyway (may be a newer or third-party voice), voice=Podcast_girl, known=["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+2026-04-29 09:40:32.202 WARN  alephcore::generation::providers::openai_tts: Unknown TTS model — proceeding anyway (may be a newer model), model=speech-2.6-hd, known=["tts-1", "tts-1-hd"]
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Registered generation provider, provider=T8Star, gen_type=Speech
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Registered generation provider, provider=T8StarSTT, gen_type=Transcription
+  Generation providers: 4 registered
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Registered provider from config, provider=moonshot
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Registered provider from config, provider=kimi-for-coding
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Registered provider from config, provider=chatgpt
+  Providers: 4 registered (default: minimax)
+2026-04-29 09:40:32.202 INFO  aleph_server::commands::start::builder::agent_init: Swarm intelligence layer: AI provider attached
+2026-04-29 09:40:32.202 INFO  alephcore::memory::embedding_manager: Embedding provider initialized, provider_id=DMXem
+  Embedding provider initialized for memory tools
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::search: SearchTool initialized with API key
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::path_utils: FileOpsTool: config_dir for denied_paths, config_dir=/Users/zouguojun/.aleph
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::tool: FileOpsTool: initialized with denied_paths, denied_paths_count=11
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::path_utils: FileOpsTool: config_dir for denied_paths, config_dir=/Users/zouguojun/.aleph
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::read: FileReadTool: initialized with denied_paths, denied_paths_count=11
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::path_utils: FileOpsTool: config_dir for denied_paths, config_dir=/Users/zouguojun/.aleph
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::write: FileWriteTool: initialized, denied_paths_count=11
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::path_utils: FileOpsTool: config_dir for denied_paths, config_dir=/Users/zouguojun/.aleph
+2026-04-29 09:40:32.202 INFO  alephcore::builtin_tools::file_ops::edit: FileEditTool: initialized, denied_paths_count=11
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=/Volumes/TBU4/Workspace/Aleph
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=/Volumes/TBU4/Workspace/Aleph/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Checking global directories, home=/Users/zouguojun
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.aleph/skills, path=/Users/zouguojun/.aleph/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.claude/skills, path=/Users/zouguojun/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=["/Volumes/TBU4/Workspace/Aleph/.claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Starting discovery, start_dir=/Volumes/TBU4/Workspace/Aleph
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found project-level .claude/skills, path=/Volumes/TBU4/Workspace/Aleph/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Checking global directories, home=/Users/zouguojun
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.aleph/skills, path=/Users/zouguojun/.aleph/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: Found global ~/.claude/skills, path=/Users/zouguojun/.claude/skills
+2026-04-29 09:40:32.203 INFO  alephcore::utils::paths: get_all_skills_dirs: Discovery complete, total_dirs=3, dirs=["/Volumes/TBU4/Workspace/Aleph/.claude/skills", "/Users/zouguojun/.aleph/skills", "/Users/zouguojun/.claude/skills"]
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating VaultStoreTool
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Created memory_search, memory_browse, and memory_explore tools
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating ImageGenerateTool with generation registry
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating VideoGenerateTool with generation registry
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating AudioGenerateTool with generation registry
+2026-04-29 09:40:32.203 INFO  alephcore::executor::builtin_registry::builder: Creating SpeechGenerateTool with generation registry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered browser tools (14 tools) in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered memory_search tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered memory.browse tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered memory_explore tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered vault.store tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered image.generate tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered video_generate tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered speech_generate tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered cron.manage tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered heartbeat_report tool (standalone) in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered session.new tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered session.rename tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered session_search tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered channel_pairing tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered session.list + session.send in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered voice_mode_set tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered note_schema tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered note_orient tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered user_profile tool in BuiltinToolRegistry
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered agent management tools (agent.create, agent.list, agent.delete)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Creating ACP delegate tools
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered ACP tools (acp_delegate=true, acp_switch=true)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered task coordination tools
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_remove)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered team_digest tool
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered team messaging tools (message_send=true, inbox_read=true)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered collaborative session tools (session_collaborate=false, session_turn=false, session_read=true)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered skill management tools (skill_status, skill_install, skill_manage)
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered note_manage tool
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered session_complete tool
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered memory_reflect tool
+2026-04-29 09:40:32.205 INFO  alephcore::executor::builtin_registry::builder: Registered recall_context tool
+2026-04-29 09:40:32.242 INFO  alephcore::extension: Extension loading complete: 0 skills, 0 agents, 9 plugins, 0 hooks
+2026-04-29 09:40:32.243 INFO  aleph_server::commands::start::builder::agent_init: LLM tool list assembled, builtin=83, plugin=0, total=83
+2026-04-29 09:40:32.243 INFO  alephcore::executor::builtin_registry::registry: MemoryReflector injected into memory_reflect tool
+2026-04-29 09:40:32.243 INFO  alephcore::executor::builtin_registry::registry: QueryFiler injected into memory_reflect tool
+  query_filer: DefaultQueryFiler wired into memory_reflect
+2026-04-29 09:40:32.243 INFO  aleph_server::commands::start::builder::agent_init: LLM classify function wired to default provider, subsystem=task_router, event=llm_classify_wired
+2026-04-29 09:40:32.243 INFO  aleph_server::commands::start::builder::agent_init: Task router initialized, subsystem=task_router, event=initialized, llm_fallback=true, escalation_threshold=3
+2026-04-29 09:40:32.246 INFO  alephcore::resilience::database::state_database: StateDatabase initialized, subsystem=resilience, event=database_initialized, db_path=/Users/zouguojun/.aleph/data/state.db, embedding_dim=1024
+Compression service started (interval: 3600s, turn threshold: 20)
+2026-04-29 09:40:32.246 INFO  alephcore::memory::dreaming: DreamDaemon background task started
+  Session compactor enabled (hierarchical summarization)
+2026-04-29 09:40:32.246 INFO  alephcore::memory::compression::service: Started background compression task, interval_seconds=3600
+  MediaProcessor: Whisper transcription enabled (from transcription provider)
+  MediaProcessor initialized
+2026-04-29 09:40:32.247 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): main
+  Registered agent: main (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): agent-73f36847
+  Registered agent: agent-73f36847 (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): codev
+  Registered agent: codev (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): coding
+  Registered agent: coding (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): cowork
+  Registered agent: cowork (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): fundamental_analyst
+  Registered agent: fundamental_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): growth_analyst
+  Registered agent: growth_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): risk_analyst
+  Registered agent: risk_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): analyst_aapl
+  Registered agent: analyst_aapl (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): analyst_msft
+  Registered agent: analyst_msft (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): analyst_nvda
+  Registered agent: analyst_nvda (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): aapl_analyst
+  Registered agent: aapl_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): msft_analyst
+  Registered agent: msft_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): nvda_analyst
+  Registered agent: nvda_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): analyst_tsla
+  Registered agent: analyst_tsla (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): macro_analyst
+  Registered agent: macro_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): market_data_analyst
+  Registered agent: market_data_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): risk_critic
+  Registered agent: risk_critic (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): market_researcher
+  Registered agent: market_researcher (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): valuation_analyst
+  Registered agent: valuation_analyst (lazy)
+2026-04-29 09:40:32.248 INFO  alephcore::gateway::agent_instance: Registered agent config (lazy): test-memory-validation
+  Registered agent: test-memory-validation (lazy)
+  Mode: Real AgentLoop (config provider)
+
+2026-04-29 09:40:32.248 INFO  alephcore::dispatcher::registry::registration: Registered 11 builtin tools (2 generate_* + 2 skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)
+  Dispatch registry: 66 skills registered
+  Dispatch registry initialized
+  commands.list: wired to unified dispatch registry
+  tools.catalog: wired to unified dispatch registry
+  tools.effective: wired to unified dispatch registry + agent defs
+  command.execute: wired to unified command parser + registry
+  MemoryProducerScheduler: spawned
+Agent control methods:
+  - agent.run            : Execute agent request with streaming
+  - agent.status         : Query run status by run_id
+  - agent.cancel         : Cancel an active run
+  - agent.list           : List available agents
+  - agent.respondToInput : Respond to user input request
+  - chat.send            : Send chat message (wraps agent.run)
+  - chat.abort           : Abort message generation
+  - chat.history         : Get chat history
+  - chat.clear           : Clear chat history
+
+2026-04-29 09:40:32.249 INFO  alephcore::verification::stop_hooks: Stop hooks registered, count=0
+2026-04-29 09:40:32.249 INFO  aleph_server::commands::start::orchestrator_init: Orchestrator assembled (Phase 5)
+Orchestrator: assembled (Phase 5)
+Session methods:
+  - sessions.list      : List all sessions
+  - sessions.history   : Get session message history
+  - sessions.reset     : Clear session messages
+  - sessions.delete    : Delete a session
+  - sessions.new       : Close current session and start new one
+  - sessions.set_topic : Set session topic/title
+  - sessions.patch     : Patch session metadata
+  - sessions.preview   : Preview session with recent messages
+  - session.create     : Create a new session
+  - session.usage      : Get session token/message stats
+  - session.compact    : Compact session history
+  - sessions.compaction.list    : List compaction checkpoints
+  - sessions.compaction.restore : Restore session to checkpoint
+  - sessions.compaction.branch  : Branch new session from checkpoint
+
+Memory methods:
+  - memory.search     : Search memories
+  - memory.stats      : Get memory statistics
+  - memory.delete     : Delete a memory
+  - memory.clear      : Clear memories
+  - memory.compress   : Trigger compression
+  - memory.reembed    : Re-embed all memories
+
+Daemon methods:
+  - daemon.status   : Server runtime status
+  - daemon.shutdown : Graceful shutdown
+  - daemon.logs     : View recent logs
+
+OAuth: restored Codex token from vault
+OAuth methods:
+  - providers.oauthLogin  : Start browser OAuth login
+  - providers.oauthLogout : Clear OAuth token
+  - providers.oauthStatus : Check OAuth status
+
+Workspace methods:
+  - workspace.create    : Create a new workspace
+  - workspace.list      : List all workspaces
+  - workspace.get       : Get workspace by ID
+  - workspace.update    : Update workspace metadata
+  - workspace.archive   : Archive (soft-delete) a workspace
+  - channels.set_agent  : Bind or unbind an agent to a channel
+  - agents.bindings     : Get all agent->channel bindings
+
+A2A protocol: disabled (set [a2a] enabled = true in config)
+
+Cron timer loop: started
+Group Chat: Disabled (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)
+
+2026-04-29 09:40:32.250 INFO  alephcore::tasks::cron::service::catchup: startup catchup complete, stale_cleared=0, immediate=0, deferred=0
+2026-04-29 09:40:32.250 INFO  aleph_server::commands::start: Rebuilding note index, dir=/Users/zouguojun/.aleph/memory/note, agent=main
+2026-04-29 09:40:32.250 INFO  alephcore::tasks::cron::service::timer: cron timer loop started, interval_secs=60
+Channel pairing methods:
+  - channel.pairing.list     : List pending channel pairing requests
+  - channel.pairing.approve  : Approve a channel sender
+  - channel.pairing.reject   : Reject a channel sender
+  - channel.pairing.approved : List approved channel senders
+  - channel.pairing.revoke   : Revoke a channel sender
+
+2026-04-29 09:40:32.251 INFO  aleph_server::commands::start: Note index rebuild complete, indexed=0, skipped=5, errors=0
+2026-04-29 09:40:32.251 INFO  alephcore::resilience::database::state_database: StateDatabase initialized, subsystem=resilience, event=database_initialized, db_path=/Users/zouguojun/.aleph/data/state.db, embedding_dim=1024
+2026-04-29 09:40:32.251 INFO  alephcore::gateway::interfaces::telegram::offset: OffsetTracker initialized (first startup, no persisted offset), channel_id=AlephzBot
+2026-04-29 09:40:32.251 INFO  alephcore::gateway::channel_registry: Registered channel: AlephzBot
+Registered channel: AlephzBot (telegram)
+2026-04-29 09:40:32.251 INFO  alephcore::gateway::interfaces::telegram: Starting Telegram channel...
+2026-04-29 09:40:33.652 INFO  alephcore::gateway::interfaces::telegram: Telegram bot connected, account_id=default, username=AlephzBot, id=[PHONE]
+2026-04-29 09:40:33.652 WARN  alephcore::gateway::interfaces::telegram: Telegram boot diagnostics: issues detected, privacy_mode_disabled=false, groups_reachable=0/0, warnings=["Privacy mode is enabled. Talk to @BotFather and disable privacy mode for group message access"]
+2026-04-29 09:40:34.479 INFO  alephcore::gateway::interfaces::telegram: Registered 15 slash commands with Telegram Bot API: ["generate_image", "generate_speech", "skill_read", "skill_list", "snapshot_capture", "switch", "groupchat", "new", "session_new", "cron_manage", "voice", "image", "video", "audio", "speech"]
+2026-04-29 09:40:34.479 INFO  alephcore::gateway::channel_registry: Started channel: AlephzBot
+  ✓ Channel AlephzBot started
+Auto-started 1/1 channels
+Channel methods:
+  - channels.list   : List all channels
+  - channels.status : Get channel status
+  - channel.start   : Start a channel
+  - channel.stop    : Stop a channel
+  - channel.send    : Send message via channel
+2026-04-29 09:40:34.479 INFO  alephcore::gateway::interfaces::telegram::polling: Starting Telegram long-polling...
+  - channel.create  : Create a new channel
+  - channel.delete  : Delete a channel
+
+2026-04-29 09:40:34.479 INFO  alephcore::gateway::channel_registry: [Forwarder] Channel AlephzBot forwarder started — broadcast receiver obtained
+2026-04-29 09:40:34.479 INFO  alephcore::gateway::link::manager: LinkManager startup complete
+LinkManager started (external bridge plugins)
+
+2026-04-29 09:40:34.479 INFO  aleph_server::commands::start: ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool
+  Inbound router: execution support enabled
+  Inbound router: message coalescing enabled
+  Inbound router: slash command resolution enabled (unified registry)
+  Inbound router: session management enabled (/new command)
+  Inbound router: voice STT transcription enabled (from transcription provider)
+  Inbound router: voice TTS output enabled
+Inbound message router started
+
+2026-04-29 09:40:34.480 INFO  alephcore::gateway::inbound_router: InboundMessageRouter started
+Config methods:
+  - config.reload   : Force reload configuration
+  - config.get      : Get current configuration
+  - config.validate : Validate config file
+  - config.path     : Get config file path
+
+Hot config reload enabled: /Users/zouguojun/.aleph/config.toml
+
+WebChat UI directory found: apps/webchat/dist
+  Note: WebChat requires a separate HTTP port (use --webchat-port)
+
+
+Aleph Server:
+  - URL:       http://127.0.0.1:18790
+  - WebSocket: ws://127.0.0.1:18790/ws
+  - Panel UI:  http://127.0.0.1:18790/
+
+2026-04-29 09:40:34.483 INFO  alephcore::gateway::server: Aleph listening on http://127.0.0.1:18790
+2026-04-29 09:40:34.483 INFO  alephcore::gateway::server:   WebSocket: ws://127.0.0.1:18790/ws
+2026-04-29 09:40:34.483 INFO  alephcore::gateway::server:   Panel UI:  http://127.0.0.1:18790/
+2026-04-29 09:40:34.485 INFO  alephcore::gateway::hot_reload: Config watcher started for: /Users/zouguojun/.aleph/config.toml
+2026-04-29 09:40:34.773 INFO  alephcore::gateway::interfaces::telegram::polling: Telegram webhook cleared + pending updates dropped (first startup)
+2026-04-29 09:40:40.065 INFO  alephcore::gateway::interfaces::telegram::polling: Telegram getUpdates test: 0 pending updates
+2026-04-29 09:40:40.066 INFO  alephcore::gateway::interfaces::telegram::polling: Telegram polling loop iteration starting, attempt=1
+2026-04-29 09:40:40.066 INFO  alephcore::gateway::interfaces::telegram::polling: Telegram dispatcher.dispatch() starting...
+2026-04-29 09:41:32.250 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:42:32.251 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:43:29.143 INFO  alephcore::gateway::server::handler: New WebSocket connection: 127.0.0.1:60279
+2026-04-29 09:43:29.157 INFO  alephcore::gateway::handlers::auth::connect: Pairing initiated, device_name=Web Panel, code=HBWMUL8L
+2026-04-29 09:43:29.160 INFO  alephcore::gateway::handlers::auth::connect: Connection authenticated via shared token, device_id=0500b481-57f8-4359-bf48-84592aa126cf
+2026-04-29 09:43:29.160 INFO  alephcore::gateway::server::handler: Connection 127.0.0.1:60279 authenticated (device: 0500b481-57f8-4359-bf48-84592aa126cf)
+2026-04-29 09:43:29.161 INFO  alephcore::gateway::handlers::events: Connection subscribed to topics, conn_id=127.0.0.1:60279, patterns=["alerts.**"]
+2026-04-29 09:43:29.161 INFO  alephcore::gateway::handlers::events: Connection subscribed to topics, conn_id=127.0.0.1:60279, patterns=["alerts.**", "config.**"]
+2026-04-29 09:43:29.164 INFO  alephcore::gateway::handlers::events: Connection subscribed to topics, conn_id=127.0.0.1:60279, patterns=["alerts.**", "config.**", "stream.*"]
+2026-04-29 09:43:32.251 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:43:36.365 INFO  alephcore::gateway::handlers::events: Connection subscribed to topics, conn_id=127.0.0.1:60279, patterns=["alerts.**", "config.**", "stream.*", "stream.session_updated"]
+2026-04-29 09:44:32.252 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:45:32.252 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:46:32.254 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:47:32.254 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:48:32.255 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:49:32.257 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:50:32.258 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:51:32.259 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:52:32.259 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:53:32.260 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:54:32.261 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:55:32.262 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:56:32.263 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:57:32.264 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:58:32.265 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 09:59:32.266 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:00:32.267 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:01:32.266 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:02:32.268 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:03:32.269 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:04:32.270 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:05:32.271 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:06:32.272 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:07:32.273 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:08:32.274 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:09:32.275 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:10:32.275 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:11:32.274 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:12:32.276 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:12:40.430 WARN  alephcore::gateway::interfaces::telegram::polling: Telegram health check failed: A network error: error sending request for url (https://api.telegram.org/token:redacted/GetMe): error trying to connect: connection closed via error, failures=1
+2026-04-29 10:13:32.278 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:14:32.280 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:14:41.375 INFO  alephcore::gateway::interfaces::telegram::polling: Telegram health check recovered after 1 failures
+2026-04-29 10:15:32.280 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:16:32.281 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:17:32.282 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:18:32.281 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:19:32.284 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:20:32.284 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:21:32.286 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:22:32.285 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:23:32.286 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:24:32.287 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:25:32.288 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:26:32.288 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:27:32.156 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:28:32.158 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:29:32.155 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:30:32.156 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:31:32.156 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:32:32.156 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:33:32.156 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:34:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:35:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:36:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:37:32.155 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:38:32.153 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:39:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:40:14.065 INFO  alephcore::gateway::hot_reload: Configuration reloaded successfully
+2026-04-29 10:40:14.066 INFO  alephcore::gateway::hot_reload: Configuration reloaded successfully
+2026-04-29 10:40:14.067 INFO  alephcore::gateway::hot_reload: Configuration reloaded successfully
+2026-04-29 10:40:14.068 INFO  alephcore::gateway::hot_reload: Configuration reloaded successfully
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+Configuration reloaded: 1 agents
+2026-04-29 10:40:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:41:32.152 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:42:32.154 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:43:32.145 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:44:32.144 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:45:32.144 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:46:32.143 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:47:32.141 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:48:32.143 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:49:32.141 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:50:32.141 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:51:32.140 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:52:32.140 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:53:32.140 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:54:32.139 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:55:32.140 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:56:32.139 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:57:32.139 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:58:32.137 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 10:59:32.176 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:00:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:01:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:02:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:03:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:04:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:05:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:06:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:07:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:08:32.178 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:09:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:10:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:11:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:12:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:13:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:14:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:15:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:16:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:17:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:18:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:19:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:20:32.182 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:21:32.178 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:22:32.183 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:23:32.182 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:24:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:25:32.181 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:26:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:27:32.178 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:28:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:29:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:30:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:31:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:32:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:33:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:34:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:35:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:36:32.178 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:37:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:38:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:39:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:40:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:41:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:42:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:43:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:44:32.180 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:45:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:46:32.179 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:47:32.129 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:48:32.128 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:49:32.128 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:50:32.128 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:51:32.127 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:52:32.126 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:53:32.126 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:54:32.125 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:55:32.125 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:56:32.123 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:57:32.123 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:58:32.122 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 11:59:32.122 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:00:32.122 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:01:32.122 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:02:32.122 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:03:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:04:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:05:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:06:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:07:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:08:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:09:32.178 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:10:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:11:32.177 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:12:32.175 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00
+2026-04-29 12:13:32.176 INFO  alephcore::memory::dreaming: DreamDaemon tick: skipped, reason=outside_window, window_start=02:00, window_end=05:00

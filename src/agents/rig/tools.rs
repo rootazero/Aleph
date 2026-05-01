@@ -3,6 +3,8 @@
 //! This module creates tool server instances using the unified builtin registry.
 //! All tool definitions come from executor::builtin_registry for consistency.
 
+#![allow(deprecated)]
+
 use crate::executor::{
     create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig as UnifiedBuiltinToolConfig,
 };

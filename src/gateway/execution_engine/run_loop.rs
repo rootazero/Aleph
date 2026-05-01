@@ -1,12 +1,12 @@
 //! Agent loop execution and streaming callback.
+#![allow(dead_code)]
 //!
 //! Contains `run_agent_loop` (the think-act two-step loop), the `StreamCallback`
 //! adapter that bridges `LoopCallback` to Gateway `StreamEvent`s, the
 //! `ExecutionAdapter` trait implementation, and background memory persistence.
 
 use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::debug;
 
 use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 

@@ -346,22 +346,13 @@ mod tests {
         assert_eq!(config.custom_rules.len(), 2);
         assert_eq!(config.custom_rules[0].name, "internal_token");
         assert_eq!(config.custom_rules[0].pattern, "IT-[A-Z0-9]{16}");
-        assert_eq!(
-            config.custom_rules[0].placeholder,
-            "[INTERNAL_TOKEN]"
-        );
-        assert_eq!(
-            config.custom_rules[0].severity,
-            CustomPiiSeverity::High
-        );
+        assert_eq!(config.custom_rules[0].placeholder, "[INTERNAL_TOKEN]");
+        assert_eq!(config.custom_rules[0].severity, CustomPiiSeverity::High);
         assert_eq!(config.custom_rules[0].action, PiiAction::Block);
 
         assert_eq!(config.custom_rules[1].name, "employee_id");
         assert_eq!(config.custom_rules[1].placeholder, "[CUSTOM_PII]");
-        assert_eq!(
-            config.custom_rules[1].severity,
-            CustomPiiSeverity::Medium
-        );
+        assert_eq!(config.custom_rules[1].severity, CustomPiiSeverity::Medium);
         assert_eq!(config.custom_rules[1].action, PiiAction::Block);
     }
 

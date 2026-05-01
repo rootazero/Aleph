@@ -37,19 +37,19 @@ impl RuntimeCapability {
         output.push_str("You can execute code using these installed runtimes:\n\n");
 
         for cap in capabilities {
-            let _ = write!(output, "**{}**\n", cap.name);
-            let _ = write!(output, "- {}\n", cap.description);
+            let _ = writeln!(output, "**{}**", cap.name);
+            let _ = writeln!(output, "- {}", cap.description);
 
             if let Some(ref version) = cap.version {
-                let _ = write!(output, "- Version: {}\n", version);
+                let _ = writeln!(output, "- Version: {}", version);
             }
 
             if let Some(ref path) = cap.executable_path {
-                let _ = write!(output, "- Executable: `{}`\n", path.display());
+                let _ = writeln!(output, "- Executable: `{}`", path.display());
             }
 
             if let Some(hint) = get_hint_from_spec(&cap.id) {
-                let _ = write!(output, "- {}\n", hint);
+                let _ = writeln!(output, "- {}", hint);
             }
             output.push('\n');
         }
@@ -79,16 +79,16 @@ pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
     use std::fmt::Write;
     let mut output = String::new();
     for entry in entries {
-        let _ = write!(output, "**{}**\n", entry.name);
+        let _ = writeln!(output, "**{}**", entry.name);
         if !entry.version.is_empty() {
-            let _ = write!(output, "- Version: {}\n", entry.version);
+            let _ = writeln!(output, "- Version: {}", entry.version);
         }
         if !entry.bin_path.as_os_str().is_empty() {
-            let _ = write!(output, "- Executable: {}\n", entry.bin_path.display());
+            let _ = writeln!(output, "- Executable: {}", entry.bin_path.display());
         }
         // Reuse existing usage hints from SPECS
         if let Some(hint) = get_hint_from_spec(&entry.name) {
-            let _ = write!(output, "- {}\n", hint);
+            let _ = writeln!(output, "- {}", hint);
         }
         output.push('\n');
     }

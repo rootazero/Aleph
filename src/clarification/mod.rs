@@ -147,7 +147,11 @@ impl ClarificationRequest {
             clarification_type: ClarificationType::Select,
             options: Some(options),
             groups: None,
-            default_value: if has_options { Some("0".to_string()) } else { None },
+            default_value: if has_options {
+                Some("0".to_string())
+            } else {
+                None
+            },
             placeholder: None,
             source: None,
         }

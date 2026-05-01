@@ -174,8 +174,7 @@ impl TaskPlanner {
     }
 
     fn has_word(&self, text: &str, word: &str) -> bool {
-        text.split(|c: char| !c.is_alphabetic())
-            .any(|w| w == word)
+        text.split(|c: char| !c.is_alphabetic()).any(|w| w == word)
     }
 
     /// Extract parameters from step description

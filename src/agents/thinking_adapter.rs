@@ -252,9 +252,7 @@ impl ThinkingAdapter {
     /// Automatically dispatches to the appropriate provider adapter.
     pub fn to_provider_params(config: &ThinkingConfig) -> Option<Value> {
         match config.provider.as_str() {
-            p if p.eq_ignore_ascii_case("claude")
-                | p.eq_ignore_ascii_case("anthropic") =>
-            {
+            p if p.eq_ignore_ascii_case("claude") | p.eq_ignore_ascii_case("anthropic") => {
                 Self::to_anthropic_params(config)
             }
             p if p.eq_ignore_ascii_case("openai") => Self::to_openai_params(config),

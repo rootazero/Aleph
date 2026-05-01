@@ -1,5 +1,7 @@
 //! Tool result cache store with LRU eviction
 
+#![allow(dead_code)]
+
 use crate::sync_primitives::Arc;
 use lru::LruCache;
 use std::collections::hash_map::DefaultHasher;

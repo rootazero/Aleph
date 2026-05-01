@@ -979,9 +979,10 @@ impl BuiltinToolRegistry {
             // service. The cast to Arc<dyn RawMemoryStore> is zero-cost (vtable lookup).
             flag_user_correction_tool: config.memory_db.as_ref().map(|db| {
                 crate::builtin_tools::FlagUserCorrectionTool::new(
-                    db.clone() as crate::sync_primitives::Arc<
-                        dyn crate::memory::store::raw_memory::RawMemoryStore,
-                    >,
+                    db.clone()
+                        as crate::sync_primitives::Arc<
+                            dyn crate::memory::store::raw_memory::RawMemoryStore,
+                        >,
                     "default".to_string(),
                 )
             }),

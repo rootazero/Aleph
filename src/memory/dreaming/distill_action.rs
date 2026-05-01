@@ -42,10 +42,7 @@ pub enum DistillAction {
         source_facts: Vec<String>,
     },
     /// LLM rejected this candidate (transient noise, not actionable).
-    Skip {
-        source_fact: String,
-        reason: String,
-    },
+    Skip { source_fact: String, reason: String },
 }
 
 /// Path this action references in the existing note set, if any.
@@ -89,7 +86,8 @@ mod tests {
 
     #[test]
     fn deserialize_strengthen_action() {
-        let j = r#"{"type":"strengthen","existing_note_path":"skill/async-err","source_facts":["F1"]}"#;
+        let j =
+            r#"{"type":"strengthen","existing_note_path":"skill/async-err","source_facts":["F1"]}"#;
         let a: DistillAction = serde_json::from_str(j).unwrap();
         assert!(matches!(a, DistillAction::Strengthen { .. }));
     }

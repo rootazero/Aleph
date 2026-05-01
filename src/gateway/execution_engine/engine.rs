@@ -27,6 +27,7 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 use super::run_loop::write_conversation_memory;
 
+#[allow(dead_code)]
 /// Execution engine that bridges Gateway to the AgentLoop
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
     pub(super) config: ExecutionEngineConfig,
@@ -296,11 +297,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let run_id = request.run_id.clone();
 
         // Create cancellation channel
-        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
 
         // Create CancellationToken for fine-grained agent loop cancellation.
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.
-        let cancel_token = CancellationToken::new();
+        let _cancel_token = CancellationToken::new();
 
         // Atomically check concurrent run limit and register the run
         {
@@ -346,7 +347,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
-        let trace_task_persisted = self
+        let _trace_task_persisted = self
             .persist_run_task_started(&run_id, &request, &agent)
             .await;
 
@@ -1030,6 +1031,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 ///
 /// The deadline can be extended by compression tasks. This function re-checks
 /// after waking to handle extensions that occurred during sleep.
+#[allow(dead_code)]
 pub(super) async fn wait_for_deadline(deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>) {
     loop {
         let dl = *deadline.lock().await;

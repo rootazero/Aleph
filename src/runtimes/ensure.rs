@@ -124,18 +124,18 @@ pub async fn ensure_capability(
 
     match bootstrap_result {
         BootstrapResult::Success { bin_path, version } => {
-        let mut guard = ledger.write().await;
-        guard.update(CapabilityEntry {
-            name: capability.to_string(),
-            bin_path: bin_path.clone(),
-            version,
-            status: CapabilityStatus::Ready,
-            source: CapabilitySource::AlephManaged,
-            last_probed: now,
-        });
-        if let Err(e) = guard.persist() {
-            warn!("Failed to persist ledger after bootstrap success: {}", e);
-        }
+            let mut guard = ledger.write().await;
+            guard.update(CapabilityEntry {
+                name: capability.to_string(),
+                bin_path: bin_path.clone(),
+                version,
+                status: CapabilityStatus::Ready,
+                source: CapabilitySource::AlephManaged,
+                last_probed: now,
+            });
+            if let Err(e) = guard.persist() {
+                warn!("Failed to persist ledger after bootstrap success: {}", e);
+            }
 
             info!(
                 "Capability {} bootstrapped at {}",

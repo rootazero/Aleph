@@ -10,10 +10,9 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{
-    CustomLeakPattern, CustomPiiRule, CustomPiiSeverity, CustomRiskPattern, DeviceInfo,
-    PiiAction, SandboxRateLimitConfigSchema, SearchConfig, SearchConfigApi,
-    SecretsProtectionConfig, SecurityConfig, SecurityConfigApi, ShellSecurityConfig,
-    VirtualKeyEntry, WindowConfigSchema,
+    CustomLeakPattern, CustomPiiRule, CustomPiiSeverity, CustomRiskPattern, DeviceInfo, PiiAction,
+    SandboxRateLimitConfigSchema, SearchConfig, SearchConfigApi, SecretsProtectionConfig,
+    SecurityConfig, SecurityConfigApi, ShellSecurityConfig, VirtualKeyEntry, WindowConfigSchema,
 };
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -24,7 +23,10 @@ fn validate_regex(pattern: &str) -> Result<(), String> {
     }
     // Use js_sys::eval to test regex validity in JS context
     let escaped = pattern.replace('\'', "\\'");
-    let js_code = format!("try {{ new RegExp('{}'); true; }} catch(e) {{ false; }}", escaped);
+    let js_code = format!(
+        "try {{ new RegExp('{}'); true; }} catch(e) {{ false; }}",
+        escaped
+    );
     match js_sys::eval(&js_code) {
         Ok(result) => match result.as_bool() {
             Some(true) => Ok(()),
@@ -667,11 +669,7 @@ fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoVi
                 if let Some(p) = pattern {
                     match field {
                         "pattern" => p.pattern = value,
-                        "reason" => p.reason = if value.is_empty() {
-                            None
-                        } else {
-                            Some(value)
-                        },
+                        "reason" => p.reason = if value.is_empty() { None } else { Some(value) },
                         _ => {}
                     }
                 }
@@ -1017,19 +1015,23 @@ fn CustomPiiRulesSubsection(
                 "name" => rule.name = value,
                 "pattern" => rule.pattern = value,
                 "placeholder" => rule.placeholder = value,
-                "severity" => rule.severity = match value.as_str() {
-                    "low" => CustomPiiSeverity::Low,
-                    "medium" => CustomPiiSeverity::Medium,
-                    "high" => CustomPiiSeverity::High,
-                    "critical" => CustomPiiSeverity::Critical,
-                    _ => CustomPiiSeverity::Medium,
-                },
-                "action" => rule.action = match value.as_str() {
-                    "block" => PiiAction::Block,
-                    "warn" => PiiAction::Warn,
-                    "off" => PiiAction::Off,
-                    _ => PiiAction::Block,
-                },
+                "severity" => {
+                    rule.severity = match value.as_str() {
+                        "low" => CustomPiiSeverity::Low,
+                        "medium" => CustomPiiSeverity::Medium,
+                        "high" => CustomPiiSeverity::High,
+                        "critical" => CustomPiiSeverity::Critical,
+                        _ => CustomPiiSeverity::Medium,
+                    }
+                }
+                "action" => {
+                    rule.action = match value.as_str() {
+                        "block" => PiiAction::Block,
+                        "warn" => PiiAction::Warn,
+                        "off" => PiiAction::Off,
+                        _ => PiiAction::Block,
+                    }
+                }
                 _ => {}
             }
         }
@@ -1147,7 +1149,10 @@ fn CustomPiiRulesSubsection(
 #[component]
 fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
     let custom_rules = RwSignal::new(
-        config.get().map(|c| c.custom_pii_rules.clone()).unwrap_or_default(),
+        config
+            .get()
+            .map(|c| c.custom_pii_rules.clone())
+            .unwrap_or_default(),
     );
     let pattern_errors = RwSignal::new(Vec::<(usize, String)>::new());
 
@@ -1186,7 +1191,12 @@ fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) -> impl Int
     let validate_leak_patterns = move || {
         let mut errors = Vec::new();
         if let Some(cfg) = config.get() {
-            for (i, p) in cfg.secrets_protection.custom_leak_patterns.iter().enumerate() {
+            for (i, p) in cfg
+                .secrets_protection
+                .custom_leak_patterns
+                .iter()
+                .enumerate()
+            {
                 if let Err(e) = validate_regex(&p.pattern) {
                     errors.push((i, e));
                 }
@@ -1229,10 +1239,12 @@ fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) -> impl Int
 
     let add_leak_pattern = move || {
         if let Some(mut cfg) = config.get() {
-            cfg.secrets_protection.custom_leak_patterns.push(CustomLeakPattern {
-                name: String::new(),
-                pattern: String::new(),
-            });
+            cfg.secrets_protection
+                .custom_leak_patterns
+                .push(CustomLeakPattern {
+                    name: String::new(),
+                    pattern: String::new(),
+                });
             config.set(Some(cfg));
         }
     };
@@ -1518,7 +1530,12 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
 
 #[component]
 fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) -> impl IntoView {
-    let get_rl = move || config.get().map(|c| c.sandbox_rate_limit.clone()).unwrap_or_default();
+    let get_rl = move || {
+        config
+            .get()
+            .map(|c| c.sandbox_rate_limit.clone())
+            .unwrap_or_default()
+    };
 
     let set_enabled = move |v: bool| {
         if let Some(mut cfg) = config.get() {
@@ -1620,7 +1637,12 @@ fn RateLimitBucketCard(
             .unwrap_or_default()
     };
 
-    let is_enabled = move || config.get().map(|c| c.sandbox_rate_limit.enabled).unwrap_or(false);
+    let is_enabled = move || {
+        config
+            .get()
+            .map(|c| c.sandbox_rate_limit.enabled)
+            .unwrap_or(false)
+    };
 
     view! {
         <div class="p-3 bg-surface-sunken rounded border border-border">

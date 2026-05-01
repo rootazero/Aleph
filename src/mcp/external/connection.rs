@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
 use crate::mcp::transport::{McpTransport, StdioTransport};
-use crate::sync_primitives::Arc;
 use crate::mcp::types::McpTool;
+use crate::sync_primitives::Arc;
 
 /// Default timeout for the entire MCP server connection process
 /// This includes: process spawn + initialize handshake + tools/list
@@ -583,11 +583,8 @@ impl McpServerConnection {
         let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
 
         let params = serde_json::json!({ "uri": resource_uri });
-        let request = JsonRpcRequest::with_params(
-            self.id_gen.next(),
-            "resources/subscribe",
-            params,
-        );
+        let request =
+            JsonRpcRequest::with_params(self.id_gen.next(), "resources/subscribe", params);
 
         tracing::debug!(
             server = %self.name,
@@ -611,11 +608,8 @@ impl McpServerConnection {
         let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
 
         let params = serde_json::json!({ "uri": resource_uri });
-        let request = JsonRpcRequest::with_params(
-            self.id_gen.next(),
-            "resources/unsubscribe",
-            params,
-        );
+        let request =
+            JsonRpcRequest::with_params(self.id_gen.next(), "resources/unsubscribe", params);
 
         tracing::debug!(
             server = %self.name,

@@ -1,7 +1,7 @@
 // Aleph/core/src/event/handler.rs
 //! Event handler trait and registry for component subscriptions.
 
-use crate::event::bus::{EventBus, EventSubscriber};
+use crate::event::bus::EventBus;
 use crate::event::types::{AlephEvent, EventType};
 use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicBool, Ordering};

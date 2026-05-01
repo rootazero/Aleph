@@ -136,7 +136,7 @@ impl StdioTransport {
                         // Otherwise it's a notification or response for a different id
                         if notifications.len() >= MAX_NOTIFICATIONS {
                             return Err(AlephError::tool(
-                                "ACP notification buffer overflow: too many out-of-band messages"
+                                "ACP notification buffer overflow: too many out-of-band messages",
                             ));
                         }
                         notifications.push(resp);

@@ -623,4 +623,3 @@ async fn then_lane_should_have_running_runs(
         lane, expected_count, lane_stats.running
     );
 }
-

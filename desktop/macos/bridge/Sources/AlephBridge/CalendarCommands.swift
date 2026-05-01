@@ -37,6 +37,9 @@ private func requestCalendarAccess() {
 
 private let calFmt = iso8601Formatter()
 
+/// Seconds in one week.
+private let SecondsPerWeek: TimeInterval = 7 * 24 * 3600
+
 private func eventToDict(_ event: EKEvent) -> [String: Any] {
     var dict: [String: Any] = [
         "id": event.eventIdentifier ?? "",
@@ -75,7 +78,7 @@ extension AlephBridge {
 
                 let now = Date()
                 let startDate = from.flatMap { parseISO8601($0) } ?? now
-                let endDate = to.flatMap { parseISO8601($0) } ?? now.addingTimeInterval(7 * 24 * 3600) // default 7 days
+                let endDate = to.flatMap { parseISO8601($0) } ?? now.addingTimeInterval(SecondsPerWeek)
 
                 var calendars: [EKCalendar]? = nil
                 if let cid = calendarId {

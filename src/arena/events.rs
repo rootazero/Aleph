@@ -1,5 +1,7 @@
 //! ArenaEvent types with tier classification for EventBus integration.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 use super::types::{AgentId, ArenaId, ArtifactId};

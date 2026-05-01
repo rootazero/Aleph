@@ -1,5 +1,7 @@
 //! Tool result cache configuration
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

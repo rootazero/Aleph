@@ -111,7 +111,7 @@ mod tests {
         let db = test_db();
         let exact = vec![1.0_f32; 1024];
         let mut close = vec![1.0_f32; 1024];
-        close[0] = 0.9;  // slightly less similar to `exact`
+        close[0] = 0.9; // slightly less similar to `exact`
         db.upsert_embedding("skill/exact", "default", &exact, 1024)
             .await
             .unwrap();

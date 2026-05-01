@@ -49,7 +49,8 @@ pub struct IndexStats {
 pub struct NoteIndexer<S: NoteStore> {
     memory_dir: PathBuf,
     store: Arc<S>,
-    orientation: Option<crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
+    orientation:
+        Option<crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>>,
 }
 
 impl<S: NoteStore> NoteIndexer<S> {
@@ -69,7 +70,9 @@ impl<S: NoteStore> NoteIndexer<S> {
     /// `NoteOrientation::invalidate` is called with the affected note path.
     pub fn with_orientation(
         mut self,
-        orientation: crate::sync_primitives::Arc<dyn crate::memory::notes::orientation::NoteOrientation>,
+        orientation: crate::sync_primitives::Arc<
+            dyn crate::memory::notes::orientation::NoteOrientation,
+        >,
     ) -> Self {
         self.orientation = Some(orientation);
         self
@@ -205,7 +208,10 @@ impl<S: NoteStore> NoteIndexer<S> {
             fs::create_dir_all(parent)
                 .await
                 .map_err(|e| AlephError::ConfigError {
-                    message: format!("Failed to create parent directory {}: {e}", parent.display()),
+                    message: format!(
+                        "Failed to create parent directory {}: {e}",
+                        parent.display()
+                    ),
                     suggestion: None,
                 })?;
         }
@@ -414,15 +420,16 @@ impl<S: NoteStore> NoteIndexer<S> {
         new_source_facts: &[String],
         confidence_floor: f32,
     ) -> Result<(), AlephError> {
-        let (cat, filename) = existing_note_path.split_once('/').ok_or_else(|| {
-            AlephError::ConfigError {
-                message: format!(
-                    "merge_source_facts: invalid note_path '{existing_note_path}' \
+        let (cat, filename) =
+            existing_note_path
+                .split_once('/')
+                .ok_or_else(|| AlephError::ConfigError {
+                    message: format!(
+                        "merge_source_facts: invalid note_path '{existing_note_path}' \
                      (expected 'category/filename')"
-                ),
-                suggestion: None,
-            }
-        })?;
+                    ),
+                    suggestion: None,
+                })?;
         let safe_title = sanitize_title(filename);
         let file_path = self
             .memory_dir
@@ -539,13 +546,8 @@ impl<S: NoteStore> NoteIndexer<S> {
                 // Strengthen does not carry a confidence value — pass 0.0 as
                 // floor so the bump is purely additive against the existing
                 // note's confidence.
-                self.merge_source_facts_into_note(
-                    agent_id,
-                    existing_note_path,
-                    source_facts,
-                    0.0,
-                )
-                .await?;
+                self.merge_source_facts_into_note(agent_id, existing_note_path, source_facts, 0.0)
+                    .await?;
             }
             DistillAction::Supersede {
                 old_note_path,
@@ -555,15 +557,16 @@ impl<S: NoteStore> NoteIndexer<S> {
                 severity,
                 source_facts,
             } => {
-                let (old_cat, old_filename) = old_note_path.split_once('/').ok_or_else(|| {
-                    AlephError::ConfigError {
-                        message: format!(
-                            "Supersede: invalid old_note_path '{old_note_path}' \
+                let (old_cat, old_filename) =
+                    old_note_path
+                        .split_once('/')
+                        .ok_or_else(|| AlephError::ConfigError {
+                            message: format!(
+                                "Supersede: invalid old_note_path '{old_note_path}' \
                              (expected 'category/filename')"
-                        ),
-                        suggestion: None,
-                    }
-                })?;
+                            ),
+                            suggestion: None,
+                        })?;
                 let safe_old = sanitize_title(old_filename);
                 let old_file = self
                     .memory_dir
@@ -584,16 +587,18 @@ impl<S: NoteStore> NoteIndexer<S> {
                     );
                 }
                 if old_file.exists() {
-                    fs::remove_file(&old_file).await.map_err(|e| {
-                        AlephError::ConfigError {
+                    fs::remove_file(&old_file)
+                        .await
+                        .map_err(|e| AlephError::ConfigError {
                             message: format!(
                                 "Supersede: failed to remove old file {old_file:?}: {e}"
                             ),
                             suggestion: None,
-                        }
-                    })?;
+                        })?;
                 }
-                self.store.remove_note_index(old_note_path, agent_id).await?;
+                self.store
+                    .remove_note_index(old_note_path, agent_id)
+                    .await?;
                 self.notify_orientation(agent_id, old_cat, &safe_old);
 
                 let now = chrono::Utc::now().timestamp();
@@ -1168,7 +1173,9 @@ mod reference_hook_tests {
             .join(cat)
             .join(format!("{name}.md"));
         let content = fs::read_to_string(&file).await.unwrap();
-        KnowledgeNote::from_markdown(name, &content).unwrap().confidence
+        KnowledgeNote::from_markdown(name, &content)
+            .unwrap()
+            .confidence
     }
 
     /// Seed a skill note with the given confidence and source_facts.
@@ -1207,7 +1214,10 @@ mod reference_hook_tests {
             existing_note_path: "skill/topic".into(),
             source_facts: (0..5).map(|i| format!("fact-{i}")).collect(),
         };
-        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
 
         let after = read_confidence(dir.path(), "default", "skill/topic").await;
         // 0.4 + 5 * 0.05 = 0.65 — within float tolerance.
@@ -1240,7 +1250,10 @@ mod reference_hook_tests {
             existing_note_path: "skill/stable".into(),
             source_facts: vec!["fact-a".into(), "fact-b".into()],
         };
-        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
 
         let after = read_confidence(dir.path(), "default", "skill/stable").await;
         assert!(
@@ -1264,7 +1277,10 @@ mod reference_hook_tests {
             existing_note_path: "skill/almost".into(),
             source_facts: (0..10).map(|i| format!("f{i}")).collect(),
         };
-        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
 
         let after = read_confidence(dir.path(), "default", "skill/almost").await;
         assert!(
@@ -1293,17 +1309,23 @@ mod reference_hook_tests {
             severity: Default::default(),
             source_facts: vec!["seed-fact".into()],
         };
-        indexer.apply_distill_action("default", "skill", &first).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &first)
+            .await
+            .unwrap();
 
         // Second New with the SAME safe_title — must not silently overwrite.
         let second = DistillAction::New {
             title: "duplicate-topic".into(),
             rule: "second body".into(), // would replace the body if we naively wrote
-            confidence: 0.9,             // floor that the existing note must be lifted to
+            confidence: 0.9,            // floor that the existing note must be lifted to
             severity: Default::default(),
             source_facts: vec!["seed-fact".into(), "extra-fact".into()],
         };
-        indexer.apply_distill_action("default", "skill", &second).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &second)
+            .await
+            .unwrap();
 
         // Re-read the (single) note from disk.
         let file = dir
@@ -1352,7 +1374,10 @@ mod reference_hook_tests {
             severity: Default::default(),
             source_facts: vec!["fact-1".into()],
         };
-        indexer.apply_distill_action("default", "skill", &action).await.unwrap();
+        indexer
+            .apply_distill_action("default", "skill", &action)
+            .await
+            .unwrap();
 
         let after = read_confidence(dir.path(), "default", "skill/fresh-topic").await;
         // No collision → no bump applied; confidence == as written.

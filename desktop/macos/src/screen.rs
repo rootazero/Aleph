@@ -202,3 +202,50 @@ fn png_dimensions(png_bytes: &[u8]) -> Option<(f64, f64)> {
     let height = u32::from_be_bytes([png_bytes[20], png_bytes[21], png_bytes[22], png_bytes[23]]);
     Some((width as f64, height as f64))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_png_dimensions_valid_1x1() {
+        // Minimal valid 1x1 PNG (signature + IHDR chunk, no IDAT/IEND)
+        let valid_png: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+            0x00, 0x00, 0x00, 0x0d, // IHDR length = 13
+            0x49, 0x48, 0x44, 0x52, // "IHDR"
+            0x00, 0x00, 0x00, 0x01, // width = 1
+            0x00, 0x00, 0x00, 0x01, // height = 1
+            0x08, 0x02, // bit depth = 8, color type = 2 (RGB)
+            0x00, 0x00, 0x00, // compression, filter, interlace
+            0x90, 0x77, 0x53, 0xde, // CRC
+        ];
+        assert_eq!(png_dimensions(valid_png), Some((1.0, 1.0)));
+    }
+
+    #[test]
+    fn test_png_dimensions_too_short() {
+        let short: &[u8] = &[0x89, 0x50, 0x4e, 0x47]; // only 4 bytes
+        assert_eq!(png_dimensions(short), None);
+    }
+
+    #[test]
+    fn test_png_dimensions_wrong_signature() {
+        let not_png: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // wrong sig
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(png_dimensions(not_png), None);
+    }
+
+    #[test]
+    fn test_png_dimensions_200x150() {
+        // PNG with width=200, height=150
+        let mut png = vec![0u8; 24 + 12]; // header + some padding
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        png[16..20].copy_from_slice(&200u32.to_be_bytes());
+        png[20..24].copy_from_slice(&150u32.to_be_bytes());
+        assert_eq!(png_dimensions(&png), Some((200.0, 150.0)));
+    }
+}

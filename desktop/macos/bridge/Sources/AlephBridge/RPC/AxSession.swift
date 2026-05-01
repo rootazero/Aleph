@@ -52,6 +52,8 @@ struct QueryListResult: Codable {
 /// (which must not race) are naturally serialised.
 actor AxQuerier {
 
+    private let MAX_TREE_NODES = 10_000
+
     // MARK: Public interface
 
     func queryFocused() -> AxElement? {
@@ -61,8 +63,9 @@ actor AxQuerier {
             sys, kAXFocusedUIElementAttribute as CFString, &focused
         )
         guard err == .success, let el = focused else { return nil }
+        var count = 0
         // swiftlint:disable:next force_cast
-        return buildElement(from: el as! AXUIElement, depth: 0, maxDepth: 2)
+        return buildElement(from: el as! AXUIElement, depth: 0, maxDepth: 2, nodeCount: &count)
     }
 
     func queryTree(pid: pid_t?, maxDepth: Int) -> AxElement? {
@@ -73,7 +76,8 @@ actor AxQuerier {
             guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
             target = AXUIElementCreateApplication(app.processIdentifier)
         }
-        return buildElement(from: target, depth: 0, maxDepth: maxDepth)
+        var count = 0
+        return buildElement(from: target, depth: 0, maxDepth: maxDepth, nodeCount: &count)
     }
 
     func queryByRole(role: String, pid: pid_t?) -> [AxElement] {
@@ -92,11 +96,13 @@ actor AxQuerier {
         return out
     }
 
-    private func buildElement(from ax: AXUIElement, depth: Int, maxDepth: Int) -> AxElement? {
+    private func buildElement(from ax: AXUIElement, depth: Int, maxDepth: Int, nodeCount: inout Int) -> AxElement? {
+        guard nodeCount < MAX_TREE_NODES else { return nil }
+        nodeCount += 1
+
         let role = (axAttr(ax, kAXRoleAttribute) as? String) ?? "AXUnknown"
         let title = axAttr(ax, kAXTitleAttribute) as? String
         let rawValue = axAttr(ax, kAXValueAttribute)
-        // Represent value as string; nil for non-stringifiable types
         let value: String?
         if let rv = rawValue {
             let s = "\(rv)"
@@ -112,7 +118,7 @@ actor AxQuerier {
         if depth < maxDepth {
             let rawChildren = axAttr(ax, kAXChildrenAttribute) as? [AXUIElement] ?? []
             children = rawChildren.compactMap {
-                buildElement(from: $0, depth: depth + 1, maxDepth: maxDepth)
+                buildElement(from: $0, depth: depth + 1, maxDepth: maxDepth, nodeCount: &nodeCount)
             }
         }
         return AxElement(

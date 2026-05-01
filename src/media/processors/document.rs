@@ -55,12 +55,11 @@ impl MediaProvider for TextDocumentProvider {
     ) -> Result<MediaOutput, MediaError> {
         match input {
             MediaInput::FilePath { path } => {
-                let content = std::fs::read_to_string(path).map_err(|e| {
-                    MediaError::ProviderError {
+                let content =
+                    std::fs::read_to_string(path).map_err(|e| MediaError::ProviderError {
                         provider: "text-document".into(),
                         message: format!("Failed to read {}: {}", path.display(), e),
-                    }
-                })?;
+                    })?;
                 Ok(MediaOutput::Text { text: content })
             }
             MediaInput::Base64 { data, .. } => {
@@ -71,11 +70,9 @@ impl MediaProvider for TextDocumentProvider {
                         provider: "text-document".into(),
                         message: format!("Base64 decode error: {}", e),
                     })?;
-                let text = String::from_utf8(bytes).map_err(|e| {
-                    MediaError::ProviderError {
-                        provider: "text-document".into(),
-                        message: format!("UTF-8 decode error: {}", e),
-                    }
+                let text = String::from_utf8(bytes).map_err(|e| MediaError::ProviderError {
+                    provider: "text-document".into(),
+                    message: format!("UTF-8 decode error: {}", e),
                 })?;
                 Ok(MediaOutput::Text { text })
             }

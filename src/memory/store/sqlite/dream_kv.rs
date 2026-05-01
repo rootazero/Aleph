@@ -39,9 +39,7 @@ impl SqliteMemoryBackend {
         match result {
             Ok(value) => {
                 let ts = value.parse::<i64>().map_err(|e| {
-                    AlephError::config(format!(
-                        "get_dream_watermark parse {key}={value:?}: {e}"
-                    ))
+                    AlephError::config(format!("get_dream_watermark parse {key}={value:?}: {e}"))
                 })?;
                 Ok(Some(ts))
             }
@@ -86,7 +84,9 @@ mod tests {
 
         // Empty store returns None.
         assert_eq!(
-            backend.get_dream_watermark("feedback_distill", "main").unwrap(),
+            backend
+                .get_dream_watermark("feedback_distill", "main")
+                .unwrap(),
             None
         );
 
@@ -95,19 +95,25 @@ mod tests {
             .set_dream_watermark("feedback_distill", "main", 12345)
             .unwrap();
         assert_eq!(
-            backend.get_dream_watermark("feedback_distill", "main").unwrap(),
+            backend
+                .get_dream_watermark("feedback_distill", "main")
+                .unwrap(),
             Some(12345)
         );
 
         // Different consumer is isolated.
         assert_eq!(
-            backend.get_dream_watermark("other_distill", "main").unwrap(),
+            backend
+                .get_dream_watermark("other_distill", "main")
+                .unwrap(),
             None
         );
 
         // Different agent is isolated.
         assert_eq!(
-            backend.get_dream_watermark("feedback_distill", "alice").unwrap(),
+            backend
+                .get_dream_watermark("feedback_distill", "alice")
+                .unwrap(),
             None
         );
     }
@@ -125,7 +131,9 @@ mod tests {
             .set_dream_watermark("feedback_distill", "main", 200)
             .unwrap();
         assert_eq!(
-            backend.get_dream_watermark("feedback_distill", "main").unwrap(),
+            backend
+                .get_dream_watermark("feedback_distill", "main")
+                .unwrap(),
             Some(200)
         );
     }

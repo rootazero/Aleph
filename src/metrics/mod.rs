@@ -192,7 +192,7 @@ impl Drop for StageTimer {
             return;
         }
 
-        if self.metadata.as_ref().map_or(true, |m| m.is_empty()) {
+        if self.metadata.as_ref().is_none_or(|m| m.is_empty()) {
             tracing::debug!(
                 stage = %self.name,
                 duration_ms = %elapsed_ms,

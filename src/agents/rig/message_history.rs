@@ -144,7 +144,10 @@ impl ChatMessage {
                         }
                     })
                     .collect();
-                content_parts.push(format!("[ExtractedKnowledge] {}", knowledge_preview.join("; ")));
+                content_parts.push(format!(
+                    "[ExtractedKnowledge] {}",
+                    knowledge_preview.join("; ")
+                ));
             }
         }
 

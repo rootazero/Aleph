@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::arena::{AgentId, ArenaId, ArenaManager, ArenaManifest};
+use crate::arena::{ArenaId, ArenaManager, ArenaManifest};
 use crate::error::Result;
 use crate::sync_primitives::{Arc, RwLock};
 use crate::tools::AlephTool;
