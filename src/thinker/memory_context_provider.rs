@@ -5,6 +5,7 @@ use crate::memory::assembler::hybrid::{AiProviderReranker, LlmReranker};
 use crate::memory::assembler::{
     AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
 };
+use crate::memory::curated::{CuratedConfig, CuratedMemoryStore, CuratedSnapshot};
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
 use crate::memory::session_resume::reader::SnapshotReader;
@@ -13,6 +14,9 @@ use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
+use dashmap::DashMap;
+use std::collections::HashMap;
+use tokio::sync::RwLock as TokioRwLock;
 
 /// Configuration for memory context retrieval.
 pub struct MemoryContextConfig {
@@ -66,6 +70,13 @@ pub struct MemoryContextProvider {
     orientation_budget: crate::memory::notes::orientation::types::TokenBudget,
     /// Optional user-profile synthesizer for injecting profile context.
     profile: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
+    /// Per-(agent_id, session_key) frozen snapshot. Built on first prompt
+    /// build for the session; reused until evicted by compression / SessionEnd.
+    curated_snapshots: Arc<TokioRwLock<HashMap<(String, String), Arc<CuratedSnapshot>>>>,
+    /// Per-agent CuratedMemoryStore. Loaded lazily on first capture.
+    curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
+    /// Char-budget config for both MEMORY.md and USER.md rendering.
+    curated_config: CuratedConfig,
 }
 
 impl MemoryContextProvider {
@@ -124,6 +135,9 @@ impl MemoryContextProvider {
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
+            curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            curated_stores: Arc::new(DashMap::new()),
+            curated_config: CuratedConfig::default(),
         }
     }
 
@@ -190,6 +204,9 @@ impl MemoryContextProvider {
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
+            curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            curated_stores: Arc::new(DashMap::new()),
+            curated_config: CuratedConfig::default(),
         }
     }
 
@@ -262,6 +279,9 @@ impl MemoryContextProvider {
             orientation: None,
             orientation_budget: crate::memory::notes::orientation::types::TokenBudget::default(),
             profile: None,
+            curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
+            curated_stores: Arc::new(DashMap::new()),
+            curated_config: CuratedConfig::default(),
         }
     }
 
@@ -280,6 +300,12 @@ impl MemoryContextProvider {
         p: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
     ) -> Self {
         self.profile = Some(p);
+        self
+    }
+
+    /// Set the curated hot-memory char-budget config (builder-style).
+    pub fn with_curated_config(mut self, cfg: CuratedConfig) -> Self {
+        self.curated_config = cfg;
         self
     }
 
