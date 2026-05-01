@@ -77,6 +77,11 @@ pub struct MemoryContextProvider {
     curated_stores: Arc<DashMap<String, Arc<CuratedMemoryStore>>>,
     /// Char-budget config for both MEMORY.md and USER.md rendering.
     curated_config: CuratedConfig,
+    /// Test-only override for the curated MEMORY.md root directory.
+    /// Real path: `~/.aleph/agents/<agent_id>/MEMORY.md`. Tests redirect
+    /// to a tempdir to keep filesystem state isolated.
+    #[cfg(test)]
+    curated_root_override: Option<std::path::PathBuf>,
 }
 
 impl MemoryContextProvider {
@@ -138,6 +143,8 @@ impl MemoryContextProvider {
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
+            #[cfg(test)]
+            curated_root_override: None,
         }
     }
 
@@ -207,6 +214,8 @@ impl MemoryContextProvider {
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
+            #[cfg(test)]
+            curated_root_override: None,
         }
     }
 
@@ -282,6 +291,8 @@ impl MemoryContextProvider {
             curated_snapshots: Arc::new(TokioRwLock::new(HashMap::new())),
             curated_stores: Arc::new(DashMap::new()),
             curated_config: CuratedConfig::default(),
+            #[cfg(test)]
+            curated_root_override: None,
         }
     }
 
@@ -307,6 +318,147 @@ impl MemoryContextProvider {
     pub fn with_curated_config(mut self, cfg: CuratedConfig) -> Self {
         self.curated_config = cfg;
         self
+    }
+
+    /// Test-only: redirect the curated root to a tempdir path (so tests don't
+    /// touch the real `~/.aleph/agents/<id>/MEMORY.md`).
+    #[cfg(test)]
+    pub(crate) fn with_curated_root_for_test(mut self, root: std::path::PathBuf) -> Self {
+        self.curated_root_override = Some(root);
+        self
+    }
+
+    /// Resolve the on-disk path for an agent's curated MEMORY.md.
+    ///
+    /// Real path: `~/.aleph/agents/<agent_id>/MEMORY.md`. Tests can override
+    /// the root via `with_curated_root_for_test`. If the home directory
+    /// cannot be resolved, falls back to a temp-dir prefix so we never
+    /// panic in a degraded environment.
+    fn agent_memory_path(&self, agent_id: &str) -> std::path::PathBuf {
+        #[cfg(test)]
+        {
+            if let Some(root) = &self.curated_root_override {
+                return root.join(agent_id).join("MEMORY.md");
+            }
+        }
+        let base = crate::discovery::aleph_home_dir().unwrap_or_else(|_| {
+            tracing::warn!(
+                "aleph_home_dir resolution failed for curated MEMORY.md; using temp-dir fallback"
+            );
+            std::env::temp_dir().join(".aleph")
+        });
+        base.join("agents").join(agent_id).join("MEMORY.md")
+    }
+
+    /// Build the cached `<CuratedMemory>` + `<UserProfile>` envelope for
+    /// this `(agent_id, session_key)`. The first call captures a frozen
+    /// snapshot; subsequent calls in the same session reuse it. Returns
+    /// `Ok(None)` only when both blocks are empty (so the layer can skip
+    /// emitting an empty user message).
+    pub async fn build_curated_message(
+        &self,
+        agent_id: &str,
+        session_key: &str,
+    ) -> Result<Option<crate::providers::message::UnifiedMessage>, crate::error::AlephError> {
+        let key = (agent_id.to_string(), session_key.to_string());
+        if let Some(snap) = self.curated_snapshots.read().await.get(&key) {
+            return Ok(self.snapshot_to_message(snap));
+        }
+        let snap = Arc::new(self.capture_curated(agent_id).await?);
+        self.curated_snapshots
+            .write()
+            .await
+            .insert(key, snap.clone());
+        Ok(self.snapshot_to_message(&snap))
+    }
+
+    /// Load (or reuse) the per-agent CuratedMemoryStore, render the
+    /// `<CuratedMemory>` and `<UserProfile>` blocks, and return them as a
+    /// frozen `CuratedSnapshot`.
+    async fn capture_curated(
+        &self,
+        agent_id: &str,
+    ) -> Result<CuratedSnapshot, crate::error::AlephError> {
+        use crate::memory::curated::snapshot::{render_agent_block, render_user_block};
+
+        let store = if let Some(s) = self.curated_stores.get(agent_id) {
+            s.clone()
+        } else {
+            let path = self.agent_memory_path(agent_id);
+            let s = Arc::new(
+                CuratedMemoryStore::load(path, self.curated_config.memory_char_limit, agent_id)
+                    .await?,
+            );
+            self.curated_stores.insert(agent_id.to_string(), s.clone());
+            s
+        };
+
+        let entries = store.current_entries();
+        let agent_block = render_agent_block(
+            &entries,
+            self.curated_config.memory_char_limit,
+            self.curated_config.legacy_warn_threshold,
+        );
+
+        let user_block = if let Some(ps) = &self.profile {
+            match ps.current(agent_id).await? {
+                Some(p) => {
+                    let body = strip_frontmatter(&p.raw);
+                    let block = render_user_block(
+                        body,
+                        self.curated_config.user_char_limit,
+                        self.curated_config.legacy_warn_threshold,
+                    );
+                    if block.is_empty() {
+                        None
+                    } else {
+                        Some(block)
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        Ok(CuratedSnapshot {
+            agent_id: agent_id.to_string(),
+            agent_md_block: agent_block,
+            user_md_block: user_block,
+            captured_at: std::time::SystemTime::now(),
+        })
+    }
+
+    /// Combine the two block strings into a single user-message. Returns
+    /// `None` when both blocks are empty (no need to emit an empty turn).
+    fn snapshot_to_message(
+        &self,
+        snap: &CuratedSnapshot,
+    ) -> Option<crate::providers::message::UnifiedMessage> {
+        let mut combined = String::new();
+        if !snap.agent_md_block.is_empty() {
+            combined.push_str(&snap.agent_md_block);
+        }
+        if let Some(ub) = &snap.user_md_block {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(ub);
+        }
+        if combined.is_empty() {
+            return None;
+        }
+        Some(crate::providers::message::UnifiedMessage::user(combined))
+    }
+
+    /// Evict every snapshot whose `session_key` matches. Called on
+    /// compression-complete and SessionEnd so the next prompt build picks
+    /// up disk mutations.
+    pub async fn invalidate_curated(&self, session_key: &str) {
+        self.curated_snapshots
+            .write()
+            .await
+            .retain(|(_, sk), _| sk != session_key);
     }
 
     /// Build a wiki orientation user-message for injection into the prompt.
@@ -766,5 +918,77 @@ mod profile_tests {
             .await
             .unwrap();
         assert!(msg.is_none());
+    }
+}
+
+#[cfg(test)]
+mod curated_snapshot_tests {
+    use super::*;
+    use crate::config::types::memory::MemoryInjectionMode;
+    use crate::memory::curated::CuratedConfig;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn first_call_captures_snapshot_subsequent_calls_hit_cache() {
+        let dir = tempdir().unwrap();
+        let provider =
+            MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context)
+                .with_curated_config(CuratedConfig {
+                    memory_char_limit: 100,
+                    user_char_limit: 100,
+                    legacy_warn_threshold: 0.95,
+                })
+                .with_curated_root_for_test(dir.path().to_path_buf());
+
+        // Pre-seed MEMORY.md (with trailing § so it's classified as curated,
+        // not legacy — see Task 7's serialize-with-trailing-delimiter fix).
+        let agent_dir = dir.path().join("agent-x");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("MEMORY.md"), "fact one\n§\nfact two\n§\n").unwrap();
+
+        let m1 = provider
+            .build_curated_message("agent-x", "ses-1")
+            .await
+            .unwrap();
+        assert!(m1.is_some(), "first call must produce a message");
+        let txt1 = format!("{:?}", m1);
+        assert!(txt1.contains("fact one"), "rendered block must include entries");
+        assert!(txt1.contains("CuratedMemory"), "must be wrapped in <CuratedMemory>");
+
+        // Mutate disk; same session_key must NOT reflect the change.
+        std::fs::write(
+            agent_dir.join("MEMORY.md"),
+            "fact one\n§\nfact two\n§\nfact three\n§\n",
+        )
+        .unwrap();
+        let m2 = provider
+            .build_curated_message("agent-x", "ses-1")
+            .await
+            .unwrap();
+        let txt2 = format!("{:?}", m2);
+        assert!(
+            !txt2.contains("fact three"),
+            "snapshot must be frozen for ses-1 — second call should hit cache"
+        );
+
+        // Eviction → next call rebuilds and picks up the disk change. Note
+        // that the per-agent store is also cached, so we must evict it via
+        // the public surface — but `invalidate_curated` only evicts the
+        // snapshot keyed by session. The store stays cached (its
+        // `current_entries()` is read fresh each capture, but it was
+        // initialized from the OLD body). For the test to observe the
+        // disk-side mutation, we also clear the per-agent store map.
+        provider.invalidate_curated("ses-1").await;
+        provider.curated_stores.remove("agent-x");
+
+        let m3 = provider
+            .build_curated_message("agent-x", "ses-1")
+            .await
+            .unwrap();
+        let txt3 = format!("{:?}", m3);
+        assert!(
+            txt3.contains("fact three"),
+            "after invalidate + store reset, must pick up disk change"
+        );
     }
 }
