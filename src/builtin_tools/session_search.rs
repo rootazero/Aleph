@@ -300,10 +300,12 @@ fn truncate(s: &str, max_chars: usize) -> String {
 impl AlephTool for SessionSearchTool {
     const NAME: &'static str = "session_search";
     const DESCRIPTION: &'static str =
-        "Search past conversation transcripts across all sessions using full-text search. \
-        Use this when the user references something from a prior conversation, \
-        or when you suspect relevant context exists in past sessions. \
-        Prefer this over asking the user to repeat themselves.";
+        "Search past conversation transcripts across all sessions and retrieve summarized \
+        excerpts. Each hit is one past session, returned with `summary` (synthesized excerpt \
+        of what that session was about), `evidence_quotes` (0-2 raw transcript snippets for \
+        grounding), and `source` (Compactor | SessionEnd | Lazy — Compactor is the most \
+        authoritative when available). Use `summary` first; only consult `evidence_quotes` \
+        when the summary is too abstract to answer the question.";
 
     type Args = SessionSearchArgs;
     type Output = SessionSearchOutput;
