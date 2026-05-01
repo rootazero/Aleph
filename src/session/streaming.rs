@@ -71,15 +71,15 @@ pub struct StreamingToolBridge {
 impl StreamingToolBridge {
     /// Create a bridge/executor pair connected by an mpsc channel.
     ///
-    /// The channel buffer is sized at 32 — more than enough for typical
-    /// LLM responses which rarely exceed 10 parallel tool calls.
+    /// The channel buffer is sized at 256 to avoid dropping tool calls
+    /// under bursty concurrent execution.
     pub fn new(
         registry: Arc<LoopToolRegistry>,
         pipeline: Arc<ToolPipeline>,
         cancel: CancellationToken,
         callback: Option<Box<dyn LoopCallback>>,
     ) -> (Self, StreamingToolExecutor) {
-        let (tx, rx) = mpsc::channel(32);
+        let (tx, rx) = mpsc::channel(256);
         let bridge = Self {
             pending: HashMap::new(),
             ready_tx: tx,
@@ -123,19 +123,32 @@ impl StreamingToolBridge {
             }
             ProviderDelta::ToolCallEnd { id } => {
                 if let Some(pending) = self.pending.remove(id) {
-                    let arguments = serde_json::from_str(&pending.arg_buffer)
-                        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+                    let arguments = match serde_json::from_str(&pending.arg_buffer) {
+                        Ok(args) => args,
+                        Err(e) => {
+                            tracing::error!(
+                                tool_name = %pending.name,
+                                tool_id = %id,
+                                arg_buffer = %pending.arg_buffer,
+                                error = %e,
+                                "Failed to parse tool arguments JSON — using empty object fallback"
+                            );
+                            Value::Object(serde_json::Map::new())
+                        }
+                    };
+                    let name = pending.name;
                     let ready = ReadyToolCall {
                         index: pending.index,
                         id: id.clone(),
-                        name: pending.name,
+                        name,
                         arguments,
                     };
-                    // try_send: if channel is full (unlikely), log and drop.
-                    // This is a bounded buffer — backpressure from slow execution
-                    // should not block the delta stream.
                     if let Err(e) = self.ready_tx.try_send(ready) {
-                        tracing::warn!("Failed to send ready tool call to executor: {}", e);
+                        tracing::error!(
+                            tool_id = %id,
+                            error = %e,
+                            "Failed to send ready tool call to executor — channel full or closed. Tool call dropped."
+                        );
                     }
                 }
             }
@@ -173,7 +186,7 @@ impl StreamingToolExecutor {
     pub async fn run(mut self) -> Vec<PipelineOutcome> {
         let batch_cancel = self.cancel.child_token();
         let mut results: Vec<(usize, PipelineOutcome)> = Vec::new();
-        let mut in_flight: Vec<JoinHandle<(usize, PipelineOutcome)>> = Vec::new();
+        let mut in_flight: Vec<(usize, JoinHandle<(usize, PipelineOutcome)>)> = Vec::new();
         let mut exclusive_queue: Vec<ReadyToolCall> = Vec::new();
 
         // Phase 1: receive tool calls from the channel.
@@ -201,7 +214,7 @@ impl StreamingToolExecutor {
                                     index,
                                     batch_cancel.child_token(),
                                 );
-                                in_flight.push(handle);
+                                in_flight.push((index, handle));
                             } else {
                                 // Queue for sequential execution.
                                 exclusive_queue.push(call);
@@ -213,9 +226,9 @@ impl StreamingToolExecutor {
         }
 
         // Phase 2: await all in-flight concurrent tasks.
-        for handle in in_flight {
+        for (call_index, handle) in in_flight {
             match handle.await {
-                Ok((idx, outcome)) => {
+                Ok((_, outcome)) => {
                     // Check cascade policy: if a side-effecting tool failed,
                     // cancel all remaining siblings in this batch.
                     if outcome.outcome.is_error {
@@ -229,32 +242,38 @@ impl StreamingToolExecutor {
                             batch_cancel.cancel();
                         }
                     }
-                    if let Some(call) = self.concurrent_calls.remove(&idx) {
+                    if let Some(call) = self.concurrent_calls.remove(&call_index) {
                         self.emit_callback(&call.id, &call.name, &call.arguments, &outcome).await;
                     }
-                    results.push((idx, outcome));
+                    results.push((call_index, outcome));
                 }
                 Err(e) => {
-                    tracing::error!("Spawned tool task panicked: {}", e);
-                    results.push((
-                        0,
-                        PipelineOutcome {
-                            outcome: ToolOutcome {
-                                tool_id: String::new(),
-                                tool_name: String::new(),
-                                duration_ms: 0,
-                                output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
-                                is_error: true,
-                                should_stop: false,
-                                retryable: false,
-                            },
-                            additional_contexts: Vec::new(),
-                            prevent_continuation: false,
-                            hook_messages: Vec::new(),
-                            needs_user_confirmation: false,
-                            confirmation_reason: None,
+                    tracing::error!(
+                        call_index = %call_index,
+                        "Spawned tool task panicked: {}",
+                        e
+                    );
+                    let panic_outcome = PipelineOutcome {
+                        outcome: ToolOutcome {
+                            tool_id: String::new(),
+                            tool_name: String::new(),
+                            duration_ms: 0,
+                            output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
+                            is_error: true,
+                            should_stop: false,
+                            retryable: false,
                         },
-                    ));
+                        additional_contexts: Vec::new(),
+                        prevent_continuation: false,
+                        hook_messages: Vec::new(),
+                        needs_user_confirmation: false,
+                        confirmation_reason: None,
+                    };
+                    if let Some(call) = self.concurrent_calls.remove(&call_index) {
+                        self.emit_callback(&call.id, &call.name, &call.arguments, &panic_outcome
+                        ).await;
+                    }
+                    results.push((call_index, panic_outcome));
                 }
             }
         }

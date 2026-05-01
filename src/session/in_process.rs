@@ -51,6 +51,20 @@ impl InProcessActorSessionService {
         &self,
         id: &SessionId,
     ) -> Result<mpsc::Sender<ActorCommand>, SessionError> {
+        let mut senders = self.senders.write().await;
+        let mut broadcasters = self.broadcasters.write().await;
+
+        // Double-check + stale sender cleanup.
+        // A sender whose receiver has been dropped (actor idle-timeout or
+        // panic) is useless — evict it before creating a replacement.
+        if let Some(sender) = senders.get(id) {
+            if !sender.is_closed() {
+                return Ok(sender.clone());
+            }
+            senders.remove(id);
+            broadcasters.remove(id);
+        }
+
         let (tx, rx) = mpsc::channel(COMMAND_BUFFER);
         let (bcast_tx, _) = broadcast::channel(BROADCAST_BUFFER);
         let actor = SessionActor::new(
@@ -62,8 +76,8 @@ impl InProcessActorSessionService {
         );
         tokio::spawn(actor.run());
 
-        self.senders.write().await.insert(id.clone(), tx.clone());
-        self.broadcasters.write().await.insert(id.clone(), bcast_tx);
+        senders.insert(id.clone(), tx.clone());
+        broadcasters.insert(id.clone(), bcast_tx);
         Ok(tx)
     }
 }
