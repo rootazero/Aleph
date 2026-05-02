@@ -47,11 +47,10 @@ pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSess
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let tmp = path.with_extension("json.tmp");
     match serde_json::to_string_pretty(sessions) {
         Ok(json) => {
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
+            if let Err(e) = crate::utils::atomic_io::write_atomic(&path, json.as_bytes()) {
+                warn!("Failed to atomic-write ACP sessions: {}", e);
             }
         }
         Err(e) => warn!("Failed to serialize ACP sessions: {}", e),
