@@ -27,6 +27,12 @@ impl InstanceLock {
     pub fn holder_pid(&self) -> u32 {
         self.holder_pid
     }
+
+    /// Consume the lock and return the underlying file handle. The OS-level
+    /// fs2 lock is released only when this `File` is dropped.
+    pub fn into_file(self) -> File {
+        self.file
+    }
 }
 
 // Drop releases the OS-level fs2 lock automatically when `file` is dropped.

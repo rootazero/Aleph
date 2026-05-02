@@ -368,10 +368,10 @@ fn build_http_provider(
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
 
-    // CRITICAL: Acquire exclusive instance lock BEFORE anything else.
-    // Multiple concurrent Aleph processes writing to security.db simultaneously
-    // can cause corruption and permanent vault data loss (all API keys).
-    let _instance_lock = crate::daemon::acquire_instance_lock()?;
+    // Singleton lock is held by `main()` for the entire process lifetime.
+    // See Spec C Task 5 — `alephcore::utils::instance_lock::try_acquire`
+    // is invoked before tracing/config init so vault writes are serialized
+    // across the whole process tree.
 
     // Ensure ~/.aleph/ directory structure exists
     if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {

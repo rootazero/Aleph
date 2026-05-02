@@ -66,6 +66,45 @@ use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginAction
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
 
+    // Spec C Task 5: acquire the cross-process singleton lock as the FIRST
+    // meaningful action when entering the start path. Multiple concurrent
+    // Aleph processes writing to security.db simultaneously can corrupt the
+    // vault. We acquire here (before tracing init, before config load,
+    // before tokio runtime, before fork()) and bind to `_instance_lock` so
+    // it lives for the entire process lifetime — Drop releases the OS-level
+    // fs2 lock when `main` returns.
+    let needs_lock_in_main = matches!(args.command, Some(Command::Start) | None);
+    let _instance_lock = if needs_lock_in_main {
+        use std::path::PathBuf;
+        let data_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".aleph/data");
+        match alephcore::utils::instance_lock::try_acquire(&data_dir)? {
+            alephcore::utils::instance_lock::AcquireOutcome::Acquired(lock) => Some(lock),
+            alephcore::utils::instance_lock::AcquireOutcome::HeldByLive { pid, lock_path } => {
+                eprintln!(
+                    "Another Aleph instance is already running (PID {pid}). \
+                     Stop it first: kill {pid} or `aleph stop`. Lock file: {}",
+                    lock_path.display(),
+                );
+                std::process::exit(64);
+            }
+            alephcore::utils::instance_lock::AcquireOutcome::HeldByOrphaned {
+                pid,
+                lock_path,
+            } => {
+                eprintln!(
+                    "Stale lock file detected (PID {pid} not running). \
+                     You may safely `rm {}` if no aleph process exists.",
+                    lock_path.display(),
+                );
+                std::process::exit(64);
+            }
+        }
+    } else {
+        None
+    };
+
     // Handle synchronous subcommands that don't need tokio
     match args.command {
         Some(Command::Stop) => return daemon::handle_stop(&args.pid_file),
