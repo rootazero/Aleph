@@ -6,4 +6,7 @@ pub mod paths;
 pub mod pii;
 pub mod text_format;
 
+#[cfg(debug_assertions)]
+pub mod spec_c_audit; // Removed in Task 26
+
 pub use one_or_many::OneOrMany;
