@@ -6,6 +6,7 @@ pub mod json_extract;
 pub mod one_or_many;
 pub mod paths;
 pub mod pii;
+pub mod sqlite_open;
 pub mod text_format;
 
 #[cfg(debug_assertions)]
