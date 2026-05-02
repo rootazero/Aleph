@@ -1,6 +1,7 @@
 /// Utility modules shared across the codebase
 pub mod atomic_io;
 pub mod atomic_write;
+pub mod instance_lock;
 pub mod json_extract;
 pub mod one_or_many;
 pub mod paths;
