@@ -29,6 +29,7 @@ pub mod policy_engine;
 pub mod shared_token;
 pub mod store;
 pub mod token;
+pub mod token_readonly;
 
 // Re-export commonly used types
 pub use activity_log::{
@@ -51,3 +52,4 @@ pub use store::{
     DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow,
 };
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};
+pub use token_readonly::read_current_token_readonly;
