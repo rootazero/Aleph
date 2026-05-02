@@ -41,6 +41,7 @@ pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;
 pub mod clarification;
+pub mod cli;
 mod clipboard;
 pub mod command;
 pub mod components;
