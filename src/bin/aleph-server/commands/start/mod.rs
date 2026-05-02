@@ -1646,8 +1646,30 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         println!();
     }
 
+    // Spec C: write IPC endpoint discovery file. Best-effort — failure does
+    // not block startup. Removed after run_until_shutdown returns (success
+    // or error) below.
+    let ipc_data_dir = match alephcore::utils::paths::get_data_dir() {
+        Ok(d) => Some(d),
+        Err(e) => {
+            tracing::warn!(error = %e, "skipping IPC endpoint discovery write — data_dir not resolvable");
+            None
+        }
+    };
+    if let Some(dir) = ipc_data_dir.as_deref() {
+        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(format!("http://{}", addr));
+        if let Err(e) = alephcore::cli::endpoint::write_endpoint(dir, &endpoint) {
+            tracing::warn!(error = %e, "failed to write IPC endpoint discovery file");
+        }
+    }
+
     let shutdown_rx = setup_graceful_shutdown(args);
-    server.run_until_shutdown(shutdown_rx).await?;
+    let run_result = server.run_until_shutdown(shutdown_rx).await;
+    // Spec C: cleanup endpoint discovery file regardless of outcome.
+    if let Some(dir) = ipc_data_dir.as_deref() {
+        alephcore::cli::endpoint::remove_endpoint(dir);
+    }
+    run_result?;
 
     // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS
     if let Some(ref hb_svc) = heartbeat_service {
