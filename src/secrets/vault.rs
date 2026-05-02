@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use super::types::{EncryptedEntry, EntryMetadata, SecretError, VaultData};
+use crate::utils::vault_io::VaultIo;
 
 /// Current vault format version.
 const VAULT_VERSION: u32 = 1;
@@ -29,22 +30,31 @@ impl SecretVault {
     /// Open or create a vault at the given path.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, SecretError> {
         let path = path.into();
+        let io = Self::io_for(&path);
 
-        let data = if path.exists() {
-            debug!(path = %path.display(), "Loading existing vault");
-            let bytes = std::fs::read(&path)?;
-            bincode::deserialize(&bytes).map_err(|e| {
-                SecretError::Serialization(format!("Failed to deserialize vault: {}", e))
-            })?
-        } else {
-            debug!(path = %path.display(), "Creating new vault");
-            VaultData {
-                version: VAULT_VERSION,
-                entries: HashMap::new(),
+        let data = match io.read()? {
+            Some(bytes) => {
+                debug!(path = %path.display(), "Loading existing vault");
+                bincode::deserialize(&bytes).map_err(|e| {
+                    SecretError::Serialization(format!("Failed to deserialize vault: {}", e))
+                })?
+            }
+            None => {
+                debug!(path = %path.display(), "Creating new vault");
+                VaultData {
+                    version: VAULT_VERSION,
+                    entries: HashMap::new(),
+                }
             }
         };
 
         Ok(Self { data, path })
+    }
+
+    /// Build a `VaultIo` keyed on the parent directory of the configured vault path.
+    fn io_for(path: &Path) -> VaultIo {
+        let data_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        VaultIo::new(data_dir)
     }
 
     /// Create an empty vault (for when open() fails).
@@ -58,7 +68,7 @@ impl SecretVault {
         }
     }
 
-    /// Save vault to disk with atomic write.
+    /// Save vault to disk with atomic write + fcntl lock via `VaultIo`.
     fn save(&self) -> Result<(), SecretError> {
         let bytes = bincode::serialize(&self.data)
             .map_err(|e| SecretError::Serialization(format!("Failed to serialize vault: {}", e)))?;
@@ -68,16 +78,10 @@ impl SecretVault {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Atomic write: write to temp file, then rename
-        let tmp_path = self.path.with_extension("vault.tmp");
-        if let Err(e) = std::fs::write(&tmp_path, &bytes) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(e.into());
-        }
-        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(e.into());
-        }
+        // Atomic temp+fsync+rename serialised via fs2 fcntl lock on
+        // `secrets.vault.lock`. Defense-in-depth even if the singleton lock
+        // is bypassed.
+        Self::io_for(&self.path).write(&bytes)?;
 
         // Restrict vault file permissions on Unix (owner-only read/write)
         #[cfg(unix)]
