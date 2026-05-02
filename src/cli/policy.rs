@@ -48,6 +48,74 @@ where
     f()
 }
 
+use std::path::Path;
+
+use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
+
+/// Test-friendly variant of `with_policy` that returns `Err` instead of
+/// calling `std::process::exit` on lock contention. Production callers
+/// should use `with_policy` which surfaces UX-friendly stderr messages.
+pub fn try_with_policy<L, T>(
+    policy: CommandPolicy,
+    data_dir: &Path,
+    local: L,
+    _ipc_body: serde_json::Value,
+) -> anyhow::Result<T>
+where
+    L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    match policy {
+        CommandPolicy::NoLock => {
+            anyhow::bail!("NoLock commands must dispatch through run_no_lock, not with_policy")
+        }
+        CommandPolicy::LockOnly => match instance_lock::try_acquire(data_dir)? {
+            AcquireOutcome::Acquired(lock) => local(&lock),
+            AcquireOutcome::HeldByLive { pid, lock_path }
+            | AcquireOutcome::HeldByOrphaned { pid, lock_path } => {
+                anyhow::bail!(
+                    "server is running (PID {pid}). This command requires \
+                     exclusive access — run `aleph stop` first. Lock: {}",
+                    lock_path.display()
+                )
+            }
+        },
+        CommandPolicy::LockOrIpc { .. } => match instance_lock::try_acquire(data_dir)? {
+            AcquireOutcome::Acquired(lock) => local(&lock),
+            AcquireOutcome::HeldByLive { .. } | AcquireOutcome::HeldByOrphaned { .. } => {
+                // IPC arm filled in by Task 15.
+                anyhow::bail!("LockOrIpc IPC arm not yet wired (Spec C Task 15 pending)")
+            }
+        },
+    }
+}
+
+/// Production dispatch: same as `try_with_policy` but converts lock
+/// contention errors into a clean stderr + `std::process::exit(64)`
+/// instead of returning an `Err` to the caller.
+pub fn with_policy<L, T>(
+    policy: CommandPolicy,
+    data_dir: &Path,
+    local: L,
+    ipc_body: serde_json::Value,
+) -> anyhow::Result<T>
+where
+    L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
+    T: serde::de::DeserializeOwned + serde::Serialize,
+{
+    match try_with_policy(policy, data_dir, local, ipc_body) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            let msg = format!("{e:?}");
+            if msg.contains("server is running") {
+                eprintln!("{msg}");
+                std::process::exit(64);
+            }
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +131,34 @@ mod tests {
         let result: anyhow::Result<i32> = run_no_lock(|| Err(anyhow::anyhow!("boom")));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "boom");
+    }
+
+    #[test]
+    fn with_policy_lock_only_acquires_when_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let result: i32 = with_policy::<_, i32>(
+            CommandPolicy::LockOnly,
+            dir.path(),
+            |_lock| Ok(7),
+            serde_json::Value::Null,
+        ).unwrap();
+        assert_eq!(result, 7);
+    }
+
+    #[test]
+    fn try_with_policy_lock_only_returns_err_when_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
+            crate::utils::instance_lock::AcquireOutcome::Acquired(g) => g,
+            _ => panic!(),
+        };
+        let result: anyhow::Result<i32> = try_with_policy::<_, i32>(
+            CommandPolicy::LockOnly,
+            dir.path(),
+            |_lock| Ok(7),
+            serde_json::Value::Null,
+        );
+        assert!(result.is_err());
+        assert!(format!("{:?}", result.unwrap_err()).contains("server is running"));
     }
 }
