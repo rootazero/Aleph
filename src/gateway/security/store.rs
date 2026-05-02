@@ -562,6 +562,9 @@ impl SecurityStore {
     }
 
     /// Load the persisted plaintext token (if any) from the shared_token table.
+    ///
+    /// NOTE: SQL kept byte-identical with `token_readonly::read_current_token_readonly`.
+    /// If you change this query, update that function (and its tests) too.
     pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let result = conn.query_row(
