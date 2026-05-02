@@ -41,9 +41,11 @@ pub async fn export_legacy_messages(
 
     info!("Starting session migration from {:?} ...", legacy_db);
 
-    let conn = Connection::open(&legacy_db).map_err(|e| crate::error::AlephError::ConfigError {
-        message: format!("Failed to open legacy session DB: {}", e),
-        suggestion: None,
+    let conn = crate::utils::sqlite_open::open_sqlite_safe(&legacy_db).map_err(|e| {
+        crate::error::AlephError::ConfigError {
+            message: format!("Failed to open legacy session DB: {}", e),
+            suggestion: None,
+        }
     })?;
 
     // Defensive: older legacy DBs may be missing columns the SELECT below

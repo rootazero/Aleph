@@ -22,11 +22,8 @@ impl TaskDatabase {
                 .map_err(|e| format!("failed to create store directory: {e}"))?;
         }
 
-        let conn = Connection::open(path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(path)
             .map_err(|e| format!("failed to open database at {}: {e}", path.display()))?;
-
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| format!("failed to set pragmas: {e}"))?;
 
         Ok(Self { conn })
     }

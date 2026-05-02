@@ -239,7 +239,7 @@ async fn initialize_session_store(
 fn build_sqlite_session_service(
     db_path: &std::path::Path,
 ) -> Option<Arc<dyn alephcore::session::service::SessionService>> {
-    let conn = match rusqlite::Connection::open(db_path) {
+    let conn = match alephcore::utils::sqlite_open::open_sqlite_safe(db_path) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(
@@ -1433,7 +1433,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 match data_dir_opt {
                     Some(data_dir) => {
                         let hb_db_path = data_dir.join("heartbeat.db");
-                        match rusqlite::Connection::open(&hb_db_path) {
+                        match alephcore::utils::sqlite_open::open_sqlite_safe(&hb_db_path) {
                             Ok(conn) => {
                                 // Schema should already exist (created by HeartbeatStore::open above),
                                 // but we call init here defensively.

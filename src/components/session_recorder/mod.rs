@@ -52,7 +52,8 @@ impl SessionRecorder {
     ///
     /// Creates the database file if it doesn't exist.
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, RecorderError> {
-        let conn = Connection::open(db_path).map_err(|e| RecorderError::Database(e.to_string()))?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(db_path.as_ref())
+            .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         Self::init_schema(&conn)?;
 

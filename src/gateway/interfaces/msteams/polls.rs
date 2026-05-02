@@ -63,7 +63,7 @@ pub struct PollDatabase {
 impl PollDatabase {
     /// Open a poll database at the given path.
     pub fn open(path: &str) -> Result<Self, ChannelError> {
-        let conn = Connection::open(path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(std::path::Path::new(path))
             .map_err(|e| ChannelError::Internal(format!("Failed to open poll database: {}", e)))?;
 
         conn.execute_batch(

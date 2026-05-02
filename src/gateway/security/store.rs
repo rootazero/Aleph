@@ -20,7 +20,7 @@ pub struct SecurityStore {
 impl SecurityStore {
     /// Open or create a security store at the specified path
     pub fn open(path: impl AsRef<Path>) -> SqliteResult<Self> {
-        let conn = Connection::open(path)?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(path.as_ref())?;
         let store = Self {
             conn: Mutex::new(conn),
         };

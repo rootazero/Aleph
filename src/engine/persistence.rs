@@ -40,7 +40,7 @@ impl Persistence {
             std::fs::create_dir_all(parent).ok();
         }
 
-        let conn = Connection::open(&db_path)?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)?;
 
         // Initialize schema
         Self::init_schema(&conn)?;

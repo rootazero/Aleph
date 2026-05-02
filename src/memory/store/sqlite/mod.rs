@@ -61,16 +61,12 @@ impl SqliteMemoryBackend {
         // Register sqlite-vec before opening any connection
         vec::register_sqlite_vec();
 
-        let conn = Connection::open(&resolved).map_err(|e| {
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&resolved).map_err(|e| {
             AlephError::config(format!(
                 "Failed to open memory database at {}: {e}",
                 resolved.display()
             ))
         })?;
-
-        // WAL mode for better concurrent read performance
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-            .map_err(|e| AlephError::config(format!("Failed to set PRAGMAs: {e}")))?;
 
         // Initialize schemas
         schema::init_schema(&conn)?;

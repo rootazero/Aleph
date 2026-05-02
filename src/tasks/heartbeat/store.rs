@@ -37,12 +37,8 @@ impl HeartbeatStore {
                 .map_err(|e| format!("failed to create store directory: {e}"))?;
         }
 
-        let conn = Connection::open(path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(path)
             .map_err(|e| format!("failed to open heartbeat DB at {}: {e}", path.display()))?;
-
-        // WAL mode for better concurrent read performance
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| format!("failed to set pragmas: {e}"))?;
 
         init_schema(&conn)?;
         history::init_schema(&conn)?;

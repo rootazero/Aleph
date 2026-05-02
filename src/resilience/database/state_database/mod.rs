@@ -98,7 +98,7 @@ impl StateDatabase {
 
         Self::register_sqlite_vec_extension();
 
-        let conn = Connection::open(&db_path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
             .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
 
         // Check if migration is needed (dimension change)
@@ -174,7 +174,7 @@ impl StateDatabase {
 
         Self::register_sqlite_vec_extension();
 
-        let conn = Connection::open(&db_path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&db_path)
             .map_err(|e| AlephError::config(format!("Failed to open database: {}", e)))?;
 
         // Check if dimension changed

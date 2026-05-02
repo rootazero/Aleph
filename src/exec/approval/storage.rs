@@ -8,7 +8,7 @@ pub struct ApprovalAuditStorage {
 
 impl ApprovalAuditStorage {
     pub async fn new(db_path: &Path) -> SqliteResult<Self> {
-        let conn = Connection::open(db_path)?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(db_path)?;
 
         // Create capability_approvals table
         conn.execute(

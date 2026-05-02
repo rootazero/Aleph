@@ -251,7 +251,7 @@ impl SessionManager {
             })?;
         }
 
-        let conn = Connection::open(&config.db_path).map_err(|e| {
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&config.db_path).map_err(|e| {
             SessionManagerError::DatabaseError(format!("Failed to open database: {}", e))
         })?;
 

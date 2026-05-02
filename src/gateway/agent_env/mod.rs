@@ -479,7 +479,7 @@ impl AgentEnvStore {
             })?;
         }
 
-        let conn = Connection::open(&config.db_path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(&config.db_path)
             .map_err(|e| AgentEnvError::Database(format!("Failed to open database: {}", e)))?;
 
         Self::init_schema(&conn)?;

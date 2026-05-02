@@ -87,7 +87,7 @@ pub struct SqlitePairingStore {
 impl SqlitePairingStore {
     /// Create a new SQLite pairing store
     pub fn new(db_path: impl AsRef<Path>) -> Result<Self, PairingError> {
-        let conn = Connection::open(db_path)?;
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(db_path.as_ref())?;
         Self::init_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

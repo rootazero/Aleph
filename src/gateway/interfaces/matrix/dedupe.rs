@@ -12,7 +12,7 @@ pub struct EventDeduper {
 impl EventDeduper {
     /// Open or create the dedupe database at the given path.
     pub fn new(path: &str) -> Result<Self, ChannelError> {
-        let conn = Connection::open(path)
+        let conn = crate::utils::sqlite_open::open_sqlite_safe(std::path::Path::new(path))
             .map_err(|e| ChannelError::Internal(format!("Failed to open dedupe database: {e}")))?;
 
         conn.execute(
