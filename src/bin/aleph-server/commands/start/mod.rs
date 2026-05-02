@@ -1666,6 +1666,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let shutdown_rx = setup_graceful_shutdown(args);
     let run_result = server.run_until_shutdown(shutdown_rx).await;
     // Spec C: cleanup endpoint discovery file regardless of outcome.
+    // NOTE: SIGTERM path (setup_graceful_shutdown) calls std::process::exit
+    // and bypasses this cleanup; stale file is overwritten on next start.
     if let Some(dir) = ipc_data_dir.as_deref() {
         alephcore::cli::endpoint::remove_endpoint(dir);
     }
