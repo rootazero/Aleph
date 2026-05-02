@@ -59,7 +59,7 @@ pub fn try_with_policy<L, T>(
     policy: CommandPolicy,
     data_dir: &Path,
     local: L,
-    _ipc_body: serde_json::Value,
+    ipc_body: serde_json::Value,
 ) -> anyhow::Result<T>
 where
     L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
@@ -80,11 +80,12 @@ where
                 )
             }
         },
-        CommandPolicy::LockOrIpc { .. } => match instance_lock::try_acquire(data_dir)? {
+        CommandPolicy::LockOrIpc { route, method } => match instance_lock::try_acquire(data_dir)? {
             AcquireOutcome::Acquired(lock) => local(&lock),
             AcquireOutcome::HeldByLive { .. } | AcquireOutcome::HeldByOrphaned { .. } => {
-                // IPC arm filled in by Task 15.
-                anyhow::bail!("LockOrIpc IPC arm not yet wired (Spec C Task 15 pending)")
+                crate::cli::ipc_client::forward_to_server::<T>(
+                    data_dir, method, route, ipc_body,
+                )
             }
         },
     }
