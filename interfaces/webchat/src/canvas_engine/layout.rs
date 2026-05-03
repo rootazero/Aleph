@@ -38,8 +38,6 @@ pub fn assign_sectors(relations: &[String]) -> HashMap<String, f32> {
     out
 }
 
-pub const R_1: f32 = 180.0;
-pub const R_2: f32 = 320.0;
 pub const Z_ACTIVE: f32 = 0.0;
 pub const Z_ONE_HOP: f32 = 60.0;
 pub const Z_TWO_HOP: f32 = 140.0;

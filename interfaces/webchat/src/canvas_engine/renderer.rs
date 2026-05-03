@@ -167,14 +167,6 @@ fn draw_orphan_ring(
         return;
     }
 
-    // Subtle hint ring so users see there's "more out there" even before pointing
-    // at a dot. Drawn first so dots sit on top of it.
-    ctx.set_stroke_style_str("rgba(167,139,250,0.06)");
-    ctx.set_line_width(1.0);
-    ctx.begin_path();
-    let _ = ctx.arc(0.0, 0.0, ORPHAN_RADIUS as f64, 0.0, TAU);
-    ctx.stroke();
-
     for n in orphans {
         let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
         let drift = drift_offset(
