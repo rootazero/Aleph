@@ -132,10 +132,11 @@ pub fn draw_neighborhood(
     }
 
     // Draw the dragged node last (on top of clusters / other 1-hop nodes)
-    // with a stretched edge from the center and a glow ring when promote-imminent.
+    // with a glow ring when promote-imminent. The centre→dragged edge is drawn
+    // by the standard edge pass via drag-aware `endpoints_world_pos`.
     if let Some(overlay) = node_drag {
         if let Some(n) = nbhd.one_hop.iter().find(|x| x.id == overlay.node_id) {
-            draw_dragged_node(ctx, n, &nbhd.center, overlay);
+            draw_dragged_node(ctx, n, overlay);
         }
     }
 
@@ -608,23 +609,17 @@ fn endpoints_world_pos(
 fn draw_dragged_node(
     ctx: &CanvasRenderingContext2d,
     n: &CanvasNode,
-    center: &CanvasNode,
     overlay: &DragOverlay,
 ) {
     use std::f64::consts::TAU;
 
     // overlay.position is in world space (Task 5 contract). The canvas context
     // already has world transform applied by draw_neighborhood, so draw directly.
+    // The centre→dragged-node edge is rendered by the standard edge pass
+    // (`endpoints_world_pos` is drag-aware), so we only draw the node body and
+    // promote-glow here. Drawing the edge a second time produces visual doubling.
     let cx = overlay.position.x;
     let cy = overlay.position.y;
-
-    // Stretched edge: center → dragged node
-    ctx.set_stroke_style_str("rgba(167,139,250,0.6)");
-    ctx.set_line_width(1.5);
-    ctx.begin_path();
-    ctx.move_to(center.position.x, center.position.y);
-    ctx.line_to(cx, cy);
-    let _ = ctx.stroke();
 
     // Node body — solid violet, slight lift over base color
     let r = n.radius;
