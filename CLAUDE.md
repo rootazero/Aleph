@@ -201,26 +201,25 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 `EnterWorktree` 会在每次 Bash 命令后强制重置 CWD 到 worktree 目录，即使 `cd` 切回主仓库也无效。因此在同一会话内执行 `git worktree remove` 会导致 Shell 永久损坏。**正确做法**：在 `EnterWorktree` 会话内只合并不删除，用新会话清理 worktree；或不用 `EnterWorktree`，手动用绝对路径管理。
 
-### 进程管理 (Process Management) ⚠️ CRITICAL
+### 进程管理 (Process Management)
 
-**重启 Aleph 前必须杀掉所有旧进程**。多个 aleph 进程同时运行会竞争写入 `.shared_token` 文件，导致 HMAC 验证失败和 **vault 数据永久丢失**（所有 API key、OAuth token、embedding key 等）。
+Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构化保护）：
 
-```bash
-# 重启前：杀掉所有 aleph 进程（debug + release）
-pkill -f "target/release/aleph-server" 2>/dev/null
-pkill -f "target/debug/aleph-server" 2>/dev/null
-sleep 2
-# 确认全部清除
-ps aux | grep "[a]leph-server" | grep -v zsh | grep -v cp | grep -v tail
+- `aleph-server start` 在 `main()` 进入任何 DB/vault 操作之前先获取
+  `~/.aleph/data/aleph.lock`。第二个 `start` 会立即以 exit 64 退出，
+  并在 stderr 打印持锁进程的 PID。
+- 所有 CLI 写子命令（`secret`、`devices`、`pairing` 等）通过
+  `with_policy` 分发：服务在跑时，写操作通过 `/v1/admin/*` IPC 转发；
+  服务不在时，CLI 自己拿锁本地写入。两条路径都不会与服务竞争。
+- OS 在进程退出（正常、panic、SIGKILL）时自动释放 `flock`。`kill -9 <pid>`
+  之后**无需 sleep**，可立即 `aleph-server start`。
+- 反向回归脚本 `scripts/spec_c_regression.sh` 锁住四条不变量：
+  SQLite 走 `open_sqlite_safe`、vault/acp 走 `vault_io`/`atomic_io`、
+  每个 CLI 子命令显式声明 policy、`acquire_instance_lock` 不再有遗留 caller。
 
-# 然后再启动
-target/release/aleph-server start
-```
-
-**绝对禁止**：
-- 在有旧 aleph 进程运行时启动新进程
-- 同时运行多个使用同一 `~/.aleph/data/` 的 aleph 实例
-- 用 `kill -9` 强制杀进程后不等待就立即重启（等 2 秒让文件锁释放）
+如果看到 `Stale lock file detected (PID X not running)`，可以安全
+`rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
+该诊断仅作防御性提示）。
 
 ---
 
