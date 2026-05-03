@@ -174,9 +174,9 @@ pub struct Neighborhood {
     pub center: CanvasNode,
     pub one_hop: Vec<CanvasNode>,
     pub two_hop: Vec<CanvasNode>,
-    /// Ghost-dot ring: nodes outside the current connected component, drawn at
-    /// `R = ORPHAN_RADIUS` around the canvas with low opacity. Click to re-center.
-    /// Tagged with `hop = ORPHAN_HOP_SENTINEL`.
+    /// Nodes outside the current connected component, drawn in dim type-grouped
+    /// clusters around the canvas. Click to re-center. Tagged with
+    /// `hop = ORPHAN_HOP_SENTINEL`.
     pub orphans: Vec<CanvasNode>,
     pub clusters: Vec<ClusterNode>,
     pub edges: Vec<CanvasEdge>,
@@ -187,9 +187,6 @@ pub struct Neighborhood {
 /// Sentinel hop value identifying ghost-dot orphans (nodes outside the current
 /// connected component). The radial layers use 0/1/2; 3+ is reserved for ghosts.
 pub const ORPHAN_HOP_SENTINEL: u8 = 3;
-
-/// World-space radius of the ghost-dot ring.
-pub const ORPHAN_RADIUS: f32 = 550.0;
 
 /// Z-depth assigned to orphans — beyond two_hop's 140 so they get maximum dim.
 pub const ORPHAN_Z: f32 = 200.0;

@@ -178,15 +178,13 @@ pub fn to_neighborhood(
 }
 
 /// Populate `nbhd.orphans` with all nodes from `all_dtos` that are not already
-/// present in the neighborhood (center, one_hop, two_hop, or cluster members).
+/// present in the neighborhood (centre, one_hop, two_hop, or cluster members).
 ///
-/// Orphans are bucketed by `category` ("kind") and each kind gets a sector around
-/// the adaptive `r_orphan(...)` ring. Within a sector, members are placed via a
-/// golden-angle spiral (≈137.5°) with a √(j+1)·16 radius so the centre of the
-/// disc is denser than the rim. Orphans are tagged with `hop = ORPHAN_HOP_SENTINEL`
-/// and `z = ORPHAN_Z`, but **not** pinned — they participate in idle drift along
-/// with one-hop / two-hop nodes (T5/T6). Their target positions are written into
-/// `target_positions` so the drift code has anchors to oscillate around.
+/// Orphans are grouped by `category` (kind), each group placed at a stable
+/// angular sector around an orphan ring radius (see `layout::r_orphan`), and
+/// laid out within their group via golden-angle spiral. They are tagged with
+/// `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`, and they participate in
+/// idle drift (no `pinned`).
 pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
     use std::collections::{BTreeMap, HashSet};
 

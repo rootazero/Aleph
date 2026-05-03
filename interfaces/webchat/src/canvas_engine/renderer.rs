@@ -105,8 +105,8 @@ pub fn draw_neighborhood(
     let _ = ctx.scale(viewport.scale, viewport.scale);
 
     // 2. Layer 0: Orphans (deepest, behind everything else).
-    //    Ghost-dot ring around R=ORPHAN_RADIUS for nodes outside the current
-    //    connected component. Click to re-center.
+    //    Dim clustered dots for nodes outside the current connected component.
+    //    Click to re-center.
     draw_orphan_ring(ctx, &nbhd.orphans, drag, selected, hovered);
 
     // 2. Layer A: 2-hop (back)
@@ -152,7 +152,7 @@ fn paint_background(ctx: &CanvasRenderingContext2d, viewport: &Viewport) {
     ctx.fill_rect(0.0, 0.0, viewport.width, viewport.height);
 }
 
-/// Draw the ghost-dot ring at `R = ORPHAN_RADIUS`. Each orphan is a small dim
+/// Draw orphan dots in their clustered positions. Each orphan is a small dim
 /// dot — no glow, no shadow, no label unless hovered/selected. Hovering brightens
 /// and reveals the label so the user can tell what they're about to recenter on.
 fn draw_orphan_ring(
