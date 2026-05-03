@@ -6,6 +6,7 @@
 //! `ExecutionAdapter` trait implementation, and background memory persistence.
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};

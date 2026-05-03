@@ -297,7 +297,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let run_id = request.run_id.clone();
 
         // Create cancellation channel
-        let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
 
         // Create CancellationToken for fine-grained agent loop cancellation.
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.

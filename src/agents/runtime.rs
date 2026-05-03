@@ -208,12 +208,10 @@ impl AgentRuntime {
         result
     }
 
-    #[cfg(feature = "phase7_traffic_flip")]
     async fn execute_via_harness(
         &self,
         config: &AgentRuntimeConfig,
     ) -> Result<LoopRunResult, String> {
-        #[cfg(feature = "phase7_traffic_flip")]
         use crate::agents::subagent_spawner::{spawn, SpawnRequest, SpawnerBase};
         // `self.child_chain` is the already-descended chain produced by the
         // caller (SubagentTool::execute calls `self.chain.child()`). The
