@@ -1,9 +1,16 @@
 //! Plugin management command handlers
+//!
+//! Spec C policy: **NoLock**. All plugin operations target
+//! `~/.aleph/plugins/` (extension dir) or read `~/.aleph/config.toml`
+//! for marketplace metadata; none of them write to `~/.aleph/data/`.
+//! Each handler enters via a marker `run_no_lock` call to satisfy
+//! the reverse-regression check (Task 25).
 
 use crate::cli::MarketplaceAction;
 
 /// Handle plugins list command
 pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
     use alephcore::extension::ExtensionManager;
 
     let manager = ExtensionManager::with_defaults().await?;

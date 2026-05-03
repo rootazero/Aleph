@@ -1,3 +1,7 @@
+//! Spec C policy: covered by parent `start` command's main-level
+//! lock (`with_policy_owned` semantically; acquired in `main()`
+//! before `fork()`).
+//!
 //! Subsystem initializers extracted from `start/mod.rs`.
 //!
 //! Each function handles one cohesive initialization concern:

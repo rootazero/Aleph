@@ -1,3 +1,7 @@
+//! Spec C policy: covered by parent `start` command's main-level
+//! lock (`with_policy_owned` semantically; acquired in `main()`
+//! before `fork()`).
+//!
 //! Agent handler registration and provider initialization.
 //!
 //! Extracted from `start/mod.rs` to keep the orchestrator under 500 lines.

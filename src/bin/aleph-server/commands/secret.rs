@@ -2,6 +2,23 @@
 //!
 //! All secret operations go through SharedTokenManager, which uses the
 //! auth token as master key for AES-256-GCM encryption.
+//!
+//! Spec C policy:
+//! - `secret init` / `secret list` / `secret set`: **LockOrIpc** — when
+//!   the server holds the singleton lock, forward to
+//!   `/v1/admin/secrets` (handlers shipped in Task 16). When no server
+//!   is running, take the lock locally and operate directly on the
+//!   vault.
+//! - `secret delete` / `secret verify`: **LockOnly** — these target a
+//!   key-by-name path (e.g. `/v1/admin/secrets/{key}`). The current
+//!   `CommandPolicy::LockOrIpc { route: &'static str }` does not
+//!   support dynamic path segments, so we refuse cleanly when the
+//!   server is up and ask the operator to stop the server first. A
+//!   future spec can promote these to LockOrIpc once the policy
+//!   supports owned route strings.
+//! - `secret providers`: **NoLock** — only inspects config and
+//!   external provider health (1Password etc.); never touches the
+//!   vault.
 
 use std::error::Error;
 use std::io::Write;
@@ -80,84 +97,55 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
     Ok(value)
 }
 
-fn handle_secret_init() -> Result<(), Box<dyn Error>> {
+/// Local fast-path: list secrets while holding the singleton lock.
+fn list_locked() -> Result<Vec<alephcore::gateway::admin_api::secrets::SecretSummary>, Box<dyn Error>>
+{
+    use alephcore::gateway::admin_api::secrets::SecretSummary;
     let manager = open_token_manager()?;
-    let count = manager
-        .list_secret_names()
-        .map(|names| names.len())
-        .unwrap_or(0);
-    println!("Secret vault ready ({} entries)", count);
-    Ok(())
-}
-
-fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn Error>> {
-    let name = validate_secret_name(&name)?;
-    let value = resolve_secret_value(value)?;
-
-    let manager = open_token_manager()?;
-    manager
-        .store_secret(&name, &value)
-        .map_err(|e| format!("Failed to store secret: {}", e))?;
-
-    println!("Stored secret '{}'", name);
-    Ok(())
-}
-
-fn handle_secret_list() -> Result<(), Box<dyn Error>> {
-    let manager = open_token_manager()?;
-    let mut names = manager
+    let names = manager
         .list_secret_names()
         .map_err(|e| format!("Failed to list secrets: {}", e))?;
-    names.sort();
-
-    if names.is_empty() {
-        println!("No secrets found");
-        return Ok(());
-    }
-
-    println!("{:<40}", "NAME");
-    println!("{}", "-".repeat(40));
-    for name in names {
-        println!("{:<40}", name);
-    }
-    Ok(())
+    Ok(names.into_iter().map(|key| SecretSummary { key }).collect())
 }
 
-fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
-    let name = validate_secret_name(&name)?;
+/// Local fast-path: store a secret while holding the singleton lock.
+fn set_locked(
+    name: &str,
+    value: &str,
+) -> Result<alephcore::gateway::admin_api::secrets::SecretSummary, Box<dyn Error>> {
+    use alephcore::gateway::admin_api::secrets::SecretSummary;
     let manager = open_token_manager()?;
+    manager
+        .store_secret(name, value)
+        .map_err(|e| format!("Failed to store secret: {}", e))?;
+    Ok(SecretSummary {
+        key: name.to_string(),
+    })
+}
 
+/// Local: delete a secret while holding the singleton lock.
+fn delete_locked(name: &str) -> Result<(), Box<dyn Error>> {
+    let manager = open_token_manager()?;
     let deleted = manager
-        .delete_secret(&name)
+        .delete_secret(name)
         .map_err(|e| format!("Failed to delete secret: {}", e))?;
-    if deleted {
-        println!("Deleted secret '{}'", name);
-    } else {
+    if !deleted {
         return Err(format!("Secret '{}' not found", name).into());
     }
     Ok(())
 }
 
-fn handle_secret_verify(name: String) -> Result<(), Box<dyn Error>> {
-    let name = validate_secret_name(&name)?;
+/// Local: verify a secret while holding the singleton lock. Returns
+/// the byte length of the redacted value on success.
+fn verify_locked(name: &str) -> Result<usize, Box<dyn Error>> {
     let manager = open_token_manager()?;
-
-    match manager.get_secret(&name) {
-        Ok(Some(secret)) => {
-            println!(
-                "Secret '{}' is available ({} bytes, value redacted)",
-                name,
-                secret.expose().len()
-            );
-        }
-        Ok(None) => {
-            return Err(format!("Secret '{}' not found", name).into());
-        }
-        Err(e) => {
-            return Err(format!("Failed to verify secret: {}", e).into());
-        }
+    match manager
+        .get_secret(name)
+        .map_err(|e| format!("Failed to verify secret: {}", e))?
+    {
+        Some(secret) => Ok(secret.expose().len()),
+        None => Err(format!("Secret '{}' not found", name).into()),
     }
-    Ok(())
 }
 
 fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
@@ -212,15 +200,113 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Handle secret subcommands.
+/// Handle secret subcommands. Each action declares its Spec C policy
+/// and dispatches through `with_policy` (LockOrIpc / LockOnly) or
+/// `run_no_lock` (Providers) so the server-vs-CLI race never reaches
+/// VaultIo's exclusive fcntl lock.
 pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>> {
+    use alephcore::cli::policy::{run_no_lock, with_policy, CommandPolicy, HttpMethod};
+    use alephcore::gateway::admin_api::secrets::SecretSummary;
+
+    let data_dir = paths::get_data_dir().map_err(|e| format!("data dir: {}", e))?;
+
     match action {
-        SecretAction::Init => handle_secret_init(),
-        SecretAction::Set { name, value } => handle_secret_set(name, value),
-        SecretAction::List => handle_secret_list(),
-        SecretAction::Delete { name } => handle_secret_delete(name),
-        SecretAction::Verify { name } => handle_secret_verify(name),
-        SecretAction::Providers => handle_secret_providers(),
+        SecretAction::Init => {
+            let summaries: Vec<SecretSummary> = with_policy(
+                CommandPolicy::LockOrIpc {
+                    route: "/v1/admin/secrets",
+                    method: HttpMethod::Get,
+                },
+                &data_dir,
+                |_lock| list_locked().map_err(|e| anyhow::anyhow!("{}", e)),
+                serde_json::Value::Null,
+            )
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            println!("Secret vault ready ({} entries)", summaries.len());
+            Ok(())
+        }
+        SecretAction::Set { name, value } => {
+            let name = validate_secret_name(&name)?;
+            let value = resolve_secret_value(value)?;
+            let body = serde_json::json!({ "key": &name, "value": &value });
+            let name_local = name.clone();
+            let value_local = value.clone();
+            let summary: SecretSummary = with_policy(
+                CommandPolicy::LockOrIpc {
+                    route: "/v1/admin/secrets",
+                    method: HttpMethod::Post,
+                },
+                &data_dir,
+                move |_lock| {
+                    set_locked(&name_local, &value_local).map_err(|e| anyhow::anyhow!("{}", e))
+                },
+                body,
+            )
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            println!("Stored secret '{}'", summary.key);
+            Ok(())
+        }
+        SecretAction::List => {
+            let summaries: Vec<SecretSummary> = with_policy(
+                CommandPolicy::LockOrIpc {
+                    route: "/v1/admin/secrets",
+                    method: HttpMethod::Get,
+                },
+                &data_dir,
+                |_lock| list_locked().map_err(|e| anyhow::anyhow!("{}", e)),
+                serde_json::Value::Null,
+            )
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+
+            if summaries.is_empty() {
+                println!("No secrets found");
+                return Ok(());
+            }
+
+            let mut names: Vec<String> = summaries.into_iter().map(|s| s.key).collect();
+            names.sort();
+            println!("{:<40}", "NAME");
+            println!("{}", "-".repeat(40));
+            for name in names {
+                println!("{:<40}", name);
+            }
+            Ok(())
+        }
+        SecretAction::Delete { name } => {
+            let name = validate_secret_name(&name)?;
+            let name_local = name.clone();
+            with_policy::<_, ()>(
+                CommandPolicy::LockOnly,
+                &data_dir,
+                move |_lock| delete_locked(&name_local).map_err(|e| anyhow::anyhow!("{}", e)),
+                serde_json::Value::Null,
+            )
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            println!("Deleted secret '{}'", name);
+            Ok(())
+        }
+        SecretAction::Verify { name } => {
+            let name = validate_secret_name(&name)?;
+            let name_local = name.clone();
+            let len: usize = with_policy(
+                CommandPolicy::LockOnly,
+                &data_dir,
+                move |_lock| verify_locked(&name_local).map_err(|e| anyhow::anyhow!("{}", e)),
+                serde_json::Value::Null,
+            )
+            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            println!(
+                "Secret '{}' is available ({} bytes, value redacted)",
+                name, len
+            );
+            Ok(())
+        }
+        SecretAction::Providers => {
+            // NoLock: doesn't touch the vault.
+            run_no_lock(|| Ok::<(), anyhow::Error>(()))
+                .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            handle_secret_providers()
+        }
     }
 }
 

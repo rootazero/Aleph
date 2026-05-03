@@ -1,7 +1,19 @@
 //! Device management command handlers
+//!
+//! Spec C policy:
+//! - `devices list`: **NoLock** — read-only against `devices.db`. WAL
+//!   mode (set by `open_sqlite_safe`, Task 7) makes concurrent reads
+//!   alongside the running server safe.
+//! - `devices revoke`: **LockOnly** — writes `devices.db` under
+//!   `~/.aleph/data/`. No matching `/v1/admin/devices/*` IPC route was
+//!   built (deferred to a future spec), so the CLI refuses cleanly
+//!   when the server is running and tells the operator to stop the
+//!   server first.
 
 /// Handle devices list command
 pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
+
     use alephcore::gateway::device_store::DeviceStore;
 
     let store_path = alephcore::utils::paths::get_devices_db_path()
@@ -37,22 +49,39 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle devices revoke command
 pub fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::cli::policy::{with_policy, CommandPolicy};
+
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+
+    with_policy::<_, ()>(
+        CommandPolicy::LockOnly,
+        &data_dir,
+        |_lock| revoke_locked(device_id),
+        serde_json::Value::Null,
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+}
+
+fn revoke_locked(device_id: &str) -> anyhow::Result<()> {
     use alephcore::gateway::device_store::DeviceStore;
 
     let store_path = alephcore::utils::paths::get_devices_db_path()
-        .map_err(|e| format!("Failed to get device store path: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to get device store path: {}", e))?;
     if !store_path.exists() {
-        eprintln!("Error: No device store found");
-        std::process::exit(1);
+        anyhow::bail!("No device store found");
     }
 
-    let device_store = DeviceStore::open(&store_path)?;
+    let device_store = DeviceStore::open(&store_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open device store: {}", e))?;
 
-    if device_store.revoke_device(device_id)? {
+    if device_store
+        .revoke_device(device_id)
+        .map_err(|e| anyhow::anyhow!("Failed to revoke device: {}", e))?
+    {
         println!("Device revoked: {}", device_id);
+        Ok(())
     } else {
-        eprintln!("Error: Device not found: {}", device_id);
-        std::process::exit(1);
+        anyhow::bail!("Device not found: {}", device_id);
     }
-    Ok(())
 }

@@ -1,3 +1,7 @@
+//! Spec C policy: covered by parent `start` command's main-level
+//! lock (`with_policy_owned` is the conceptual helper; the actual
+//! acquisition happens in `main()` before `fork()` for fork safety).
+//!
 //! Phase 5 Task 9: Orchestrator assembly at boot.
 //!
 //! Builds the `Arc<Orchestrator>` once after all five input services are

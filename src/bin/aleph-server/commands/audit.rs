@@ -4,6 +4,11 @@
 //! - `audit tools` - List all tools with risk scores
 //! - `audit tool <name>` - Show detailed tool info and execution history
 //! - `audit escalations` - Show all escalation events
+//!
+//! Spec C policy: **NoLock**. Audit reads from
+//! `~/.aleph/approval_audit.db`, which lives OUTSIDE `~/.aleph/data/`,
+//! so no singleton-lock dance is needed. Each handler enters via a
+//! marker `run_no_lock` call to satisfy the reverse-regression check.
 
 use alephcore::exec::approval::audit::{AuditQuery, ToolExecutionRecord};
 use alephcore::exec::approval::storage::ApprovalAuditStorage;
@@ -70,6 +75,7 @@ fn format_timestamp(timestamp: i64) -> String {
 
 /// Handle audit tools command - list all tools with risk scores
 pub async fn handle_audit_tools() -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
     let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {
@@ -126,6 +132,7 @@ pub async fn handle_audit_tool(
     tool_name: &str,
     limit: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
     let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {
@@ -193,6 +200,7 @@ pub async fn handle_audit_tool(
 
 /// Handle audit escalations command - show all escalation events
 pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
     let db_path = get_audit_db_path()?;
 
     if !db_path.exists() {

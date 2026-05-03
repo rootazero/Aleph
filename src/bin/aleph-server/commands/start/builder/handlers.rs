@@ -1,3 +1,7 @@
+//! Spec C policy: covered by parent `start` command's main-level
+//! lock (`with_policy_owned` semantically; acquired in `main()`
+//! before `fork()`).
+//!
 //! Handler registration helpers for the gateway server.
 //!
 //! All `register_*` and `start_*` / `setup_*` functions are collected here so

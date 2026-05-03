@@ -1,4 +1,11 @@
 //! `aleph-server bootstrap-runtime` — install managed runtimes via ensure_capability.
+//!
+//! Spec C policy: **NoLock**. Bootstrap-runtime is invoked as a child
+//! process by `start` while the parent already holds the singleton
+//! lock; touching `~/.aleph/data/` is the parent's responsibility, so
+//! this child does not contend. The marker `run_no_lock` call at
+//! `run` entry preserves classification for the reverse-regression
+//! check (Task 25).
 
 use std::io::Write;
 use std::sync::Arc;
@@ -18,6 +25,10 @@ const DETECT_ONLY: &[&str] = &["git", "cargo"];
 
 /// Run the `bootstrap-runtime` subcommand. Returns a POSIX-style exit code.
 pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
+    // Spec C Task 19: NoLock policy marker — parent owns the lock.
+    if alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(())).is_err() {
+        return 2;
+    }
     let runtimes_dir = match runtimes::get_runtimes_dir() {
         Ok(d) => d,
         Err(e) => {

@@ -1,9 +1,20 @@
 //! Pairing command handlers
+//!
+//! Spec C policy:
+//! - `pairing list`: **NoLock** — read-only against `security.db`,
+//!   WAL-safe alongside the running server.
+//! - `pairing approve` / `pairing reject`: **LockOnly** — both write
+//!   `security.db` (and `devices.db` on approve). No
+//!   `/v1/admin/pairing/*` IPC route was built, so the CLI refuses
+//!   cleanly when the server holds the lock and tells the operator
+//!   to stop the server first.
 
 use std::path::PathBuf;
 
 /// Handle pairing list command
 pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
+
     use alephcore::gateway::security::{PairingManager, PairingRequest, SecurityStore};
     use std::sync::Arc;
 
@@ -55,6 +66,22 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle pairing approve command
 pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::cli::policy::{with_policy, CommandPolicy};
+
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+    let code = code.to_string();
+
+    with_policy::<_, ()>(
+        CommandPolicy::LockOnly,
+        &data_dir,
+        move |_lock| approve_locked(&code).map_err(|e| anyhow::anyhow!("{}", e)),
+        serde_json::Value::Null,
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+}
+
+fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::device_store::{ApprovedDevice, DeviceStore};
     use alephcore::gateway::security::{
         DeviceRole, DeviceType, PairingManager, PairingRequest, SecurityStore, TokenManager,
@@ -140,6 +167,22 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
 
 /// Handle pairing reject command
 pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::cli::policy::{with_policy, CommandPolicy};
+
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+    let code = code.to_string();
+
+    with_policy::<_, ()>(
+        CommandPolicy::LockOnly,
+        &data_dir,
+        move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{}", e)),
+        serde_json::Value::Null,
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+}
+
+fn reject_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::security::{PairingManager, SecurityStore};
     use std::sync::Arc;
 
