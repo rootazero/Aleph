@@ -390,8 +390,14 @@ fn draw_orphan_ring(
 
     for n in orphans {
         let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
-        let cx = n.position.x + off.0 as f64;
-        let cy = n.position.y + off.1 as f64;
+        let drift = drift_offset(
+            now_ms_in_seconds() * 1000.0,
+            &n.id,
+            DRIFT_AMPLITUDE_PX,
+            DRIFT_PERIOD_MS,
+        );
+        let cx = n.position.x + off.0 as f64 + drift.x;
+        let cy = n.position.y + off.1 as f64 + drift.y;
         let r = n.radius;
 
         let is_selected = selected.map(|s| s == n.id).unwrap_or(false);
@@ -439,8 +445,14 @@ fn draw_node(
 
     let attrs = depth_attrs(n.z);
     let off = crate::canvas_engine::viewport::parallax_offset(n.z, drag.0, drag.1);
-    let cx = n.position.x as f32 + off.0;
-    let cy = n.position.y as f32 + off.1;
+    let drift = drift_offset(
+        now_ms_in_seconds() * 1000.0,
+        &n.id,
+        DRIFT_AMPLITUDE_PX,
+        DRIFT_PERIOD_MS,
+    );
+    let cx = n.position.x as f32 + off.0 + drift.x as f32;
+    let cy = n.position.y as f32 + off.1 + drift.y as f32;
     let r = (n.radius as f32 * attrs.scale) as f64;
     let cx64 = cx as f64;
     let cy64 = cy as f64;
