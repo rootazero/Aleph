@@ -125,8 +125,19 @@ pub fn to_neighborhood(
             (kept, folded)
         };
 
-    let target_positions =
-        compute_target_positions(&center, &filtered_one_hop, &two_hop, &clusters, &edges);
+    // adapter.rs has no viewport at this layer; pass nominal default (centre of
+    // the clamp range). The *initial* target positions only need plausible
+    // relative geometry; real fit happens via Viewport::fit_to_content invoked
+    // from canvas-level code after seed_graph_state (T9).
+    let viewport_w_px = 800.0_f32;
+    let target_positions = compute_target_positions(
+        &center,
+        &filtered_one_hop,
+        &two_hop,
+        &clusters,
+        &edges,
+        viewport_w_px,
+    );
 
     // Seed each node's position from its target so the renderer has something
     // to draw immediately. Without a running force simulation the positions

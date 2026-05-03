@@ -76,6 +76,7 @@ pub fn compute_target_positions(
     two_hop: &[CanvasNode],
     clusters: &[ClusterNode],
     edges: &[CanvasEdge],
+    viewport_w_px: f32,
 ) -> HashMap<String, Vec3> {
     let mut out = HashMap::new();
     out.insert(active.id.clone(), Vec3::new(0.0, 0.0, Z_ACTIVE));
@@ -96,9 +97,11 @@ pub fn compute_target_positions(
             .push((c.id.clone(), c.aggregated_weight));
     }
 
-    // Cluster folding handles dense sectors via fold_threshold; keep R_1 fixed
-    // so the 1-hop ring never sprawls past the viewport when nodes get many.
-    let r1 = R_1;
+    // Cluster folding handles dense sectors via fold_threshold; r1/r2 now grow
+    // adaptively with neighborhood size and viewport width via r_one_hop/r_two_hop.
+    let total_visible = one_hop.len() + clusters.len() + two_hop.len();
+    let r1 = r_one_hop(total_visible, viewport_w_px);
+    let r2 = r_two_hop(total_visible, viewport_w_px);
 
     // Assign sector center angles (evenly spaced, hash-ordered)
     let relations: Vec<String> = by_relation.keys().cloned().collect();
@@ -138,13 +141,13 @@ pub fn compute_target_positions(
         let parent_pos = parent_id.as_ref().and_then(|p| out.get(p)).copied();
         let (px, py) = match parent_pos {
             Some(p) => (p.x, p.y),
-            None => (R_1, 0.0),
+            None => (r1, 0.0),
         };
         let parent_angle = py.atan2(px);
         let jitter = (fnv1a_32(n.id.as_bytes()) as f32 / u32::MAX as f32 - 0.5) * 0.6;
         let theta = parent_angle + jitter;
-        let x = R_2 * theta.cos();
-        let y = R_2 * theta.sin();
+        let x = r2 * theta.cos();
+        let y = r2 * theta.sin();
         out.insert(n.id.clone(), Vec3::new(x, y, Z_TWO_HOP));
     }
 
@@ -339,7 +342,7 @@ mod radial_tests {
         let active = n("a", "concept", 0);
         let one_hop = vec![n("b", "concept", 1)];
         let edges = vec![e(0, 1, "uses")];
-        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
         let pos_a = targets.get("a").unwrap();
         assert_eq!(pos_a.x, 0.0);
         assert_eq!(pos_a.y, 0.0);
@@ -350,12 +353,14 @@ mod radial_tests {
         let active = n("a", "concept", 0);
         let one_hop = vec![n("b", "concept", 1)];
         let edges = vec![e(0, 1, "uses")];
-        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
         let pos_b = targets.get("b").unwrap();
         let r = (pos_b.x.powi(2) + pos_b.y.powi(2)).sqrt();
+        // total_visible = 1 (one_hop) + 0 (clusters) + 0 (two_hop) = 1.
+        let expected = r_one_hop(1, 800.0);
         assert!(
-            (r - 180.0).abs() < 1.0,
-            "1-hop should be at radius 180, got {r}"
+            (r - expected).abs() < 1.0,
+            "1-hop should be at radius {expected}, got {r}"
         );
     }
 
@@ -365,12 +370,15 @@ mod radial_tests {
         let one_hop = vec![n("b", "concept", 1)];
         let two_hop = vec![n("c", "concept", 2)];
         let edges = vec![e(0, 1, "uses"), e(1, 2, "part_of")];
-        let targets = compute_target_positions(&active, &one_hop, &two_hop, &[], &edges);
+        let targets =
+            compute_target_positions(&active, &one_hop, &two_hop, &[], &edges, 800.0);
         let pos_c = targets.get("c").unwrap();
         let r = (pos_c.x.powi(2) + pos_c.y.powi(2)).sqrt();
+        // total_visible = 1 (one_hop) + 0 (clusters) + 1 (two_hop) = 2.
+        let expected = r_two_hop(2, 800.0);
         assert!(
-            (r - 320.0).abs() < 5.0,
-            "2-hop should be at radius 320, got {r}"
+            (r - expected).abs() < 5.0,
+            "2-hop should be at radius {expected}, got {r}"
         );
     }
 
@@ -445,7 +453,7 @@ mod radial_tests {
         let active = n("a", "concept", 0);
         let one_hop = vec![n("b", "concept", 1), n("c", "concept", 1)];
         let edges = vec![e(0, 1, "uses"), e(0, 2, "part_of")];
-        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
         let pos_b = targets.get("b").unwrap();
         let pos_c = targets.get("c").unwrap();
         let angle_b = pos_b.y.atan2(pos_b.x);
@@ -464,7 +472,7 @@ mod radial_tests {
         let active = n("a", "concept", 0);
         let one_hop: Vec<_> = (0..5).map(|i| n(&format!("h{i}"), "concept", 1)).collect();
         let edges: Vec<_> = (0..5).map(|i| e(0, i + 1, "uses")).collect();
-        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges);
+        let targets = compute_target_positions(&active, &one_hop, &[], &[], &edges, 800.0);
 
         let mut layout = RadialForceLayout::new(targets, ForceConfig::default());
         for _ in 0..60 {
