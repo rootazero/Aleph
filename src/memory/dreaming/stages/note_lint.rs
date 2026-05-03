@@ -286,11 +286,20 @@ impl DreamStage for NoteLintStage {
         // raw bare-filename targets when the destination didn't yet exist.
         // After this stage's other rules settle, retry resolution so cross-form
         // graph queries become consistent (Task A2.3).
-        let _ = ctx
-            .indexer
-            .store()
-            .relink_unresolved(&ctx.agent_id)
-            .await?;
+        //
+        // Best-effort: every prior on-disk/DB mutation in this stage is already
+        // committed. A relink failure must not roll back the rest of the stage,
+        // so we log and continue — the next dream cycle will retry.
+        match ctx.indexer.store().relink_unresolved(&ctx.agent_id).await {
+            Ok(relinked) => {
+                if relinked > 0 {
+                    tracing::info!(relinked, "NoteLint: late-resolved unresolved wikilinks");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "NoteLint: relink_unresolved failed; will retry next dream cycle");
+            }
+        }
 
         Ok(ctx)
     }
@@ -549,14 +558,87 @@ category: preference
         let agent_id = ctx.agent_id.clone();
         stage.execute(ctx).await.unwrap();
 
-        let incoming = store
+        let mut incoming = store
             .get_incoming_links("reference/rust", &agent_id)
             .await
             .unwrap();
+        incoming.sort();
         assert_eq!(
-            incoming.len(),
-            1,
-            "lint should have resolved [[rust]] -> reference/rust"
+            incoming,
+            vec!["preference/a".to_string()],
+            "lint should have resolved [[rust]] -> reference/rust from a single source"
+        );
+    }
+
+    #[tokio::test]
+    async fn lint_leaves_ambiguous_links_unresolved() {
+        let (ctx, store) = build_test_dream_ctx().await;
+
+        // Note A links to bare [[rust]] before any rust note exists.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "a".into(),
+                    category: "preference".into(),
+                    facts: vec!["see [[rust]]".into()],
+                    links: vec!["rust".into()],
+                    content_hash: "h1".into(),
+                    ..Default::default()
+                },
+                &ctx.agent_id,
+                "preference",
+            )
+            .await
+            .unwrap();
+
+        // Two notes share filename "rust" — at reference/rust AND tutorial/rust.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "rust".into(),
+                    category: "reference".into(),
+                    facts: vec!["body".into()],
+                    content_hash: "h2".into(),
+                    ..Default::default()
+                },
+                &ctx.agent_id,
+                "reference",
+            )
+            .await
+            .unwrap();
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "rust".into(),
+                    category: "tutorial".into(),
+                    facts: vec!["body".into()],
+                    content_hash: "h3".into(),
+                    ..Default::default()
+                },
+                &ctx.agent_id,
+                "tutorial",
+            )
+            .await
+            .unwrap();
+
+        let stage = NoteLintStage;
+        let agent_id = ctx.agent_id.clone();
+        stage.execute(ctx).await.unwrap();
+
+        // Neither path receives an incoming link — the bare row stays at to_note="rust".
+        let inc_ref = store
+            .get_incoming_links("reference/rust", &agent_id)
+            .await
+            .unwrap();
+        let inc_tut = store
+            .get_incoming_links("tutorial/rust", &agent_id)
+            .await
+            .unwrap();
+        assert!(
+            inc_ref.is_empty() && inc_tut.is_empty(),
+            "ambiguous bare link must not auto-resolve; got ref={:?} tut={:?}",
+            inc_ref,
+            inc_tut
         );
     }
 }
