@@ -18,6 +18,24 @@ use tokio::sync::RwLock;
 
 use super::{BuiltinToolConfig, ToolRegistry};
 
+/// Parse `agent_id` out of a serialized session key string, returning
+/// `fallback` when the key fails to parse.
+///
+/// `session_key_str` follows the canonical form `agent:<id>:<rest>` (see
+/// [`crate::routing::session_key::SessionKey::to_key_string`]). A naive
+/// `.split(':').next()` would return the literal `"agent"` namespace
+/// prefix instead of the agent_id, silently misrouting per-agent state
+/// (e.g. `RememberTool` writing to `~/.aleph/agents/agent/MEMORY.md`
+/// instead of `~/.aleph/agents/<id>/MEMORY.md`). Going through
+/// `SessionKey::from_key_string` keeps the parser in lock-step with the
+/// canonical encoding and survives every key variant (Main, DM, Group,
+/// Task, Subagent, Ephemeral) plus the legacy `peer:` form.
+pub(super) fn parse_caller_agent_id(session_key_str: &str, fallback: &str) -> String {
+    crate::routing::session_key::SessionKey::from_key_string(session_key_str)
+        .map(|k| k.agent_id().to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 pub(crate) fn resolve_plugin_handler_from_sources(
     extension_manager: Option<&crate::extension::ExtensionManager>,
     tools: &HashMap<String, UnifiedTool>,
@@ -247,6 +265,17 @@ impl BuiltinToolRegistry {
     /// Register an additional tool (e.g., plugin tools discovered at runtime)
     pub fn register_tool(&mut self, tool: UnifiedTool) {
         self.tools.insert(tool.name.clone(), tool);
+    }
+
+    /// Extract caller's agent_id from the injected session context handle,
+    /// falling back to `fallback` if the handle is missing, the lock cannot
+    /// be acquired non-blockingly, or the key fails to parse.
+    fn caller_agent_id(&self, fallback: &str) -> String {
+        self.session_context_handle
+            .as_ref()
+            .and_then(|h| h.try_read().ok())
+            .map(|ctx| parse_caller_agent_id(&ctx.session_key_str, fallback))
+            .unwrap_or_else(|| fallback.to_string())
     }
 
     /// Inject GatewayContext after construction (breaks circular dependency).
@@ -608,12 +637,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "remember not available: MemoryContextProvider not yet injected",
                     )
                 })?;
-                let agent_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "main".to_string());
+                let agent_id = self.caller_agent_id("main");
                 let store = mcp
                     .get_or_load_curated_store(&agent_id)
                     .await
@@ -645,15 +669,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "session_search not available: GatewayContext not yet injected",
                     )
                 })?;
-                // Derive caller identity from session context (agent_id is the first
-                // segment of session_key_str, e.g. "assistant:dm:telegram:…").
-                // Falls back to "main" when session context is unavailable.
-                let caller_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "main".to_string());
+                // Derive caller identity from session context. Falls back to
+                // "main" when the handle is missing or the key fails to parse.
+                let caller_id = self.caller_agent_id("main");
                 // Assembler from MCP (None if not yet injected → call_impl falls back to raw FTS5).
                 let assembler = self
                     .memory_context_provider
@@ -1112,12 +1130,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             // Wiki orientation tools (Spec 5)
             "note_orient" => {
                 // Inject the caller's agent_id from session context.
-                let agent_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "default".to_string());
+                let agent_id = self.caller_agent_id("default");
                 if let Some(ref tool) = self.note_orient_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1139,12 +1152,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
 
             "note_schema" => {
-                let agent_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "default".to_string());
+                let agent_id = self.caller_agent_id("default");
                 if let Some(ref tool) = self.note_schema_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1167,12 +1175,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // User profile tool (Spec 7 Task 9)
             "user_profile" => {
-                let agent_id = self
-                    .session_context_handle
-                    .as_ref()
-                    .and_then(|h| h.try_read().ok())
-                    .and_then(|ctx| ctx.session_key_str.split(':').next().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "default".to_string());
+                let agent_id = self.caller_agent_id("default");
                 if let Some(ref tool) = self.user_profile_tool {
                     let tool = tool.clone();
                     Box::pin(async move {
@@ -1215,6 +1218,79 @@ impl ToolRegistry for BuiltinToolRegistry {
                 error!(tool = %tool, "Unknown tool requested");
                 Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {}", tool))) })
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_caller_agent_id;
+
+    // Regression for BUG-1: a naive `.split(':').next()` returned the literal
+    // namespace prefix `"agent"`, silently misrouting all per-agent state
+    // (RememberTool wrote to `agents/agent/MEMORY.md` while readers used
+    // `agents/<id>/MEMORY.md`). These cases lock the canonical key parser as
+    // the single source of truth.
+
+    #[test]
+    fn extracts_agent_id_from_main_key() {
+        assert_eq!(parse_caller_agent_id("agent:main:main", "fallback"), "main");
+        assert_eq!(parse_caller_agent_id("agent:work:main", "fallback"), "work");
+    }
+
+    #[test]
+    fn extracts_agent_id_from_dm_key() {
+        assert_eq!(
+            parse_caller_agent_id("agent:assistant:dm:user1", "fallback"),
+            "assistant"
+        );
+        assert_eq!(
+            parse_caller_agent_id("agent:assistant:telegram:dm:user1", "fallback"),
+            "assistant"
+        );
+        assert_eq!(
+            parse_caller_agent_id("agent:assistant:peer:user1", "fallback"),
+            "assistant"
+        );
+    }
+
+    #[test]
+    fn extracts_agent_id_from_group_and_task_keys() {
+        assert_eq!(
+            parse_caller_agent_id("agent:codev:discord:group:guild456", "fallback"),
+            "codev"
+        );
+        assert_eq!(
+            parse_caller_agent_id("agent:scheduler:cron:daily-summary", "fallback"),
+            "scheduler"
+        );
+    }
+
+    #[test]
+    fn returns_fallback_for_garbage_or_empty() {
+        assert_eq!(parse_caller_agent_id("", "fallback"), "fallback");
+        assert_eq!(parse_caller_agent_id("not-a-session-key", "main"), "main");
+        // missing trailing component -> parse fails -> fallback.
+        assert_eq!(parse_caller_agent_id("agent:", "main"), "main");
+    }
+
+    #[test]
+    fn never_returns_literal_agent_namespace_prefix() {
+        // The historical bug returned the literal "agent" string from
+        // `.split(':').next()`. Every realistic key form must yield the
+        // actual agent_id, not the namespace prefix.
+        for key in [
+            "agent:main:main",
+            "agent:work:main",
+            "agent:assistant:dm:user1",
+            "agent:scheduler:webhook:hook-1",
+            "agent:rust-bot:slack:channel:c123",
+        ] {
+            let id = parse_caller_agent_id(key, "fallback");
+            assert_ne!(
+                id, "agent",
+                "regression: key {key} parsed to namespace prefix instead of agent_id"
+            );
         }
     }
 }
