@@ -190,7 +190,6 @@ mod tests {
             radius: 30.0,
             position: Vec2::new(0.0, 0.0),
             velocity: Vec2::new(0.0, 0.0),
-            pinned: false,
             z: 0.0,
             hop: 0,
             decay_score: 1.0,

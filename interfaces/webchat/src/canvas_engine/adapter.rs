@@ -49,7 +49,7 @@ pub struct GraphSearchResponse {
 /// Mirrors the server's `GraphNeighborsResponse` in `src/gateway/handlers/graph_types.rs`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GraphNeighborsResponse {
-    /// The queried node, pinned at world origin in the radial layout.
+    /// The queried node, placed at world origin in the radial layout (hop=0).
     pub center: NoteNodeDto,
     /// Neighbor nodes (center excluded).
     pub nodes: Vec<NoteNodeDto>,
@@ -184,7 +184,7 @@ pub fn to_neighborhood(
 /// angular sector around an orphan ring radius (see `layout::r_orphan`), and
 /// laid out within their group via golden-angle spiral. They are tagged with
 /// `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`, and they participate in
-/// idle drift (no `pinned`).
+/// idle drift.
 pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
     use std::collections::{BTreeMap, HashSet};
 
@@ -249,7 +249,7 @@ pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
             let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
             node.position = Vec2::new(x, y);
             node.z = ORPHAN_Z;
-            // No `pinned = true` — orphans drift like everyone else.
+            // Orphans drift like everyone else.
             node.radius = 4.5;
             orphans.push(node);
 
@@ -275,7 +275,6 @@ fn note_dto_to_canvas(dto: &NoteNodeDto, hop: u8) -> CanvasNode {
         radius: note_radius(dto.link_count),
         position: Vec2::zero(),
         velocity: Vec2::zero(),
-        pinned: hop == 0,
         z,
         hop,
         decay_score: 1.0,
@@ -313,7 +312,6 @@ pub fn adapt_graph_response(response: &GraphQueryResponse) -> (Vec<CanvasNode>, 
                 radius: note_radius(dto.link_count),
                 position: Vec2::new(angle.cos() * spread, angle.sin() * spread),
                 velocity: Vec2::zero(),
-                pinned: false,
                 z: 0.0,
                 hop: 2,           // populated by `to_neighborhood` per `hop_depth`
                 decay_score: 1.0, // no decay data in global-graph response; populated in radial mode
@@ -503,8 +501,8 @@ mod tests {
         assert_eq!(one_hop_total, 1, "only 'b' is 1-hop");
         assert_eq!(nb.two_hop.len(), 1, "only 'c' is 2-hop");
         assert_eq!(nb.two_hop[0].id, "c");
-        // Center should be pinned (hop=0)
-        assert!(nb.center.pinned);
+        // Center must have hop=0
+        assert_eq!(nb.center.hop, 0, "centre must have hop=0");
         // target_positions must have entries for all nodes
         assert!(nb.target_positions.contains_key("a"));
         assert!(nb.target_positions.contains_key("b"));
@@ -545,10 +543,10 @@ mod tests {
         ];
         populate_orphans(&mut nbhd, &all);
 
-        // All orphans returned, no pinning.
+        // All orphans returned with correct hop sentinel.
         assert_eq!(nbhd.orphans.len(), 6);
         for o in &nbhd.orphans {
-            assert!(!o.pinned, "orphan {} is pinned", o.id);
+            assert_eq!(o.hop, ORPHAN_HOP_SENTINEL, "orphan {} has wrong hop", o.id);
         }
 
         // Same-kind orphans are tightly grouped (within ~ √n·16 + ε).

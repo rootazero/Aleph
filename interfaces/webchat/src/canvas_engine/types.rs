@@ -99,7 +99,6 @@ pub struct CanvasNode {
     pub radius: f64,
     pub position: Vec2,
     pub velocity: Vec2,
-    pub pinned: bool,
     // Radial navigation fields
     pub z: f32,
     pub hop: u8, // 0 = active centre, 1 = one-hop, 2 = two-hop

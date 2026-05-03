@@ -194,7 +194,6 @@ impl Default for crate::canvas_engine::types::CanvasNode {
             radius: 0.0,
             position: Vec2::new(0.0, 0.0),
             velocity: Vec2::new(0.0, 0.0),
-            pinned: false,
             z: 0.0,
             hop: 0,
             decay_score: 0.0,

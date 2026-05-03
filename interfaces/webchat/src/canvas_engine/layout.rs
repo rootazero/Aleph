@@ -207,7 +207,6 @@ mod radial_tests {
             hop,
             decay_score: 1.0,
             edge_count: 1,
-            pinned: false,
         }
     }
 

@@ -350,7 +350,6 @@ pub fn GraphCanvas(
         if let Some(idx) = state.viewport.hit_test(screen, &state.nodes) {
             state.interaction.is_dragging_node = true;
             state.interaction.dragged_node_idx = Some(idx);
-            state.nodes[idx].pinned = true;
         } else {
             state.interaction.is_panning = true;
         }
@@ -444,14 +443,6 @@ pub fn GraphCanvas(
         let mut state = gs_up.borrow_mut();
         let screen = Vec2::new(ev.offset_x() as f64, ev.offset_y() as f64);
         let now = js_sys::Date::now();
-
-        if state.interaction.is_dragging_node {
-            if let Some(idx) = state.interaction.dragged_node_idx {
-                if let Some(node) = state.nodes.get_mut(idx) {
-                    node.pinned = false;
-                }
-            }
-        }
 
         if state.interaction.is_click(screen) {
             // Reset drag parallax offset on click (not a pan gesture)

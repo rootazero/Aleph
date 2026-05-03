@@ -112,7 +112,6 @@ mod tests {
             velocity: Vec2::new(0.0, 0.0),
             z: 0.0,
             hop: 1,
-            pinned: false,
             decay_score: 1.0,
             edge_count: 1,
         }

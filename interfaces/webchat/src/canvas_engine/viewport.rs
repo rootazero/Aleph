@@ -144,7 +144,6 @@ mod parallax_tests {
             radius: 6.0,
             position: Vec2::new(x, y),
             velocity: Vec2::zero(),
-            pinned: false,
             z: 0.0,
             hop: 1,
             decay_score: 1.0,
