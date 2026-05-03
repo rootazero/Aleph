@@ -218,7 +218,9 @@ mod tests {
         db.index_note(&note_b, AGENT, "reference").await.unwrap();
         db.index_note(&note_c, AGENT, "reference").await.unwrap();
 
-        // Outgoing from Rust (from_note = "reference/Rust", to_note = raw link targets)
+        // Outgoing from Rust: Cargo and Clippy are indexed AFTER Rust, so at
+        // write time the bare targets cannot resolve — they fall back to raw.
+        // (Task A2.3's lint stage will repair these on a later pass.)
         let out = db
             .get_outgoing_links("reference/Rust", AGENT)
             .await
@@ -227,11 +229,14 @@ mod tests {
         assert!(out.contains(&"Cargo".to_string()));
         assert!(out.contains(&"Clippy".to_string()));
 
-        // Incoming to "Rust" — to_note stores raw wikilink targets (filenames),
-        // so we query by the raw target name, not the full path.
-        let inc = db.get_incoming_links("Rust", AGENT).await.unwrap();
+        // Incoming to Rust: Cargo is indexed AFTER Rust, so its link `Rust`
+        // resolves to the canonical `reference/Rust` at write time.
+        let inc = db
+            .get_incoming_links("reference/Rust", AGENT)
+            .await
+            .unwrap();
         assert_eq!(inc.len(), 1);
-        assert!(inc[0].starts_with("reference/Cargo"));
+        assert_eq!(inc[0], "reference/Cargo");
     }
 
     #[tokio::test]

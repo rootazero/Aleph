@@ -740,7 +740,7 @@ mod tests {
             .get_outgoing_links("skill/Rust Learning", AGENT)
             .await
             .unwrap();
-        assert!(out_links2.contains(&"Editor Preferences".to_string()));
+        assert!(out_links2.contains(&"preference/Editor Preferences".to_string()));
     }
 
     #[tokio::test]

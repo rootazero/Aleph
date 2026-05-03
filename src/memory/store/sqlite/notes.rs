@@ -87,17 +87,40 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
 
-        // Replace links: delete old, insert new
+        // Replace links: delete old, insert new with resolved to_note.
         conn.execute(
             "DELETE FROM notes_links WHERE from_note = ?1 AND agent_id = ?2",
             params![path, agent_id],
         )
         .map_err(|e| AlephError::config(format!("index_note delete links: {e}")))?;
 
-        for target in &note.links {
+        for raw_target in &note.links {
+            // Resolve raw_target: full paths (containing '/') are trusted as-is;
+            // bare filenames are looked up; ambiguous matches fall back to the raw form.
+            let resolved = if raw_target.contains('/') {
+                raw_target.clone()
+            } else {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
+                    )
+                    .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
+                let paths: Vec<String> = stmt
+                    .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
+                    .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                if paths.len() == 1 {
+                    paths[0].clone()
+                } else {
+                    raw_target.clone()
+                }
+            };
+
             conn.execute(
-                "INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note) VALUES (?1, ?2, ?3)",
-                params![agent_id, path, target],
+                "INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note, to_raw) \
+                    VALUES (?1, ?2, ?3, ?4)",
+                params![agent_id, path, resolved, raw_target],
             )
             .map_err(|e| AlephError::config(format!("index_note insert link: {e}")))?;
         }
@@ -892,5 +915,62 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn incoming_links_resolve_mixed_link_forms() {
+        let backend = make_backend();
+
+        // Target note exists at reference/rust.
+        let target = KnowledgeNote {
+            title: "rust".into(),
+            category: "reference".into(),
+            facts: vec!["body".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+        backend
+            .index_note(&target, "default", "reference")
+            .await
+            .unwrap();
+
+        // Note A links via short form `rust`.
+        let a = KnowledgeNote {
+            title: "a".into(),
+            category: "preference".into(),
+            facts: vec!["see [[rust]]".into()],
+            links: vec!["rust".into()],
+            content_hash: "h1".into(),
+            ..Default::default()
+        };
+        backend
+            .index_note(&a, "default", "preference")
+            .await
+            .unwrap();
+
+        // Note B links via full path `reference/rust`.
+        let b = KnowledgeNote {
+            title: "b".into(),
+            category: "preference".into(),
+            facts: vec!["see [[reference/rust]]".into()],
+            links: vec!["reference/rust".into()],
+            content_hash: "h2".into(),
+            ..Default::default()
+        };
+        backend
+            .index_note(&b, "default", "preference")
+            .await
+            .unwrap();
+
+        let incoming = backend
+            .get_incoming_links("reference/rust", "default")
+            .await
+            .unwrap();
+        assert_eq!(
+            incoming.len(),
+            2,
+            "both A and B should link to reference/rust, got: {:?}",
+            incoming
+        );
     }
 }
