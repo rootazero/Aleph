@@ -281,14 +281,31 @@ impl AgentHarnessRunner {
         }
 
         let mut builder = PromptBuilder::new(PromptConfig::default());
+        let role_present = agent_def.is_some();
         if let Some(def) = agent_def {
             builder = builder.with_agent(def);
         }
+        let curated_chars = curated_text.as_ref().map(String::len).unwrap_or(0);
         builder = builder.with_curated_envelope(curated_text);
+        let memory_chars = memory_text.as_ref().map(String::len).unwrap_or(0);
         if let Some(text) = memory_text {
             builder = builder.with_memory_user_message(text);
         }
-        Some(builder.build_system_prompt(&[]))
+        let prompt = builder.build_system_prompt(&[]);
+        // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
+        // Logs character counts (not contents) so prompts are observable
+        // without leaking memory content to disk-side telemetry.
+        tracing::info!(
+            target: "alephcore::orchestrator::prompt",
+            agent_id,
+            session = %session_key_str,
+            curated_chars,
+            memory_chars,
+            role_present,
+            prompt_chars = prompt.len(),
+            "system prompt assembled"
+        );
+        Some(prompt)
     }
 }
 
