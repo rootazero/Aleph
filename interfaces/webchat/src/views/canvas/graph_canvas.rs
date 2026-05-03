@@ -1,5 +1,4 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use leptos::prelude::*;
@@ -10,9 +9,8 @@ use leptos::callback::Callback;
 
 use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
-use crate::canvas_engine::layout::ForceLayout;
 use crate::canvas_engine::navigation::NavController;
-use crate::canvas_engine::renderer::{draw_neighborhood, Renderer};
+use crate::canvas_engine::renderer::draw_neighborhood;
 use crate::canvas_engine::tween::build_interpolated_neighborhood;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
@@ -22,11 +20,9 @@ pub struct GraphState {
     pub nodes: Vec<CanvasNode>,
     pub edges: Vec<CanvasEdge>,
     pub viewport: Viewport,
-    pub layout: ForceLayout,
     pub interaction: InteractionState,
     pub selected_node: Option<String>,
     pub hovered_node: Option<String>,
-    pub kind_filter: HashSet<String>,
     pub is_running: bool,
     /// Target position for smooth pan animation (world coordinates).
     pub pan_target: Option<Vec2>,
@@ -42,11 +38,9 @@ impl GraphState {
             nodes: Vec::new(),
             edges: Vec::new(),
             viewport: Viewport::new(800.0, 600.0),
-            layout: ForceLayout::new(),
             interaction: InteractionState::new(),
             selected_node: None,
             hovered_node: None,
-            kind_filter: HashSet::new(),
             is_running: false,
             pan_target: None,
             pan_progress: 0.0,
@@ -88,8 +82,8 @@ pub fn GraphCanvas(
     graph_state: Rc<RefCell<GraphState>>,
     on_event: Callback<CanvasEvent>,
     /// Optional NavController for the radial navigation path.
-    /// When `Some`, the RAF loop uses NavState-aware rendering.
-    /// When `None`, falls back to the legacy flat `Renderer::draw`.
+    /// When `Some`, the rAF loop uses NavState-aware rendering.
+    /// When `None`, the rAF loop is a no-op (no flat-graph fallback).
     #[prop(optional)]
     nav: Option<Rc<RefCell<NavController>>>,
 ) -> impl IntoView {
@@ -288,96 +282,7 @@ pub fn GraphCanvas(
                     }
                 }
 
-                // Schedule next frame
-                if let Some(window) = web_sys::window() {
-                    let cb = raf_c_inner.borrow();
-                    if let Some(closure) = cb.as_ref() {
-                        let id = window
-                            .request_animation_frame(closure.as_ref().unchecked_ref())
-                            .unwrap_or(0);
-                        *raf_h_inner.borrow_mut() = Some(id);
-                    }
-                }
-                return;
             }
-
-            // ---------------------------------------------------------------
-            // Legacy flat-graph branch (no nav controller)
-            // ---------------------------------------------------------------
-
-            // Physics tick — use destructuring to get disjoint borrows
-            if !state.layout.is_settled {
-                let GraphState {
-                    ref mut nodes,
-                    ref edges,
-                    ref mut layout,
-                    ..
-                } = *state;
-                layout.tick(nodes, edges);
-            }
-
-            // Smooth pan-to-center animation
-            if let Some(target) = state.pan_target {
-                state.pan_progress += 0.08; // ~300ms at 60fps
-                if state.pan_progress >= 1.0 {
-                    // Snap to target
-                    state.viewport.offset.x =
-                        state.viewport.width / 2.0 - target.x * state.viewport.scale;
-                    state.viewport.offset.y =
-                        state.viewport.height / 2.0 - target.y * state.viewport.scale;
-                    state.pan_target = None;
-                    state.pan_progress = 0.0;
-                } else {
-                    // Ease-out interpolation
-                    let t = 1.0 - (1.0 - state.pan_progress).powi(3);
-                    let current_center_x = (state.viewport.width / 2.0 - state.viewport.offset.x)
-                        / state.viewport.scale;
-                    let current_center_y = (state.viewport.height / 2.0 - state.viewport.offset.y)
-                        / state.viewport.scale;
-                    let new_x = current_center_x + (target.x - current_center_x) * t;
-                    let new_y = current_center_y + (target.y - current_center_y) * t;
-                    state.viewport.offset.x =
-                        state.viewport.width / 2.0 - new_x * state.viewport.scale;
-                    state.viewport.offset.y =
-                        state.viewport.height / 2.0 - new_y * state.viewport.scale;
-                }
-            }
-
-            // Compute highlighted neighbors for hover dimming
-            let highlighted_neighbors: HashSet<String> =
-                if let Some(ref hov_id) = state.hovered_node {
-                    state
-                        .edges
-                        .iter()
-                        .filter_map(|e| {
-                            let from = state.nodes.get(e.from_idx)?;
-                            let to = state.nodes.get(e.to_idx)?;
-                            if from.id == *hov_id {
-                                Some(to.id.clone())
-                            } else if to.id == *hov_id {
-                                Some(from.id.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                } else {
-                    HashSet::new()
-                };
-
-            // Render
-            Renderer::draw(
-                &ctx,
-                &state.viewport,
-                &state.nodes,
-                &state.edges,
-                state.selected_node.as_deref(),
-                state.hovered_node.as_deref(),
-                &state.kind_filter,
-                &highlighted_neighbors,
-            );
-
-            drop(state);
 
             // Schedule next frame
             if let Some(window) = web_sys::window() {
@@ -480,7 +385,6 @@ pub fn GraphCanvas(
                 if let Some(node) = state.nodes.get_mut(idx) {
                     node.position = world;
                 }
-                state.layout.wake();
             }
         } else {
             // Hover detection

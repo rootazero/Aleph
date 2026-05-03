@@ -688,7 +688,6 @@ fn seed_graph_state(
     let mut gs = gs.borrow_mut();
     gs.nodes = nodes;
     gs.edges = edges;
-    gs.layout.wake();
     gs.selected_node = selected;
     // Recenter: world (0,0) → canvas center, reset zoom + drag
     gs.viewport.offset.x = gs.viewport.width / 2.0;
