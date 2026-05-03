@@ -962,15 +962,15 @@ mod tests {
             .await
             .unwrap();
 
-        let incoming = backend
+        let mut incoming = backend
             .get_incoming_links("reference/rust", "default")
             .await
             .unwrap();
+        incoming.sort();
         assert_eq!(
-            incoming.len(),
-            2,
-            "both A and B should link to reference/rust, got: {:?}",
-            incoming
+            incoming,
+            vec!["preference/a".to_string(), "preference/b".to_string()],
+            "both A and B should link to reference/rust"
         );
     }
 }
