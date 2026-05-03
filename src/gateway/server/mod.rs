@@ -184,6 +184,11 @@ pub struct GatewayServer {
     /// mismatched bearers with 401; None → dev-open (any bearer accepted).
     /// Token rotation requires a server restart.
     pub openai_api_token: Option<String>,
+    /// Admin IPC router (Spec C). Mounted under `/v1/admin` when set.
+    /// `None` means CLI subcommands routed via `LockOrIpc` will receive
+    /// 404 from the server side — the CLI is expected to take the local
+    /// lock instead.
+    admin_router: Option<Router>,
 }
 
 impl GatewayServer {
@@ -225,6 +230,7 @@ impl GatewayServer {
             embedding_provider: None,
             orchestrator: None,
             openai_api_token: None,
+            admin_router: None,
         }
     }
 
@@ -265,6 +271,7 @@ impl GatewayServer {
             embedding_provider: None,
             orchestrator: None,
             openai_api_token: None,
+            admin_router: None,
         }
     }
 
@@ -302,6 +309,12 @@ impl GatewayServer {
     /// Set the A2A server state (enables A2A routes in build_router)
     pub fn set_a2a_state(&mut self, state: Arc<crate::a2a::adapter::server::A2AServerState>) {
         self.a2a_state = Some(state);
+    }
+
+    /// Mount the Spec C admin IPC router under `/v1/admin` in `build_router`.
+    /// Idempotent — replaces any previously set admin router.
+    pub fn set_admin_router(&mut self, router: Router) {
+        self.admin_router = Some(router);
     }
 
     /// Get the current number of active connections
@@ -361,6 +374,11 @@ impl GatewayServer {
         if let Some(a2a_state) = &self.a2a_state {
             let a2a = crate::a2a::adapter::server::a2a_routes(a2a_state.clone());
             router = router.merge(a2a);
+        }
+
+        // Spec C: mount admin IPC router under /v1/admin if configured.
+        if let Some(admin) = self.admin_router.clone() {
+            router = router.nest("/v1/admin", admin);
         }
 
         router.layer(SecurityHeadersLayer::new())

@@ -1134,6 +1134,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // deployments.
     server.openai_api_token = auth_bundle.auth_ctx.shared_token_mgr.get_current_token();
 
+    // Spec C: mount /v1/admin IPC router for CLI subcommands routed via
+    // LockOrIpc when this server holds the singleton lock. Bearer auth is
+    // enforced by the existing OpenAI-compat handler upstream.
+    {
+        let admin_state = alephcore::gateway::admin_api::AdminApiState {
+            shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        };
+        server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
+    }
+
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
         let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir(), 10);

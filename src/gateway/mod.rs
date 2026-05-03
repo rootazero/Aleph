@@ -26,6 +26,7 @@
 pub mod link;
 pub mod transport;
 
+pub mod admin_api;
 pub mod auth_middleware;
 pub mod event_bus;
 pub mod event_emitter;
