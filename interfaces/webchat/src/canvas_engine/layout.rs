@@ -44,6 +44,31 @@ pub const Z_ACTIVE: f32 = 0.0;
 pub const Z_ONE_HOP: f32 = 60.0;
 pub const Z_TWO_HOP: f32 = 140.0;
 
+/// Adaptive radius for a hop layer.
+///
+/// Grows ~ √n so the ring widens as neighborhoods densify, then is multiplied
+/// by `hop` (1 for one-hop, 2 for two-hop, 2.4 for orphans) and a viewport
+/// scale factor so small windows shrink and large windows expand within
+/// reasonable bounds.
+fn r_for_hop(hop_factor: f32, n: usize, viewport_w_px: f32) -> f32 {
+    let base = 100.0_f32;
+    let count_factor = (1.0 + (n as f32) / 16.0).sqrt();
+    let vw_factor = (viewport_w_px / 800.0).clamp(0.6, 1.4);
+    base * count_factor * vw_factor * hop_factor
+}
+
+pub fn r_one_hop(n: usize, viewport_w_px: f32) -> f32 {
+    r_for_hop(1.0, n, viewport_w_px)
+}
+
+pub fn r_two_hop(n: usize, viewport_w_px: f32) -> f32 {
+    r_for_hop(2.0, n, viewport_w_px)
+}
+
+pub fn r_orphan(n: usize, viewport_w_px: f32) -> f32 {
+    r_for_hop(2.4, n, viewport_w_px)
+}
+
 /// Compute ideal (target) positions for active + neighbors using radial geometry.
 pub fn compute_target_positions(
     active: &CanvasNode,
@@ -450,6 +475,41 @@ mod radial_tests {
             "expected KE < 1.0 after 60 iters, got {}",
             layout.kinetic_energy()
         );
+    }
+
+    #[test]
+    fn r_one_hop_grows_with_node_count() {
+        let small = r_one_hop(20, 800.0);
+        let big = r_one_hop(500, 800.0);
+        assert!(big > small * 1.5, "expected bigger n to grow R, got small={small} big={big}");
+    }
+
+    #[test]
+    fn r_one_hop_clamps_viewport() {
+        // Below the lower bound (clamped to 0.6) and above the upper (1.4) should both pin.
+        let narrow_low  = r_one_hop(50, 100.0);
+        let narrow_min  = r_one_hop(50, 480.0);  // 480/800 = 0.6 exactly
+        let wide_max    = r_one_hop(50, 1120.0); // 1120/800 = 1.4
+        let wide_high   = r_one_hop(50, 4000.0);
+        let eps = 1e-3;
+        assert!((narrow_low - narrow_min).abs() < eps,
+            "lower clamp: {narrow_low} vs {narrow_min}");
+        assert!((wide_high - wide_max).abs() < eps,
+            "upper clamp: {wide_high} vs {wide_max}");
+    }
+
+    #[test]
+    fn r_two_hop_outside_one_hop() {
+        let one = r_one_hop(50, 800.0);
+        let two = r_two_hop(50, 800.0);
+        assert!(two > one, "R₂ must exceed R₁: one={one} two={two}");
+    }
+
+    #[test]
+    fn r_orphan_outside_two_hop() {
+        let two = r_two_hop(50, 800.0);
+        let orphan = r_orphan(50, 800.0);
+        assert!(orphan > two, "R_orphan must exceed R₂: two={two} orphan={orphan}");
     }
 }
 
