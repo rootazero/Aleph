@@ -695,6 +695,13 @@ fn seed_graph_state(
     gs.viewport.offset.y = gs.viewport.height / 2.0;
     gs.viewport.scale = 1.0;
     gs.drag_offset = (0.0, 0.0);
+    // Auto-fit viewport to the freshly seeded layout so we don't lose nodes off-screen.
+    // Safe when nodes is empty (fit_to_content early-returns) or when width/height are
+    // still zero pre-mount (T10 will refit on resize).
+    // Reborrow through `&mut *gs` so the borrow checker sees disjoint field borrows on
+    // GraphState rather than two simultaneous borrows of the RefMut wrapper.
+    let gs = &mut *gs;
+    gs.viewport.fit_to_content(&gs.nodes, 0.10);
 }
 
 /// Refresh GraphState's node/edge buffers from a freshly folded `Neighborhood`
