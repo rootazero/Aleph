@@ -6,8 +6,9 @@ use regex::Regex;
 
 use crate::memory::notes::store::NoteStore;
 
-/// Regex matching `[[...]]` wikilinks (non-greedy, no nested brackets).
-static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
+/// Regex matching `[[target]]` and `[[target|alias]]` wikilinks.
+static WIKILINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\[([^\]\|]+)(?:\|([^\]]*))?\]\]").unwrap());
 
 /// Extract all wikilink targets from `text`.
 ///
@@ -22,12 +23,30 @@ pub fn extract_wikilinks(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Extract wikilink targets and their optional aliases from `text`.
+///
+/// `[[target]]` yields `(target, None)`; `[[target|alias]]` yields `(target, Some(alias))`.
+pub fn extract_wikilinks_with_alias(text: &str) -> Vec<(String, Option<String>)> {
+    WIKILINK_RE
+        .captures_iter(text)
+        .map(|cap| {
+            (
+                cap[1].to_string(),
+                cap.get(2).map(|m| m.as_str().to_string()),
+            )
+        })
+        .collect()
+}
+
 /// Replace every `[[old_name]]` with `[[new_name]]`, leaving other links intact.
 pub fn rewrite_wikilinks(text: &str, old_name: &str, new_name: &str) -> String {
     WIKILINK_RE
         .replace_all(text, |caps: &regex::Captures| {
             if &caps[1] == old_name {
-                format!("[[{new_name}]]")
+                match caps.get(2) {
+                    Some(alias) => format!("[[{new_name}|{}]]", alias.as_str()),
+                    None => format!("[[{new_name}]]"),
+                }
             } else {
                 caps[0].to_string()
             }
@@ -124,6 +143,37 @@ mod tests {
     fn remove_wikilink_no_op_when_target_absent() {
         let text = "[[a]] [[b]]";
         assert_eq!(remove_wikilink(text, "z"), "[[a]] [[b]]");
+    }
+
+    #[test]
+    fn extract_pipe_alias_returns_target_only() {
+        let text = "see [[rust|Rust 学习]] and [[plain]]";
+        assert_eq!(extract_wikilinks(text), vec!["rust", "plain"]);
+    }
+
+    #[test]
+    fn extract_with_alias_returns_pairs() {
+        let text = "see [[rust|Rust 学习]] and [[plain]]";
+        assert_eq!(
+            extract_wikilinks_with_alias(text),
+            vec![
+                ("rust".to_string(), Some("Rust 学习".to_string())),
+                ("plain".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_alias_when_pipe_form() {
+        let text = "before [[old|Old Display]] after";
+        let result = rewrite_wikilinks(text, "old", "new");
+        assert_eq!(result, "before [[new|Old Display]] after");
+    }
+
+    #[test]
+    fn remove_drops_full_pipe_form() {
+        let text = "x [[stale|Stale]] y";
+        assert_eq!(remove_wikilink(text, "stale"), "x  y");
     }
 }
 
