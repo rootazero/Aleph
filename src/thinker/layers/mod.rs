@@ -53,6 +53,9 @@ mod curated_memory;
 // --- Memory augmentation layer ---
 mod memory_augmentation;
 
+// --- Memory protocol guidance layer ---
+mod memory_protocol;
+
 // --- Session context guide layer ---
 mod session_context_guide;
 
@@ -92,6 +95,7 @@ pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;
 pub use inbound_context::InboundContextLayer;
 pub use memory_augmentation::MemoryAugmentationLayer;
+pub use memory_protocol::MemoryProtocolLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
 pub use runtime_context::RuntimeContextLayer;

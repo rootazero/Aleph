@@ -236,6 +236,7 @@ impl PromptPipeline {
     /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
     /// 1740  MemoryAugmentationLayer
+    /// 1745  MemoryProtocolLayer
     /// 1750  SessionContextGuideLayer
     /// 1760  SessionResumeLayer
     pub fn default_layers() -> Self {
@@ -271,6 +272,7 @@ impl PromptPipeline {
             Box::new(CustomInstructionsLayer),
             Box::new(IdentityFilesLayer),
             Box::new(MemoryAugmentationLayer),
+            Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
             Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
@@ -466,7 +468,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 34);
+        assert_eq!(pipeline.layer_count(), 35);
     }
 
     #[test]
@@ -817,6 +819,7 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"runtime_context"));
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_augmentation"));
+        assert!(dynamic_names.contains(&"memory_protocol"));
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
@@ -824,8 +827,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"agent_catalog"));
         assert_eq!(
             dynamic_names.len(),
-            10,
-            "Exactly 10 dynamic layers expected"
+            11,
+            "Exactly 11 dynamic layers expected"
         );
     }
 
