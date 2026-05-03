@@ -219,11 +219,31 @@ CREATE TABLE IF NOT EXISTS notes_links (
     agent_id    TEXT NOT NULL DEFAULT 'default',
     from_note   TEXT NOT NULL,
     to_note     TEXT NOT NULL,
+    to_raw      TEXT NOT NULL,
     UNIQUE(agent_id, from_note, to_note)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);
 CREATE INDEX IF NOT EXISTS idx_notes_links_to ON notes_links(agent_id, to_note);
 "#;
+
+/// Add `to_raw` column to existing `notes_links` rows; backfill with `to_note` value.
+///
+/// Idempotent: re-running on a migrated table is a no-op.
+pub fn migrate_notes_links_to_raw(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(notes_links)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "to_raw");
+    if has_col {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE notes_links ADD COLUMN to_raw TEXT NOT NULL DEFAULT '';
+         UPDATE notes_links SET to_raw = to_note WHERE to_raw = '';",
+    )?;
+    Ok(())
+}
 
 const NOTES_FTS_DDL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -374,8 +394,8 @@ pub(crate) fn migrate_unify_default_to_main_agent(conn: &Connection) -> Result<(
                 created_at, updated_at, last_accessed_at, content_hash
          FROM notes_index WHERE agent_id = 'default';
 
-         INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note)
-         SELECT 'main', from_note, to_note
+         INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note, to_raw)
+         SELECT 'main', from_note, to_note, to_raw
          FROM notes_links WHERE agent_id = 'default';
 
          INSERT INTO notes_fts (path, filename, content, agent_id)
@@ -499,6 +519,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
 
     conn.execute_batch(NOTES_LINKS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_links table: {e}")))?;
+    migrate_notes_links_to_raw(conn)
+        .map_err(|e| AlephError::config(format!("Failed to migrate notes_links: {e}")))?;
 
     conn.execute_batch(NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
@@ -900,13 +922,42 @@ mod tests {
     }
 
     #[test]
+    fn migrate_notes_links_adds_to_raw_and_backfills() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // Old schema without to_raw
+        conn.execute_batch(
+            "CREATE TABLE notes_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                from_note TEXT NOT NULL,
+                to_note TEXT NOT NULL,
+                UNIQUE(agent_id, from_note, to_note)
+            );
+            INSERT INTO notes_links (agent_id, from_note, to_note)
+                VALUES ('a', 'cat/x', 'rust');",
+        )
+        .unwrap();
+
+        migrate_notes_links_to_raw(&conn).unwrap();
+
+        let to_raw: String = conn
+            .query_row(
+                "SELECT to_raw FROM notes_links WHERE from_note='cat/x'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(to_raw, "rust");
+    }
+
+    #[test]
     fn migration_preserves_link_topology() {
         let conn = Connection::open_in_memory().expect("in-memory db");
         init_schema(&conn).expect("init_schema");
         seed_default_agent_row(&conn, "A.md", "a");
         seed_default_agent_row(&conn, "B.md", "b");
         conn.execute(
-            "INSERT INTO notes_links (agent_id, from_note, to_note) VALUES ('default', 'A.md', 'B.md')",
+            "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw) VALUES ('default', 'A.md', 'B.md', 'B.md')",
             [],
         ).expect("seed default link");
         migrate_unify_default_to_main_agent(&conn).expect("migration");
