@@ -472,18 +472,6 @@ fn draw_edges_for_node(
             let _ = ctx.set_line_dash(&solid);
         }
 
-        // Bezier control point: perpendicular offset from midpoint
-        let mid_x = (from_pos.0 + to_pos.0) * 0.5;
-        let mid_y = (from_pos.1 + to_pos.1) * 0.5;
-        let dx = to_pos.0 - from_pos.0;
-        let dy = to_pos.1 - from_pos.1;
-        let len = (dx * dx + dy * dy).sqrt().max(1.0);
-        let nx = -dy / len; // perpendicular unit vector
-        let ny = dx / len;
-        let curve_amt = 30.0_f32;
-        let cx = mid_x + nx * curve_amt;
-        let cy = mid_y + ny * curve_amt;
-
         let grad = ctx.create_linear_gradient(
             from_pos.0 as f64,
             from_pos.1 as f64,
@@ -520,7 +508,7 @@ fn draw_edges_for_node(
         ctx.set_line_width(avg_w as f64);
         ctx.begin_path();
         ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
-        ctx.quadratic_curve_to(cx as f64, cy as f64, to_pos.0 as f64, to_pos.1 as f64);
+        ctx.line_to(to_pos.0 as f64, to_pos.1 as f64);
         ctx.stroke();
     }
 }
