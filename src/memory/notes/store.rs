@@ -151,6 +151,16 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
         dim_hint: u32,
     ) -> Result<Option<Vec<f32>>, AlephError>;
+
+    /// Retry resolution for any links where `to_note == to_raw` and `to_raw`
+    /// has no '/'. Updates `to_note` to the resolved path when filename is
+    /// unique.
+    ///
+    /// Returns the number of rows updated.
+    async fn relink_unresolved(&self, agent_id: &str) -> Result<usize, AlephError> {
+        let _ = agent_id;
+        Ok(0)
+    }
 }
 
 #[cfg(test)]

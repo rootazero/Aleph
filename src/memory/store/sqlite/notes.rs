@@ -725,6 +725,49 @@ impl NoteStore for SqliteMemoryBackend {
 
         Ok(results)
     }
+
+    async fn relink_unresolved(&self, agent_id: &str) -> Result<usize, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, to_raw FROM notes_links \
+                 WHERE agent_id = ?1 AND to_note = to_raw AND instr(to_raw, '/') = 0",
+            )
+            .map_err(|e| AlephError::config(format!("relink prep: {e}")))?;
+
+        let rows: Vec<(i64, String)> = stmt
+            .query_map(params![agent_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| AlephError::config(format!("relink scan: {e}")))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut updated = 0usize;
+        for (id, raw) in rows {
+            let mut find = conn
+                .prepare(
+                    "SELECT path FROM notes_index \
+                     WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
+                )
+                .map_err(|e| AlephError::config(format!("relink find: {e}")))?;
+            let paths: Vec<String> = find
+                .query_map(params![agent_id, raw], |r| r.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("relink find query: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if paths.len() == 1 {
+                conn.execute(
+                    "UPDATE notes_links SET to_note = ?1 WHERE id = ?2",
+                    params![paths[0], id],
+                )
+                .map_err(|e| AlephError::config(format!("relink update: {e}")))?;
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
 }
 
 // ---------------------------------------------------------------------------

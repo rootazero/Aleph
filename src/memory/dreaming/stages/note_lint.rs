@@ -282,6 +282,16 @@ impl DreamStage for NoteLintStage {
             "NoteLint completed"
         );
 
+        // Late-resolution sweep: write-time resolution may have fallen back to
+        // raw bare-filename targets when the destination didn't yet exist.
+        // After this stage's other rules settle, retry resolution so cross-form
+        // graph queries become consistent (Task A2.3).
+        let _ = ctx
+            .indexer
+            .store()
+            .relink_unresolved(&ctx.agent_id)
+            .await?;
+
         Ok(ctx)
     }
 }
@@ -435,5 +445,118 @@ category: preference
     #[test]
     fn note_lint_stage_name() {
         assert_eq!(NoteLintStage.name(), "note_lint");
+    }
+
+    // -----------------------------------------------------------------
+    // Late-resolution lint rule (Task A2.3)
+    // -----------------------------------------------------------------
+
+    use crate::memory::embedding_provider::EmbeddingProvider;
+    use crate::memory::notes::store::NoteStore as _;
+    use crate::memory::notes::{KnowledgeNote, NoteIndexer};
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::providers::mock::MockProvider;
+    use crate::sync_primitives::Arc;
+
+    /// Minimal EmbeddingProvider stub for stage tests — never invoked because
+    /// `lint_resolves_pending_links_after_target_appears` does not exercise
+    /// any embedding-touching stage code.
+    struct StubEmbedder;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for StubEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Ok(Vec::new())
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Ok(Vec::new())
+        }
+        fn dimensions(&self) -> usize {
+            0
+        }
+        fn model_name(&self) -> &str {
+            "stub"
+        }
+        fn provider_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    async fn build_test_dream_ctx() -> (DreamContext, Arc<SqliteMemoryBackend>) {
+        let temp = std::env::temp_dir().join(format!("aleph_lint_{}", uuid::Uuid::new_v4()));
+        let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
+        let indexer = NoteIndexer::new(temp.clone(), store.clone());
+        let provider: std::sync::Arc<dyn crate::providers::AiProvider> =
+            std::sync::Arc::new(MockProvider::new(""));
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> = std::sync::Arc::new(StubEmbedder);
+
+        let ctx = DreamContext {
+            notes: Vec::new(),
+            note_contents: std::collections::HashMap::new(),
+            agent_id: "default".into(),
+            database: store.clone(),
+            indexer,
+            provider,
+            embedder,
+            report: crate::memory::dreaming::DreamReport::default(),
+            pipeline_type: "consolidate".into(),
+            activity_checker: std::sync::Arc::new(|| false),
+            strategy: crate::memory::dreaming::DreamStrategy::Consolidate,
+            orientation: None,
+        };
+        (ctx, store)
+    }
+
+    #[tokio::test]
+    async fn lint_resolves_pending_links_after_target_appears() {
+        let (ctx, store) = build_test_dream_ctx().await;
+
+        // Note A links to [[rust]] before any rust note exists → at write time
+        // the resolver falls back to to_raw="rust", to_note="rust".
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "a".into(),
+                    category: "preference".into(),
+                    facts: vec!["see [[rust]]".into()],
+                    links: vec!["rust".into()],
+                    content_hash: "h1".into(),
+                    ..Default::default()
+                },
+                &ctx.agent_id,
+                "preference",
+            )
+            .await
+            .unwrap();
+
+        // Now rust exists at reference/rust.
+        store
+            .index_note(
+                &KnowledgeNote {
+                    title: "rust".into(),
+                    category: "reference".into(),
+                    facts: vec!["body".into()],
+                    content_hash: "h2".into(),
+                    ..Default::default()
+                },
+                &ctx.agent_id,
+                "reference",
+            )
+            .await
+            .unwrap();
+
+        let stage = NoteLintStage;
+        let agent_id = ctx.agent_id.clone();
+        stage.execute(ctx).await.unwrap();
+
+        let incoming = store
+            .get_incoming_links("reference/rust", &agent_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            incoming.len(),
+            1,
+            "lint should have resolved [[rust]] -> reference/rust"
+        );
     }
 }
