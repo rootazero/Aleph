@@ -10,6 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentDef;
 use crate::harness::chain_context::ChainContext;
+use crate::memory::extensions::MemoryExtensionRegistry;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::AiProvider;
 use crate::sandbox::Sandbox;
 use crate::session::service::SessionService;
@@ -109,6 +111,15 @@ pub struct AgentRuntime {
     parent_tools: Arc<dyn ToolService>,
     /// Shared sandbox instance passed to the child harness.
     sandbox: Arc<dyn Sandbox>,
+    /// Spec 1 G2 — when set, the spawner emits a `RawMemory(Delegation)`
+    /// row after each successful subagent run.
+    raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
+    /// Optional capture-filter registry threaded into the delegation emit.
+    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    /// Parent agent identity stamped onto the emitted Delegation row.
+    parent_agent_id: Option<String>,
+    /// Parent session id stamped onto the emitted Delegation row.
+    parent_session_id: Option<String>,
 }
 
 impl AgentRuntime {
@@ -129,7 +140,35 @@ impl AgentRuntime {
             session,
             parent_tools,
             sandbox,
+            raw_memory_writer: None,
+            capture_registry: None,
+            parent_agent_id: None,
+            parent_session_id: None,
         }
+    }
+
+    /// Wire a `RawMemoryStore` so the spawner emits the Delegation hook.
+    pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Wire an optional capture-filter registry threaded into the emit.
+    pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
+        self.capture_registry = Some(registry);
+        self
+    }
+
+    /// Set the parent agent id stamped onto the emitted Delegation row.
+    pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
+        self.parent_agent_id = Some(id.into());
+        self
+    }
+
+    /// Set the parent session id stamped onto the emitted Delegation row.
+    pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
+        self.parent_session_id = Some(sid.into());
+        self
     }
 
     /// Execute a sub-agent to completion with lifecycle tracing.
@@ -239,6 +278,10 @@ impl AgentRuntime {
             sandbox: self.sandbox.clone(),
             provider: self.provider.clone(),
             chain: parent_chain,
+            raw_memory_writer: self.raw_memory_writer.clone(),
+            capture_registry: self.capture_registry.clone(),
+            parent_agent_id: self.parent_agent_id.clone(),
+            parent_session_id: self.parent_session_id.clone(),
         };
         let req = SpawnRequest {
             agent_def: &config.agent_def,

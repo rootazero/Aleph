@@ -81,6 +81,15 @@ pub struct SubagentTool {
     inbox: Option<Arc<Inbox>>,
     /// Identifies the calling agent (default: "primary").
     parent_agent_id: String,
+    /// Spec 1 G2 — threaded into child `AgentRuntime`s so the spawner emits
+    /// `RawMemory(Delegation)` after each successful local subagent run.
+    raw_memory_writer:
+        Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    /// Optional capture-filter registry threaded with the writer.
+    capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
+    /// Parent session id stamped onto emitted Delegation rows. `None` leaves
+    /// the row untagged for session-level lookups.
+    parent_session_id: Option<String>,
 }
 
 impl SubagentTool {
@@ -112,6 +121,9 @@ impl SubagentTool {
             message_router: None,
             inbox: None,
             parent_agent_id: "primary".to_string(),
+            raw_memory_writer: None,
+            capture_registry: None,
+            parent_session_id: None,
         }
     }
 
@@ -136,6 +148,30 @@ impl SubagentTool {
     /// Set the parent agent id (identifies the calling agent).
     pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
         self.parent_agent_id = id.into();
+        self
+    }
+
+    /// Spec 1 G2 — wire the raw-memory writer for delegation hook emit.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
+        self
+    }
+
+    /// Spec 1 G2 — wire an optional capture-filter registry alongside the writer.
+    pub fn with_capture_registry(
+        mut self,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
+        self.capture_registry = Some(registry);
+        self
+    }
+
+    /// Spec 1 G2 — set the parent session id stamped onto Delegation rows.
+    pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
+        self.parent_session_id = Some(sid.into());
         self
     }
 }
@@ -610,6 +646,10 @@ impl LoopTool for SubagentTool {
             let session = self.session.clone();
             let parent_tools = self.parent_tools.clone();
             let sandbox = self.sandbox.clone();
+            let raw_memory_writer = self.raw_memory_writer.clone();
+            let capture_registry = self.capture_registry.clone();
+            let parent_agent_id = self.parent_agent_id.clone();
+            let parent_session_id = self.parent_session_id.clone();
 
             tokio::spawn(async move {
                 let runtime_config = AgentRuntimeConfig {
@@ -620,14 +660,24 @@ impl LoopTool for SubagentTool {
                     timeout_secs,
                 };
 
-                let runtime = AgentRuntime::new(
+                let mut runtime = AgentRuntime::new(
                     provider,
                     child_chain,
                     cancel_token,
                     session,
                     parent_tools,
                     sandbox,
-                );
+                )
+                .with_parent_agent_id(parent_agent_id);
+                if let Some(w) = raw_memory_writer {
+                    runtime = runtime.with_raw_memory_writer(w);
+                }
+                if let Some(reg) = capture_registry {
+                    runtime = runtime.with_capture_registry(reg);
+                }
+                if let Some(sid) = parent_session_id {
+                    runtime = runtime.with_parent_session_id(sid);
+                }
 
                 let result = AssertUnwindSafe(runtime.run(runtime_config))
                     .catch_unwind()
@@ -658,14 +708,24 @@ impl LoopTool for SubagentTool {
                 timeout_secs: args.timeout_secs,
             };
 
-            let runtime = AgentRuntime::new(
+            let mut runtime = AgentRuntime::new(
                 self.provider.clone(),
                 child_chain,
                 CancellationToken::new(),
                 self.session.clone(),
                 self.parent_tools.clone(),
                 self.sandbox.clone(),
-            );
+            )
+            .with_parent_agent_id(self.parent_agent_id.clone());
+            if let Some(w) = self.raw_memory_writer.clone() {
+                runtime = runtime.with_raw_memory_writer(w);
+            }
+            if let Some(reg) = self.capture_registry.clone() {
+                runtime = runtime.with_capture_registry(reg);
+            }
+            if let Some(sid) = self.parent_session_id.clone() {
+                runtime = runtime.with_parent_session_id(sid);
+            }
 
             match runtime.run(runtime_config).await {
                 Ok(result) => {

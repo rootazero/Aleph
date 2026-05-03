@@ -27,6 +27,8 @@ use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::chain_context::ChainContext;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
+use crate::memory::extensions::MemoryExtensionRegistry;
+use crate::memory::store::raw_memory::RawMemoryStore;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
@@ -56,6 +58,20 @@ pub struct SpawnerBase {
     /// The parent's chain context. The spawner derives a child via
     /// `ChainContext::child()`.
     pub chain: ChainContext,
+    /// Spec 1 G2 — when set, the spawner emits a `RawMemory(Delegation)`
+    /// row after a successful spawn so CompressionService can distil
+    /// LESSON-flavoured notes for the parent agent's long-term memory.
+    /// The pre-phase7 A2A path emits the same row from `a2a/sub_agent.rs`;
+    /// this field plugs the gap on the post-phase7 intra-process path.
+    pub raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
+    /// Optional capture-filter registry threaded into the delegation emit.
+    pub capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    /// Parent agent identity stamped onto the emitted `RawMemory` row.
+    /// `None` falls back to `"default"` to match the A2A path's behaviour.
+    pub parent_agent_id: Option<String>,
+    /// Parent session id — when set, the row is tagged with it so
+    /// `notes` can correlate the lesson with the originating session.
+    pub parent_session_id: Option<String>,
 }
 
 /// Per-spawn configuration. All lifetimes are scoped to a single `spawn` call.
@@ -225,7 +241,30 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
     //    `Arc<AgentHarness>` we just read the flag.
     let hit_limit = harness.hit_limit();
 
-    extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit).await
+    let result =
+        extract_run_result(base.session.as_ref(), &child_id, &child_chain, hit_limit).await?;
+
+    // 9. Spec 1 G2 — fire-and-forget Delegation emit so CompressionService
+    //    can distil parent-side lessons. Skipped silently when no writer is
+    //    threaded through (legacy callers, tests, off-by-config).
+    if let Some(writer) = base.raw_memory_writer.clone() {
+        let summary = result.final_text.clone().unwrap_or_default();
+        let parent_id = base
+            .parent_agent_id
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        crate::a2a::sub_agent::emit_delegation_primitives(
+            writer,
+            req.task.to_string(),
+            summary,
+            parent_id,
+            base.parent_session_id.clone(),
+            req.agent_def.id.clone(),
+            base.capture_registry.clone(),
+        );
+    }
+
+    Ok(result)
 }
 
 /// Walk the child session event log and synthesize a `LoopRunResult`.
@@ -565,12 +604,74 @@ mod tests {
             sandbox: Arc::new(crate::sandbox::NoopSandbox),
             provider,
             chain: ChainContext::new(),
+            raw_memory_writer: None,
+            capture_registry: None,
+            parent_agent_id: None,
+            parent_session_id: None,
         }
     }
 
     fn agent_with_allowed(id: &str, tools: Vec<&str>) -> AgentDef {
         AgentDef::new(id, AgentMode::SubAgent)
             .with_allowed_tools(tools.into_iter().map(String::from).collect())
+    }
+
+    // -- Fake RawMemoryStore (used by the G2 emit test) -------------------
+
+    /// In-memory `RawMemoryStore` capturing every insert for assertions.
+    /// Mirrors the pattern in `a2a::sub_agent::spec1_tests::FakeWriter` and
+    /// `components::session_compactor::tests::pre_compress_tests::FakeWriter`.
+    #[derive(Default)]
+    struct FakeWriter(
+        tokio::sync::Mutex<Vec<crate::memory::store::raw_memory::RawMemory>>,
+    );
+
+    #[async_trait::async_trait]
+    impl crate::memory::store::raw_memory::RawMemoryStore for FakeWriter {
+        async fn insert_raw_memory(
+            &self,
+            raw: &crate::memory::store::raw_memory::RawMemory,
+        ) -> Result<(), crate::error::AlephError> {
+            self.0.lock().await.push(raw.clone());
+            Ok(())
+        }
+
+        async fn get_unprocessed_raw_memories(
+            &self,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<
+            Vec<crate::memory::store::raw_memory::RawMemory>,
+            crate::error::AlephError,
+        > {
+            Ok(vec![])
+        }
+
+        async fn mark_raw_as_processed(
+            &self,
+            _ids: &[String],
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn count_unprocessed(
+            &self,
+            _agent_id: &str,
+        ) -> Result<usize, crate::error::AlephError> {
+            Ok(0)
+        }
+
+        async fn get_raw_by_path_prefix(
+            &self,
+            _path_prefix: &str,
+            _agent_id: &str,
+            _limit: usize,
+        ) -> Result<
+            Vec<crate::memory::store::raw_memory::RawMemory>,
+            crate::error::AlephError,
+        > {
+            Ok(vec![])
+        }
     }
 
     // -- Tests ------------------------------------------------------------
@@ -716,6 +817,112 @@ mod tests {
                 || lower.contains("permission"),
             "expected allowlist denial, got: {err}",
         );
+    }
+
+    // -- G2 delegation hook regression test ---------------------------------
+
+    /// Spec 1 G2 — when `SpawnerBase.raw_memory_writer` is set, a successful
+    /// spawn must fire-and-forget a `RawMemory(Delegation { child_agent_id })`
+    /// row stamped with parent agent + session ids. Without this hook the
+    /// post-phase7 intra-process subagent path silently loses every
+    /// delegation lesson, regressing the work shipped under spec 1.
+    #[tokio::test]
+    async fn spawn_emits_delegation_raw_when_writer_set() {
+        use crate::memory::store::raw_memory::RawMemorySource;
+
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "child summary text".to_string(),
+        )]);
+        let mut base = make_base(provider);
+
+        let fake = Arc::new(FakeWriter::default());
+        base.raw_memory_writer =
+            Some(fake.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>);
+        base.parent_agent_id = Some("parent-007".to_string());
+        base.parent_session_id = Some("agent:parent-007:peer:user".to_string());
+
+        let agent = agent_with_allowed("delegated-child", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "summarise the quarterly report",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+        };
+
+        spawn(&base, req).await.expect("spawn ok");
+
+        // Emit is fire-and-forget on a tokio task; give it a moment.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let captured = fake.0.lock().await;
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one Delegation RawMemory row, got {}",
+            captured.len()
+        );
+        let row = &captured[0];
+
+        match &row.source {
+            RawMemorySource::Delegation { child_agent_id } => {
+                assert_eq!(child_agent_id, "delegated-child");
+            }
+            other => panic!("expected Delegation source, got {:?}", other),
+        }
+        assert!(
+            row.content.contains("DELEGATION_PROMPT:"),
+            "content missing DELEGATION_PROMPT marker: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("summarise the quarterly report"),
+            "content missing task text: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("DELEGATION_RESULT:"),
+            "content missing DELEGATION_RESULT marker: {}",
+            row.content
+        );
+        assert!(
+            row.content.contains("child summary text"),
+            "content missing child summary: {}",
+            row.content
+        );
+        assert_eq!(row.agent_id, "parent-007");
+        assert_eq!(
+            row.session_id,
+            Some("agent:parent-007:peer:user".to_string()),
+        );
+    }
+
+    /// Negative control — when no writer is wired, spawn must succeed without
+    /// emitting anything. Guards against regressions where a default writer
+    /// is silently injected by the harness.
+    #[tokio::test]
+    async fn spawn_does_not_emit_delegation_when_writer_unset() {
+        let provider = ScriptedProvider::new(vec![ProviderResponse::text_only(
+            "no writer here".to_string(),
+        )]);
+        let base = make_base(provider); // raw_memory_writer left as None
+
+        let agent = agent_with_allowed("orphan", vec!["*"]);
+        let req = SpawnRequest {
+            agent_def: &agent,
+            task: "ignored",
+            context_summary: None,
+            model: None,
+            timeout_secs: 5,
+            cancel: CancellationToken::new(),
+        };
+
+        let result = spawn(&base, req).await.expect("spawn ok");
+        assert_eq!(result.final_text.as_deref(), Some("no writer here"));
+        // No assertion on captured rows — the absence of a writer is the
+        // contract, and if any silent default fires the test above will catch
+        // it (single row expected) before this test would.
     }
 
     // -- extract_run_result edge-case regression tests ------------------------

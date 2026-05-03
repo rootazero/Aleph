@@ -127,7 +127,10 @@ pub(crate) fn emit_delegation_raw(
     emit_delegation_raw_with_registry(writer, request, result, child_agent_id, None);
 }
 
-/// Inner implementation that optionally threads an extension registry.
+/// SubAgentRequest/Result shaped wrapper around `emit_delegation_primitives`.
+/// Kept as the entry point for the A2A path which still has those types in
+/// scope; the new harness-based subagent_spawner calls the primitive helper
+/// directly to avoid coupling on a2a request/result shapes.
 pub(crate) fn emit_delegation_raw_with_registry(
     writer: std::sync::Arc<dyn RawMemoryStore>,
     request: &SubAgentRequest,
@@ -135,22 +138,45 @@ pub(crate) fn emit_delegation_raw_with_registry(
     child_agent_id: impl Into<String>,
     registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
 ) {
-    let child_agent_id = child_agent_id.into();
-    let prompt_text = request.prompt.clone();
-    let summary_text = result.summary.clone();
-    let content = format!(
-        "DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",
-        prompt = prompt_text,
-        summary = summary_text,
-    );
-
     let parent_agent_id = request
         .execution_context
         .as_ref()
         .and_then(|ctx| ctx.metadata.get("parent_agent_id").cloned())
         .unwrap_or_else(|| "default".to_string());
-
     let parent_session_id = request.parent_session_id.clone();
+    emit_delegation_primitives(
+        writer,
+        request.prompt.clone(),
+        result.summary.clone(),
+        parent_agent_id,
+        parent_session_id,
+        child_agent_id.into(),
+        registry,
+    );
+}
+
+/// Primitive-arg core of the G2 hook — agnostic to a2a request/result types.
+///
+/// Public-in-crate so the harness-based subagent spawner (intra-process
+/// delegation, post-phase7 traffic flip) can emit the same `RawMemory(Delegation)`
+/// row that the A2A cross-process path emits. Without this hook the parent
+/// agent loses every lesson its local subagents learn.
+///
+/// Spawns a fire-and-forget tokio task to write the row and (optionally) run
+/// it through the `MemoryExtensionRegistry` capture filter. Logs and returns
+/// when no tokio runtime is available rather than panicking.
+pub(crate) fn emit_delegation_primitives(
+    writer: std::sync::Arc<dyn RawMemoryStore>,
+    prompt: String,
+    summary: String,
+    parent_agent_id: String,
+    parent_session_id: Option<String>,
+    child_agent_id: String,
+    registry: Option<std::sync::Arc<MemoryExtensionRegistry>>,
+) {
+    let content = format!(
+        "DELEGATION_PROMPT:\n{prompt}\n\nDELEGATION_RESULT:\n{summary}",
+    );
 
     let mut raw = RawMemory::new(content, RawMemorySource::Delegation { child_agent_id })
         .with_agent(parent_agent_id.clone());

@@ -499,7 +499,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     sub_session,
                     parent_view_for_children,
                     sub_sandbox,
-                );
+                )
+                .with_parent_agent_id(request.session_key.agent_id().to_string())
+                .with_parent_session_id(request.session_key.to_key_string());
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }
@@ -508,6 +510,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 if let Some(ref inbox) = self.inbox {
                     t = t.with_inbox(inbox.clone());
+                }
+                // Spec 1 G2 — thread the raw-memory writer so the spawner emits
+                // a Delegation row after each successful local subagent run.
+                // Falls back silently when memory_backend isn't configured.
+                if let Some(ref mb) = self.memory_backend {
+                    t = t.with_raw_memory_writer(
+                        mb.clone() as Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+                    );
                 }
                 Arc::new(t)
             };
