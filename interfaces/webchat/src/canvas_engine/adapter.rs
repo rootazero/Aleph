@@ -180,13 +180,15 @@ pub fn to_neighborhood(
 /// Populate `nbhd.orphans` with all nodes from `all_dtos` that are not already
 /// present in the neighborhood (center, one_hop, two_hop, or cluster members).
 ///
-/// Orphans are laid out evenly around an outer ring at `ORPHAN_RADIUS`, tagged
-/// with `hop = ORPHAN_HOP_SENTINEL` and `z = ORPHAN_Z`. They are pinned so the
-/// force layout doesn't disturb them, and their world positions are also written
-/// into `target_positions` for tween consistency.
+/// Orphans are bucketed by `category` ("kind") and each kind gets a sector around
+/// the adaptive `r_orphan(...)` ring. Within a sector, members are placed via a
+/// golden-angle spiral (≈137.5°) with a √(j+1)·16 radius so the centre of the
+/// disc is denser than the rim. Orphans are tagged with `hop = ORPHAN_HOP_SENTINEL`
+/// and `z = ORPHAN_Z`, but **not** pinned — they participate in idle drift along
+/// with one-hop / two-hop nodes (T5/T6). Their target positions are written into
+/// `target_positions` so the drift code has anchors to oscillate around.
 pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
-    use std::collections::HashSet;
-    use std::f64::consts::TAU;
+    use std::collections::{BTreeMap, HashSet};
 
     let mut in_view: HashSet<&str> = HashSet::new();
     in_view.insert(nbhd.center.id.as_str());
@@ -207,33 +209,57 @@ pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
         .filter(|d| !in_view.contains(d.id.as_str()))
         .collect();
 
-    let count = orphan_dtos.len();
-    if count == 0 {
+    if orphan_dtos.is_empty() {
         nbhd.orphans = Vec::new();
         return;
     }
 
-    let r = ORPHAN_RADIUS as f64;
-    // Stagger by a quarter turn so the first orphan doesn't sit on the +X axis.
-    let phase = TAU / 8.0;
-
-    let mut orphans = Vec::with_capacity(count);
-    for (i, dto) in orphan_dtos.into_iter().enumerate() {
-        let angle = phase + (i as f64) * TAU / (count as f64);
-        let x = angle.cos() * r;
-        let y = angle.sin() * r;
-
-        let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
-        node.position = Vec2::new(x, y);
-        node.z = ORPHAN_Z;
-        node.pinned = true;
-        // Shrink ghost dots: orphans are visual context, not focus targets.
-        node.radius = 4.5;
-        orphans.push(node);
-
-        nbhd.target_positions
-            .insert(dto.id.clone(), Vec3::new(x as f32, y as f32, ORPHAN_Z));
+    // Bucket by kind (== `category`). BTreeMap gives stable iteration order.
+    let mut by_kind: BTreeMap<String, Vec<&NoteNodeDto>> = BTreeMap::new();
+    for d in &orphan_dtos {
+        by_kind.entry(d.category.clone()).or_default().push(d);
     }
+
+    let kind_count = by_kind.len().max(1) as f64;
+    // Adaptive orphan ring radius (consistent with hop layout). The adapter has no
+    // viewport at this layer; pass nominal 800 — viewport::fit_to_content corrects
+    // the visible scale after seeding.
+    let orphan_count = orphan_dtos.len();
+    let r_ring = crate::canvas_engine::layout::r_orphan(orphan_count, 800.0) as f64;
+
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt()); // ≈ 137.5°
+
+    let mut orphans = Vec::with_capacity(orphan_count);
+
+    for (i, (kind, members)) in by_kind.into_iter().enumerate() {
+        // Cluster-centre angle: even slots, slightly perturbed by hash so the
+        // pattern differs across kinds. Stable across sessions.
+        let h = crate::canvas_engine::layout::fnv1a_32(kind.as_bytes()) as f64
+            / u32::MAX as f64;
+        let center_angle =
+            (i as f64 / kind_count) * std::f64::consts::TAU + h * 0.5;
+        let cx = r_ring * center_angle.cos();
+        let cy = r_ring * center_angle.sin();
+
+        for (j, dto) in members.into_iter().enumerate() {
+            let angle = j as f64 * golden;
+            // √(j+1)·16: golden-angle disc with denser centre.
+            let radius = (j as f64 + 1.0).sqrt() * 16.0;
+            let x = cx + radius * angle.cos();
+            let y = cy + radius * angle.sin();
+
+            let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
+            node.position = Vec2::new(x, y);
+            node.z = ORPHAN_Z;
+            // No `pinned = true` — orphans drift like everyone else.
+            node.radius = 4.5;
+            orphans.push(node);
+
+            nbhd.target_positions
+                .insert(dto.id.clone(), Vec3::new(x as f32, y as f32, ORPHAN_Z));
+        }
+    }
+
     nbhd.orphans = orphans;
 }
 
@@ -485,5 +511,114 @@ mod tests {
         assert!(nb.target_positions.contains_key("a"));
         assert!(nb.target_positions.contains_key("b"));
         assert!(nb.target_positions.contains_key("c"));
+    }
+
+    fn dto_kind(id: &str, kind: &str) -> NoteNodeDto {
+        NoteNodeDto {
+            id: id.to_string(),
+            name: id.to_string(),
+            path: format!("{id}.md"),
+            category: kind.to_string(),
+            tags: vec![],
+            link_count: 1,
+        }
+    }
+
+    #[test]
+    fn populate_orphans_groups_by_kind() {
+        use crate::canvas_engine::types::Vec2;
+        let mut nbhd = Neighborhood {
+            center: note_dto_to_canvas(&dto_kind("c", "centre"), 0),
+            one_hop: vec![],
+            two_hop: vec![],
+            orphans: vec![],
+            clusters: vec![],
+            edges: vec![],
+            target_positions: Default::default(),
+            fetched_at_ms: 0.0,
+        };
+        let all = vec![
+            dto_kind("a1", "concept"),
+            dto_kind("a2", "concept"),
+            dto_kind("b1", "person"),
+            dto_kind("b2", "person"),
+            dto_kind("b3", "person"),
+            dto_kind("c1", "tool"),
+        ];
+        populate_orphans(&mut nbhd, &all);
+
+        // All orphans returned, no pinning.
+        assert_eq!(nbhd.orphans.len(), 6);
+        for o in &nbhd.orphans {
+            assert!(!o.pinned, "orphan {} is pinned", o.id);
+        }
+
+        // Same-kind orphans are tightly grouped (within ~ √n·16 + ε).
+        let group = |kind: &str| -> Vec<Vec2> {
+            nbhd.orphans
+                .iter()
+                .filter(|o| o.category == kind)
+                .map(|o| o.position)
+                .collect()
+        };
+        let person = group("person");
+        assert_eq!(person.len(), 3);
+        let cx = person.iter().map(|p| p.x).sum::<f64>() / 3.0;
+        let cy = person.iter().map(|p| p.y).sum::<f64>() / 3.0;
+        for p in &person {
+            let d = ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt();
+            // Golden-angle disc with j∈{0,1,2}, radius = √(j+1)·16 → max ≈ √3·16 ≈ 27.7.
+            assert!(d < 60.0, "person orphan {} too far from cluster centre: d={d}", p.x);
+        }
+    }
+
+    #[test]
+    fn populate_orphans_distinct_kinds_separated() {
+        let mut nbhd = Neighborhood {
+            center: note_dto_to_canvas(&dto_kind("c", "centre"), 0),
+            one_hop: vec![],
+            two_hop: vec![],
+            orphans: vec![],
+            clusters: vec![],
+            edges: vec![],
+            target_positions: Default::default(),
+            fetched_at_ms: 0.0,
+        };
+        let all = vec![
+            dto_kind("a", "kind-a"),
+            dto_kind("b", "kind-b"),
+            dto_kind("c1", "kind-c"),
+        ];
+        populate_orphans(&mut nbhd, &all);
+
+        // For 3 kinds the angular separation between consecutive cluster centres
+        // (sorted by angle) should be ≥ TAU/(2·K) = ~60°.
+        let mut angles: Vec<f64> = nbhd
+            .orphans
+            .iter()
+            .map(|o| o.position.y.atan2(o.position.x))
+            .collect();
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for w in angles.windows(2) {
+            let gap = (w[1] - w[0]).abs();
+            assert!(gap > std::f64::consts::PI / 3.0 - 0.1, "clusters too close: gap={gap}");
+        }
+    }
+
+    #[test]
+    fn populate_orphans_writes_target_positions() {
+        let mut nbhd = Neighborhood {
+            center: note_dto_to_canvas(&dto_kind("c", "centre"), 0),
+            one_hop: vec![],
+            two_hop: vec![],
+            orphans: vec![],
+            clusters: vec![],
+            edges: vec![],
+            target_positions: Default::default(),
+            fetched_at_ms: 0.0,
+        };
+        let all = vec![dto_kind("only", "kind")];
+        populate_orphans(&mut nbhd, &all);
+        assert!(nbhd.target_positions.contains_key("only"));
     }
 }

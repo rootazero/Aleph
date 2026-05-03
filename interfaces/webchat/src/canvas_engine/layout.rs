@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::types::{CanvasEdge, CanvasNode, ClusterNode, Vec2, Vec3};
 
 /// FNV-1a 32-bit hash, deterministic across runs and platforms.
-fn fnv1a_32(bytes: &[u8]) -> u32 {
+pub(crate) fn fnv1a_32(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811c9dc5;
     for b in bytes {
         h ^= *b as u32;
