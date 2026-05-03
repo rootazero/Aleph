@@ -6,21 +6,25 @@
 //! `gateway::server::build_router`). Spec C scope covers secrets and
 //! agents (memory writes go through the existing `remember` tool).
 
+pub mod agents;
 pub mod secrets;
 
 use std::sync::Arc;
 
 use axum::Router;
 
+use crate::config::agent_manager::AgentManager;
 use crate::gateway::security::SharedTokenManager;
 
 #[derive(Clone)]
 pub struct AdminApiState {
     pub shared_token: Arc<SharedTokenManager>,
+    pub agent_manager: Arc<AgentManager>,
 }
 
 pub fn router(state: AdminApiState) -> Router {
     Router::new()
         .nest("/secrets", secrets::router())
+        .nest("/agents", agents::router())
         .with_state(state)
 }

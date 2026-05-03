@@ -91,6 +91,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_app() -> (Router, TempDir) {
+        use crate::config::agent_manager::AgentManager;
         use crate::gateway::security::store::SecurityStore;
         use crate::gateway::security::SharedTokenManager;
 
@@ -99,8 +100,19 @@ mod tests {
         let mgr = Arc::new(SharedTokenManager::new(store, dir.path().join("vault")));
         // Vault encryption requires a token; generate one before any store_secret.
         mgr.generate_token().expect("seed token");
+
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "[agents]\n").unwrap();
+        let agent_manager = Arc::new(AgentManager::new(
+            cfg,
+            dir.path().join("workspaces"),
+            dir.path().join("agents"),
+            dir.path().join("trash"),
+        ));
+
         let state = AdminApiState {
             shared_token: mgr,
+            agent_manager,
         };
         let app = Router::new().nest("/secrets", router()).with_state(state);
         (app, dir)

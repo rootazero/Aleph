@@ -1140,6 +1140,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     {
         let admin_state = alephcore::gateway::admin_api::AdminApiState {
             shared_token: auth_bundle.auth_ctx.shared_token_mgr.clone(),
+            agent_manager: agent_manager.clone(),
         };
         server.set_admin_router(alephcore::gateway::admin_api::router(admin_state));
     }
