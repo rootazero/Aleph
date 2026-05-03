@@ -140,12 +140,10 @@ impl KnowledgeNote {
             .map(|dt| dt.format("%Y-%m-%d").to_string())
             .unwrap_or_default();
 
-        let tags_yaml: Vec<String> = self.tags.iter().map(|t| t.to_string()).collect();
-
         let mut out = String::new();
         out.push_str("---\n");
         out.push_str(&format!("category: {}\n", self.category));
-        out.push_str(&format!("tags: [{}]\n", tags_yaml.join(", ")));
+        out.push_str(&format!("tags: {}\n", yaml_inline_array(&self.tags)));
         out.push_str(&format!("created: {created}\n"));
         out.push_str(&format!("updated: {updated}\n"));
         out.push_str(&format!("confidence: {:.4}\n", self.confidence));
@@ -156,14 +154,10 @@ impl KnowledgeNote {
             Severity::Critical => "critical",
         };
         out.push_str(&format!("severity: {severity_str}\n"));
-        if self.source_facts.is_empty() {
-            out.push_str("source_facts: []\n");
-        } else {
-            out.push_str(&format!(
-                "source_facts: [{}]\n",
-                self.source_facts.join(", ")
-            ));
-        }
+        out.push_str(&format!(
+            "source_facts: {}\n",
+            yaml_inline_array(&self.source_facts)
+        ));
         out.push_str("---\n\n");
 
         for fact in &self.facts {
@@ -263,6 +257,49 @@ fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Emit a YAML flow-style array, quoting any element that contains a YAML
+/// reserved character so the round-trip survives `serde_yaml::from_str`.
+pub(crate) fn yaml_inline_array(items: &[String]) -> String {
+    if items.is_empty() {
+        return "[]".to_string();
+    }
+    let parts: Vec<String> = items
+        .iter()
+        .map(|s| {
+            let needs_quote = s.chars().any(|c| {
+                matches!(
+                    c,
+                    '\'' | '"'
+                        | ','
+                        | ':'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '#'
+                        | '&'
+                        | '*'
+                        | '!'
+                        | '|'
+                        | '>'
+                        | '%'
+                        | '@'
+                        | '`'
+                )
+            }) || s.starts_with(' ')
+                || s.ends_with(' ')
+                || s.is_empty();
+            if needs_quote {
+                let escaped = s.replace('\'', "''");
+                format!("'{escaped}'")
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    format!("[{}]", parts.join(", "))
 }
 
 #[cfg(test)]
@@ -461,6 +498,41 @@ Related: [[Rust Learning]] [[Dev Environment]]
         assert_eq!(sanitize_title("has\\back"), "hasback");
         assert_eq!(sanitize_title("a]b*c?d"), "a]bcd");
         assert_eq!(sanitize_title("  spaces  "), "spaces");
+    }
+
+    #[test]
+    fn yaml_inline_array_quotes_special_chars() {
+        let items = vec![
+            "plain".to_string(),
+            "has, comma".to_string(),
+            "has: colon".to_string(),
+            "has '' quote".to_string(),
+        ];
+        let s = yaml_inline_array(&items);
+        assert_eq!(s, "[plain, 'has, comma', 'has: colon', 'has '''' quote']");
+    }
+
+    #[test]
+    fn yaml_inline_array_empty() {
+        assert_eq!(yaml_inline_array(&[]), "[]");
+    }
+
+    #[test]
+    fn tags_with_special_chars_round_trip() {
+        let n = KnowledgeNote {
+            title: "t".into(),
+            category: "preference".into(),
+            tags: vec!["has, comma".into(), "has: colon".into()],
+            facts: vec!["x".into()],
+            content_hash: String::new(),
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        let parsed = KnowledgeNote::from_markdown("t", &md).expect("must round-trip");
+        assert_eq!(
+            parsed.tags,
+            vec!["has, comma".to_string(), "has: colon".to_string()]
+        );
     }
 
     #[test]
