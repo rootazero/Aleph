@@ -259,6 +259,34 @@ fn sha256_hex(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Return `true` if `s`, emitted unquoted in YAML flow context, would parse
+/// as a non-string scalar (null, bool, number, etc.) and break a round-trip
+/// to `Vec<String>`.
+fn is_yaml_implicit_scalar(s: &str) -> bool {
+    matches!(
+        s,
+        ""
+        | "~"
+        | "null" | "Null" | "NULL"
+        | "true" | "True" | "TRUE"
+        | "false" | "False" | "FALSE"
+        | "yes" | "Yes" | "YES"
+        | "no" | "No" | "NO"
+        | "on" | "On" | "ON"
+        | "off" | "Off" | "OFF"
+        | ".inf" | ".Inf" | ".INF"
+        | "-.inf" | "-.Inf" | "-.INF"
+        | ".nan" | ".NaN" | ".NAN"
+    ) || s.parse::<i64>().is_ok()
+        || s.parse::<f64>().is_ok()
+        || s.starts_with("0x")
+        || s.starts_with("-0x")
+        || s.starts_with("+0x")
+        || s.starts_with("0o")
+        || s.starts_with("-0o")
+        || s.starts_with("+0o")
+}
+
 /// Emit a YAML flow-style array, quoting any element that contains a YAML
 /// reserved character so the round-trip survives `serde_yaml::from_str`.
 pub(crate) fn yaml_inline_array(items: &[String]) -> String {
@@ -290,7 +318,8 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
                 )
             }) || s.starts_with(' ')
                 || s.ends_with(' ')
-                || s.is_empty();
+                || s.is_empty()
+                || is_yaml_implicit_scalar(s);
             if needs_quote {
                 let escaped = s.replace('\'', "''");
                 format!("'{escaped}'")
@@ -532,6 +561,45 @@ Related: [[Rust Learning]] [[Dev Environment]]
         assert_eq!(
             parsed.tags,
             vec!["has, comma".to_string(), "has: colon".to_string()]
+        );
+    }
+
+    #[test]
+    fn yaml_inline_array_quotes_implicit_scalars() {
+        let cases = [
+            "null", "Null", "NULL", "~", "true", "false", "Yes", "NO", "on", "OFF", "123", "-1",
+            "1.5", ".inf", ".nan", "0x1a", "0o7",
+        ];
+        for c in cases {
+            let s = yaml_inline_array(&[c.to_string()]);
+            assert!(
+                s.starts_with("['") && s.ends_with("']"),
+                "expected {c:?} to be quoted, got {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_inline_array_quotes_leading_and_trailing_space() {
+        let s = yaml_inline_array(&[" lead".to_string(), "trail ".to_string(), "".to_string()]);
+        assert_eq!(s, "[' lead', 'trail ', '']");
+    }
+
+    #[test]
+    fn implicit_scalar_tags_round_trip() {
+        let n = KnowledgeNote {
+            title: "t".into(),
+            category: "preference".into(),
+            tags: vec!["null".into(), "true".into(), "123".into()],
+            facts: vec!["x".into()],
+            content_hash: String::new(),
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        let parsed = KnowledgeNote::from_markdown("t", &md).expect("must round-trip");
+        assert_eq!(
+            parsed.tags,
+            vec!["null".to_string(), "true".to_string(), "123".to_string()]
         );
     }
 
