@@ -69,6 +69,12 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
+    /// Phase 6 follow-up: MemoryContextProvider exposed for the orchestrator
+    /// path so `AgentHarnessRunner` can build the per-turn system prompt with
+    /// curated memory + hybrid retrieval. ExecutionEngine receives a clone via
+    /// `with_memory_context_provider`; the orchestrator path needs its own
+    /// reference because it does not hold an `ExecutionEngine`.
+    pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -118,6 +124,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut orch_cell_out: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     > = None;
+    // Phase 6 follow-up: hold the same MemoryContextProvider that gets injected
+    // into the (legacy) ExecutionEngine so the orchestrator path can build a
+    // system prompt with curated memory + hybrid retrieval.
+    let mut mcp_for_orchestrator: Option<Arc<alephcore::thinker::MemoryContextProvider>> = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
@@ -1398,6 +1408,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 );
             }
 
+            mcp_for_orchestrator = Some(mcp.clone());
             engine = engine.with_memory_context_provider(mcp);
         }
 
@@ -2093,5 +2104,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         event_store: event_store.clone(),
         artifact_store: artifact_store.clone(),
         orchestrator_cell: orch_cell_out,
+        memory_context_provider: mcp_for_orchestrator,
     }
 }

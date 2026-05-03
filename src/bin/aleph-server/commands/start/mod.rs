@@ -1105,6 +1105,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             default_provider,
             sandbox.clone(),
             &stop_hook_configs,
+            agent_result.memory_context_provider.clone(),
         )
         .await
         {

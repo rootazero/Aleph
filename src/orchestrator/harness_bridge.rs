@@ -62,6 +62,16 @@ pub struct AgentHarnessRunner {
     /// Platform-specific power-management capability. Injected at boot so the
     /// core never directly imports platform crates (R1: Brain–Limb separation).
     pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
+
+    /// Phase 6 follow-up — closes the BUG-2/BUG-3 gap where the gateway path
+    /// was constructing `HarnessDeps { system_prompt: None }` and bypassing
+    /// curated/hybrid memory entirely. When `Some`, `run()` invokes
+    /// `build_curated_message` + `build_memory_user_message` and threads the
+    /// rendered envelopes through `PromptBuilder` so the system prompt carries
+    /// per-agent curated memory plus retrieval hits. `None` preserves the old
+    /// behaviour (boot path for tests / env without a memory backend).
+    pub memory_context_provider:
+        Option<Arc<crate::thinker::memory_context_provider::MemoryContextProvider>>,
 }
 
 #[async_trait]
@@ -112,7 +122,18 @@ impl HarnessRunner for AgentHarnessRunner {
         // Step 5: seed the session with the input as the appropriate event(s)
         // so the inner harness Think loop can read it. Preserve per-message
         // structure — do not flatten via string join.
+        // Capture the user's last query before moving `input` so step 5b can
+        // ask MemoryContextProvider for retrieval-relevant facts.
+        let user_query = last_user_query(&input);
         seed_session(self.session_service.as_ref(), &session_id, input).await?;
+
+        // Step 5b (BUG-2/BUG-3 fix, Phase 6 follow-up): assemble the system
+        // prompt from per-agent curated memory + hybrid retrieval before the
+        // harness loop starts. Failures are warned and degraded to `None` so
+        // memory issues never block a turn.
+        let system_prompt = self
+            .build_system_prompt(&spec.agent, &session_id, &user_query)
+            .await;
 
         // Step 6: assemble HarnessDeps and run the inner Think→Act loop.
         // Apply per-request tool_service override; fall back to the runner's
@@ -131,7 +152,7 @@ impl HarnessRunner for AgentHarnessRunner {
             context_compactor: self.context_compactor.clone(),
             skill_prefetcher: self.skill_prefetcher.clone(),
             trace_sink: trace_sink.clone(),
-            system_prompt: None,
+            system_prompt,
             max_iterations: None,
             power,
             stall_config: None,
@@ -191,6 +212,104 @@ impl HarnessRunner for AgentHarnessRunner {
         let _ = events.send(FlowStreamEvent::Complete(outcome.clone()));
 
         Ok(outcome)
+    }
+}
+
+impl AgentHarnessRunner {
+    /// Assemble the per-turn system prompt with curated memory + hybrid
+    /// retrieval. Returns `None` when no `MemoryContextProvider` is wired
+    /// (test envs without a memory backend) or when both memory builders
+    /// returned empty envelopes.
+    ///
+    /// Errors from individual builders are downgraded to a warn log: the
+    /// remaining sections (curated/memory/agent role) still render so a
+    /// transient memory failure never blocks a turn. This matches the
+    /// `Ok(None)` semantics already exposed by `MemoryContextProvider`'s
+    /// builders and keeps the harness path resilient.
+    async fn build_system_prompt(
+        &self,
+        agent_id: &str,
+        session_id: &SessionId,
+        user_query: &str,
+    ) -> Option<String> {
+        use crate::providers::message::UnifiedMessage;
+        use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
+
+        let mcp = self.memory_context_provider.as_ref()?;
+
+        let session_key_str = session_id.to_key_string();
+
+        let curated_text: Option<String> = match mcp
+            .build_curated_message(agent_id, &session_key_str)
+            .await
+        {
+            Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+            Err(e) => {
+                tracing::warn!(
+                    agent_id,
+                    session = %session_key_str,
+                    error = %e,
+                    "build_curated_message failed; degrading curated envelope to None"
+                );
+                None
+            }
+        };
+
+        let memory_text: Option<String> = if user_query.is_empty() {
+            None
+        } else {
+            match mcp.build_memory_user_message(agent_id, user_query).await {
+                Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id,
+                        error = %e,
+                        "build_memory_user_message failed; degrading memory envelope to None"
+                    );
+                    None
+                }
+            }
+        };
+
+        let agent_def = self.agent_registry.get(agent_id);
+
+        // Skip prompt assembly entirely when there is nothing memory-side to
+        // inject AND no AgentDef to seed the role layer; the harness's
+        // pre-Phase-6 behaviour was already `system_prompt: None` in that case.
+        if curated_text.is_none() && memory_text.is_none() && agent_def.is_none() {
+            return None;
+        }
+
+        let mut builder = PromptBuilder::new(PromptConfig::default());
+        if let Some(def) = agent_def {
+            builder = builder.with_agent(def);
+        }
+        builder = builder.with_curated_envelope(curated_text);
+        if let Some(text) = memory_text {
+            builder = builder.with_memory_user_message(text);
+        }
+        Some(builder.build_system_prompt(&[]))
+    }
+}
+
+/// Extract the user's most recent prompt text from a `FlowInput` for use as
+/// the retrieval query against `MemoryContextProvider::build_memory_user_message`.
+/// Returns an empty string when no user-side text is available; callers treat
+/// the empty case as "skip retrieval".
+fn last_user_query(input: &FlowInput) -> String {
+    fn text_of(content: &crate::session::events::MessageContent) -> &str {
+        content.text.as_str()
+    }
+    match input {
+        FlowInput::Prompt(s) => s.clone(),
+        FlowInput::Messages(msgs) | FlowInput::Multimodal(msgs) => msgs
+            .iter()
+            .rev()
+            .map(text_of)
+            .find(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_default(),
+        FlowInput::History { prompt, .. } => prompt.clone(),
     }
 }
 
@@ -710,4 +829,66 @@ mod tests {
             .collect();
         assert_eq!(users, vec!["m1", "m2"]);
     }
+
+    // BUG-2/BUG-3 regression coverage — `last_user_query` must round-trip the
+    // most recent user-side text out of every `FlowInput` variant so the
+    // gateway path can hand it to `MemoryContextProvider::build_memory_user_message`.
+    // Empty strings degrade cleanly to "" so callers can short-circuit
+    // retrieval without a panic.
+
+    fn msg(text: &str) -> crate::session::events::MessageContent {
+        crate::session::events::MessageContent {
+            text: text.to_string(),
+            blocks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn last_user_query_extracts_prompt() {
+        let q = super::last_user_query(&FlowInput::Prompt("hello world".into()));
+        assert_eq!(q, "hello world");
+    }
+
+    #[test]
+    fn last_user_query_extracts_history_prompt() {
+        let input = FlowInput::History {
+            turns: vec![],
+            prompt: "next turn please".into(),
+        };
+        assert_eq!(super::last_user_query(&input), "next turn please");
+    }
+
+    #[test]
+    fn last_user_query_extracts_last_non_empty_message() {
+        let input = FlowInput::Messages(vec![msg("first"), msg("second")]);
+        assert_eq!(super::last_user_query(&input), "second");
+    }
+
+    #[test]
+    fn last_user_query_skips_trailing_empty_messages() {
+        let input = FlowInput::Messages(vec![msg("real query"), msg(""), msg("")]);
+        assert_eq!(super::last_user_query(&input), "real query");
+    }
+
+    #[test]
+    fn last_user_query_handles_multimodal() {
+        let input = FlowInput::Multimodal(vec![msg("first"), msg("multimodal-tail")]);
+        assert_eq!(super::last_user_query(&input), "multimodal-tail");
+    }
+
+    #[test]
+    fn last_user_query_returns_empty_for_empty_messages() {
+        let input = FlowInput::Messages(vec![]);
+        assert_eq!(super::last_user_query(&input), "");
+    }
+
+    // Note on build_system_prompt coverage: the prompt assembly path itself
+    // requires a wired `MemoryContextProvider` (LLM-backed reranker, embedder,
+    // hybrid assembler, FactSourceFilter pipeline). That is exercised in the
+    // P0 联合 e2e validation step against a live aleph-server, where curated
+    // markers and retrieval markers can be planted in a known-state fixture
+    // and the resulting RequestPayload.system_prompt asserted via TraceSink.
+    // Adding a unit test here would require a heavy fixture stack (provider,
+    // session_service, tool_service, agent registry) that the surrounding
+    // file already builds via `fresh_service` for `seed_session` only.
 }

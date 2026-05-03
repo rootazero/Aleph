@@ -40,6 +40,12 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     default_provider: Arc<dyn alephcore::providers::AiProvider>,
     sandbox: Arc<dyn alephcore::sandbox::Sandbox>,
     stop_hook_configs: &[StopHookConfig],
+    // Phase 6 follow-up — fixes BUG-2/BUG-3 (gateway path was building
+    // HarnessDeps with system_prompt: None, bypassing curated memory and
+    // hybrid retrieval entirely). When `Some`, AgentHarnessRunner uses it to
+    // assemble the system prompt before each turn. None disables only the
+    // memory-driven prompt sections; AgentRoleLayer still renders.
+    memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // Presets only — PHASE-6: load user flows from ~/.aleph/flows/.
     let presets =
@@ -109,6 +115,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         context_compactor: None,
         skill_prefetcher: None,
         power,
+        memory_context_provider,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.
