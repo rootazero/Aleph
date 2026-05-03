@@ -651,7 +651,7 @@ fn draw_edges_for_node(
     drag: (f32, f32),
 ) {
     for e in &nbhd.edges {
-        let endpoints = endpoints_world_pos(e, nbhd, drag);
+        let endpoints = endpoints_world_pos(e, nbhd, drag, now_ms_in_seconds() * 1000.0);
         let (from_pos, to_pos, from_z, to_z) = match endpoints {
             Some(t) => t,
             None => continue,
@@ -784,26 +784,36 @@ fn endpoints_world_pos(
     e: &CanvasEdge,
     nbhd: &Neighborhood,
     drag: (f32, f32),
+    t_ms: f64,
 ) -> Option<((f32, f32), (f32, f32), f32, f32)> {
-    let resolve = |idx: usize| -> Option<Vec3> {
+    let resolve = |idx: usize| -> Option<(&str, Vec3)> {
         if idx == 0 {
-            nbhd.target_positions.get(&nbhd.center.id).copied()
+            let id = nbhd.center.id.as_str();
+            nbhd.target_positions.get(id).copied().map(|p| (id, p))
         } else if idx <= nbhd.one_hop.len() {
             let n = &nbhd.one_hop[idx - 1];
-            nbhd.target_positions.get(&n.id).copied()
+            nbhd.target_positions
+                .get(n.id.as_str())
+                .copied()
+                .map(|p| (n.id.as_str(), p))
         } else {
             let off = idx - 1 - nbhd.one_hop.len();
             let n = nbhd.two_hop.get(off)?;
-            nbhd.target_positions.get(&n.id).copied()
+            nbhd.target_positions
+                .get(n.id.as_str())
+                .copied()
+                .map(|p| (n.id.as_str(), p))
         }
     };
-    let p1 = resolve(e.from_idx)?;
-    let p2 = resolve(e.to_idx)?;
+    let (id1, p1) = resolve(e.from_idx)?;
+    let (id2, p2) = resolve(e.to_idx)?;
     let off1 = crate::canvas_engine::viewport::parallax_offset(p1.z, drag.0, drag.1);
     let off2 = crate::canvas_engine::viewport::parallax_offset(p2.z, drag.0, drag.1);
+    let d1 = drift_offset(t_ms, id1, DRIFT_AMPLITUDE_PX, DRIFT_PERIOD_MS);
+    let d2 = drift_offset(t_ms, id2, DRIFT_AMPLITUDE_PX, DRIFT_PERIOD_MS);
     Some((
-        (p1.x + off1.0, p1.y + off1.1),
-        (p2.x + off2.0, p2.y + off2.1),
+        (p1.x + off1.0 + d1.x as f32, p1.y + off1.1 + d1.y as f32),
+        (p2.x + off2.0 + d2.x as f32, p2.y + off2.1 + d2.y as f32),
         p1.z,
         p2.z,
     ))
