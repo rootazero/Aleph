@@ -948,6 +948,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(to_raw, "rust");
+
+        // Idempotency: re-running the migration must not error and must not clobber.
+        migrate_notes_links_to_raw(&conn).unwrap();
+        let to_raw_again: String = conn
+            .query_row(
+                "SELECT to_raw FROM notes_links WHERE from_note='cat/x'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(to_raw_again, "rust");
     }
 
     #[test]
