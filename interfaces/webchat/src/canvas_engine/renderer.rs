@@ -320,7 +320,7 @@ pub fn draw_neighborhood(
 
     // 2. Layer A: 2-hop (back)
     for n in &nbhd.two_hop {
-        draw_edges_for_node(ctx, n, nbhd, drag);
+        draw_edges_for_node(ctx, n, nbhd, drag, node_drag);
     }
     for n in &nbhd.two_hop {
         draw_node(ctx, n, drag, selected, hovered);
@@ -331,11 +331,7 @@ pub fn draw_neighborhood(
         draw_cluster(ctx, c, drag, selected, hovered);
     }
     for n in &nbhd.one_hop {
-        // Skip edges for the dragged node — we'll draw a stretched edge instead.
-        if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
-            continue;
-        }
-        draw_edges_for_node(ctx, n, nbhd, drag);
+        draw_edges_for_node(ctx, n, nbhd, drag, node_drag);
     }
     for n in &nbhd.one_hop {
         if node_drag.map(|o| o.node_id == n.id).unwrap_or(false) {
@@ -649,9 +645,10 @@ fn draw_edges_for_node(
     n: &CanvasNode,
     nbhd: &Neighborhood,
     drag: (f32, f32),
+    node_drag: Option<&DragOverlay>,
 ) {
     for e in &nbhd.edges {
-        let endpoints = endpoints_world_pos(e, nbhd, drag, now_ms_in_seconds() * 1000.0);
+        let endpoints = endpoints_world_pos(e, nbhd, drag, node_drag, now_ms_in_seconds() * 1000.0);
         let (from_pos, to_pos, from_z, to_z) = match endpoints {
             Some(t) => t,
             None => continue,
@@ -784,6 +781,7 @@ fn endpoints_world_pos(
     e: &CanvasEdge,
     nbhd: &Neighborhood,
     drag: (f32, f32),
+    node_drag: Option<&DragOverlay>,
     t_ms: f64,
 ) -> Option<((f32, f32), (f32, f32), f32, f32)> {
     let resolve = |idx: usize| -> Option<(&str, Vec3)> {
@@ -807,16 +805,21 @@ fn endpoints_world_pos(
     };
     let (id1, p1) = resolve(e.from_idx)?;
     let (id2, p2) = resolve(e.to_idx)?;
-    let off1 = crate::canvas_engine::viewport::parallax_offset(p1.z, drag.0, drag.1);
-    let off2 = crate::canvas_engine::viewport::parallax_offset(p2.z, drag.0, drag.1);
-    let d1 = drift_offset(t_ms, id1, DRIFT_AMPLITUDE_PX, DRIFT_PERIOD_MS);
-    let d2 = drift_offset(t_ms, id2, DRIFT_AMPLITUDE_PX, DRIFT_PERIOD_MS);
-    Some((
-        (p1.x + off1.0 + d1.x as f32, p1.y + off1.1 + d1.y as f32),
-        (p2.x + off2.0 + d2.x as f32, p2.y + off2.1 + d2.y as f32),
-        p1.z,
-        p2.z,
-    ))
+
+    let resolve_endpoint = |id: &str, p: Vec3| -> (f32, f32, f32) {
+        if let Some(o) = node_drag {
+            if o.node_id == id {
+                return (o.position.x as f32, o.position.y as f32, p.z);
+            }
+        }
+        let off = crate::canvas_engine::viewport::parallax_offset(p.z, drag.0, drag.1);
+        let d = drift_offset(t_ms, id, DRIFT_AMPLITUDE_PX, DRIFT_PERIOD_MS);
+        (p.x + off.0 + d.x as f32, p.y + off.1 + d.y as f32, p.z)
+    };
+
+    let (x1, y1, z1) = resolve_endpoint(id1, p1);
+    let (x2, y2, z2) = resolve_endpoint(id2, p2);
+    Some(((x1, y1), (x2, y2), z1, z2))
 }
 
 fn draw_dragged_node(
