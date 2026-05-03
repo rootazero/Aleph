@@ -10,7 +10,5 @@ pub mod sqlite_open;
 pub mod text_format;
 pub mod vault_io;
 
-#[cfg(debug_assertions)]
-pub mod spec_c_audit; // Removed in Task 26
-
 pub use one_or_many::OneOrMany;
+

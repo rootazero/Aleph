@@ -1054,6 +1054,45 @@ reviewer must confirm the handler does not open, read, or write any file under
 
 Any handler that cannot include this comment must be redesigned before merging.
 
+## Cross-process safety guarantees (Spec C, 2026-05-02)
+
+The original `.shared_token` corruption incident (documented elsewhere
+in this file) had a structural cause: nothing prevented two
+`aleph-server` processes from writing the same `~/.aleph/data/` files.
+Spec C closes that gap with four layered protections:
+
+- **Singleton lock**: `aleph-server start` acquires
+  `~/.aleph/data/aleph.lock` via `flock()` in `main()` before any
+  other state. The OS releases the lock automatically on process
+  exit (graceful, panic, SIGKILL). A second `start` exits cleanly
+  with code 64 + a stderr diagnostic naming the holder PID.
+- **Vault writes**: every write to `secrets.vault` goes through
+  `alephcore::utils::vault_io::VaultIo`, which combines an fcntl
+  exclusive lock (defense-in-depth even if the singleton ever fails)
+  with `tempfile + persist` rename for atomicity.
+- **JSON state writes**: `acp_sessions.json` and equivalent
+  hand-managed JSON files use `alephcore::utils::atomic_io::write_atomic`,
+  which is also temp + rename via `tempfile`.
+- **SQLite connections**: every connection under `~/.aleph/data/`
+  is opened via `alephcore::utils::sqlite_open::open_sqlite_safe`,
+  which sets `journal_mode=WAL`, `busy_timeout=5000`, and
+  `synchronous=NORMAL`. Read-only callers use `open_sqlite_readonly`.
+  Multi-reader + single-writer is now safe by construction.
+- **CLI dispatch**: every CLI subcommand declares a
+  `CommandPolicy` (NoLock / LockOnly / LockOrIpc) and routes
+  through `alephcore::cli::policy::with_policy` or `run_no_lock`.
+  When the server holds the singleton lock, write subcommands
+  forward to `/v1/admin/*` IPC endpoints (token rotation
+  self-heals via a single 401 retry). When no server is running,
+  the CLI takes the lock locally and operates directly.
+
+Reverse-regression: `scripts/spec_c_regression.sh` enforces the four
+invariants (no direct rusqlite open, no direct fs ops on vault/acp
+files, every CLI subcommand annotated, no leftover
+`acquire_instance_lock` callers). Run before any commit that touches
+`src/utils/`, `src/cli/`, `src/gateway/admin_api/`, or
+`src/bin/aleph-server/commands/`.
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview
