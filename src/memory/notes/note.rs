@@ -32,9 +32,9 @@ struct Frontmatter {
     category: String,
     #[serde(default)]
     tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_date_string")]
     created: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_date_string")]
     updated: Option<String>,
     #[serde(default = "default_confidence")]
     confidence: f32,
@@ -42,6 +42,35 @@ struct Frontmatter {
     severity: Severity,
     #[serde(default)]
     source_facts: Vec<String>,
+}
+
+/// Accept a YAML date field as either a quoted string, a native YAML date
+/// (which serde_yaml may surface as a Tagged value or other scalar depending
+/// on version), or null. Re-serialize non-string variants and strip
+/// surrounding quotes/whitespace so downstream callers always receive a clean
+/// `YYYY-MM-DD`-shaped string (or `None` for empty/null).
+fn deserialize_optional_date_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let v = serde_yaml::Value::deserialize(d)?;
+    Ok(match v {
+        serde_yaml::Value::Null => None,
+        serde_yaml::Value::String(s) => Some(s),
+        other => {
+            let s = serde_yaml::to_string(&other)
+                .map_err(serde::de::Error::custom)?
+                .trim()
+                .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace())
+                .to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+    })
 }
 
 fn default_confidence() -> f32 {
@@ -144,8 +173,8 @@ impl KnowledgeNote {
         out.push_str("---\n");
         out.push_str(&format!("category: {}\n", self.category));
         out.push_str(&format!("tags: {}\n", yaml_inline_array(&self.tags)));
-        out.push_str(&format!("created: {created}\n"));
-        out.push_str(&format!("updated: {updated}\n"));
+        out.push_str(&format!("created: \"{created}\"\n"));
+        out.push_str(&format!("updated: \"{updated}\"\n"));
         out.push_str(&format!("confidence: {:.4}\n", self.confidence));
         let severity_str = match self.severity {
             Severity::Low => "low",
@@ -601,6 +630,53 @@ Related: [[Rust Learning]] [[Dev Environment]]
             parsed.tags,
             vec!["null".to_string(), "true".to_string(), "123".to_string()]
         );
+    }
+
+    #[test]
+    fn date_writer_quotes_iso_string() {
+        let n = KnowledgeNote {
+            title: "t".into(),
+            category: "preference".into(),
+            facts: vec!["x".into()],
+            created_at: 1714377600,
+            updated_at: 1714377600,
+            ..Default::default()
+        };
+        let md = n.to_markdown();
+        assert!(
+            md.contains("created: \"2024-04-29\""),
+            "expected quoted date, got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn date_reader_accepts_native_yaml_date() {
+        let md = "---
+category: skill
+tags: []
+created: 2026-04-01
+updated: 2026-04-01
+---
+
+- fact
+";
+        let n = KnowledgeNote::from_markdown("t", md).expect("must parse native date");
+        assert!(n.created_at > 0);
+    }
+
+    #[test]
+    fn date_reader_accepts_quoted_iso_date() {
+        let md = "---
+category: skill
+tags: []
+created: \"2026-04-01\"
+updated: \"2026-04-01\"
+---
+
+- fact
+";
+        let n = KnowledgeNote::from_markdown("t", md).expect("must parse quoted date");
+        assert!(n.created_at > 0);
     }
 
     #[test]
