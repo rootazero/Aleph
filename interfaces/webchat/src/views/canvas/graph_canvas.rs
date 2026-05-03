@@ -188,6 +188,15 @@ pub fn GraphCanvas(
                         state.viewport.height = ph;
                         state.viewport.offset.x = pw / 2.0;
                         state.viewport.offset.y = ph / 2.0;
+                        // Refit content to the new canvas size. Only when nodes are loaded
+                        // (otherwise nodes is empty and fit_to_content early-returns).
+                        // Reborrow through `&mut *state` so the borrow checker sees disjoint
+                        // field borrows on GraphState rather than two simultaneous borrows of
+                        // the RefMut wrapper.
+                        if !state.nodes.is_empty() {
+                            let state = &mut *state;
+                            state.viewport.fit_to_content(&state.nodes, 0.10);
+                        }
                     }
                 }
             }
