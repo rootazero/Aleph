@@ -230,6 +230,14 @@ impl CuratedMemoryStore {
         }
     }
 
+    /// Snapshot the current store state with an arbitrary message — used by
+    /// callers (e.g. RememberTool) to construct a tool-result envelope for
+    /// soft rejections (duplicate / over-budget / scanner-block) without
+    /// raising a hard error and aborting the harness turn.
+    pub fn snapshot_outcome(&self, message: impl Into<String>) -> WriteOutcome {
+        self.outcome(&message.into())
+    }
+
     /// Acquire fs2 advisory lock on a sidecar `.lock` file, re-read disk into
     /// state, run the mutator, write atomically, release lock.
     async fn with_lock<F>(&self, mutate: F) -> Result<(), CuratedError>
