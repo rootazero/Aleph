@@ -32,6 +32,7 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "subagent-session",
     "subagent-checkpoint",
     "subagent-transcript",
+    "contradiction", // Phase C2.6: note_drift conflict pages
     "other",
     "query", // Spec 8: filed-back query answers
 ];

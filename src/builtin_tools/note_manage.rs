@@ -35,6 +35,7 @@ const VALID_CATEGORIES: &[&str] = &[
     "subagent-session",
     "subagent-checkpoint",
     "subagent-transcript",
+    "contradiction",
 ];
 
 // =============================================================================
@@ -642,6 +643,11 @@ fn validate_category(category: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_category_accepts_contradiction() {
+        assert!(validate_category("contradiction").is_ok());
+    }
 
     #[test]
     fn test_frontmatter_wiki_template() {
