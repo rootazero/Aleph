@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS notes_index (
 CREATE INDEX IF NOT EXISTS idx_notes_filename ON notes_index(filename);
 CREATE INDEX IF NOT EXISTS idx_notes_agent ON notes_index(agent_id);
 CREATE INDEX IF NOT EXISTS idx_notes_category ON notes_index(category);
+CREATE INDEX IF NOT EXISTS idx_notes_filename_agent ON notes_index(agent_id, filename);
 "#;
 
 const NOTES_LINKS_DDL: &str = r#"
@@ -935,6 +936,32 @@ mod tests {
             "SELECT COUNT(*) FROM notes_index WHERE agent_id='main'",
         );
         assert_eq!(snapshot1, snapshot2, "second run must be a no-op");
+    }
+
+    #[test]
+    fn find_by_filename_uses_composite_index() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        // Seed a couple of rows so the planner has something to optimize against.
+        conn.execute(
+            "INSERT INTO notes_index (path, filename, agent_id, category, tags_json, created_at, updated_at, content_hash)
+             VALUES ('preference/rust', 'rust', 'default', 'preference', '[]', 0, 0, 'h')",
+            [],
+        ).unwrap();
+
+        // Use the same WHERE clause that production code uses for filename resolution.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2",
+                rusqlite::params!["default", "rust"],
+                |r| r.get::<_, String>(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("idx_notes_filename_agent"),
+            "expected planner to use composite index 'idx_notes_filename_agent', got: {plan}"
+        );
     }
 
     #[test]
