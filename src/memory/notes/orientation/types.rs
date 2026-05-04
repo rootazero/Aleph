@@ -66,6 +66,22 @@ pub struct IndexStats {
     pub bytes_written: usize,
 }
 
+/// Summary of a single ingest batch — enumerates which categories saw note
+/// creates or updates so downstream passes (e.g. `index.md` refresh) can
+/// scope their work.
+#[derive(Debug, Clone, Default)]
+pub struct IngestBatchSummary {
+    pub agent_id: String,
+    pub touched: Vec<TouchedCategory>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TouchedCategory {
+    pub category: String,
+    pub added: u32,
+    pub updated: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

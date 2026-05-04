@@ -5,7 +5,7 @@ use crate::memory::notes::orientation::index_md::IndexMdGenerator;
 use crate::memory::notes::orientation::log_md::LogMdWriter;
 use crate::memory::notes::orientation::schema::{SchemaStore, DEFAULT_SCHEMA};
 use crate::memory::notes::orientation::types::{
-    IndexStats, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
+    IndexStats, IngestBatchSummary, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
 };
 use crate::memory::notes::store::NoteStore;
 use crate::providers::AiProvider;
@@ -31,6 +31,26 @@ pub trait NoteOrientation: Send + Sync {
     async fn record_session_end(&self, agent_id: &str, entry: LogEntry) -> Result<(), AlephError>;
 
     async fn rebuild_index(&self, agent_id: &str) -> Result<IndexStats, AlephError>;
+
+    /// Refresh `index.md` after a single ingest batch.
+    ///
+    /// The default impl is a no-op so non-fs orientations (e.g. an in-memory
+    /// stub) don't need to opt in.
+    ///
+    /// **TODO (Phase B follow-up):** the current `FsNoteOrientation` override
+    /// performs a full `rebuild_index` whenever any category is touched. A
+    /// future optimization can use `summary.touched` to regenerate only the
+    /// affected sections of `index.md`. Both the data plumbing and the type
+    /// surface are in place; the optimization is deferred to keep B4.1 small.
+    async fn refresh_index_after_ingest(
+        &self,
+        agent_id: &str,
+        summary: &IngestBatchSummary,
+    ) -> Result<(), AlephError> {
+        let _ = (agent_id, summary);
+        Ok(())
+    }
+
     async fn rotate_log_if_needed(&self, agent_id: &str) -> Result<bool, AlephError>;
 
     /// Mark a note dirty. A subsequent `rebuild_index` (or next `record_ingest`) flushes.
@@ -167,6 +187,20 @@ impl<S: NoteStore + Send + Sync + 'static> NoteOrientation for FsNoteOrientation
         Ok(stats)
     }
 
+    async fn refresh_index_after_ingest(
+        &self,
+        agent_id: &str,
+        summary: &IngestBatchSummary,
+    ) -> Result<(), AlephError> {
+        if summary.touched.is_empty() {
+            return Ok(());
+        }
+        // For now: full rebuild whenever anything changed. Partial-by-category
+        // rendering is tracked as a Phase B follow-up (see trait docstring).
+        self.rebuild_index(agent_id).await?;
+        Ok(())
+    }
+
     async fn rotate_log_if_needed(&self, agent_id: &str) -> Result<bool, AlephError> {
         LogMdWriter::new(self.agent_dir(agent_id))
             .rotate_if_needed()
@@ -252,5 +286,80 @@ mod tests {
             orient.dirty.lock().unwrap_or_else(|e| e.into_inner()).len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_index_after_ingest_rebuilds_when_categories_touched() {
+        use crate::memory::notes::note::KnowledgeNote;
+        use crate::memory::notes::orientation::types::{IngestBatchSummary, TouchedCategory};
+        use crate::memory::notes::store::NoteStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fresh_backend(dir.path());
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend.clone());
+        orient.bootstrap("default").await.unwrap();
+
+        // Seed a single preference note in the store so rebuild_index has a row.
+        let note = KnowledgeNote {
+            title: "EditorPref".to_string(),
+            category: "preference".to_string(),
+            tags: vec!["test".to_string()],
+            facts: vec!["prefers vim".to_string()],
+            content_hash: "h0".to_string(),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            ..Default::default()
+        };
+        backend
+            .index_note(&note, "default", "preference")
+            .await
+            .unwrap();
+
+        let summary = IngestBatchSummary {
+            agent_id: "default".into(),
+            touched: vec![TouchedCategory {
+                category: "preference".into(),
+                added: 1,
+                updated: 0,
+            }],
+        };
+        orient
+            .refresh_index_after_ingest("default", &summary)
+            .await
+            .unwrap();
+
+        let index_md =
+            std::fs::read_to_string(dir.path().join("note/default").join("index.md")).unwrap();
+        assert!(
+            index_md.contains("preference"),
+            "preference category must appear in index.md after refresh; got:\n{index_md}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_index_after_ingest_is_noop_when_touched_empty() {
+        use crate::memory::notes::orientation::types::IngestBatchSummary;
+
+        let dir = tempfile::tempdir().unwrap();
+        let backend = fresh_backend(dir.path());
+        let orient = FsNoteOrientation::new(dir.path().join("note"), backend);
+        orient.bootstrap("default").await.unwrap();
+
+        // Capture the post-bootstrap index.md content; an empty-touched refresh
+        // must not modify it (no second rebuild).
+        let index_path = dir.path().join("note/default").join("index.md");
+        let before = std::fs::read_to_string(&index_path).unwrap();
+
+        let summary = IngestBatchSummary {
+            agent_id: "default".into(),
+            touched: vec![],
+        };
+        orient
+            .refresh_index_after_ingest("default", &summary)
+            .await
+            .unwrap();
+
+        let after = std::fs::read_to_string(&index_path).unwrap();
+        assert_eq!(before, after, "empty-touched refresh must be a no-op");
     }
 }

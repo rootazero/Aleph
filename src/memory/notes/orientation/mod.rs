@@ -16,4 +16,7 @@ pub use index_md::{IndexMdGenerator, INDEX_FILENAME};
 pub use log_md::{LogMdWriter, LOG_FILENAME, LOG_ROTATE_LINES};
 pub use prompts::{schema_via_llm, PROMPT_ORIENTATION_BOOTSTRAP};
 pub use schema::{SchemaDoc, SchemaStore, DEFAULT_SCHEMA, SCHEMA_FILENAME, SCHEMA_SECTIONS};
-pub use types::{IndexStats, LogAction, LogEntry, OrientationSnapshot, TokenBudget};
+pub use types::{
+    IndexStats, IngestBatchSummary, LogAction, LogEntry, OrientationSnapshot, TokenBudget,
+    TouchedCategory,
+};
