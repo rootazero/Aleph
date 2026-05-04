@@ -129,12 +129,12 @@ impl NoteStore for SqliteMemoryBackend {
                     "SELECT to_raw, to_note FROM notes_links \
                      WHERE agent_id = ?1 AND from_note = ?2",
                 )
-                .map_err(|e| AlephError::config(format!("set_diff prepare: {e}")))?;
+                .map_err(|e| AlephError::config(format!("index_note links scan prep: {e}")))?;
             let rows = stmt
                 .query_map(params![agent_id, path], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
                 })
-                .map_err(|e| AlephError::config(format!("set_diff scan: {e}")))?;
+                .map_err(|e| AlephError::config(format!("index_note links scan: {e}")))?;
             rows.filter_map(|r| r.ok()).collect()
         };
 
@@ -147,7 +147,7 @@ impl NoteStore for SqliteMemoryBackend {
                  WHERE agent_id = ?1 AND from_note = ?2 AND to_raw = ?3 AND to_note = ?4",
                 params![agent_id, path, to_raw, to_note],
             )
-            .map_err(|e| AlephError::config(format!("set_diff delete: {e}")))?;
+            .map_err(|e| AlephError::config(format!("index_note links delete: {e}")))?;
         }
         // INSERT rows newly added. The schema's UNIQUE(agent_id, from_note, to_note)
         // makes INSERT OR IGNORE a safe no-op when two distinct raw forms resolve
@@ -158,7 +158,7 @@ impl NoteStore for SqliteMemoryBackend {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![agent_id, path, to_note, to_raw],
             )
-            .map_err(|e| AlephError::config(format!("set_diff insert: {e}")))?;
+            .map_err(|e| AlephError::config(format!("index_note links insert: {e}")))?;
         }
 
         // Replace FTS content
@@ -1053,6 +1053,28 @@ mod tests {
         );
     }
 
+    fn snapshot_links(db: &SqliteMemoryBackend) -> Vec<(i64, String, String, String, String)> {
+        let conn = db.conn().lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, agent_id, from_note, to_note, to_raw \
+                 FROM notes_links ORDER BY id",
+            )
+            .expect("prepare snapshot_links");
+        stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })
+        .expect("query_map snapshot_links")
+        .map(|r| r.expect("row snapshot_links"))
+        .collect()
+    }
+
     #[tokio::test]
     async fn reindex_unchanged_links_no_writes() {
         // Re-indexing a note whose link set has not changed must not produce
@@ -1080,63 +1102,60 @@ mod tests {
 
         db.index_note(&note, "default", "preference").await.unwrap();
 
-        let snapshot_before: Vec<(i64, String, String, String, String)> = {
-            let conn = db.conn().lock().unwrap();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, agent_id, from_note, to_note, to_raw \
-                     FROM notes_links \
-                     WHERE agent_id = 'default' AND from_note = 'preference/x' \
-                     ORDER BY id",
-                )
-                .unwrap();
-            stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-        };
+        let snapshot_before = snapshot_links(&db);
 
         // Sanity: 3 link rows persisted from the initial index.
         assert_eq!(snapshot_before.len(), 3);
 
         db.index_note(&note, "default", "preference").await.unwrap();
 
-        let snapshot_after: Vec<(i64, String, String, String, String)> = {
-            let conn = db.conn().lock().unwrap();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, agent_id, from_note, to_note, to_raw \
-                     FROM notes_links \
-                     WHERE agent_id = 'default' AND from_note = 'preference/x' \
-                     ORDER BY id",
-                )
-                .unwrap();
-            stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                ))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
-        };
+        let snapshot_after = snapshot_links(&db);
 
         // Identical id sequence proves no row was deleted+reinserted.
         assert_eq!(
             snapshot_before, snapshot_after,
             "set-diff upsert must leave unchanged links untouched (same ids, same values)"
         );
+    }
+
+    #[tokio::test]
+    async fn reindex_with_partial_link_change_preserves_intersection_ids() {
+        let temp = std::env::temp_dir().join(format!("aleph_diff_partial_{}", uuid::Uuid::new_v4()));
+        let db = SqliteMemoryBackend::new(&temp).unwrap();
+
+        let note_v1 = crate::memory::notes::KnowledgeNote {
+            title: "x".into(),
+            category: "preference".into(),
+            facts: vec!["body".into()],
+            links: vec!["a".into(), "b".into(), "c".into()],
+            content_hash: "h0".into(),
+            ..Default::default()
+        };
+        db.index_note(&note_v1, "default", "preference").await.unwrap();
+
+        let snap_v1 = snapshot_links(&db);
+        assert_eq!(snap_v1.len(), 3);
+
+        // v2: remove "c", add "d" — "a" and "b" must keep their original ids.
+        let mut note_v2 = note_v1.clone();
+        note_v2.links = vec!["a".into(), "b".into(), "d".into()];
+        db.index_note(&note_v2, "default", "preference").await.unwrap();
+
+        let snap_v2 = snapshot_links(&db);
+        assert_eq!(snap_v2.len(), 3);
+
+        // Build raw->id maps from each snapshot for a structural compare.
+        use std::collections::HashMap;
+        let by_raw_v1: HashMap<&str, i64> = snap_v1.iter().map(|r| (r.4.as_str(), r.0)).collect();
+        let by_raw_v2: HashMap<&str, i64> = snap_v2.iter().map(|r| (r.4.as_str(), r.0)).collect();
+
+        // Intersection rows ('a', 'b') must keep IDENTICAL row ids — no DELETE+INSERT.
+        assert_eq!(by_raw_v1["a"], by_raw_v2["a"], "row 'a' must keep its id");
+        assert_eq!(by_raw_v1["b"], by_raw_v2["b"], "row 'b' must keep its id");
+        // 'c' must be gone.
+        assert!(!by_raw_v2.contains_key("c"), "row 'c' must be deleted");
+        // 'd' must be new — its id must be strictly greater than any v1 id.
+        let max_v1_id = snap_v1.iter().map(|r| r.0).max().unwrap();
+        assert!(by_raw_v2["d"] > max_v1_id, "row 'd' must be a fresh insert");
     }
 }
