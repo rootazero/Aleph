@@ -174,7 +174,13 @@ impl NoteStore for SqliteMemoryBackend {
         // each FTS5 DELETE+INSERT cascades to ~14 shadow-table writes
         // (`_data`/`_idx`/`_docsize`/`_content`). The body hash is tracked in a
         // sibling `notes_fts_meta` row so the gate survives across processes.
-        let body = note.body_text();
+        //
+        // Use `body_text_for_fts()` (Phase C2.2) so inline `<!-- src: ... -->`
+        // provenance markers don't end up in the FTS index. For legacy notes
+        // without markers this is identical to `body_text()`, so the existing
+        // `notes_fts_meta` rows remain valid; notes that gain markers will
+        // trigger one rewrite — the correct one-time migration cost.
+        let body = note.body_text_for_fts();
         let body_hash = body_text_sha256(&body);
 
         let prev_body_hash: Option<String> = conn

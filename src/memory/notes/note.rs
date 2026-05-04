@@ -38,6 +38,79 @@ pub enum NoteStatus {
     Contradicted,
 }
 
+/// Provenance origin of an individual fact-bullet within a note. Phase C2
+/// paragraph-level provenance. `Legacy` is the default for facts that have
+/// no `<!-- ... -->` marker, preserving backward compatibility with
+/// pre-C2.2 notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProvenanceOrigin {
+    RawSource,
+    PriorNote,
+    Inferred,
+    Legacy,
+}
+
+/// Per-fact provenance metadata extracted from inline HTML comments.
+#[derive(Debug, Clone)]
+pub struct FactProvenance {
+    pub origin: ProvenanceOrigin,
+    pub source_id: Option<String>,
+    pub inferred: bool,
+}
+
+impl Default for FactProvenance {
+    fn default() -> Self {
+        Self {
+            origin: ProvenanceOrigin::Legacy,
+            source_id: None,
+            inferred: false,
+        }
+    }
+}
+
+/// Inline-comment provenance marker, e.g.
+/// `<!-- src: raw/abc, origin: raw_source, inferred: false -->`. The `src:`
+/// segment is optional (e.g. inferred facts have no source).
+static PROVENANCE_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(true|false)\s*-->",
+    ).unwrap()
+});
+
+/// Parse a fact-line list and return one `FactProvenance` per fact, defaulting
+/// to `Legacy` when no marker is present on that line.
+pub fn extract_provenance_markers(body: &str, facts: &[String]) -> Vec<FactProvenance> {
+    let mut out: Vec<FactProvenance> = Vec::with_capacity(facts.len());
+    let mut idx = 0;
+    for raw_line in body.lines() {
+        if idx >= facts.len() {
+            break;
+        }
+        let trimmed = raw_line.trim_start();
+        if trimmed.starts_with("- ") {
+            let prov = PROVENANCE_RE
+                .captures(raw_line)
+                .map(|c| FactProvenance {
+                    origin: match &c[2] {
+                        "raw_source" => ProvenanceOrigin::RawSource,
+                        "prior_note" => ProvenanceOrigin::PriorNote,
+                        "inferred" => ProvenanceOrigin::Inferred,
+                        _ => ProvenanceOrigin::Legacy,
+                    },
+                    source_id: c.get(1).map(|m| m.as_str().trim().to_string()),
+                    inferred: &c[3] == "true",
+                })
+                .unwrap_or_default();
+            out.push(prov);
+            idx += 1;
+        }
+    }
+    while out.len() < facts.len() {
+        out.push(FactProvenance::default());
+    }
+    out
+}
+
 /// YAML frontmatter parsed from the top of a markdown note.
 #[derive(Debug, Deserialize, Serialize)]
 struct Frontmatter {
@@ -135,6 +208,10 @@ pub struct KnowledgeNote {
     /// Note paths that supersede this note (i.e. they replace this one).
     /// Empty for legacy / non-superseded notes.
     pub superseded_by: Vec<String>,
+    /// Per-fact provenance, one entry per item in `facts` (same order). Empty
+    /// for legacy notes that lack inline `<!-- src: ..., origin: ..., inferred: ... -->`
+    /// markers; otherwise populated by `extract_provenance_markers`.
+    pub fact_provenance: Vec<FactProvenance>,
 }
 
 impl Default for KnowledgeNote {
@@ -154,6 +231,7 @@ impl Default for KnowledgeNote {
             status: NoteStatus::default(),
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
+            fact_provenance: Vec::new(),
         }
     }
 }
@@ -173,6 +251,7 @@ impl KnowledgeNote {
 
         let facts = extract_facts(&body);
         let links = extract_wikilinks(&body);
+        let fact_provenance = extract_provenance_markers(&body, &facts);
 
         Ok(Self {
             title: title.to_string(),
@@ -189,6 +268,7 @@ impl KnowledgeNote {
             status: frontmatter.status,
             supersedes: frontmatter.supersedes,
             superseded_by: frontmatter.superseded_by,
+            fact_provenance,
         })
     }
 
@@ -253,6 +333,17 @@ impl KnowledgeNote {
     /// Body text for embedding — facts joined by newline.
     pub fn body_text(&self) -> String {
         self.facts.join("\n")
+    }
+
+    /// Body text for FTS indexing — facts joined by newline with inline
+    /// `<!-- src: ..., origin: ..., inferred: ... -->` provenance markers
+    /// stripped so they don't pollute the search index.
+    pub fn body_text_for_fts(&self) -> String {
+        self.facts
+            .iter()
+            .map(|f| PROVENANCE_RE.replace_all(f, "").trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -453,6 +544,34 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_provenance_markers_handles_all_origins() {
+        let body = "- a <!-- src: raw/abc, origin: raw_source, inferred: false -->
+- b <!-- origin: inferred, inferred: true -->
+- c <!-- src: note/x, origin: prior_note, inferred: false -->
+- legacy fact with no marker
+";
+        let provs = extract_provenance_markers(body, &extract_facts(body));
+        assert_eq!(provs.len(), 4);
+        assert_eq!(provs[0].origin, ProvenanceOrigin::RawSource);
+        assert_eq!(provs[0].source_id.as_deref(), Some("raw/abc"));
+        assert_eq!(provs[1].origin, ProvenanceOrigin::Inferred);
+        assert!(provs[1].inferred);
+        assert_eq!(provs[2].origin, ProvenanceOrigin::PriorNote);
+        assert_eq!(provs[3].origin, ProvenanceOrigin::Legacy);
+    }
+
+    #[test]
+    fn fts_body_strips_provenance_comments() {
+        let n = KnowledgeNote::from_markdown("t",
+            "---\ncategory: preference\ntags: []\n---\n\n- a <!-- src: raw/x, origin: raw_source, inferred: false -->\n- b\n",
+        ).unwrap();
+        let fts = n.body_text_for_fts();
+        assert!(!fts.contains("<!--"));
+        assert!(fts.contains("a"));
+        assert!(fts.contains("b"));
+    }
 
     #[test]
     fn note_status_default_active_for_legacy() {
